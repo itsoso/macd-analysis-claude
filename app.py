@@ -23,6 +23,8 @@ STRATEGY_ENHANCED_FILE = os.path.join(BASE_DIR, 'strategy_enhanced_result.json')
 STRATEGY_FUTURES_FILE = os.path.join(BASE_DIR, 'strategy_futures_result.json')
 STRATEGY_FUTURES_V2_FILE = os.path.join(BASE_DIR, 'strategy_futures_v2_result.json')
 STRATEGY_FUTURES_V3_FILE = os.path.join(BASE_DIR, 'strategy_futures_v3_result.json')
+STRATEGY_FUTURES_V4_FILE = os.path.join(BASE_DIR, 'strategy_futures_v4_result.json')
+STRATEGY_FUTURES_V5_FILE = os.path.join(BASE_DIR, 'strategy_futures_v5_result.json')
 
 
 def load_json(path):
@@ -116,6 +118,24 @@ def api_strategy_futures_v3():
     if data:
         return jsonify(data)
     return jsonify({'error': '未找到Phase3数据, 请先运行 python strategy_futures_v3.py'}), 404
+
+
+@app.route('/api/strategy_futures_v4')
+def api_strategy_futures_v4():
+    """返回合约策略Phase 4引擎修正后优化结果"""
+    data = load_json(STRATEGY_FUTURES_V4_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({'error': '未找到Phase4数据, 请先运行 python strategy_futures_v4.py'}), 404
+
+
+@app.route('/api/strategy_futures_v5')
+def api_strategy_futures_v5():
+    """返回合约策略Phase 5终极优化结果"""
+    data = load_json(STRATEGY_FUTURES_V5_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({'error': '未找到Phase5数据, 请先运行 python strategy_futures_v5.py'}), 404
 
 
 if __name__ == '__main__':

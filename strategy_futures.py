@@ -223,7 +223,8 @@ class FuturesEngine:
         notional = actual_p * pos.quantity
         fee = notional * self.TAKER_FEE
         slippage_cost = pos.quantity * price * self.SLIPPAGE
-        self.usdt += pos.margin + pnl - fee
+        # 修正: margin已在usdt内(只是被frozen), 平仓只需加PnL减fee
+        self.usdt += pnl - fee
         self.frozen_margin -= pos.margin
         self.total_futures_fees += fee
         self.total_slippage_cost += slippage_cost
@@ -264,7 +265,8 @@ class FuturesEngine:
         notional = actual_p * pos.quantity
         fee = notional * self.TAKER_FEE
         slippage_cost = pos.quantity * price * self.SLIPPAGE
-        self.usdt += pos.margin + pnl - fee
+        # 修正: margin已在usdt内(只是被frozen), 平仓只需加PnL减fee
+        self.usdt += pnl - fee
         self.frozen_margin -= pos.margin
         self.total_futures_fees += fee
         self.total_slippage_cost += slippage_cost
@@ -280,7 +282,8 @@ class FuturesEngine:
             notional = pos.quantity * price
             liq_fee = notional * self.LIQUIDATION_FEE
             loss = pos.margin + liq_fee
-            self.usdt -= liq_fee
+            # 修正: 强平时margin被没收, 必须从usdt中扣除
+            self.usdt -= pos.margin + liq_fee
             self.frozen_margin -= pos.margin
             self.total_liquidation_fees += liq_fee
             self.total_futures_fees += liq_fee
@@ -294,7 +297,8 @@ class FuturesEngine:
             notional = pos.quantity * price
             liq_fee = notional * self.LIQUIDATION_FEE
             loss = pos.margin + liq_fee
-            self.usdt -= liq_fee
+            # 修正: 强平时margin被没收, 必须从usdt中扣除
+            self.usdt -= pos.margin + liq_fee
             self.frozen_margin -= pos.margin
             self.total_liquidation_fees += liq_fee
             self.total_futures_fees += liq_fee
