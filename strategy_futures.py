@@ -75,10 +75,11 @@ class FuturesPosition:
 class FuturesEngine:
     """合约+现货混合回测引擎"""
 
-    TAKER_FEE = 0.0005   # 0.05% taker
+    TAKER_FEE = 0.0005   # 0.05% taker (币安标准)
     MAKER_FEE = 0.0002   # 0.02% maker
-    FUNDING_RATE = 0.0001  # 0.01% per 8h
+    FUNDING_RATE = 0.0001  # 0.01% per 8h (基准, 实际可正可负)
     SLIPPAGE = 0.001      # 0.1% 滑点(含市场冲击)
+    LIQUIDATION_FEE = 0.005  # 0.5% 强平清算手续费
 
     def __init__(self, name, initial_usdt=100000, initial_eth_value=100000,
                  max_leverage=3, use_spot=True):
@@ -98,6 +99,14 @@ class FuturesEngine:
         self.trades = []
         self.history = []
         self.funding_counter = 0
+
+        # ===== 费用追踪 =====
+        self.total_spot_fees = 0       # 现货交易手续费累计
+        self.total_futures_fees = 0    # 合约交易手续费累计(开+平)
+        self.total_funding_paid = 0    # 资金费率支出累计
+        self.total_funding_received = 0  # 资金费率收入累计
+        self.total_slippage_cost = 0   # 滑点成本累计
+        self.total_liquidation_fees = 0  # 强平手续费累计
 
         # 风控: 最大合约保证金 = 初始总资产的10%
         self.max_margin_total = self.initial_total * 0.10
@@ -157,9 +166,12 @@ class FuturesEngine:
             return
         actual_p = price * (1 + self.SLIPPAGE)
         fee = invest * self.TAKER_FEE
+        slippage_cost = invest * self.SLIPPAGE
         qty = (invest - fee) / actual_p
         self.usdt -= invest
         self.spot_eth += qty
+        self.total_spot_fees += fee
+        self.total_slippage_cost += slippage_cost
         self._record_trade(dt, price, 'SPOT_BUY', 'long', qty, invest, fee, 1, reason)
 
     def spot_sell(self, price, dt, ratio, reason):
@@ -169,9 +181,13 @@ class FuturesEngine:
             return
         actual_p = price * (1 - self.SLIPPAGE)
         revenue = qty * actual_p
+        fair_revenue = qty * price
         fee = revenue * self.TAKER_FEE
+        slippage_cost = fair_revenue - revenue
         self.usdt += revenue - fee
         self.spot_eth -= qty
+        self.total_spot_fees += fee
+        self.total_slippage_cost += slippage_cost
         self._record_trade(dt, price, 'SPOT_SELL', 'long', qty, revenue, fee, 1, reason)
 
     # === 合约操作 ===
@@ -187,9 +203,12 @@ class FuturesEngine:
         notional = margin * leverage
         qty = notional / actual_p
         fee = notional * self.TAKER_FEE
+        slippage_cost = notional * self.SLIPPAGE
         self.usdt -= fee
         self.frozen_margin += margin
         self.lifetime_margin_used += margin
+        self.total_futures_fees += fee
+        self.total_slippage_cost += slippage_cost
         self.futures_long = FuturesPosition('long', actual_p, qty, leverage, margin)
         self._record_trade(dt, price, 'OPEN_LONG', 'long', qty, notional, fee,
                            leverage, reason)
@@ -203,8 +222,11 @@ class FuturesEngine:
         pnl = (actual_p - pos.entry_price) * pos.quantity
         notional = actual_p * pos.quantity
         fee = notional * self.TAKER_FEE
+        slippage_cost = pos.quantity * price * self.SLIPPAGE
         self.usdt += pos.margin + pnl - fee
         self.frozen_margin -= pos.margin
+        self.total_futures_fees += fee
+        self.total_slippage_cost += slippage_cost
         self._record_trade(dt, price, 'CLOSE_LONG', 'long', pos.quantity,
                            notional, fee, pos.leverage,
                            f"{reason} PnL={pnl:+.0f}")
@@ -222,9 +244,12 @@ class FuturesEngine:
         notional = margin * leverage
         qty = notional / actual_p
         fee = notional * self.TAKER_FEE
+        slippage_cost = notional * self.SLIPPAGE
         self.usdt -= fee
         self.frozen_margin += margin
         self.lifetime_margin_used += margin
+        self.total_futures_fees += fee
+        self.total_slippage_cost += slippage_cost
         self.futures_short = FuturesPosition('short', actual_p, qty, leverage, margin)
         self._record_trade(dt, price, 'OPEN_SHORT', 'short', qty, notional, fee,
                            leverage, reason)
@@ -238,43 +263,77 @@ class FuturesEngine:
         pnl = (pos.entry_price - actual_p) * pos.quantity
         notional = actual_p * pos.quantity
         fee = notional * self.TAKER_FEE
+        slippage_cost = pos.quantity * price * self.SLIPPAGE
         self.usdt += pos.margin + pnl - fee
         self.frozen_margin -= pos.margin
+        self.total_futures_fees += fee
+        self.total_slippage_cost += slippage_cost
         self._record_trade(dt, price, 'CLOSE_SHORT', 'short', pos.quantity,
                            notional, fee, pos.leverage,
                            f"{reason} PnL={pnl:+.0f}")
         self.futures_short = None
 
     def check_liquidation(self, price, dt):
-        """检查强平"""
+        """检查强平(含清算手续费)"""
         if self.futures_long and self.futures_long.is_liquidated(price):
-            loss = self.futures_long.margin
-            self.frozen_margin -= loss
+            pos = self.futures_long
+            notional = pos.quantity * price
+            liq_fee = notional * self.LIQUIDATION_FEE
+            loss = pos.margin + liq_fee
+            self.usdt -= liq_fee
+            self.frozen_margin -= pos.margin
+            self.total_liquidation_fees += liq_fee
+            self.total_futures_fees += liq_fee
             self._record_trade(dt, price, 'LIQUIDATED', 'long',
-                               self.futures_long.quantity, 0, 0,
-                               self.futures_long.leverage, f"多仓强平,损失{loss:.0f}")
+                               pos.quantity, notional, liq_fee,
+                               pos.leverage, f"多仓强平,损失{loss:.0f}(含清算费{liq_fee:.0f})")
             self.futures_long = None
 
         if self.futures_short and self.futures_short.is_liquidated(price):
-            loss = self.futures_short.margin
-            self.frozen_margin -= loss
+            pos = self.futures_short
+            notional = pos.quantity * price
+            liq_fee = notional * self.LIQUIDATION_FEE
+            loss = pos.margin + liq_fee
+            self.usdt -= liq_fee
+            self.frozen_margin -= pos.margin
+            self.total_liquidation_fees += liq_fee
+            self.total_futures_fees += liq_fee
             self._record_trade(dt, price, 'LIQUIDATED', 'short',
-                               self.futures_short.quantity, 0, 0,
-                               self.futures_short.leverage, f"空仓强平,损失{loss:.0f}")
+                               pos.quantity, notional, liq_fee,
+                               pos.leverage, f"空仓强平,损失{loss:.0f}(含清算费{liq_fee:.0f})")
             self.futures_short = None
 
     def charge_funding(self, price, dt):
-        """收取资金费率(每8小时)"""
+        """收取资金费率(每8小时)
+        实际币安资金费率可正可负:
+        - 正费率(常态): 多头付给空头
+        - 负费率(极端看空): 空头付给多头
+        这里使用动态模型: 基准0.01%, 下跌趋势中费率可能偏负"""
         self.funding_counter += 1
         if self.funding_counter % 8 != 0:
             return
+
+        # 动态资金费率: 基准±随机波动(模拟真实市场)
+        # 使用确定性模型: 基准费率0.01%, 但有30%概率为负
+        # 用counter做伪随机确保可复现
+        is_negative = (self.funding_counter * 7 + 3) % 10 < 3  # ~30%概率负费率
+        rate = self.FUNDING_RATE if not is_negative else -self.FUNDING_RATE * 0.5
+
         if self.futures_long:
-            cost = self.futures_long.quantity * price * self.FUNDING_RATE
-            self.usdt -= cost
+            cost = self.futures_long.quantity * price * rate
+            self.usdt -= cost  # 正费率: 多头付; 负费率: 多头收
+            if cost > 0:
+                self.total_funding_paid += cost
+            else:
+                self.total_funding_received += abs(cost)
+
         if self.futures_short:
-            # 空头收取资金费(通常多头付给空头)
-            income = self.futures_short.quantity * price * self.FUNDING_RATE
-            self.usdt += income
+            income = self.futures_short.quantity * price * rate
+            self.usdt += income  # 正费率: 空头收; 负费率: 空头付
+            if income > 0:
+                self.total_funding_received += income
+            else:
+                self.total_funding_paid += abs(income)
 
     def record_history(self, dt, price):
         total = self.total_value(price)
@@ -309,6 +368,14 @@ class FuturesEngine:
             dd = (t - peak) / peak
             max_dd = min(max_dd, dd)
 
+        # 费用汇总
+        total_all_fees = (self.total_spot_fees + self.total_futures_fees +
+                          self.total_funding_paid)
+        total_all_costs = total_all_fees + self.total_slippage_cost
+        net_funding = self.total_funding_received - self.total_funding_paid
+        gross_return = final_total + total_all_costs - initial_total
+        fee_drag = total_all_costs / initial_total * 100 if initial_total > 0 else 0
+
         return {
             'name': self.name,
             'initial_total': initial_total,
@@ -324,6 +391,20 @@ class FuturesEngine:
             'final_spot_eth': round(self.spot_eth, 4),
             'has_long': bool(self.futures_long),
             'has_short': bool(self.futures_short),
+            # 费用明细
+            'fees': {
+                'spot_fees': round(self.total_spot_fees, 2),
+                'futures_fees': round(self.total_futures_fees, 2),
+                'funding_paid': round(self.total_funding_paid, 2),
+                'funding_received': round(self.total_funding_received, 2),
+                'net_funding': round(net_funding, 2),
+                'slippage_cost': round(self.total_slippage_cost, 2),
+                'liquidation_fees': round(self.total_liquidation_fees, 2),
+                'total_fees': round(total_all_fees, 2),
+                'total_costs': round(total_all_costs, 2),
+                'fee_drag_pct': round(fee_drag, 2),
+                'gross_return_pct': round(gross_return / initial_total * 100, 2),
+            },
             'trades': self.trades,
             'history': self.history,
         }
@@ -1063,26 +1144,45 @@ def run_all():
               f"回撤: {r['max_drawdown']:.2f}% | 交易: {r['total_trades']}笔{liq_str} | "
               f"资产: ${r['final_total']:,.0f}")
 
-    print(f"\n\n{'='*120}")
+    print(f"\n\n{'='*140}")
     print("                      合约策略排名 (按超额收益)")
-    print(f"{'='*120}")
-    fmt = "{:>3} {:<34} {:>10} {:>10} {:>10} {:>10} {:>8} {:>8} {:>12}"
-    print(fmt.format("#", "策略", "策略收益", "买入持有", "超额收益", "最大回撤",
-                      "交易数", "强平", "最终资产"))
-    print("-" * 120)
+    print(f"{'='*140}")
+    fmt = "{:>3} {:<32} {:>9} {:>9} {:>9} {:>8} {:>6} {:>10} {:>10} {:>10} {:>10} {:>10}"
+    print(fmt.format("#", "策略", "收益", "超额α", "回撤", "笔数",
+                      "强平", "总费用", "滑点", "资金费净", "费用占比", "最终资产"))
+    print("-" * 140)
     for rank, r in enumerate(sorted(results, key=lambda x: x['alpha'], reverse=True), 1):
         star = " ★" if rank == 1 else ""
+        f = r.get('fees', {})
         print(fmt.format(
             rank, r['name'] + star,
-            f"{r['strategy_return']:+.2f}%",
-            f"{r['buy_hold_return']:+.2f}%",
-            f"{r['alpha']:+.2f}%",
-            f"{r['max_drawdown']:.2f}%",
+            f"{r['strategy_return']:+.1f}%",
+            f"{r['alpha']:+.1f}%",
+            f"{r['max_drawdown']:.1f}%",
             str(r['total_trades']),
             str(r['liquidations']),
+            f"${f.get('total_fees', 0):,.0f}",
+            f"${f.get('slippage_cost', 0):,.0f}",
+            f"${f.get('net_funding', 0):+,.0f}",
+            f"{f.get('fee_drag_pct', 0):.2f}%",
             f"${r['final_total']:,.0f}",
         ))
-    print("=" * 120)
+    print("=" * 140)
+
+    # 费用影响分析
+    print(f"\n  {'='*70}")
+    print("  费用影响分析")
+    print(f"  {'='*70}")
+    for r in sorted(results, key=lambda x: x['alpha'], reverse=True):
+        f = r.get('fees', {})
+        if f.get('total_costs', 0) > 0:
+            print(f"  {r['name']:<30} "
+                  f"现货费:{f['spot_fees']:>8,.0f} "
+                  f"合约费:{f['futures_fees']:>8,.0f} "
+                  f"资金费净:{f['net_funding']:>+8,.0f} "
+                  f"滑点:{f['slippage_cost']:>8,.0f} "
+                  f"总成本:{f['total_costs']:>8,.0f} "
+                  f"({f['fee_drag_pct']:.2f}%)")
 
     output = {
         'futures_results': [{

@@ -933,26 +933,44 @@ def run_all():
 
     # 排名
     ranked = sorted(results, key=lambda x: x['alpha'], reverse=True)
-    print(f"\n\n{'='*125}")
-    print("                    Phase 2 合约策略排名 (按超额收益)")
-    print(f"{'='*125}")
-    fmt = "{:>3} {:<36} {:>10} {:>10} {:>10} {:>10} {:>8} {:>8} {:>12}"
-    print(fmt.format("#", "策略", "策略收益", "买入持有", "超额收益", "最大回撤",
-                      "交易数", "强平", "最终资产"))
-    print("-" * 125)
+    print(f"\n\n{'='*145}")
+    print("                    Phase 2 合约策略排名 (按超额收益) · 含费用明细")
+    print(f"{'='*145}")
+    fmt = "{:>3} {:<32} {:>9} {:>9} {:>8} {:>6} {:>10} {:>10} {:>10} {:>10} {:>10}"
+    print(fmt.format("#", "策略", "收益", "超额α", "回撤", "笔数",
+                      "总费用", "滑点", "资金费净", "费用占比", "最终资产"))
+    print("-" * 145)
     for rank, r in enumerate(ranked, 1):
         star = " ★" if rank == 1 else ""
+        f = r.get('fees', {})
         print(fmt.format(
             rank, r['name'] + star,
-            f"{r['strategy_return']:+.2f}%",
-            f"{r['buy_hold_return']:+.2f}%",
-            f"{r['alpha']:+.2f}%",
-            f"{r['max_drawdown']:.2f}%",
+            f"{r['strategy_return']:+.1f}%",
+            f"{r['alpha']:+.1f}%",
+            f"{r['max_drawdown']:.1f}%",
             str(r['total_trades']),
-            str(r['liquidations']),
+            f"${f.get('total_fees', 0):,.0f}",
+            f"${f.get('slippage_cost', 0):,.0f}",
+            f"${f.get('net_funding', 0):+,.0f}",
+            f"{f.get('fee_drag_pct', 0):.2f}%",
             f"${r['final_total']:,.0f}",
         ))
-    print("=" * 125)
+    print("=" * 145)
+
+    # 费用影响分析
+    print(f"\n  {'='*80}")
+    print("  费用影响分析 (手续费+滑点+资金费率)")
+    print(f"  {'='*80}")
+    for r in ranked:
+        f = r.get('fees', {})
+        if f.get('total_costs', 0) > 0:
+            print(f"  {r['name']:<30} "
+                  f"现货费:{f.get('spot_fees',0):>7,.0f} "
+                  f"合约费:{f.get('futures_fees',0):>7,.0f} "
+                  f"资金费净:{f.get('net_funding',0):>+7,.0f} "
+                  f"滑点:{f.get('slippage_cost',0):>7,.0f} "
+                  f"总成本:{f.get('total_costs',0):>7,.0f} "
+                  f"({f.get('fee_drag_pct',0):.2f}%)")
 
     # 找出Phase 1最佳vs Phase 2最佳的对比
     p_baseline = next((r for r in results if 'P-基线' in r['name']), None)
@@ -974,7 +992,8 @@ def run_all():
         'best_strategy': ranked[0]['name'],
         'ranking': [{'rank': i + 1, 'name': r['name'], 'alpha': r['alpha'],
                       'return': r['strategy_return'], 'max_dd': r['max_drawdown'],
-                      'trades': r['total_trades']}
+                      'trades': r['total_trades'],
+                      'fees': r.get('fees', {})}
                      for i, r in enumerate(ranked)],
     }
 

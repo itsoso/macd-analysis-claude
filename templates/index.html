@@ -2996,21 +2996,24 @@
     function renderFTTable(sorted) {
         const head = document.getElementById('ft-table-head');
         const body = document.getElementById('ft-table-body');
-        head.innerHTML = `<th>#</th><th>策略</th><th>策略收益</th><th>买入持有</th><th>超额收益</th><th>最大回撤</th><th>交易数</th><th>强平</th><th>最终资产</th>`;
+        head.innerHTML = `<th>#</th><th>策略</th><th>策略收益</th><th>超额α</th><th>回撤</th><th>笔数</th><th>总费用</th><th>滑点成本</th><th>资金费净</th><th>费用占比</th><th>最终资产</th>`;
 
         body.innerHTML = sorted.map((r, i) => {
             const s = r.summary;
+            const f = s.fees || {};
             const cls = i === 0 ? 'style="background:rgba(0,214,143,0.08);"' : '';
             return `<tr ${cls}>
                 <td>${i + 1}</td>
                 <td><b>${r.name}</b>${i === 0 ? ' ★' : ''}</td>
                 <td style="color:${s.strategy_return >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">${s.strategy_return > 0 ? '+' : ''}${s.strategy_return}%</td>
-                <td>${s.buy_hold_return > 0 ? '+' : ''}${s.buy_hold_return}%</td>
                 <td style="color:${s.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight:700;">${s.alpha > 0 ? '+' : ''}${s.alpha}%</td>
                 <td>${s.max_drawdown}%</td>
                 <td>${s.total_trades}</td>
-                <td style="color:${s.liquidations > 0 ? 'var(--accent-red)' : 'var(--text-muted)'}">${s.liquidations}</td>
-                <td>$${Number(s.final_total).toLocaleString()}</td>
+                <td>$${Number(f.total_fees || 0).toLocaleString()}</td>
+                <td>$${Number(f.slippage_cost || 0).toLocaleString()}</td>
+                <td style="color:${(f.net_funding||0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">$${(f.net_funding||0) >= 0 ? '+' : ''}${Number(f.net_funding || 0).toLocaleString()}</td>
+                <td>${f.fee_drag_pct || 0}%</td>
+                <td style="font-weight:600;">$${Number(s.final_total).toLocaleString()}</td>
             </tr>`;
         }).join('');
     }
@@ -3153,9 +3156,10 @@
         // 表格
         const head = document.getElementById('ft2-table-head');
         const body = document.getElementById('ft2-table-body');
-        head.innerHTML = `<th>#</th><th>策略</th><th>策略收益</th><th>超额收益(α)</th><th>最大回撤</th><th>交易数</th><th>最终资产</th>`;
+        head.innerHTML = `<th>#</th><th>策略</th><th>策略收益</th><th>超额α</th><th>回撤</th><th>笔数</th><th>总费用</th><th>滑点</th><th>费用占比</th><th>最终资产</th>`;
         body.innerHTML = sorted.map((r, i) => {
             const s = r.summary;
+            const f = s.fees || {};
             const cls = i === 0 ? 'style="background:rgba(0,214,143,0.08);"' : '';
             return `<tr ${cls}>
                 <td>${i + 1}</td>
@@ -3164,7 +3168,10 @@
                 <td style="color:var(--accent-green);font-weight:700;">${s.alpha > 0 ? '+' : ''}${s.alpha}%</td>
                 <td>${s.max_drawdown}%</td>
                 <td>${s.total_trades}</td>
-                <td>$${Number(s.final_total).toLocaleString()}</td>
+                <td>$${Number(f.total_fees || 0).toLocaleString()}</td>
+                <td>$${Number(f.slippage_cost || 0).toLocaleString()}</td>
+                <td>${f.fee_drag_pct || 0}%</td>
+                <td style="font-weight:600;">$${Number(s.final_total).toLocaleString()}</td>
             </tr>`;
         }).join('');
 
