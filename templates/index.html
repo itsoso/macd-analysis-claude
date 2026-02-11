@@ -1,0 +1,1357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>背离技术分析 - 代码实现与回测展示</title>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0f1117;
+            --bg-secondary: #1a1d29;
+            --bg-card: #1e2130;
+            --bg-hover: #262a3d;
+            --text-primary: #e1e4ea;
+            --text-secondary: #8b8fa3;
+            --text-muted: #5c6078;
+            --accent-blue: #4a9eff;
+            --accent-green: #00d68f;
+            --accent-red: #ff4d6a;
+            --accent-yellow: #ffaa00;
+            --accent-purple: #a855f7;
+            --border: #2a2d3e;
+            --sidebar-w: 280px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ===== Sidebar ===== */
+        .sidebar {
+            width: var(--sidebar-w);
+            min-width: var(--sidebar-w);
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .sidebar-header {
+            padding: 24px 20px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar-header h1 {
+            font-size: 18px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 4px;
+        }
+
+        .sidebar-header p {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .nav-section {
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 0 20px;
+            margin-bottom: 4px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 20px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-secondary);
+            transition: all 0.15s;
+            gap: 10px;
+        }
+
+        .nav-item:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            background: rgba(74, 158, 255, 0.1);
+            color: var(--accent-blue);
+            border-left: 2px solid var(--accent-blue);
+        }
+
+        .nav-icon {
+            width: 18px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        /* ===== Main Content ===== */
+        .main-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+        }
+
+        .page {
+            display: none;
+            padding: 32px 40px;
+            max-width: 1200px;
+        }
+
+        .page.active { display: block; }
+
+        .page-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .page-subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 32px;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .badge {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: rgba(74, 158, 255, 0.15);
+            color: var(--accent-blue);
+        }
+
+        .badge.green { background: rgba(0, 214, 143, 0.15); color: var(--accent-green); }
+        .badge.red { background: rgba(255, 77, 106, 0.15); color: var(--accent-red); }
+        .badge.yellow { background: rgba(255, 170, 0, 0.15); color: var(--accent-yellow); }
+        .badge.purple { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .stat-value.positive { color: var(--accent-green); }
+        .stat-value.negative { color: var(--accent-red); }
+
+        .stat-note {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* Chapter Outline */
+        .chapter {
+            margin-bottom: 24px;
+        }
+
+        .chapter-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+            cursor: pointer;
+        }
+
+        .chapter-num {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .chapter-num.ch1 { background: rgba(74, 158, 255, 0.15); color: var(--accent-blue); }
+        .chapter-num.ch2 { background: rgba(0, 214, 143, 0.15); color: var(--accent-green); }
+        .chapter-num.ch3 { background: rgba(255, 77, 106, 0.15); color: var(--accent-red); }
+        .chapter-num.ch4 { background: rgba(255, 170, 0, 0.15); color: var(--accent-yellow); }
+        .chapter-num.ch5 { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); }
+
+        .chapter-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .chapter-content {
+            padding-left: 48px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.8;
+        }
+
+        .chapter-content ul {
+            padding-left: 18px;
+        }
+
+        .chapter-content li {
+            margin-bottom: 4px;
+        }
+
+        .chapter-content .key-concept {
+            color: var(--accent-blue);
+            font-weight: 500;
+        }
+
+        /* Code Blocks */
+        .code-section {
+            margin-bottom: 24px;
+        }
+
+        .code-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 16px;
+            background: #161822;
+            border: 1px solid var(--border);
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .code-file { color: var(--accent-blue); font-weight: 500; }
+
+        pre {
+            background: #0d0f17;
+            border: 1px solid var(--border);
+            border-radius: 0 0 8px 8px;
+            padding: 16px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.6;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+        }
+
+        code { font-family: inherit; }
+
+        .kw { color: #c678dd; }
+        .fn { color: #61afef; }
+        .st { color: #98c379; }
+        .cm { color: #5c6370; font-style: italic; }
+        .nu { color: #d19a66; }
+        .op { color: #56b6c2; }
+        .cl { color: #e5c07b; }
+
+        /* Chart Container */
+        .chart-container {
+            width: 100%;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .chart-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .chart-toolbar h3 {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        #kline-chart { width: 100%; height: 400px; }
+        #equity-chart { width: 100%; height: 300px; }
+
+        /* Trade Table */
+        .trade-table-wrap {
+            overflow-x: auto;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th {
+            text-align: left;
+            padding: 10px 12px;
+            background: var(--bg-secondary);
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        tr:hover td {
+            background: var(--bg-hover);
+        }
+
+        .pnl-pos { color: var(--accent-green); font-weight: 600; }
+        .pnl-neg { color: var(--accent-red); font-weight: 600; }
+
+        /* Principle cards */
+        .principle-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .principle-card {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .principle-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+        }
+
+        .principle-card.sell::before { background: var(--accent-red); }
+        .principle-card.buy::before { background: var(--accent-green); }
+
+        .principle-card h3 {
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+
+        .principle-card p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        /* Loading */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 60px;
+            color: var(--text-muted);
+        }
+
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 12px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Architecture */
+        .arch-diagram {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            align-items: center;
+            padding: 24px;
+        }
+
+        .arch-layer {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .arch-box {
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            text-align: center;
+            border: 1px solid var(--border);
+        }
+
+        .arch-box.entry { background: rgba(74, 158, 255, 0.15); color: var(--accent-blue); }
+        .arch-box.data { background: rgba(0, 214, 143, 0.15); color: var(--accent-green); }
+        .arch-box.core { background: rgba(255, 77, 106, 0.15); color: var(--accent-red); }
+        .arch-box.analysis { background: rgba(255, 170, 0, 0.15); color: var(--accent-yellow); }
+        .arch-box.out { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); }
+
+        .arch-arrow {
+            color: var(--text-muted);
+            font-size: 20px;
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .sidebar { width: 220px; min-width: 220px; }
+            .page { padding: 24px 20px; }
+            .principle-grid { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h1>背离技术分析</h1>
+            <p>江南小隐 · 代码实现 & ETH回测</p>
+        </div>
+
+        <div class="nav-section">
+            <div class="nav-section-title">概览</div>
+            <div class="nav-item active" data-page="overview">
+                <span class="nav-icon">📖</span> 书籍大纲
+            </div>
+            <div class="nav-item" data-page="architecture">
+                <span class="nav-icon">🏗️</span> 项目架构
+            </div>
+        </div>
+
+        <div class="nav-section">
+            <div class="nav-section-title">代码实现</div>
+            <div class="nav-item" data-page="code-indicators">
+                <span class="nav-icon">📊</span> 技术指标计算
+            </div>
+            <div class="nav-item" data-page="code-pattern">
+                <span class="nav-icon">📐</span> 几何形态背离
+            </div>
+            <div class="nav-item" data-page="code-macd">
+                <span class="nav-icon">📈</span> MACD背离
+            </div>
+            <div class="nav-item" data-page="code-exhaustion">
+                <span class="nav-icon">⚡</span> 背离与背驰
+            </div>
+            <div class="nav-item" data-page="code-other">
+                <span class="nav-icon">🔬</span> 其他指标背离
+            </div>
+        </div>
+
+        <div class="nav-section">
+            <div class="nav-section-title">ETH/USDT 回测</div>
+            <div class="nav-item" data-page="backtest-summary">
+                <span class="nav-icon">💰</span> 回测摘要
+            </div>
+            <div class="nav-item" data-page="backtest-chart">
+                <span class="nav-icon">📉</span> K线与信号
+            </div>
+            <div class="nav-item" data-page="backtest-trades">
+                <span class="nav-icon">📋</span> 交易明细
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-content">
+
+        <!-- ====== 书籍大纲 ====== -->
+        <div class="page active" id="overview">
+            <div class="page-title">《背离技术分析》书籍大纲</div>
+            <div class="page-subtitle">江南小隐 著 · 理财学院系列 · 全面解析背离与背驰交易体系</div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">一</div>
+                    <div class="chapter-title">第一章 · 背离总述</div>
+                </div>
+                <div class="chapter-content">
+                    <p>背离的核心定义: <span class="key-concept">将前后两段走势的特征进行比较, 发现趋势衰竭信号</span></p>
+                    <ul>
+                        <li>背离是趋势衰竭的信号, 但不一定马上反转</li>
+                        <li>可以"背离了又背离", 直到产生<span class="key-concept">背驰</span>才是最终反转</li>
+                        <li>背离分析是确认性分析, 而非预测性分析</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch2">二</div>
+                    <div class="chapter-title">第二章 · 几何形态背离</div>
+                </div>
+                <div class="chapter-content">
+                    <ul>
+                        <li><span class="key-concept">趋势K线背离</span> — 上涨中出现大阴线/下跌中出现大阳线, 预示趋势可能反转</li>
+                        <li><span class="key-concept">趋势幅度背离</span> — 后一段趋势的垂直幅度小于前一段, 说明推动力减弱</li>
+                        <li><span class="key-concept">时间度背离</span> — 后一段趋势持续K线数少于前一段, 时间上的衰竭</li>
+                        <li><span class="key-concept">均线背离</span> — 价格剧烈穿越长期均线(均线方向与价格运动方向相反)</li>
+                        <li><span class="key-concept">均线相交面积背离</span> — 短期与长期均线之间的面积缩小</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch3">三</div>
+                    <div class="chapter-title">第三章 · MACD技术指标背离 (核心章节)</div>
+                </div>
+                <div class="chapter-content">
+                    <ul>
+                        <li><span class="key-concept">黄白线(DIF/DEA)背离</span> — 价格创新高/低, DIF/DEA线未同步创新高/低</li>
+                        <li><span class="key-concept">彩柱线长度背离</span> — 红/绿柱最大长度缩短
+                            <ul>
+                                <li><strong>当堆背离</strong>: 同一堆柱体内后面的柱子比前面短</li>
+                                <li><strong>邻堆背离</strong>: 相邻两堆柱体中后堆最大柱子比前堆短</li>
+                                <li><strong>隔堆背离</strong>: 隔开的两堆柱体中后堆不如前堆(最重要!)</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">彩柱线面积背离</span> — 柱体堆面积缩小 (邻堆/隔堆)</li>
+                        <li><span class="key-concept">黄白线相交面积背离</span> — DIF与DEA围合的面积缩小</li>
+                        <li><span class="key-concept">金叉/死叉</span> — DIF上穿/下穿DEA的交叉信号</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch4">四</div>
+                    <div class="chapter-title">第四章 · 背离与背驰 (核心策略)</div>
+                </div>
+                <div class="chapter-content">
+                    <div class="principle-grid" style="padding-left:0; margin-top:12px;">
+                        <div class="principle-card sell">
+                            <h3>卖点用背离 (宁早勿晚)</h3>
+                            <p>
+                                满足任一条件即考虑卖出:<br>
+                                ① MACD DIF远离零轴后返回, 重新上升不创新高 + 已有一次隔堆背离<br>
+                                ② 虽未返回零轴, 但已有两次以上隔堆背离
+                            </p>
+                        </div>
+                        <div class="principle-card buy">
+                            <h3>买点用背驰 (宁迟勿早)</h3>
+                            <p>
+                                需<strong>同时满足两个条件</strong>才考虑买入:<br>
+                                ① 产生了两次以上隔堆背离<br>
+                                ② MACD DIF线两次返回零轴后再度底背离
+                            </p>
+                        </div>
+                    </div>
+                    <ul>
+                        <li><span class="key-concept">背驰</span> = 趋势的最后一次背离, 一旦产生马上反转</li>
+                        <li>背离可以反复, 但背驰只出现一次</li>
+                        <li>背驰是背离量积累到质变的飞跃</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch5">五</div>
+                    <div class="chapter-title">第五章 · 其他背离方法</div>
+                </div>
+                <div class="chapter-content">
+                    <ul>
+                        <li><span class="key-concept">KDJ指标背离</span> — 价格新高/低而KDJ的K/D线未同步, 尤其在超买(>80)/超卖(<20)区域</li>
+                        <li><span class="key-concept">CCI指标背离</span> — 价格新高/低而CCI未同步, CCI越过+100(天线)或跌破-100(地线)为强信号</li>
+                        <li><span class="key-concept">RSI指标背离</span> — 价格新高/低而RSI未同步, 关注RSI在80以上(超买)或20以下(超卖)的区域</li>
+                        <li><span class="key-concept">量价背离</span> — 价升量减(上涨乏力)、价跌量增(恐慌抛售)、地量地价(潜在底部)</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- ====== 项目架构 ====== -->
+        <div class="page" id="architecture">
+            <div class="page-title">项目架构</div>
+            <div class="page-subtitle">基于 Python 实现的完整背离分析系统</div>
+
+            <div class="card">
+                <div class="card-title">系统架构图</div>
+                <div class="arch-diagram">
+                    <div class="arch-layer">
+                        <div class="arch-box entry">main.py<br><small>命令行入口</small></div>
+                        <div class="arch-box entry">app.py<br><small>Web 展示</small></div>
+                        <div class="arch-box entry">backtest.py<br><small>回测引擎</small></div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-layer">
+                        <div class="arch-box analysis">ComprehensiveAnalyzer<br><small>综合分析器</small></div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-layer">
+                        <div class="arch-box core">PatternDiv<br><small>形态背离</small></div>
+                        <div class="arch-box core">MACDDiv<br><small>MACD背离</small></div>
+                        <div class="arch-box core">Exhaustion<br><small>背驰分析</small></div>
+                        <div class="arch-box core">KDJ/CCI/RSI<br><small>指标背离</small></div>
+                        <div class="arch-box core">VolPrice<br><small>量价背离</small></div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-layer">
+                        <div class="arch-box data">indicators.py<br><small>技术指标计算</small></div>
+                        <div class="arch-box data">config.py<br><small>参数配置</small></div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-layer">
+                        <div class="arch-box out">binance_fetcher.py<br><small>币安数据获取</small></div>
+                        <div class="arch-box out">data_fetcher.py<br><small>A股/CSV数据</small></div>
+                        <div class="arch-box out">visualization.py<br><small>图表可视化</small></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">文件结构</div>
+                <pre><code><span class="st">macd-analysis-claude/</span>
+├── <span class="fn">config.py</span>             <span class="cm"># 全局参数配置 (MACD/KDJ/CCI/RSI参数, 背离阈值)</span>
+├── <span class="fn">indicators.py</span>         <span class="cm"># 技术指标: SMA, EMA, MACD, KDJ, CCI, RSI</span>
+├── <span class="fn">binance_fetcher.py</span>    <span class="cm"># 币安API数据获取 (10分钟K线)</span>
+├── <span class="fn">data_fetcher.py</span>       <span class="cm"># A股/CSV/模拟数据获取</span>
+├── <span class="fn">backtest.py</span>           <span class="cm"># 回测引擎 (止损止盈/冷却期/信号过滤)</span>
+├── <span class="fn">visualization.py</span>      <span class="cm"># Matplotlib 多面板图表</span>
+├── <span class="fn">main.py</span>               <span class="cm"># 命令行主程序</span>
+├── <span class="fn">app.py</span>                <span class="cm"># Flask Web 应用</span>
+├── <span class="st">divergence/</span>           <span class="cm"># 背离检测模块包</span>
+│   ├── __init__.py
+│   ├── <span class="fn">pattern_divergence.py</span>    <span class="cm"># 第二章: 几何形态背离</span>
+│   ├── <span class="fn">macd_divergence.py</span>       <span class="cm"># 第三章: MACD背离</span>
+│   ├── <span class="fn">exhaustion.py</span>            <span class="cm"># 第四章: 背离与背驰</span>
+│   ├── <span class="fn">kdj_divergence.py</span>        <span class="cm"># 第五章: KDJ背离</span>
+│   ├── <span class="fn">cci_divergence.py</span>        <span class="cm"># 第五章: CCI背离</span>
+│   ├── <span class="fn">rsi_divergence.py</span>        <span class="cm"># 第五章: RSI背离</span>
+│   ├── <span class="fn">volume_price_divergence.py</span>  <span class="cm"># 第五章: 量价背离</span>
+│   └── <span class="fn">comprehensive.py</span>         <span class="cm"># 综合分析 & 评分</span>
+└── <span class="st">templates/</span>
+    └── index.html        <span class="cm"># Web 展示页面</span></code></pre>
+            </div>
+        </div>
+
+        <!-- ====== 代码: 技术指标 ====== -->
+        <div class="page" id="code-indicators">
+            <div class="page-title">技术指标计算</div>
+            <div class="page-subtitle">indicators.py · 所有分析的基础</div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">indicators.py</span>
+                    <span>MACD 计算</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">calc_macd</span>(close: pd.Series, fast=<span class="nu">12</span>, slow=<span class="nu">26</span>, signal=<span class="nu">9</span>) -> pd.DataFrame:
+    <span class="st">"""计算MACD指标: DIF, DEA, MACD_BAR"""</span>
+    ema_fast = close.ewm(span=fast, adjust=<span class="kw">False</span>).mean()
+    ema_slow = close.ewm(span=slow, adjust=<span class="kw">False</span>).mean()
+    dif = ema_fast - ema_slow                    <span class="cm"># 快线-慢线 = DIF(白线)</span>
+    dea = dif.ewm(span=signal, adjust=<span class="kw">False</span>).mean()  <span class="cm"># DIF的EMA = DEA(黄线)</span>
+    bar = <span class="nu">2</span> * (dif - dea)                       <span class="cm"># 红绿柱 = 2*(DIF-DEA)</span>
+    <span class="kw">return</span> pd.DataFrame({<span class="st">'DIF'</span>: dif, <span class="st">'DEA'</span>: dea, <span class="st">'MACD_BAR'</span>: bar})</code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">indicators.py</span>
+                    <span>KDJ / CCI / RSI</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">calc_kdj</span>(high, low, close, n=<span class="nu">9</span>, m1=<span class="nu">3</span>, m2=<span class="nu">3</span>):
+    <span class="st">"""KDJ随机指标: RSV -> K -> D -> J"""</span>
+    lowest = low.rolling(n).min()
+    highest = high.rolling(n).max()
+    rsv = (close - lowest) / (highest - lowest) * <span class="nu">100</span>
+    k = rsv.ewm(com=m1-<span class="nu">1</span>, adjust=<span class="kw">False</span>).mean()
+    d = k.ewm(com=m2-<span class="nu">1</span>, adjust=<span class="kw">False</span>).mean()
+    j = <span class="nu">3</span> * k - <span class="nu">2</span> * d
+    <span class="kw">return</span> pd.DataFrame({<span class="st">'K'</span>: k, <span class="st">'D'</span>: d, <span class="st">'J'</span>: j})
+
+<span class="kw">def</span> <span class="fn">calc_cci</span>(high, low, close, n=<span class="nu">14</span>):
+    <span class="st">"""CCI顺势指标: TP的偏离度/平均偏差"""</span>
+    tp = (high + low + close) / <span class="nu">3</span>
+    ma = tp.rolling(n).mean()
+    md = tp.rolling(n).apply(<span class="kw">lambda</span> x: np.abs(x - x.mean()).mean())
+    <span class="kw">return</span> (tp - ma) / (<span class="nu">0.015</span> * md)
+
+<span class="kw">def</span> <span class="fn">calc_rsi</span>(close, period=<span class="nu">6</span>):
+    <span class="st">"""RSI相对强弱指标: 涨幅均值/(涨幅均值+跌幅均值)*100"""</span>
+    delta = close.diff()
+    gain = delta.clip(lower=<span class="nu">0</span>).ewm(alpha=<span class="nu">1</span>/period, adjust=<span class="kw">False</span>).mean()
+    loss = (-delta.clip(upper=<span class="nu">0</span>)).ewm(alpha=<span class="nu">1</span>/period, adjust=<span class="kw">False</span>).mean()
+    <span class="kw">return</span> <span class="nu">100</span> - <span class="nu">100</span> / (<span class="nu">1</span> + gain / loss)</code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">indicators.py</span>
+                    <span>辅助函数: 波峰波谷 / 趋势分段 / MACD柱堆识别</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">find_swing_highs</span>(series, order=<span class="nu">5</span>):
+    <span class="st">"""寻找局部高点(波峰), order=前后各5根K线范围"""</span>
+    highs = []
+    <span class="kw">for</span> i <span class="kw">in</span> range(order, len(series) - order):
+        <span class="kw">if</span> all(series.iloc[i] >= series.iloc[i-j] <span class="kw">for</span> j <span class="kw">in</span> range(<span class="nu">1</span>, order+<span class="nu">1</span>)) \
+           <span class="kw">and</span> all(series.iloc[i] >= series.iloc[i+j] <span class="kw">for</span> j <span class="kw">in</span> range(<span class="nu">1</span>, order+<span class="nu">1</span>)):
+            highs.append(i)
+    <span class="kw">return</span> highs
+
+<span class="kw">def</span> <span class="fn">identify_bar_groups</span>(bar: pd.Series):
+    <span class="st">"""识别MACD柱堆: 连续红柱(>0)或绿柱(<0)为一堆"""</span>
+    groups = []
+    current_sign = <span class="kw">None</span>
+    start_idx = <span class="nu">0</span>
+    <span class="kw">for</span> i, v <span class="kw">in</span> enumerate(bar):
+        sign = <span class="st">'red'</span> <span class="kw">if</span> v >= <span class="nu">0</span> <span class="kw">else</span> <span class="st">'green'</span>
+        <span class="kw">if</span> sign != current_sign:
+            <span class="kw">if</span> current_sign <span class="kw">is not None</span>:
+                groups.append({<span class="st">'type'</span>: current_sign, <span class="st">'start'</span>: start_idx, <span class="st">'end'</span>: i-<span class="nu">1</span>})
+            current_sign = sign
+            start_idx = i
+    groups.append({<span class="st">'type'</span>: current_sign, <span class="st">'start'</span>: start_idx, <span class="st">'end'</span>: len(bar)-<span class="nu">1</span>})
+    <span class="kw">return</span> groups</code></pre>
+            </div>
+        </div>
+
+        <!-- ====== 代码: 几何形态背离 ====== -->
+        <div class="page" id="code-pattern">
+            <div class="page-title">第二章 · 几何形态背离</div>
+            <div class="page-subtitle">pattern_divergence.py · 5种形态背离检测</div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/pattern_divergence.py</span>
+                    <span>趋势K线背离</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_kline_divergence</span>(<span class="kw">self</span>, lookback=<span class="nu">20</span>, body_ratio=<span class="nu">0.02</span>):
+    <span class="st">"""检测趋势中出现的反向大K线
+    上涨趋势中的大阴线(实体>=2%), 或下跌趋势中的大阳线"""</span>
+    signals = []
+    <span class="kw">for</span> i <span class="kw">in</span> range(lookback, len(df)):
+        body = abs(df[<span class="st">'close'</span>].iloc[i] - df[<span class="st">'open'</span>].iloc[i])
+        body_pct = body / df[<span class="st">'open'</span>].iloc[i]
+        <span class="kw">if</span> body_pct < body_ratio:
+            <span class="kw">continue</span>
+        <span class="cm"># 判断近期趋势方向 (用MA斜率)</span>
+        trend = df[<span class="st">'close'</span>].iloc[i-lookback:i].mean() - df[<span class="st">'close'</span>].iloc[i-lookback]
+        is_bearish = df[<span class="st">'close'</span>].iloc[i] < df[<span class="st">'open'</span>].iloc[i]
+        <span class="kw">if</span> trend > <span class="nu">0</span> <span class="kw">and</span> is_bearish:   <span class="cm"># 上涨中大阴线</span>
+            signals.append({<span class="st">'type'</span>: <span class="st">'top'</span>, <span class="st">'idx'</span>: i, <span class="st">'severity'</span>: body_pct})
+        <span class="kw">elif</span> trend < <span class="nu">0</span> <span class="kw">and not</span> is_bearish:  <span class="cm"># 下跌中大阳线</span>
+            signals.append({<span class="st">'type'</span>: <span class="st">'bottom'</span>, <span class="st">'idx'</span>: i})
+    <span class="kw">return</span> signals</code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/pattern_divergence.py</span>
+                    <span>趋势幅度 & 时间度背离</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_amplitude_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>, shrink_ratio=<span class="nu">0.7</span>):
+    <span class="st">"""检测趋势幅度衰减: 后一段涨/跌幅 < 前一段 × shrink_ratio"""</span>
+    up_segs, down_segs = identify_trend_segments(df, order)
+    signals = []
+    <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nu">1</span>, len(up_segs)):
+        prev_amp = up_segs[i-<span class="nu">1</span>][<span class="st">'amplitude'</span>]
+        curr_amp = up_segs[i][<span class="st">'amplitude'</span>]
+        <span class="kw">if</span> curr_amp < prev_amp * shrink_ratio:
+            signals.append({<span class="st">'type'</span>: <span class="st">'top'</span>, <span class="st">'ratio'</span>: curr_amp/prev_amp})
+    <span class="kw">return</span> signals
+
+<span class="kw">def</span> <span class="fn">detect_time_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>, shrink_ratio=<span class="nu">0.7</span>):
+    <span class="st">"""检测时间度衰减: 后一段持续K线数 < 前一段 × shrink_ratio"""</span>
+    <span class="cm"># 逻辑类似幅度背离, 比较 segment['duration'] 即K线数</span></code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/pattern_divergence.py</span>
+                    <span>均线相交面积背离</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_ma_area_divergence</span>(<span class="kw">self</span>, short_period=<span class="nu">5</span>, long_period=<span class="nu">30</span>):
+    <span class="st">"""短期均线与长期均线之间的面积逐渐缩小 -> 趋势减弱"""</span>
+    ma_short = df[<span class="st">'close'</span>].rolling(short_period).mean()
+    ma_long  = df[<span class="st">'close'</span>].rolling(long_period).mean()
+    diff = ma_short - ma_long           <span class="cm"># MA差值序列</span>
+    <span class="cm"># 将连续正值/负值区间识别为一个"面积段"</span>
+    <span class="cm"># 比较相邻同向面积段: 后段面积 < 前段面积 × shrink_ratio</span></code></pre>
+            </div>
+        </div>
+
+        <!-- ====== 代码: MACD背离 ====== -->
+        <div class="page" id="code-macd">
+            <div class="page-title">第三章 · MACD 技术指标背离</div>
+            <div class="page-subtitle">macd_divergence.py · 书中最核心的背离检测</div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/macd_divergence.py</span>
+                    <span>黄白线(DIF/DEA)背离</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_dif_dea_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+    <span class="st">"""价格创新高但DIF/DEA未创新高 = 顶背离
+    价格创新低但DIF/DEA未创新低 = 底背离"""</span>
+    price_highs = find_swing_highs(df[<span class="st">'high'</span>], order)
+    dif_at_highs = [df[<span class="st">'DIF'</span>].iloc[h] <span class="kw">for</span> h <span class="kw">in</span> price_highs]
+
+    <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nu">1</span>, len(price_highs)):
+        <span class="cm"># 价格新高但DIF未新高 -> 顶背离</span>
+        <span class="kw">if</span> df[<span class="st">'high'</span>].iloc[price_highs[i]] > df[<span class="st">'high'</span>].iloc[price_highs[i-<span class="nu">1</span>]] \
+           <span class="kw">and</span> dif_at_highs[i] < dif_at_highs[i-<span class="nu">1</span>] * <span class="nu">0.9</span>:
+            signals.append({<span class="st">'type'</span>: <span class="st">'top'</span>, <span class="st">'subtype'</span>: <span class="st">'dif_dea'</span>, ...})</code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/macd_divergence.py</span>
+                    <span>彩柱线长度背离 (当堆/邻堆/隔堆)</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_bar_length_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+    <span class="st">"""MACD柱线长度背离 — 三种子类型"""</span>
+    groups = identify_bar_groups(df[<span class="st">'MACD_BAR'</span>])
+
+    <span class="cm"># 1. 当堆背离: 同一堆内后面柱子的最大值开始缩小</span>
+    <span class="kw">for</span> g <span class="kw">in</span> groups:
+        bars = df[<span class="st">'MACD_BAR'</span>].iloc[g[<span class="st">'start'</span>]:g[<span class="st">'end'</span>]+<span class="nu">1</span>]
+        peak_idx = bars.abs().idxmax()
+        <span class="cm"># 如果峰值出现在堆的前半部分, 后半部分持续缩小 -> 当堆背离</span>
+
+    <span class="cm"># 2. 邻堆背离: 相邻两个同色堆的最大柱子对比</span>
+    red_groups = [g <span class="kw">for</span> g <span class="kw">in</span> groups <span class="kw">if</span> g[<span class="st">'type'</span>] == <span class="st">'red'</span>]
+    <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nu">1</span>, len(red_groups)):
+        <span class="kw">if</span> max_bar(red_groups[i]) < max_bar(red_groups[i-<span class="nu">1</span>]) * <span class="nu">0.7</span>:
+            <span class="cm"># 邻堆背离 (如果两堆相邻) 或 隔堆背离 (如果中间隔了其他堆)</span>
+
+    <span class="cm"># 3. 隔堆背离 (最重要! 判断背驰的核心依据)</span></code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/macd_divergence.py</span>
+                    <span>彩柱线面积背离 & 金叉死叉分析</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_bar_area_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+    <span class="st">"""柱堆面积(所有柱子绝对值之和)背离"""</span>
+    groups = identify_bar_groups(df[<span class="st">'MACD_BAR'</span>])
+    <span class="kw">for</span> g <span class="kw">in</span> groups:
+        g[<span class="st">'area'</span>] = df[<span class="st">'MACD_BAR'</span>].iloc[g[<span class="st">'start'</span>]:g[<span class="st">'end'</span>]+<span class="nu">1</span>].abs().sum()
+    <span class="cm"># 比较同色相邻/隔堆的面积变化</span>
+
+<span class="kw">def</span> <span class="fn">analyze_macd_crosses</span>(<span class="kw">self</span>):
+    <span class="st">"""金叉: DIF上穿DEA (买入信号)
+    死叉: DIF下穿DEA (卖出信号)
+    零轴上方金叉更强, 零轴下方死叉更弱"""</span>
+    crosses = find_macd_crosses(df[<span class="st">'DIF'</span>], df[<span class="st">'DEA'</span>])
+    <span class="kw">for</span> c <span class="kw">in</span> crosses:
+        c[<span class="st">'above_zero'</span>] = df[<span class="st">'DIF'</span>].iloc[c[<span class="st">'idx'</span>]] > <span class="nu">0</span>
+    <span class="kw">return</span> crosses</code></pre>
+            </div>
+        </div>
+
+        <!-- ====== 代码: 背离与背驰 ====== -->
+        <div class="page" id="code-exhaustion">
+            <div class="page-title">第四章 · 背离与背驰</div>
+            <div class="page-subtitle">exhaustion.py · 全书最核心的操作策略</div>
+
+            <div class="principle-grid">
+                <div class="principle-card sell">
+                    <h3>卖点用背离 (宁早勿晚)</h3>
+                    <p>MACD隔堆背离一次 + DIF返回零轴 → 即考虑卖出<br>
+                    或: 两次以上隔堆背离 → 无论是否返回零轴都考虑卖出</p>
+                </div>
+                <div class="principle-card buy">
+                    <h3>买点用背驰 (宁迟勿早)</h3>
+                    <p>二次以上隔堆背离 + DIF两次返回零轴后再度底背离 → 才考虑买入<br>
+                    条件更严格, 减少抄底风险</p>
+                </div>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/exhaustion.py</span>
+                    <span>背驰检测核心逻辑</span>
+                </div>
+                <pre><code><span class="kw">class</span> <span class="cl">ExhaustionAnalyzer</span>:
+    <span class="st">"""背驰分析器 — 趋势的最后一次背离"""</span>
+
+    <span class="kw">def</span> <span class="fn">_count_zero_returns</span>(<span class="kw">self</span>, direction=<span class="st">'top'</span>):
+        <span class="st">"""计算MACD DIF线返回零轴的次数
+        顶背驰: DIF从正值区域回到0附近再回升的次数
+        底背驰: DIF从负值区域回到0附近再回落的次数"""</span>
+        dif = <span class="kw">self</span>.df[<span class="st">'DIF'</span>]
+        zero_threshold = dif.abs().mean() * <span class="nu">0.1</span>  <span class="cm"># 接近零轴的阈值</span>
+        <span class="cm"># 遍历DIF序列, 检测 "远离零轴 -> 接近零轴 -> 再次远离" 的模式</span>
+        returns = []
+        <span class="cm">...</span>
+        <span class="kw">return</span> returns
+
+    <span class="kw">def</span> <span class="fn">_count_separated_divergences</span>(<span class="kw">self</span>, direction=<span class="st">'top'</span>):
+        <span class="st">"""计算隔堆背离次数(最关键的背驰判据)"""</span>
+        <span class="cm"># 使用 MACDDivergenceAnalyzer 获取隔堆背离信号</span>
+        bar_divs = <span class="kw">self</span>.macd_analyzer.detect_bar_length_divergence()
+        separated = [d <span class="kw">for</span> d <span class="kw">in</span> bar_divs
+                     <span class="kw">if</span> d.get(<span class="st">'subtype'</span>) == <span class="st">'separated'</span>
+                     <span class="kw">and</span> d[<span class="st">'type'</span>] == direction]
+        <span class="kw">return</span> separated
+
+    <span class="kw">def</span> <span class="fn">detect_exhaustion</span>(<span class="kw">self</span>):
+        <span class="st">"""综合判断背驰"""</span>
+        results = []
+
+        <span class="cm"># 顶背驰 (卖出条件宽松)</span>
+        top_sep = <span class="kw">self</span>._count_separated_divergences(<span class="st">'top'</span>)
+        top_zeros = <span class="kw">self</span>._count_zero_returns(<span class="st">'top'</span>)
+        <span class="kw">if</span> len(top_sep) >= <span class="nu">1</span> <span class="kw">and</span> len(top_zeros) >= <span class="nu">1</span>:
+            results.append({<span class="st">'type'</span>: <span class="st">'top_exhaustion'</span>, <span class="st">'confidence'</span>: <span class="st">'high'</span>})
+        <span class="kw">elif</span> len(top_sep) >= <span class="nu">2</span>:
+            results.append({<span class="st">'type'</span>: <span class="st">'top_exhaustion'</span>, <span class="st">'confidence'</span>: <span class="st">'medium'</span>})
+
+        <span class="cm"># 底背驰 (买入条件严格)</span>
+        bot_sep = <span class="kw">self</span>._count_separated_divergences(<span class="st">'bottom'</span>)
+        bot_zeros = <span class="kw">self</span>._count_zero_returns(<span class="st">'bottom'</span>)
+        <span class="kw">if</span> len(bot_sep) >= <span class="nu">2</span> <span class="kw">and</span> len(bot_zeros) >= <span class="nu">2</span>:
+            results.append({<span class="st">'type'</span>: <span class="st">'bottom_exhaustion'</span>, <span class="st">'confidence'</span>: <span class="st">'high'</span>})
+
+        <span class="kw">return</span> results</code></pre>
+            </div>
+        </div>
+
+        <!-- ====== 代码: 其他指标 ====== -->
+        <div class="page" id="code-other">
+            <div class="page-title">第五章 · 其他指标背离</div>
+            <div class="page-subtitle">KDJ / CCI / RSI / 量价背离</div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/kdj_divergence.py</span>
+                    <span>KDJ指标背离</span>
+                </div>
+                <pre><code><span class="kw">class</span> <span class="cl">KDJDivergenceAnalyzer</span>:
+    <span class="kw">def</span> <span class="fn">detect_top_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+        <span class="st">"""价格创新高 + K值在超买区(>80) + K值未创新高 = KDJ顶背离"""</span>
+        price_highs = find_swing_highs(df[<span class="st">'high'</span>], order)
+        <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nu">1</span>, len(price_highs)):
+            k_val = df[<span class="st">'K'</span>].iloc[price_highs[i]]
+            <span class="kw">if</span> k_val > <span class="nu">80</span> <span class="kw">and</span> k_val < df[<span class="st">'K'</span>].iloc[price_highs[i-<span class="nu">1</span>]]:
+                signals.append({<span class="st">'type'</span>: <span class="st">'top'</span>, <span class="st">'indicator'</span>: <span class="st">'KDJ'</span>})
+
+    <span class="kw">def</span> <span class="fn">detect_bottom_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+        <span class="st">"""价格创新低 + K值在超卖区(<20) + K值未创新低 = KDJ底背离"""</span></code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/cci_divergence.py · divergence/rsi_divergence.py</span>
+                    <span>CCI & RSI 背离</span>
+                </div>
+                <pre><code><span class="cm"># CCI: 天线+100, 地线-100</span>
+<span class="kw">class</span> <span class="cl">CCIDivergenceAnalyzer</span>:
+    <span class="kw">def</span> <span class="fn">detect_top_divergence</span>(<span class="kw">self</span>):
+        <span class="st">"""价格新高 + CCI在+100以上 + CCI未新高"""</span>
+    <span class="kw">def</span> <span class="fn">detect_spring_autumn_crosses</span>(<span class="kw">self</span>):
+        <span class="st">"""CCI穿越天线+100(做多) / 跌破地线-100(做空)"""</span>
+
+<span class="cm"># RSI: 超买>80, 超卖<20</span>
+<span class="kw">class</span> <span class="cl">RSIDivergenceAnalyzer</span>:
+    <span class="kw">def</span> <span class="fn">detect_top_divergence</span>(<span class="kw">self</span>):
+        <span class="st">"""价格新高 + RSI>80 + RSI未新高"""</span>
+    <span class="kw">def</span> <span class="fn">detect_bottom_divergence</span>(<span class="kw">self</span>):
+        <span class="st">"""价格新低 + RSI<20 + RSI未新低"""</span></code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/volume_price_divergence.py</span>
+                    <span>量价背离</span>
+                </div>
+                <pre><code><span class="kw">class</span> <span class="cl">VolumePriceDivergenceAnalyzer</span>:
+    <span class="kw">def</span> <span class="fn">detect_price_up_volume_down</span>(<span class="kw">self</span>):
+        <span class="st">"""价升量减: 价格上涨但成交量下降, 上涨趋势可能衰竭"""</span>
+        <span class="cm"># 比较相邻上涨段的成交量: 后段量 < 前段量</span>
+
+    <span class="kw">def</span> <span class="fn">detect_price_down_volume_up</span>(<span class="kw">self</span>):
+        <span class="st">"""价跌量增: 价格下跌但成交量增加, 可能是恐慌抛售"""</span>
+
+    <span class="kw">def</span> <span class="fn">detect_ground_volume</span>(<span class="kw">self</span>):
+        <span class="st">"""地量地价: 成交量极低+价格低位, 可能是底部信号
+        量 < 近期均量的30% -> 地量"""</span></code></pre>
+            </div>
+        </div>
+
+        <!-- ====== 回测摘要 ====== -->
+        <div class="page" id="backtest-summary">
+            <div class="page-title">ETH/USDT 回测摘要</div>
+            <div class="page-subtitle">10分钟K线 · 币安现货 · 背离/背驰策略</div>
+
+            <div id="summary-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载回测数据...
+            </div>
+
+            <div id="summary-content" style="display:none;">
+                <div class="stats-grid" id="stats-grid"></div>
+
+                <div class="card">
+                    <div class="card-title">策略说明</div>
+                    <div class="principle-grid">
+                        <div class="principle-card sell">
+                            <h3>卖出信号</h3>
+                            <p>
+                                • 综合顶背离评分 ≥ 45<br>
+                                • 背驰卖出信号 (最高优先级)<br>
+                                • 止损: -5% / 止盈: +8%<br>
+                                • 遵循 "卖点用背离, 宁早勿晚"
+                            </p>
+                        </div>
+                        <div class="principle-card buy">
+                            <h3>买入信号</h3>
+                            <p>
+                                • 综合底背离评分 ≥ 65<br>
+                                • 背驰买入信号 (最高优先级)<br>
+                                • 冷却期: 30根K线 (5小时)<br>
+                                • 遵循 "买点用背驰, 宁迟勿早"
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chart-container">
+                    <div class="chart-toolbar">
+                        <h3>资产曲线</h3>
+                        <span style="font-size:12px;color:var(--text-muted);">蓝线=策略净值 | 基准=ETH买入持有</span>
+                    </div>
+                    <div id="equity-chart"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ====== K线图 ====== -->
+        <div class="page" id="backtest-chart">
+            <div class="page-title">K线图与交易信号</div>
+            <div class="page-subtitle">ETH/USDT 10分钟K线 · 买卖点标注</div>
+
+            <div id="chart-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载图表数据...
+            </div>
+
+            <div id="chart-content" style="display:none;">
+                <div class="chart-container">
+                    <div class="chart-toolbar">
+                        <h3>ETH/USDT · 10分钟</h3>
+                    </div>
+                    <div id="kline-chart"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ====== 交易明细 ====== -->
+        <div class="page" id="backtest-trades">
+            <div class="page-title">交易明细</div>
+            <div class="page-subtitle">完整交易记录 (买入-卖出配对)</div>
+
+            <div id="trades-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载交易数据...
+            </div>
+
+            <div id="trades-content" style="display:none;">
+                <div class="stats-grid" id="trade-stats"></div>
+                <div class="card">
+                    <div class="card-title">交易记录</div>
+                    <div class="trade-table-wrap">
+                        <table id="trades-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>买入时间</th>
+                                    <th>买入价</th>
+                                    <th>卖出时间</th>
+                                    <th>卖出价</th>
+                                    <th>盈亏(USDT)</th>
+                                    <th>盈亏%</th>
+                                    <th>买入原因</th>
+                                    <th>卖出原因</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+    // ===== Navigation =====
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.addEventListener('click', () => {
+            document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            item.classList.add('active');
+            const pageId = item.dataset.page;
+            document.getElementById(pageId).classList.add('active');
+
+            // Lazy load backtest data
+            if (pageId.startsWith('backtest') && !window._backtestLoaded) {
+                loadBacktestData();
+            }
+        });
+    });
+
+    // ===== Backtest Data =====
+    let btData = null;
+
+    async function loadBacktestData() {
+        if (window._backtestLoaded) return;
+        try {
+            const resp = await fetch('/api/backtest');
+            if (!resp.ok) throw new Error('No data');
+            btData = await resp.json();
+            window._backtestLoaded = true;
+            renderSummary();
+            renderEquityChart();
+            renderKlineChart();
+            renderTrades();
+        } catch (e) {
+            document.querySelectorAll('.loading').forEach(el => {
+                el.innerHTML = '<span style="color:var(--accent-red)">未找到回测数据。请先运行: python backtest.py</span>';
+            });
+        }
+    }
+
+    function renderSummary() {
+        const s = btData.summary;
+        document.getElementById('summary-loading').style.display = 'none';
+        document.getElementById('summary-content').style.display = 'block';
+
+        const statsHtml = [
+            {label: '策略收益', value: s.total_return + '%', cls: s.total_return >= 0 ? 'positive' : 'negative'},
+            {label: '买入持有收益', value: s.buy_hold_return + '%', cls: s.buy_hold_return >= 0 ? 'positive' : 'negative'},
+            {label: '最终资金', value: '$' + s.final_equity.toLocaleString(), cls: s.final_equity >= s.initial_capital ? 'positive' : 'negative'},
+            {label: '最大回撤', value: s.max_drawdown + '%', cls: 'negative'},
+            {label: '交易次数', value: s.total_trades, cls: ''},
+            {label: '胜率', value: s.win_rate + '%', cls: s.win_rate >= 50 ? 'positive' : 'negative', note: s.win_count + '胜 / ' + s.lose_count + '负'},
+            {label: '平均盈利', value: '+' + s.avg_win_pct + '%', cls: 'positive'},
+            {label: '平均亏损', value: s.avg_loss_pct + '%', cls: 'negative'},
+            {label: 'Sharpe比率', value: s.sharpe_ratio, cls: s.sharpe_ratio >= 0 ? 'positive' : 'negative'},
+            {label: '回测天数', value: s.total_days + '天', cls: ''},
+        ].map(item => `
+            <div class="stat-card">
+                <div class="stat-label">${item.label}</div>
+                <div class="stat-value ${item.cls}">${item.value}</div>
+                ${item.note ? '<div class="stat-note">' + item.note + '</div>' : ''}
+            </div>
+        `).join('');
+        document.getElementById('stats-grid').innerHTML = statsHtml;
+    }
+
+    function renderEquityChart() {
+        const container = document.getElementById('equity-chart');
+        if (!btData || !btData.equity_curve || !btData.equity_curve.length) return;
+
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth,
+            height: 300,
+            layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            crosshair: { mode: 0 },
+            timeScale: { timeVisible: true, secondsVisible: false },
+        });
+
+        const equitySeries = chart.addLineSeries({
+            color: '#4a9eff', lineWidth: 2, title: '策略净值',
+        });
+
+        const eqData = btData.equity_curve.map(e => ({
+            time: Math.floor(new Date(e.date).getTime() / 1000),
+            value: e.equity,
+        }));
+        equitySeries.setData(eqData);
+
+        // Buy & hold baseline
+        if (btData.kline_data && btData.kline_data.length > 0) {
+            const baseline = chart.addLineSeries({
+                color: '#5c6078', lineWidth: 1, lineStyle: 2, title: '买入持有',
+            });
+            const firstPrice = btData.kline_data[0].close;
+            const initCap = btData.summary.initial_capital;
+            const bhData = btData.kline_data.map(k => ({
+                time: Math.floor(new Date(k.date).getTime() / 1000),
+                value: initCap * (k.close / firstPrice),
+            }));
+            baseline.setData(bhData);
+        }
+
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderKlineChart() {
+        const container = document.getElementById('kline-chart');
+        document.getElementById('chart-loading').style.display = 'none';
+        document.getElementById('chart-content').style.display = 'block';
+
+        if (!btData || !btData.kline_data || !btData.kline_data.length) return;
+
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth,
+            height: 400,
+            layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            crosshair: { mode: 0 },
+            timeScale: { timeVisible: true, secondsVisible: false },
+        });
+
+        const candleSeries = chart.addCandlestickSeries({
+            upColor: '#00d68f', downColor: '#ff4d6a',
+            borderUpColor: '#00d68f', borderDownColor: '#ff4d6a',
+            wickUpColor: '#00d68f', wickDownColor: '#ff4d6a',
+        });
+
+        const kData = btData.kline_data.map(k => ({
+            time: Math.floor(new Date(k.date).getTime() / 1000),
+            open: k.open, high: k.high, low: k.low, close: k.close,
+        }));
+        candleSeries.setData(kData);
+
+        // Add markers for signals
+        if (btData.signals && btData.signals.length > 0) {
+            const markers = btData.signals.map(s => ({
+                time: Math.floor(new Date(s.date).getTime() / 1000),
+                position: s.signal === 'BUY' ? 'belowBar' : 'aboveBar',
+                color: s.signal === 'BUY' ? '#00d68f' : '#ff4d6a',
+                shape: s.signal === 'BUY' ? 'arrowUp' : 'arrowDown',
+                text: s.signal === 'BUY' ? 'B' : 'S',
+            }));
+            candleSeries.setMarkers(markers);
+        }
+
+        // Volume
+        const volSeries = chart.addHistogramSeries({
+            priceFormat: { type: 'volume' },
+            priceScaleId: 'vol',
+        });
+        chart.priceScale('vol').applyOptions({
+            scaleMargins: { top: 0.85, bottom: 0 },
+        });
+        const vData = btData.kline_data.map(k => ({
+            time: Math.floor(new Date(k.date).getTime() / 1000),
+            value: k.volume,
+            color: k.close >= k.open ? 'rgba(0,214,143,0.3)' : 'rgba(255,77,106,0.3)',
+        }));
+        volSeries.setData(vData);
+
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderTrades() {
+        document.getElementById('trades-loading').style.display = 'none';
+        document.getElementById('trades-content').style.display = 'block';
+
+        if (!btData || !btData.completed_trades) return;
+
+        const trades = btData.completed_trades;
+        const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+        const bestTrade = trades.reduce((b, t) => t.pnl_pct > b.pnl_pct ? t : b, trades[0] || {pnl_pct:0});
+        const worstTrade = trades.reduce((w, t) => t.pnl_pct < w.pnl_pct ? t : w, trades[0] || {pnl_pct:0});
+
+        document.getElementById('trade-stats').innerHTML = [
+            {label: '总盈亏', value: '$' + totalPnl.toFixed(2), cls: totalPnl >= 0 ? 'positive' : 'negative'},
+            {label: '最佳交易', value: '+' + (bestTrade.pnl_pct||0).toFixed(2) + '%', cls: 'positive'},
+            {label: '最差交易', value: (worstTrade.pnl_pct||0).toFixed(2) + '%', cls: 'negative'},
+            {label: '完成交易', value: trades.length, cls: ''},
+        ].map(item => `
+            <div class="stat-card">
+                <div class="stat-label">${item.label}</div>
+                <div class="stat-value ${item.cls}">${item.value}</div>
+            </div>
+        `).join('');
+
+        const tbody = document.querySelector('#trades-table tbody');
+        tbody.innerHTML = trades.map((t, i) => `
+            <tr>
+                <td>${i + 1}</td>
+                <td>${formatDate(t.buy_date)}</td>
+                <td>$${t.buy_price.toFixed(2)}</td>
+                <td>${formatDate(t.sell_date)}</td>
+                <td>$${t.sell_price.toFixed(2)}</td>
+                <td class="${t.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}</td>
+                <td class="${t.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg'}">${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%</td>
+                <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.buy_reason||''}">${t.buy_reason || '-'}</td>
+                <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.sell_reason||''}">${t.sell_reason || '-'}</td>
+            </tr>
+        `).join('');
+    }
+
+    function formatDate(dateStr) {
+        if (!dateStr) return '-';
+        const d = new Date(dateStr);
+        return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    }
+    </script>
+</body>
+</html>

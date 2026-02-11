@@ -1,0 +1,140 @@
+"""
+币安 ETH/USDT 数据获取模块
+使用币安公开API获取K线数据, 无需API Key
+"""
+
+import pandas as pd
+import numpy as np
+import json
+import time
+from datetime import datetime, timedelta
+from urllib.request import urlopen, Request
+from urllib.error import URLError
+
+
+BINANCE_KLINE_URL = "https://api.binance.com/api/v3/klines"
+
+INTERVAL_MAP = {
+    '1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m', '30m': '30m',
+    '1h': '1h', '2h': '2h', '4h': '4h', '6h': '6h', '8h': '8h', '12h': '12h',
+    '1d': '1d', '3d': '3d', '1w': '1w', '1M': '1M',
+    '10m': '15m',  # 币安没有10m, 用15m代替后重采样
+}
+
+
+def fetch_binance_klines(symbol: str = "ETHUSDT",
+                         interval: str = "15m",
+                         days: int = 30,
+                         limit_per_request: int = 1000) -> pd.DataFrame:
+    """
+    从币安获取K线数据
+
+    参数:
+        symbol: 交易对 (如 ETHUSDT)
+        interval: K线周期 (1m/5m/15m/30m/1h/4h/1d)
+        days: 获取最近多少天的数据
+        limit_per_request: 每次请求最多返回条数
+
+    返回: DataFrame with open, high, low, close, volume
+    """
+    all_klines = []
+    end_time = int(datetime.now().timestamp() * 1000)
+    start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+
+    # 如果请求10分钟, 先获取5分钟再重采样
+    actual_interval = interval
+    need_resample = False
+    resample_rule = None
+
+    if interval == '10m':
+        actual_interval = '5m'
+        need_resample = True
+        resample_rule = '10min'
+        # 需要更多数据来重采样
+        days = int(days * 1.1)
+        start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+
+    current_start = start_time
+
+    print(f"正在从币安获取 {symbol} {interval} K线数据 (最近{days}天)...")
+
+    while current_start < end_time:
+        url = (f"{BINANCE_KLINE_URL}?symbol={symbol}"
+               f"&interval={actual_interval}"
+               f"&startTime={current_start}"
+               f"&limit={limit_per_request}")
+
+        try:
+            req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urlopen(req, timeout=15) as response:
+                data = json.loads(response.read().decode())
+        except Exception as e:
+            print(f"  请求失败: {e}, 重试中...")
+            time.sleep(2)
+            try:
+                req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urlopen(req, timeout=15) as response:
+                    data = json.loads(response.read().decode())
+            except Exception as e2:
+                print(f"  重试仍失败: {e2}")
+                break
+
+        if not data:
+            break
+
+        all_klines.extend(data)
+        current_start = data[-1][0] + 1  # 下一批从最后一条之后开始
+
+        if len(data) < limit_per_request:
+            break
+
+        time.sleep(0.2)  # 避免限速
+
+    if not all_klines:
+        print("未获取到数据!")
+        return pd.DataFrame()
+
+    # 解析数据
+    df = pd.DataFrame(all_klines, columns=[
+        'open_time', 'open', 'high', 'low', 'close', 'volume',
+        'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+        'taker_buy_quote', 'ignore'
+    ])
+
+    df['date'] = pd.to_datetime(df['open_time'], unit='ms')
+    df = df.set_index('date')
+
+    for col in ['open', 'high', 'low', 'close', 'volume', 'quote_volume']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    df = df[['open', 'high', 'low', 'close', 'volume', 'quote_volume']].copy()
+    df = df[~df.index.duplicated(keep='first')]
+    df = df.sort_index()
+
+    # 如果需要重采样到10分钟
+    if need_resample and resample_rule:
+        print(f"  将 {actual_interval} 数据重采样为 {interval}...")
+        df = df.resample(resample_rule).agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum',
+            'quote_volume': 'sum'
+        }).dropna()
+
+    # 去掉时区信息使后续处理一致
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+
+    print(f"  获取完成: {len(df)} 条 {interval} K线 "
+          f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+          f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+
+    return df
+
+
+if __name__ == '__main__':
+    df = fetch_binance_klines("ETHUSDT", interval="10m", days=30)
+    print(f"\n数据预览:\n{df.tail(10)}")
+    print(f"\n数据统计:\n{df.describe()}")
