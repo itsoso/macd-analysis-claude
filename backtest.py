@@ -382,13 +382,56 @@ class BacktestEngine:
         return report
 
 
-def run_eth_backtest(days: int = 30) -> dict:
-    """执行 ETH/USDT 10分钟回测"""
+def run_eth_backtest(days: int = 30, interval: str = '1h') -> dict:
+    """
+    执行 ETH/USDT 回测
+
+    参数:
+        days: 回测天数
+        interval: K线周期 (10m / 15m / 1h / 4h / 1d)
+    """
     from binance_fetcher import fetch_binance_klines
 
-    df = fetch_binance_klines("ETHUSDT", interval="10m", days=days)
-    if df is None or len(df) < 200:
-        print("数据不足, 无法回测")
+    # 根据周期调整策略参数
+    PARAMS = {
+        '5m':  {'window': 200, 'step': 40,  'cooldown': 36, 'buy_th': 65, 'sell_th': 45,
+                'sl': 0.04, 'tp': 0.06, 'label': '5分钟'},
+        '10m': {'window': 200, 'step': 50,  'cooldown': 30, 'buy_th': 65, 'sell_th': 45,
+                'sl': 0.05, 'tp': 0.08, 'label': '10分钟'},
+        '15m': {'window': 200, 'step': 40,  'cooldown': 20, 'buy_th': 63, 'sell_th': 45,
+                'sl': 0.05, 'tp': 0.08, 'label': '15分钟'},
+        '30m': {'window': 200, 'step': 30,  'cooldown': 12, 'buy_th': 60, 'sell_th': 42,
+                'sl': 0.06, 'tp': 0.09, 'label': '30分钟'},
+        '1h':  {'window': 168, 'step': 24,  'cooldown': 18, 'buy_th': 70, 'sell_th': 40,
+                'sl': 0.07, 'tp': 0.12, 'label': '1小时'},
+        '2h':  {'window': 150, 'step': 18,  'cooldown': 6,  'buy_th': 55, 'sell_th': 38,
+                'sl': 0.07, 'tp': 0.13, 'label': '2小时'},
+        '3h':  {'window': 130, 'step': 15,  'cooldown': 4,  'buy_th': 53, 'sell_th': 37,
+                'sl': 0.08, 'tp': 0.14, 'label': '3小时'},
+        '4h':  {'window': 120, 'step': 12,  'cooldown': 3,  'buy_th': 50, 'sell_th': 35,
+                'sl': 0.08, 'tp': 0.15, 'label': '4小时'},
+        '6h':  {'window': 100, 'step': 8,   'cooldown': 2,  'buy_th': 50, 'sell_th': 35,
+                'sl': 0.09, 'tp': 0.16, 'label': '6小时'},
+        '8h':  {'window': 90,  'step': 6,   'cooldown': 2,  'buy_th': 50, 'sell_th': 35,
+                'sl': 0.10, 'tp': 0.18, 'label': '8小时'},
+        '16h': {'window': 60,  'step': 4,   'cooldown': 2,  'buy_th': 50, 'sell_th': 35,
+                'sl': 0.12, 'tp': 0.22, 'label': '16小时'},
+        '24h': {'window': 50,  'step': 3,   'cooldown': 1,  'buy_th': 50, 'sell_th': 35,
+                'sl': 0.12, 'tp': 0.22, 'label': '24小时'},
+        '32h': {'window': 45,  'step': 3,   'cooldown': 1,  'buy_th': 50, 'sell_th': 35,
+                'sl': 0.15, 'tp': 0.28, 'label': '32小时'},
+        '1d':  {'window': 60,  'step': 5,   'cooldown': 2,  'buy_th': 50, 'sell_th': 35,
+                'sl': 0.10, 'tp': 0.20, 'label': '日线'},
+    }
+    p = PARAMS.get(interval, PARAMS['1h'])
+
+    print(f"\n{'='*60}")
+    print(f"  ETH/USDT {p['label']}级别背离/背驰策略回测")
+    print(f"{'='*60}")
+
+    df = fetch_binance_klines("ETHUSDT", interval=interval, days=days)
+    if df is None or len(df) < p['window']:
+        print(f"数据不足(需要至少{p['window']}条K线), 无法回测")
         return {}
 
     engine = BacktestEngine(
@@ -397,14 +440,16 @@ def run_eth_backtest(days: int = 30) -> dict:
         commission=0.001,
         slippage=0.0005,
         position_size=0.95,
-        stop_loss=0.05,
-        take_profit=0.08,
-        cooldown=30,
-        buy_threshold=65,
-        sell_threshold=45,
+        stop_loss=p['sl'],
+        take_profit=p['tp'],
+        cooldown=p['cooldown'],
+        buy_threshold=p['buy_th'],
+        sell_threshold=p['sell_th'],
     )
 
-    report = engine.run(window_size=200, step=50)
+    report = engine.run(window_size=p['window'], step=p['step'])
+    report['interval'] = interval
+    report['interval_label'] = p['label']
 
     output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                'backtest_result.json')
@@ -416,4 +461,12 @@ def run_eth_backtest(days: int = 30) -> dict:
 
 
 if __name__ == '__main__':
-    run_eth_backtest(days=30)
+    import argparse
+    parser = argparse.ArgumentParser(description='ETH/USDT 背离策略回测')
+    parser.add_argument('--interval', '-i', default='1h',
+                        choices=['5m','10m','15m','30m','1h','2h','3h','4h','6h','8h','16h','24h','32h','1d'],
+                        help='K线周期 (默认: 1h)')
+    parser.add_argument('--days', '-d', type=int, default=90,
+                        help='回测天数 (默认: 90)')
+    args = parser.parse_args()
+    run_eth_backtest(days=args.days, interval=args.interval)

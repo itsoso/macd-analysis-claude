@@ -460,11 +460,185 @@
         }
 
         /* Responsive */
+        /* Multi-interval bar chart */
+        .bar-chart-container {
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            gap: 8px;
+            height: 260px;
+            padding: 20px 10px 0;
+        }
+
+        .bar-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex: 1;
+            max-width: 72px;
+        }
+
+        .bar-value {
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            white-space: nowrap;
+        }
+
+        .bar-rect {
+            width: 100%;
+            border-radius: 4px 4px 0 0;
+            min-height: 2px;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .bar-rect:hover {
+            opacity: 0.8;
+            transform: scaleX(1.1);
+        }
+
+        .bar-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 8px;
+            text-align: center;
+        }
+
+        .bar-zero-line {
+            width: 100%;
+            height: 1px;
+            background: var(--text-muted);
+            position: relative;
+        }
+
+        /* Multi table highlight */
+        #sc-table th, #sc-opt-table th {
+            text-align: center;
+            font-size: 11px;
+            padding: 8px 10px;
+            white-space: nowrap;
+        }
+
+        #sc-table td, #sc-opt-table td {
+            text-align: center;
+            font-size: 12px;
+            padding: 8px 10px;
+            white-space: nowrap;
+        }
+
+        #multi-table th {
+            text-align: center;
+            font-size: 11px;
+            padding: 8px 6px;
+            white-space: nowrap;
+        }
+
+        #multi-table td {
+            text-align: center;
+            font-size: 12px;
+            padding: 7px 6px;
+            white-space: nowrap;
+        }
+
+        #multi-table tr.best-row td {
+            background: rgba(0, 214, 143, 0.05);
+        }
+
+        .cell-best {
+            color: var(--accent-green) !important;
+            font-weight: 700 !important;
+        }
+
+        .cell-worst {
+            color: var(--accent-red) !important;
+        }
+
+        /* Conclusion */
+        .conclusion-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .conclusion-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .conclusion-item {
+            padding: 16px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+        }
+
+        .conclusion-item h4 {
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .conclusion-item p {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        .rank-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            font-size: 11px;
+            font-weight: 700;
+            margin-right: 4px;
+        }
+
+        .rank-1 { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #000; }
+        .rank-2 { background: linear-gradient(135deg, #c0c0c0, #a0a0a0); color: #000; }
+        .rank-3 { background: linear-gradient(135deg, #cd7f32, #a0622a); color: #fff; }
+
+        /* Legend for equity chart */
+        .equity-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 3px 8px;
+            border-radius: 4px;
+            transition: background 0.15s;
+        }
+
+        .legend-item:hover { background: var(--bg-hover); }
+        .legend-item.disabled { opacity: 0.3; }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
         @media (max-width: 900px) {
             .sidebar { width: 220px; min-width: 220px; }
             .page { padding: 24px 20px; }
             .principle-grid { grid-template-columns: 1fr; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .conclusion-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -507,8 +681,17 @@
 
         <div class="nav-section">
             <div class="nav-section-title">ETH/USDT 回测</div>
+            <div class="nav-item" data-page="global-strategy">
+                <span class="nav-icon">🏆</span> 全局最优策略
+            </div>
+            <div class="nav-item" data-page="strategy-compare">
+                <span class="nav-icon">🔬</span> 策略优化对比
+            </div>
+            <div class="nav-item" data-page="multi-compare">
+                <span class="nav-icon">📊</span> 多周期对比
+            </div>
             <div class="nav-item" data-page="backtest-summary">
-                <span class="nav-icon">💰</span> 回测摘要
+                <span class="nav-icon">💰</span> 单周期详情
             </div>
             <div class="nav-item" data-page="backtest-chart">
                 <span class="nav-icon">📉</span> K线与信号
@@ -1039,6 +1222,194 @@
             </div>
         </div>
 
+        <!-- ====== 全局最优策略 ====== -->
+        <div class="page" id="global-strategy">
+            <div class="page-title">全局多周期融合策略</div>
+            <div class="page-subtitle">初始配置 100,000 USDT + 价值 100,000 USDT 的 ETH · 9个周期加权信号融合</div>
+
+            <div id="gs-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载全局策略数据...
+            </div>
+
+            <div id="gs-content" style="display:none;">
+                <!-- 摘要统计 -->
+                <div class="stats-grid" id="gs-stats"></div>
+
+                <!-- 策略说明 -->
+                <div class="card">
+                    <div class="card-title">策略说明</div>
+                    <div class="principle-grid">
+                        <div class="principle-card sell">
+                            <h3>卖出逻辑 (宁早勿晚)</h3>
+                            <p>
+                                • 多周期背驰卖出信号 → 卖出60%仓位<br>
+                                • 加权顶背离≥35 且仓位>30% → 卖出30~40%<br>
+                                • 强顶背离≥50 且仓位>20% → 卖出40~60%<br>
+                                • ETH浮亏超12% → 止损减仓50%
+                            </p>
+                        </div>
+                        <div class="principle-card buy">
+                            <h3>买入逻辑 (宁迟勿早)</h3>
+                            <p>
+                                • 多周期背驰买入信号 → 买入50%可用资金<br>
+                                • 加权底背离≥45 且仓位<50% → 买入30%<br>
+                                • 强底背离≥60 且仓位<60% → 买入50%<br>
+                                • 冷却期: 8小时
+                            </p>
+                        </div>
+                    </div>
+                    <div style="margin-top:16px;">
+                        <div class="card-title" style="font-size:14px;">各周期权重</div>
+                        <div id="gs-weights" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;"></div>
+                    </div>
+                </div>
+
+                <!-- 资产曲线 -->
+                <div class="chart-container">
+                    <div class="chart-toolbar">
+                        <h3>总资产曲线</h3>
+                        <span style="font-size:12px;color:var(--text-muted);">蓝线=策略总资产 | 灰虚线=买入持有</span>
+                    </div>
+                    <div id="gs-equity-chart" style="width:100%;height:350px;"></div>
+                </div>
+
+                <!-- 仓位变化 -->
+                <div class="chart-container">
+                    <div class="chart-toolbar">
+                        <h3>ETH仓位比例变化</h3>
+                        <span style="font-size:12px;color:var(--text-muted);">ETH占总资产的比例</span>
+                    </div>
+                    <div id="gs-ratio-chart" style="width:100%;height:200px;"></div>
+                </div>
+
+                <!-- 交易明细表 -->
+                <div class="card">
+                    <div class="card-title">全部交易明细 <span class="badge" id="gs-trade-count"></span></div>
+                    <div class="trade-table-wrap" style="max-height:600px;">
+                        <table id="gs-trades-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>时间</th>
+                                    <th>操作</th>
+                                    <th>类型</th>
+                                    <th>ETH价格</th>
+                                    <th>数量(ETH)</th>
+                                    <th>金额(USDT)</th>
+                                    <th>手续费</th>
+                                    <th>USDT余额</th>
+                                    <th>ETH持仓</th>
+                                    <th>总资产</th>
+                                    <th>原因</th>
+                                    <th>各周期信号</th>
+                                </tr>
+                            </thead>
+                            <tbody id="gs-trades-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ====== 策略优化对比 ====== -->
+        <div class="page" id="strategy-compare">
+            <div class="page-title">策略优化对比实验</div>
+            <div class="page-subtitle">6种策略思路 + 12种参数变体 · 寻找最优策略配置</div>
+
+            <div id="sc-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载策略对比数据...
+            </div>
+
+            <div id="sc-content" style="display:none;">
+                <!-- 第一部分: 6大策略对比 -->
+                <div class="card">
+                    <div class="card-title">6大策略思路对比 <span class="badge purple">Phase 1</span></div>
+                    <div class="page-subtitle" style="margin-bottom:16px;">相同数据、相同初始资金(10万USDT+10万ETH)，测试6种不同策略逻辑</div>
+
+                    <!-- 策略说明卡片 -->
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;" id="sc-strategy-cards"></div>
+
+                    <!-- 超额收益对比柱状图 -->
+                    <div id="sc-bar-chart" style="width:100%;min-height:320px;margin-bottom:20px;"></div>
+
+                    <!-- 对比表格 -->
+                    <div class="trade-table-wrap" style="max-height:none;">
+                        <table id="sc-table">
+                            <thead><tr id="sc-table-head"></tr></thead>
+                            <tbody id="sc-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 第二部分: 最优策略参数调优 -->
+                <div class="card">
+                    <div class="card-title">最优策略参数调优 <span class="badge green">Phase 2</span></div>
+                    <div class="page-subtitle" style="margin-bottom:16px;">基于最优策略(渐进减仓)，测试12种参数组合寻找最优配置</div>
+
+                    <!-- 优化变体柱状图 -->
+                    <div id="sc-opt-bar" style="width:100%;min-height:360px;margin-bottom:20px;"></div>
+
+                    <!-- 优化变体表格 -->
+                    <div class="trade-table-wrap" style="max-height:none;">
+                        <table id="sc-opt-table">
+                            <thead><tr id="sc-opt-head"></tr></thead>
+                            <tbody id="sc-opt-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 资产曲线对比 -->
+                <div class="card">
+                    <div class="card-title">TOP策略资产曲线对比</div>
+                    <div id="sc-equity-chart" style="width:100%;height:380px;"></div>
+                </div>
+
+                <!-- 最终结论 -->
+                <div class="card" id="sc-conclusion"></div>
+            </div>
+        </div>
+
+        <!-- ====== 多周期对比 ====== -->
+        <div class="page" id="multi-compare">
+            <div class="page-title">12周期回测对比</div>
+            <div class="page-subtitle">ETH/USDT · 10分钟 ~ 32小时 · 背离/背驰策略在不同时间框架下的表现</div>
+
+            <div id="multi-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载多周期回测数据...
+            </div>
+
+            <div id="multi-content" style="display:none;">
+                <!-- 超额收益柱状图 -->
+                <div class="card">
+                    <div class="card-title">超额收益对比 <span class="badge green">策略收益 - 买入持有收益</span></div>
+                    <div id="alpha-bar-chart" style="width:100%;height:320px;"></div>
+                </div>
+
+                <!-- 核心指标对比表 -->
+                <div class="card">
+                    <div class="card-title">核心指标对比表</div>
+                    <div class="trade-table-wrap" style="max-height:none;">
+                        <table id="multi-table">
+                            <thead><tr id="multi-table-head"></tr></thead>
+                            <tbody id="multi-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 资产曲线叠加图 -->
+                <div class="card">
+                    <div class="card-title">资产曲线叠加 <span class="badge">点击图例切换显示</span></div>
+                    <div id="multi-equity-chart" style="width:100%;height:380px;"></div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="multi-conclusion"></div>
+            </div>
+        </div>
+
         <!-- ====== 回测摘要 ====== -->
         <div class="page" id="backtest-summary">
             <div class="page-title">ETH/USDT 回测摘要</div>
@@ -1145,6 +1516,11 @@
     </div>
 
     <script>
+    // ===== Constants =====
+    const INTERVALS = ['10m','15m','30m','1h','2h','3h','4h','6h','8h','16h','24h','32h'];
+    const INTERVAL_LABELS = {'10m':'10分钟','15m':'15分钟','30m':'30分钟','1h':'1小时','2h':'2小时','3h':'3小时','4h':'4小时','6h':'6小时','8h':'8小时','16h':'16小时','24h':'24小时','32h':'32小时'};
+    const COLORS = ['#4a9eff','#ff4d6a','#00d68f','#ffaa00','#a855f7','#06b6d4','#f43f5e','#84cc16','#ec4899','#f97316','#8b5cf6','#14b8a6'];
+
     // ===== Navigation =====
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', () => {
@@ -1154,14 +1530,776 @@
             const pageId = item.dataset.page;
             document.getElementById(pageId).classList.add('active');
 
-            // Lazy load backtest data
-            if (pageId.startsWith('backtest') && !window._backtestLoaded) {
-                loadBacktestData();
-            }
+            if (pageId === 'global-strategy' && !window._gsLoaded) loadGlobalStrategy();
+                if (pageId === 'strategy-compare' && !window._scLoaded) loadStrategyCompare();
+                if (pageId === 'multi-compare' && !window._multiLoaded) loadMultiData();
+                if (pageId.startsWith('backtest') && !window._backtestLoaded) loadBacktestData();
         });
     });
 
-    // ===== Backtest Data =====
+    // ========================================
+    //   Global Strategy
+    // ========================================
+    let gsData = null;
+
+    async function loadGlobalStrategy() {
+        if (window._gsLoaded) return;
+        try {
+            const resp = await fetch('/api/global_strategy');
+            if (!resp.ok) throw new Error('No data');
+            gsData = await resp.json();
+            window._gsLoaded = true;
+            renderGS();
+            document.getElementById('gs-loading').style.display = 'none';
+            document.getElementById('gs-content').style.display = 'block';
+        } catch (e) {
+            document.getElementById('gs-loading').innerHTML =
+                '<span style="color:var(--accent-red)">未找到全局策略数据。请先运行: python global_strategy.py</span>';
+        }
+    }
+
+    function renderGS() {
+        const s = gsData.summary;
+        const trades = gsData.trades || [];
+
+        // Stats
+        document.getElementById('gs-stats').innerHTML = [
+            {label:'初始总资产', value:'$'+s.initial_total.toLocaleString(), cls:''},
+            {label:'最终总资产', value:'$'+s.final_total.toLocaleString(), cls: s.final_total >= s.initial_total ? 'positive' : 'negative'},
+            {label:'策略收益', value: s.strategy_return+'%', cls: s.strategy_return >= 0 ? 'positive' : 'negative'},
+            {label:'买入持有收益', value: s.buy_hold_return+'%', cls: s.buy_hold_return >= 0 ? 'positive' : 'negative'},
+            {label:'超额收益', value: (s.alpha >= 0 ? '+' : '') + s.alpha + '%', cls: s.alpha >= 0 ? 'positive' : 'negative'},
+            {label:'最大回撤', value: s.max_drawdown+'%', cls:'negative'},
+            {label:'ETH价格变化', value: s.eth_price_change+'%', cls: s.eth_price_change >= 0 ? 'positive' : 'negative'},
+            {label:'买入/卖出次数', value: s.total_buy_trades + '买 / ' + s.total_sell_trades + '卖', cls:''},
+            {label:'最终USDT', value: '$'+s.final_usdt.toLocaleString(), cls:''},
+            {label:'最终ETH持仓', value: s.final_eth_qty + ' ETH', cls:'', note: '$' + s.final_eth_value.toLocaleString()},
+        ].map(item => `
+            <div class="stat-card">
+                <div class="stat-label">${item.label}</div>
+                <div class="stat-value ${item.cls}" style="font-size:${item.value.length > 12 ? '18' : '24'}px;">${item.value}</div>
+                ${item.note ? '<div class="stat-note">' + item.note + '</div>' : ''}
+            </div>
+        `).join('');
+
+        // Weights
+        const weights = gsData.tf_weights || {};
+        document.getElementById('gs-weights').innerHTML = Object.entries(weights)
+            .sort((a,b) => b[1] - a[1])
+            .map(([tf, w]) => {
+                const pct = Math.round(w * 100);
+                const hue = pct > 70 ? 142 : pct > 50 ? 45 : 220;
+                return `<div style="padding:6px 12px;border-radius:8px;border:1px solid var(--border);font-size:12px;">
+                    <strong>${INTERVAL_LABELS[tf] || tf}</strong>
+                    <span style="color:hsl(${hue},70%,60%);margin-left:4px;">${pct}%</span>
+                    <div style="height:3px;margin-top:4px;border-radius:2px;background:var(--border);width:80px;">
+                        <div style="height:100%;width:${pct}%;background:hsl(${hue},70%,60%);border-radius:2px;"></div>
+                    </div>
+                </div>`;
+            }).join('');
+
+        // Trade count badge
+        document.getElementById('gs-trade-count').textContent = trades.length + '笔交易';
+
+        // Equity chart
+        renderGSEquity();
+
+        // Ratio chart
+        renderGSRatio();
+
+        // Trades table
+        renderGSTrades();
+    }
+
+    function renderGSEquity() {
+        const container = document.getElementById('gs-equity-chart');
+        const ph = gsData.portfolio_history || [];
+        if (!ph.length) return;
+
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth, height: 350,
+            layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            crosshair: { mode: 0 },
+            timeScale: { timeVisible: true, secondsVisible: false },
+        });
+
+        // Strategy total
+        const stLine = chart.addLineSeries({ color: '#4a9eff', lineWidth: 2, title: '策略总资产' });
+        stLine.setData(ph.map(p => ({
+            time: Math.floor(new Date(p.time).getTime() / 1000),
+            value: p.total,
+        })));
+
+        // Buy & hold baseline
+        const initTotal = gsData.summary.initial_total;
+        const firstEthP = ph[0].eth_price;
+        const bhLine = chart.addLineSeries({ color: '#5c6078', lineWidth: 1, lineStyle: 2, title: '买入持有' });
+        bhLine.setData(ph.map(p => ({
+            time: Math.floor(new Date(p.time).getTime() / 1000),
+            value: 100000 + (100000 / firstEthP) * p.eth_price,
+        })));
+
+        // Buy/sell markers on equity
+        const markers = (gsData.trades || []).map(t => ({
+            time: Math.floor(new Date(t.time).getTime() / 1000),
+            position: t.action === 'BUY' ? 'belowBar' : 'aboveBar',
+            color: t.action === 'BUY' ? '#00d68f' : '#ff4d6a',
+            shape: t.action === 'BUY' ? 'arrowUp' : 'arrowDown',
+            text: t.action === 'BUY' ? 'B' : 'S',
+        }));
+        stLine.setMarkers(markers);
+
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderGSRatio() {
+        const container = document.getElementById('gs-ratio-chart');
+        const ph = gsData.portfolio_history || [];
+        if (!ph.length) return;
+
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth, height: 200,
+            layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            crosshair: { mode: 0 },
+            timeScale: { timeVisible: true, secondsVisible: false },
+            rightPriceScale: { autoScale: true },
+        });
+
+        const areaS = chart.addAreaSeries({
+            topColor: 'rgba(74,158,255,0.3)',
+            bottomColor: 'rgba(74,158,255,0.02)',
+            lineColor: '#4a9eff',
+            lineWidth: 1,
+            title: 'ETH仓位%',
+        });
+        areaS.setData(ph.map(p => ({
+            time: Math.floor(new Date(p.time).getTime() / 1000),
+            value: p.eth_ratio,
+        })));
+
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderGSTrades() {
+        const trades = gsData.trades || [];
+        const tbody = document.getElementById('gs-trades-body');
+
+        tbody.innerHTML = trades.map((t, i) => {
+            const isBuy = t.action === 'BUY';
+            const actionCls = isBuy ? 'pnl-pos' : 'pnl-neg';
+            const typeBg = t.type === '止损减仓' ? 'background:rgba(255,77,106,0.08);' : '';
+            const dt = new Date(t.time);
+            const timeStr = `${dt.getMonth()+1}/${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+
+            return `<tr style="${typeBg}">
+                <td>${i+1}</td>
+                <td style="white-space:nowrap;">${timeStr}</td>
+                <td class="${actionCls}" style="font-weight:700;">${t.action}</td>
+                <td>${t.type}</td>
+                <td>$${t.price.toLocaleString()}</td>
+                <td>${t.quantity.toFixed(4)}</td>
+                <td>$${t.value.toLocaleString()}</td>
+                <td>$${t.fee.toFixed(2)}</td>
+                <td>$${t.usdt_after.toLocaleString()}</td>
+                <td>${t.eth_after.toFixed(4)}</td>
+                <td>$${t.total_assets.toLocaleString()}</td>
+                <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${t.reason}">${t.reason}</td>
+                <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--text-muted);" title="${t.signal_tf||''}">${t.signal_tf||'—'}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    // ========================================
+    //   Strategy Compare & Optimize
+    // ========================================
+    let scData = null;
+    let scOptData = null;
+
+    async function loadStrategyCompare() {
+        if (window._scLoaded) return;
+        try {
+            const [r1, r2] = await Promise.all([
+                fetch('/api/strategy_compare'),
+                fetch('/api/strategy_optimize'),
+            ]);
+            if (!r1.ok || !r2.ok) throw new Error('No data');
+            scData = await r1.json();
+            scOptData = await r2.json();
+            window._scLoaded = true;
+            renderSCPage();
+            document.getElementById('sc-loading').style.display = 'none';
+            document.getElementById('sc-content').style.display = 'block';
+        } catch (e) {
+            document.getElementById('sc-loading').innerHTML =
+                '<span style="color:var(--accent-red)">未找到策略对比数据。请先运行 python strategy_compare.py && python strategy_optimize.py</span>';
+        }
+    }
+
+    function renderSCPage() {
+        renderSCCards();
+        renderSCBarChart();
+        renderSCTable();
+        renderSCOptBar();
+        renderSCOptTable();
+        renderSCEquity();
+        renderSCConclusion();
+    }
+
+    function renderSCCards() {
+        const strategies = scData.strategies || [];
+        const descriptions = {
+            'A: 多周期融合 (baseline)': { icon: '🔀', desc: '多周期信号加权融合，综合多个时间框架的背离/背驰信号做决策', color: '#4a9eff' },
+            'B: 4h专注策略': { icon: '🎯', desc: '只使用4h周期信号，最优单周期专注操作，高阈值+长冷却期', color: '#a855f7' },
+            'C: 趋势跟随防御': { icon: '📉', desc: 'MA50判断趋势方向，下跌只卖不买，上涨趋势中才考虑买入', color: '#f97316' },
+            'D: 保守高阈值': { icon: '🛡️', desc: '极高信号阈值(共振得分≥55/60)，36小时冷却期，只做确定性最高的交易', color: '#06b6d4' },
+            'E: 渐进减仓': { icon: '⬇️', desc: '根据背离强度逐步卖出ETH，保留10%底仓，只在强背驰信号买回', color: '#00d68f' },
+            'F: 动态再平衡': { icon: '⚖️', desc: '根据背离信号动态调整ETH目标比例(10%~70%)，偏差>8%时再平衡', color: '#ffaa00' },
+        };
+
+        const container = document.getElementById('sc-strategy-cards');
+        container.innerHTML = strategies.map(s => {
+            const d = descriptions[s.name] || { icon: '📊', desc: '', color: '#4a9eff' };
+            const alpha = s.summary.alpha;
+            const alphaColor = alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+            return `<div style="padding:16px;border-radius:10px;border:1px solid var(--border);border-top:3px solid ${d.color};">
+                <div style="font-size:20px;margin-bottom:8px;">${d.icon}</div>
+                <div style="font-weight:600;font-size:14px;margin-bottom:6px;">${s.name}</div>
+                <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;margin-bottom:10px;">${d.desc}</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-size:12px;color:var(--text-muted);">${s.summary.total_trades}笔交易</span>
+                    <span style="font-size:16px;font-weight:700;color:${alphaColor};">${alpha >= 0 ? '+' : ''}${alpha.toFixed(2)}%</span>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    function renderSCBarChart() {
+        const strategies = (scData.strategies || []).sort((a, b) => b.summary.alpha - a.summary.alpha);
+        const container = document.getElementById('sc-bar-chart');
+        const maxAbs = Math.max(...strategies.map(s => Math.abs(s.summary.alpha)), 1);
+        const barColors = ['#00d68f', '#06b6d4', '#ffaa00', '#a855f7', '#4a9eff', '#ff4d6a'];
+
+        const barH = 220;
+        let html = '<div style="position:relative;height:' + (barH + 60) + 'px;display:flex;align-items:center;">';
+        html += '<div style="display:flex;flex-direction:column;justify-content:space-between;height:' + barH + 'px;padding-right:8px;font-size:11px;color:var(--text-muted);width:50px;text-align:right;">';
+        html += '<span>+' + maxAbs.toFixed(0) + '%</span><span>0%</span><span>-' + maxAbs.toFixed(0) + '%</span></div>';
+        html += '<div style="flex:1;display:flex;align-items:center;height:' + barH + 'px;position:relative;">';
+        html += '<div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--text-muted);opacity:0.3;"></div>';
+        html += '<div style="display:flex;align-items:center;height:100%;width:100%;justify-content:space-around;">';
+
+        strategies.forEach((s, i) => {
+            const alpha = s.summary.alpha;
+            const h = Math.abs(alpha / maxAbs) * (barH / 2 - 10);
+            const isPos = alpha >= 0;
+            const color = barColors[i % barColors.length];
+            const valColor = isPos ? 'var(--accent-green)' : 'var(--accent-red)';
+            const shortName = s.name.split(':')[1] || s.name;
+
+            html += '<div style="display:flex;flex-direction:column;align-items:center;flex:1;max-width:130px;height:100%;justify-content:center;position:relative;">';
+            if (isPos) {
+                html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:50%;">';
+                html += '<span style="font-size:12px;font-weight:700;color:' + valColor + ';margin-bottom:3px;">' + (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '%</span>';
+                html += '<div style="width:48px;height:' + h + 'px;background:' + color + ';border-radius:6px 6px 0 0;opacity:0.85;"></div>';
+                html += '</div><div style="height:50%;"></div>';
+            } else {
+                html += '<div style="height:50%;"></div>';
+                html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-start;height:50%;">';
+                html += '<div style="width:48px;height:' + h + 'px;background:' + color + ';border-radius:0 0 6px 6px;opacity:0.85;"></div>';
+                html += '<span style="font-size:12px;font-weight:700;color:' + valColor + ';margin-top:3px;">' + alpha.toFixed(2) + '%</span>';
+                html += '</div>';
+            }
+            html += '<div style="position:absolute;bottom:-28px;font-size:11px;color:var(--text-muted);white-space:nowrap;text-align:center;">' + shortName.trim() + '</div>';
+            html += '</div>';
+        });
+
+        html += '</div></div></div>';
+        container.innerHTML = html;
+    }
+
+    function renderSCTable() {
+        const strategies = (scData.strategies || []).sort((a, b) => b.summary.alpha - a.summary.alpha);
+
+        let headHtml = '<th style="text-align:left;">排名</th><th style="text-align:left;">策略</th>';
+        headHtml += '<th>策略收益</th><th>买入持有</th><th>超额收益</th><th>最大回撤</th><th>交易数</th><th>最终资产</th>';
+        document.getElementById('sc-table-head').innerHTML = headHtml;
+
+        const tbody = document.getElementById('sc-table-body');
+        tbody.innerHTML = strategies.map((s, i) => {
+            const sm = s.summary;
+            const isBest = i === 0;
+            const rowStyle = isBest ? 'background:rgba(0,214,143,0.05);' : '';
+            const rankBadge = i < 3 ? `<span class="rank-badge rank-${i+1}">${i+1}</span>` : `<span style="padding:0 8px;color:var(--text-muted);">${i+1}</span>`;
+            const alphaColor = sm.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+            const retColor = sm.strategy_return >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+            return `<tr style="${rowStyle}">
+                <td>${rankBadge}</td>
+                <td style="text-align:left;font-weight:${isBest?'700':'500'};">${s.name}${isBest?' ★':''}</td>
+                <td style="color:${retColor};font-weight:600;">${sm.strategy_return >= 0 ? '+' : ''}${sm.strategy_return}%</td>
+                <td style="color:var(--text-muted);">${sm.buy_hold_return}%</td>
+                <td style="color:${alphaColor};font-weight:700;">${sm.alpha >= 0 ? '+' : ''}${sm.alpha}%</td>
+                <td style="color:var(--accent-red);">${sm.max_drawdown}%</td>
+                <td>${sm.total_trades}</td>
+                <td style="font-weight:600;">$${sm.final_total.toLocaleString()}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    function renderSCOptBar() {
+        const results = (scOptData.optimization_results || []).sort((a, b) => b.summary.alpha - a.summary.alpha);
+        const container = document.getElementById('sc-opt-bar');
+        const maxAbs = Math.max(...results.map(r => Math.abs(r.summary.alpha)), 1);
+
+        const barH = 260;
+        let html = '<div style="position:relative;height:' + (barH + 70) + 'px;display:flex;align-items:center;">';
+        html += '<div style="display:flex;flex-direction:column;justify-content:space-between;height:' + barH + 'px;padding-right:8px;font-size:11px;color:var(--text-muted);width:50px;text-align:right;">';
+        html += '<span>+' + maxAbs.toFixed(0) + '%</span><span>0%</span><span>-' + maxAbs.toFixed(0) + '%</span></div>';
+        html += '<div style="flex:1;display:flex;align-items:center;height:' + barH + 'px;position:relative;overflow-x:auto;">';
+        html += '<div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--text-muted);opacity:0.3;"></div>';
+        html += '<div style="display:flex;align-items:center;height:100%;min-width:100%;justify-content:space-around;">';
+
+        const optColors = results.map((r, i) => {
+            const a = r.summary.alpha;
+            if (a >= 8) return '#00d68f';
+            if (a >= 5) return '#06b6d4';
+            if (a >= 2) return '#4a9eff';
+            if (a >= 0) return '#ffaa00';
+            return '#ff4d6a';
+        });
+
+        results.forEach((r, i) => {
+            const alpha = r.summary.alpha;
+            const h = Math.abs(alpha / maxAbs) * (barH / 2 - 15);
+            const isPos = alpha >= 0;
+            const color = optColors[i];
+            const valColor = isPos ? 'var(--accent-green)' : 'var(--accent-red)';
+            const label = r.name.split(':')[0];
+
+            html += '<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:55px;max-width:80px;height:100%;justify-content:center;position:relative;">';
+            if (isPos) {
+                html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:50%;">';
+                html += '<span style="font-size:10px;font-weight:700;color:' + valColor + ';margin-bottom:2px;">' + (alpha >= 0 ? '+' : '') + alpha.toFixed(1) + '%</span>';
+                html += '<div style="width:28px;height:' + h + 'px;background:' + color + ';border-radius:4px 4px 0 0;opacity:0.85;"></div>';
+                html += '</div><div style="height:50%;"></div>';
+            } else {
+                html += '<div style="height:50%;"></div>';
+                html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-start;height:50%;">';
+                html += '<div style="width:28px;height:' + h + 'px;background:' + color + ';border-radius:0 0 4px 4px;opacity:0.85;"></div>';
+                html += '<span style="font-size:10px;font-weight:700;color:' + valColor + ';margin-top:2px;">' + alpha.toFixed(1) + '%</span>';
+                html += '</div>';
+            }
+            html += '<div style="position:absolute;bottom:-34px;font-size:10px;color:var(--text-muted);white-space:nowrap;text-align:center;transform:rotate(-15deg);">' + label + '</div>';
+            html += '</div>';
+        });
+
+        html += '</div></div></div>';
+        container.innerHTML = html;
+    }
+
+    function renderSCOptTable() {
+        const results = (scOptData.optimization_results || []).sort((a, b) => b.summary.alpha - a.summary.alpha);
+
+        let headHtml = '<th style="text-align:left;">#</th><th style="text-align:left;">变体</th>';
+        headHtml += '<th>策略收益</th><th>超额收益</th><th>最大回撤</th><th>交易数</th><th>最终资产</th>';
+        document.getElementById('sc-opt-head').innerHTML = headHtml;
+
+        const tbody = document.getElementById('sc-opt-body');
+        tbody.innerHTML = results.map((r, i) => {
+            const sm = r.summary;
+            const isBest = i === 0;
+            const rowStyle = isBest ? 'background:rgba(0,214,143,0.05);' : (i < 3 ? 'background:rgba(74,158,255,0.03);' : '');
+            const alphaColor = sm.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+            const retColor = sm.strategy_return >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+            const medal = i === 0 ? ' 🥇' : i === 1 ? ' 🥈' : i === 2 ? ' 🥉' : '';
+            return `<tr style="${rowStyle}">
+                <td style="font-weight:600;color:var(--text-muted);">${i+1}</td>
+                <td style="text-align:left;font-weight:${isBest?'700':'400'};font-size:12px;">${r.name}${medal}</td>
+                <td style="color:${retColor};">${sm.strategy_return >= 0 ? '+' : ''}${sm.strategy_return}%</td>
+                <td style="color:${alphaColor};font-weight:700;">${sm.alpha >= 0 ? '+' : ''}${sm.alpha}%</td>
+                <td style="color:var(--accent-red);">${sm.max_drawdown}%</td>
+                <td>${sm.total_trades}</td>
+                <td style="font-weight:500;">$${sm.final_total.toLocaleString()}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    function renderSCEquity() {
+        const container = document.getElementById('sc-equity-chart');
+
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth, height: 380,
+            layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            crosshair: { mode: 0 },
+            timeScale: { timeVisible: true, secondsVisible: false },
+        });
+
+        // Show top 6 optimization variants
+        const results = (scOptData.optimization_results || []).sort((a, b) => b.summary.alpha - a.summary.alpha);
+        const topN = results.slice(0, 6);
+        const eqColors = ['#00d68f', '#06b6d4', '#4a9eff', '#ffaa00', '#a855f7', '#f43f5e'];
+
+        topN.forEach((r, i) => {
+            const hist = r.history || [];
+            if (hist.length < 2) return;
+            const line = chart.addLineSeries({
+                color: eqColors[i],
+                lineWidth: i === 0 ? 3 : 1,
+                title: r.name.split(':')[0],
+            });
+            line.setData(hist.map(h => ({
+                time: Math.floor(new Date(h.time).getTime() / 1000),
+                value: h.total,
+            })));
+        });
+
+        // Also show strategies from phase 1
+        const strategies = (scData.strategies || []).sort((a, b) => b.summary.alpha - a.summary.alpha);
+        if (strategies.length > 0) {
+            const bestS = strategies[0];
+            const hist = bestS.history || [];
+            if (hist.length >= 2) {
+                const line = chart.addLineSeries({
+                    color: '#5c6078', lineWidth: 1, lineStyle: 2,
+                    title: '买入持有(参考)',
+                });
+                // Approximate buy-hold using first and last points
+                const initT = bestS.summary.initial_total;
+                const bhRet = bestS.summary.buy_hold_return / 100;
+                const startV = initT;
+                const endV = initT * (1 + bhRet);
+                const startTime = Math.floor(new Date(hist[0].time).getTime() / 1000);
+                const endTime = Math.floor(new Date(hist[hist.length-1].time).getTime() / 1000);
+                line.setData(hist.map((h, idx) => {
+                    const t = Math.floor(new Date(h.time).getTime() / 1000);
+                    const progress = (t - startTime) / (endTime - startTime || 1);
+                    return { time: t, value: startV + (endV - startV) * progress };
+                }));
+            }
+        }
+
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderSCConclusion() {
+        const strategies = (scData.strategies || []).sort((a, b) => b.summary.alpha - a.summary.alpha);
+        const optResults = (scOptData.optimization_results || []).sort((a, b) => b.summary.alpha - a.summary.alpha);
+
+        const bestStrategy = strategies[0];
+        const bestOpt = optResults[0];
+        const worstOpt = optResults[optResults.length - 1];
+
+        let html = '<div class="conclusion-title">🔬 策略优化结论</div>';
+        html += '<div class="conclusion-grid">';
+
+        // Finding 1: Best strategy type
+        html += '<div class="conclusion-item" style="border-color:var(--accent-green);">';
+        html += '<h4 style="color:var(--accent-green);">最优策略思路</h4>';
+        html += '<p>';
+        html += '<strong>' + bestStrategy.name + '</strong> 以超额收益 <strong style="color:var(--accent-green);">' + (bestStrategy.summary.alpha >= 0 ? '+' : '') + bestStrategy.summary.alpha + '%</strong> 领先其他5种策略。';
+        html += '<br><br>';
+        html += '核心逻辑: 在下跌趋势中<strong>逐步减仓</strong>而非一次性操作，';
+        html += '保留最低底仓(10%)防止踏空，只在强背驰信号出现时才买回。';
+        html += '</p></div>';
+
+        // Finding 2: Best optimized variant
+        html += '<div class="conclusion-item" style="border-color:var(--accent-blue);">';
+        html += '<h4 style="color:var(--accent-blue);">最优参数配置</h4>';
+        html += '<p>';
+        html += '<strong>' + bestOpt.name + '</strong> 进一步将超额收益提升至 <strong style="color:var(--accent-green);">' + (bestOpt.summary.alpha >= 0 ? '+' : '') + bestOpt.summary.alpha + '%</strong>';
+        html += '，最大回撤 <strong>' + bestOpt.summary.max_drawdown + '%</strong> (优于基准)。';
+        html += '<br><br>';
+        html += '关键发现: 在下跌行情中，<strong>"只卖不买"</strong>策略反而表现最好——减少不确定性买入，让利润自然积累。';
+        html += '</p></div>';
+
+        // Finding 3: What doesn't work
+        html += '<div class="conclusion-item" style="border-color:var(--accent-red);">';
+        html += '<h4 style="color:var(--accent-red);">失效策略警示</h4>';
+        html += '<p>';
+        const worst = strategies[strategies.length - 1];
+        html += '<strong>' + worst.name + '</strong> 表现最差(超额 ' + worst.summary.alpha + '%)。';
+        html += '<br><br>';
+        html += '过于频繁的多周期信号融合在震荡行情中产生大量<strong>假信号</strong>，导致频繁交易和手续费损耗。';
+        html += '<br>提高卖出阈值(≥30)或过度依赖4h单周期同样效果不佳。';
+        html += '</p></div>';
+
+        // Finding 4: Actionable insight
+        html += '<div class="conclusion-item" style="border-color:var(--accent-yellow);">';
+        html += '<h4 style="color:var(--accent-yellow);">实操建议</h4>';
+        html += '<p>';
+        html += '📌 <strong>熊市</strong>: 渐进减仓策略(E)最优，降低最低仓位至5%，卖出冷却期5h';
+        html += '<br>📌 <strong>震荡市</strong>: 动态再平衡(F)或趋势跟随(C)更稳健';
+        html += '<br>📌 <strong>牛市</strong>: 需反向优化——渐进加仓、高阈值才卖出';
+        html += '<br><br>';
+        html += '<span style="color:var(--text-muted);font-size:12px;">⚠️ 以上结论基于最近30天下跌行情，不同市场环境需重新验证</span>';
+        html += '</p></div>';
+
+        html += '</div>';
+        document.getElementById('sc-conclusion').innerHTML = html;
+    }
+
+    // ========================================
+    //   Multi-Interval Comparison
+    // ========================================
+    let multiData = null;
+
+    async function loadMultiData() {
+        if (window._multiLoaded) return;
+        try {
+            const resp = await fetch('/api/backtest_multi');
+            if (!resp.ok) throw new Error('No data');
+            multiData = await resp.json();
+            window._multiLoaded = true;
+            renderMultiBarChart();
+            renderMultiTable();
+            renderMultiEquity();
+            renderConclusion();
+            document.getElementById('multi-loading').style.display = 'none';
+            document.getElementById('multi-content').style.display = 'block';
+        } catch (e) {
+            document.getElementById('multi-loading').innerHTML =
+                '<span style="color:var(--accent-red)">未找到多周期数据。请先生成 backtest_multi.json</span>';
+        }
+    }
+
+    function renderMultiBarChart() {
+        const container = document.getElementById('alpha-bar-chart');
+        const items = INTERVALS.map((iv, i) => {
+            const s = multiData[iv];
+            const alpha = s ? (s.total_return - s.buy_hold_return) : null;
+            return { iv, alpha, color: COLORS[i], label: INTERVAL_LABELS[iv] };
+        }).filter(x => x.alpha !== null);
+
+        const maxAbs = Math.max(...items.map(x => Math.abs(x.alpha)), 1);
+
+        // Build bar chart with CSS
+        const barH = 200;
+        const zeroY = barH / 2;
+
+        let html = '<div style="position:relative;height:' + (barH + 60) + 'px;display:flex;align-items:center;">';
+        // Y axis labels
+        html += '<div style="display:flex;flex-direction:column;justify-content:space-between;height:' + barH + 'px;padding-right:8px;font-size:11px;color:var(--text-muted);width:50px;text-align:right;">';
+        html += '<span>+' + maxAbs.toFixed(0) + '%</span>';
+        html += '<span>0%</span>';
+        html += '<span>-' + maxAbs.toFixed(0) + '%</span>';
+        html += '</div>';
+        // Bars
+        html += '<div style="flex:1;display:flex;align-items:center;height:' + barH + 'px;position:relative;">';
+        // Zero line
+        html += '<div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--text-muted);opacity:0.3;"></div>';
+        // Bar area
+        html += '<div style="display:flex;align-items:center;height:100%;width:100%;justify-content:space-around;">';
+
+        items.forEach(item => {
+            const pct = item.alpha / maxAbs;
+            const h = Math.abs(pct) * (barH / 2 - 10);
+            const isPos = item.alpha >= 0;
+            const barColor = isPos ? 'var(--accent-green)' : 'var(--accent-red)';
+            const valColor = isPos ? 'var(--accent-green)' : 'var(--accent-red)';
+
+            html += '<div style="display:flex;flex-direction:column;align-items:center;flex:1;max-width:80px;height:100%;justify-content:center;position:relative;">';
+            if (isPos) {
+                html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:50%;">';
+                html += '<span style="font-size:11px;font-weight:600;color:' + valColor + ';margin-bottom:3px;">+' + item.alpha.toFixed(1) + '%</span>';
+                html += '<div style="width:32px;height:' + h + 'px;background:' + barColor + ';border-radius:4px 4px 0 0;opacity:0.85;"></div>';
+                html += '</div>';
+                html += '<div style="height:50%;"></div>';
+            } else {
+                html += '<div style="height:50%;"></div>';
+                html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-start;height:50%;">';
+                html += '<div style="width:32px;height:' + h + 'px;background:' + barColor + ';border-radius:0 0 4px 4px;opacity:0.85;"></div>';
+                html += '<span style="font-size:11px;font-weight:600;color:' + valColor + ';margin-top:3px;">' + item.alpha.toFixed(1) + '%</span>';
+                html += '</div>';
+            }
+            html += '<div style="position:absolute;bottom:-24px;font-size:11px;color:var(--text-muted);white-space:nowrap;">' + item.label + '</div>';
+            html += '</div>';
+        });
+
+        html += '</div></div></div>';
+        container.innerHTML = html;
+    }
+
+    function renderMultiTable() {
+        // Header
+        let headHtml = '<th style="text-align:left;">指标</th>';
+        INTERVALS.forEach((iv, i) => {
+            headHtml += '<th>' + INTERVAL_LABELS[iv] + '</th>';
+        });
+        document.getElementById('multi-table-head').innerHTML = headHtml;
+
+        // Rows
+        const rows = [
+            { label: '策略收益', key: 'total_return', unit: '%', signed: true, higherBetter: true },
+            { label: '买入持有', key: 'buy_hold_return', unit: '%', signed: true },
+            { label: '超额收益', key: '_alpha', unit: '%', signed: true, higherBetter: true },
+            { label: '最大回撤', key: 'max_drawdown', unit: '%', lowerBetter: true },
+            { label: '交易次数', key: 'total_trades', unit: '' },
+            { label: '胜率', key: 'win_rate', unit: '%', higherBetter: true },
+            { label: '平均盈利', key: 'avg_win_pct', unit: '%', higherBetter: true },
+            { label: '平均亏损', key: 'avg_loss_pct', unit: '%' },
+            { label: 'Sharpe', key: 'sharpe_ratio', unit: '', higherBetter: true },
+        ];
+
+        let bodyHtml = '';
+        rows.forEach(row => {
+            let vals = INTERVALS.map(iv => {
+                const s = multiData[iv];
+                if (!s) return null;
+                if (row.key === '_alpha') return s.total_return - s.buy_hold_return;
+                return s[row.key];
+            });
+
+            // Find best value (only among intervals with trades)
+            let bestIdx = -1;
+            if (row.higherBetter) {
+                let best = -Infinity;
+                vals.forEach((v, i) => {
+                    const s = multiData[INTERVALS[i]];
+                    if (v !== null && s && s.total_trades > 0 && v > best) { best = v; bestIdx = i; }
+                });
+            } else if (row.lowerBetter) {
+                let best = Infinity;
+                vals.forEach((v, i) => {
+                    const s = multiData[INTERVALS[i]];
+                    if (v !== null && s && s.total_trades > 0 && Math.abs(v) < Math.abs(best)) { best = v; bestIdx = i; }
+                });
+            }
+
+            bodyHtml += '<tr>';
+            bodyHtml += '<td style="text-align:left;font-weight:600;color:var(--text-primary);">' + row.label + '</td>';
+            vals.forEach((v, i) => {
+                if (v === null) {
+                    bodyHtml += '<td style="color:var(--text-muted);">—</td>';
+                } else {
+                    let cls = '';
+                    if (i === bestIdx) cls = 'cell-best';
+                    let display;
+                    if (row.unit === '%') {
+                        display = (row.signed && v > 0 ? '+' : '') + v.toFixed(1) + '%';
+                    } else {
+                        display = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(1)) : v;
+                    }
+                    // Color coding for return/alpha
+                    let style = '';
+                    if (row.key === 'total_return' || row.key === '_alpha') {
+                        style = v >= 0 ? 'color:var(--accent-green);' : 'color:var(--accent-red);';
+                    }
+                    bodyHtml += '<td class="' + cls + '" style="' + style + '">' + display + '</td>';
+                }
+            });
+            bodyHtml += '</tr>';
+        });
+
+        document.getElementById('multi-table-body').innerHTML = bodyHtml;
+    }
+
+    function renderMultiEquity() {
+        const container = document.getElementById('multi-equity-chart');
+
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth,
+            height: 380,
+            layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            crosshair: { mode: 0 },
+            timeScale: { timeVisible: true, secondsVisible: false },
+            rightPriceScale: { borderVisible: false },
+        });
+
+        const series = {};
+        // Only show intervals with equity curves and trades
+        const activeIntervals = INTERVALS.filter(iv => {
+            const s = multiData[iv];
+            return s && s.equity_curve && s.equity_curve.length > 0 && s.total_trades > 0;
+        });
+
+        activeIntervals.forEach((iv, i) => {
+            const s = multiData[iv];
+            const ec = s.equity_curve;
+            if (!ec || ec.length < 2) return;
+
+            const line = chart.addLineSeries({
+                color: COLORS[i % COLORS.length],
+                lineWidth: iv === '4h' ? 3 : 1,
+                title: INTERVAL_LABELS[iv],
+            });
+
+            // Normalize to percentage
+            const initVal = ec[0].equity || 10000;
+            const data = ec.map(e => ({
+                time: Math.floor(new Date(e.date).getTime() / 1000),
+                value: (e.equity / initVal) * 100,
+            }));
+            line.setData(data);
+            series[iv] = line;
+        });
+
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderConclusion() {
+        // Rank by alpha (only intervals with actual trades)
+        const ranked = INTERVALS
+            .filter(iv => multiData[iv] && multiData[iv].total_trades > 0)
+            .map(iv => ({
+                iv,
+                label: INTERVAL_LABELS[iv],
+                alpha: multiData[iv].total_return - multiData[iv].buy_hold_return,
+                ret: multiData[iv].total_return,
+                dd: multiData[iv].max_drawdown,
+                trades: multiData[iv].total_trades,
+                wr: multiData[iv].win_rate,
+            }))
+            .sort((a, b) => b.alpha - a.alpha);
+
+        const noTrade = INTERVALS.filter(iv => multiData[iv] && multiData[iv].total_trades === 0);
+
+        let html = '<div class="conclusion-title">分析结论</div>';
+        html += '<div class="conclusion-grid">';
+
+        // Top 3
+        html += '<div class="conclusion-item" style="border-color:var(--accent-green);">';
+        html += '<h4 style="color:var(--accent-green);">超额收益排名 (有实际交易)</h4>';
+        html += '<div style="margin-top:8px;">';
+        ranked.slice(0, 5).forEach((r, i) => {
+            const rankCls = i < 3 ? ' rank-' + (i+1) : '';
+            const badge = i < 3 ? '<span class="rank-badge' + rankCls + '">' + (i+1) + '</span>' : '<span style="display:inline-block;width:26px;text-align:center;color:var(--text-muted);">' + (i+1) + '.</span>';
+            html += '<div style="padding:4px 0;font-size:13px;">';
+            html += badge;
+            html += '<strong>' + r.label + '</strong>';
+            html += ' <span style="color:' + (r.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)') + ';font-weight:600;">' + (r.alpha >= 0 ? '+' : '') + r.alpha.toFixed(1) + '%</span>';
+            html += ' <span style="color:var(--text-muted);font-size:11px;">(' + r.trades + '笔, 胜率' + r.wr.toFixed(0) + '%)</span>';
+            html += '</div>';
+        });
+        html += '</div></div>';
+
+        // Key insight
+        const best = ranked[0];
+        html += '<div class="conclusion-item" style="border-color:var(--accent-blue);">';
+        html += '<h4 style="color:var(--accent-blue);">核心发现</h4>';
+        html += '<p>';
+        html += '<strong>' + best.label + '</strong> 是当前行情最优周期，超额收益 <strong style="color:var(--accent-green);">' + (best.alpha >= 0 ? '+' : '') + best.alpha.toFixed(1) + '%</strong>。';
+        html += '<br><br>';
+        html += '背离/背驰本质是<strong>趋势级别</strong>信号。时间框架越大，信号噪音越少，但交易机会也越少。';
+        html += '<br><br>';
+        html += '<strong>最优窗口: 2h ~ 8h</strong>，兼顾信号质量和交易频率。';
+        if (noTrade.length > 0) {
+            html += '<br><br><span style="color:var(--text-muted);font-size:12px;">' + noTrade.map(iv => INTERVAL_LABELS[iv]).join('、') + ' 未触发交易信号，持币不动。</span>';
+        }
+        html += '</p></div>';
+
+        html += '</div>';
+        document.getElementById('multi-conclusion').innerHTML = html;
+    }
+
+    // ========================================
+    //   Single Interval Detail (existing)
+    // ========================================
     let btData = null;
 
     async function loadBacktestData() {
@@ -1176,8 +2314,9 @@
             renderKlineChart();
             renderTrades();
         } catch (e) {
-            document.querySelectorAll('.loading').forEach(el => {
-                el.innerHTML = '<span style="color:var(--accent-red)">未找到回测数据。请先运行: python backtest.py</span>';
+            ['summary-loading','chart-loading','trades-loading'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.innerHTML = '<span style="color:var(--accent-red)">未找到回测数据。请先运行: python backtest.py</span>';
             });
         }
     }
@@ -1213,38 +2352,26 @@
         if (!btData || !btData.equity_curve || !btData.equity_curve.length) return;
 
         const chart = LightweightCharts.createChart(container, {
-            width: container.clientWidth,
-            height: 300,
+            width: container.clientWidth, height: 300,
             layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
             grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
             crosshair: { mode: 0 },
             timeScale: { timeVisible: true, secondsVisible: false },
         });
 
-        const equitySeries = chart.addLineSeries({
-            color: '#4a9eff', lineWidth: 2, title: '策略净值',
-        });
+        const equitySeries = chart.addLineSeries({ color: '#4a9eff', lineWidth: 2, title: '策略净值' });
+        equitySeries.setData(btData.equity_curve.map(e => ({
+            time: Math.floor(new Date(e.date).getTime() / 1000), value: e.equity,
+        })));
 
-        const eqData = btData.equity_curve.map(e => ({
-            time: Math.floor(new Date(e.date).getTime() / 1000),
-            value: e.equity,
-        }));
-        equitySeries.setData(eqData);
-
-        // Buy & hold baseline
         if (btData.kline_data && btData.kline_data.length > 0) {
-            const baseline = chart.addLineSeries({
-                color: '#5c6078', lineWidth: 1, lineStyle: 2, title: '买入持有',
-            });
-            const firstPrice = btData.kline_data[0].close;
-            const initCap = btData.summary.initial_capital;
-            const bhData = btData.kline_data.map(k => ({
-                time: Math.floor(new Date(k.date).getTime() / 1000),
-                value: initCap * (k.close / firstPrice),
-            }));
-            baseline.setData(bhData);
+            const baseline = chart.addLineSeries({ color: '#5c6078', lineWidth: 1, lineStyle: 2, title: '买入持有' });
+            const fp = btData.kline_data[0].close;
+            const ic = btData.summary.initial_capital;
+            baseline.setData(btData.kline_data.map(k => ({
+                time: Math.floor(new Date(k.date).getTime() / 1000), value: ic * (k.close / fp),
+            })));
         }
-
         chart.timeScale().fitContent();
         new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
     }
@@ -1253,56 +2380,42 @@
         const container = document.getElementById('kline-chart');
         document.getElementById('chart-loading').style.display = 'none';
         document.getElementById('chart-content').style.display = 'block';
-
         if (!btData || !btData.kline_data || !btData.kline_data.length) return;
 
         const chart = LightweightCharts.createChart(container, {
-            width: container.clientWidth,
-            height: 400,
+            width: container.clientWidth, height: 400,
             layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
             grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
             crosshair: { mode: 0 },
             timeScale: { timeVisible: true, secondsVisible: false },
         });
 
-        const candleSeries = chart.addCandlestickSeries({
+        const cs = chart.addCandlestickSeries({
             upColor: '#00d68f', downColor: '#ff4d6a',
             borderUpColor: '#00d68f', borderDownColor: '#ff4d6a',
             wickUpColor: '#00d68f', wickDownColor: '#ff4d6a',
         });
-
-        const kData = btData.kline_data.map(k => ({
+        cs.setData(btData.kline_data.map(k => ({
             time: Math.floor(new Date(k.date).getTime() / 1000),
             open: k.open, high: k.high, low: k.low, close: k.close,
-        }));
-        candleSeries.setData(kData);
+        })));
 
-        // Add markers for signals
         if (btData.signals && btData.signals.length > 0) {
-            const markers = btData.signals.map(s => ({
+            cs.setMarkers(btData.signals.map(s => ({
                 time: Math.floor(new Date(s.date).getTime() / 1000),
                 position: s.signal === 'BUY' ? 'belowBar' : 'aboveBar',
                 color: s.signal === 'BUY' ? '#00d68f' : '#ff4d6a',
                 shape: s.signal === 'BUY' ? 'arrowUp' : 'arrowDown',
                 text: s.signal === 'BUY' ? 'B' : 'S',
-            }));
-            candleSeries.setMarkers(markers);
+            })));
         }
 
-        // Volume
-        const volSeries = chart.addHistogramSeries({
-            priceFormat: { type: 'volume' },
-            priceScaleId: 'vol',
-        });
-        chart.priceScale('vol').applyOptions({
-            scaleMargins: { top: 0.85, bottom: 0 },
-        });
-        const vData = btData.kline_data.map(k => ({
-            time: Math.floor(new Date(k.date).getTime() / 1000),
-            value: k.volume,
+        const vs = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
+        chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+        vs.setData(btData.kline_data.map(k => ({
+            time: Math.floor(new Date(k.date).getTime() / 1000), value: k.volume,
             color: k.close >= k.open ? 'rgba(0,214,143,0.3)' : 'rgba(255,77,106,0.3)',
-        }));
-        volSeries.setData(vData);
+        })));
 
         chart.timeScale().fitContent();
         new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
@@ -1311,45 +2424,35 @@
     function renderTrades() {
         document.getElementById('trades-loading').style.display = 'none';
         document.getElementById('trades-content').style.display = 'block';
-
         if (!btData || !btData.completed_trades) return;
 
         const trades = btData.completed_trades;
         const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
-        const bestTrade = trades.reduce((b, t) => t.pnl_pct > b.pnl_pct ? t : b, trades[0] || {pnl_pct:0});
-        const worstTrade = trades.reduce((w, t) => t.pnl_pct < w.pnl_pct ? t : w, trades[0] || {pnl_pct:0});
+        const best = trades.length ? trades.reduce((b, t) => t.pnl_pct > b.pnl_pct ? t : b, trades[0]) : {pnl_pct:0};
+        const worst = trades.length ? trades.reduce((w, t) => t.pnl_pct < w.pnl_pct ? t : w, trades[0]) : {pnl_pct:0};
 
         document.getElementById('trade-stats').innerHTML = [
-            {label: '总盈亏', value: '$' + totalPnl.toFixed(2), cls: totalPnl >= 0 ? 'positive' : 'negative'},
-            {label: '最佳交易', value: '+' + (bestTrade.pnl_pct||0).toFixed(2) + '%', cls: 'positive'},
-            {label: '最差交易', value: (worstTrade.pnl_pct||0).toFixed(2) + '%', cls: 'negative'},
-            {label: '完成交易', value: trades.length, cls: ''},
-        ].map(item => `
-            <div class="stat-card">
-                <div class="stat-label">${item.label}</div>
-                <div class="stat-value ${item.cls}">${item.value}</div>
-            </div>
-        `).join('');
+            {label:'总盈亏', value:'$'+totalPnl.toFixed(2), cls:totalPnl>=0?'positive':'negative'},
+            {label:'最佳交易', value:'+'+(best.pnl_pct||0).toFixed(2)+'%', cls:'positive'},
+            {label:'最差交易', value:(worst.pnl_pct||0).toFixed(2)+'%', cls:'negative'},
+            {label:'完成交易', value:trades.length, cls:''},
+        ].map(item=>`<div class="stat-card"><div class="stat-label">${item.label}</div><div class="stat-value ${item.cls}">${item.value}</div></div>`).join('');
 
-        const tbody = document.querySelector('#trades-table tbody');
-        tbody.innerHTML = trades.map((t, i) => `
+        document.querySelector('#trades-table tbody').innerHTML = trades.map((t,i)=>`
             <tr>
-                <td>${i + 1}</td>
-                <td>${formatDate(t.buy_date)}</td>
-                <td>$${t.buy_price.toFixed(2)}</td>
-                <td>${formatDate(t.sell_date)}</td>
-                <td>$${t.sell_price.toFixed(2)}</td>
-                <td class="${t.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}</td>
-                <td class="${t.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg'}">${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}%</td>
-                <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.buy_reason||''}">${t.buy_reason || '-'}</td>
-                <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.sell_reason||''}">${t.sell_reason || '-'}</td>
-            </tr>
-        `).join('');
+                <td>${i+1}</td>
+                <td>${fmtDate(t.buy_date)}</td><td>$${t.buy_price.toFixed(2)}</td>
+                <td>${fmtDate(t.sell_date)}</td><td>$${t.sell_price.toFixed(2)}</td>
+                <td class="${t.pnl>=0?'pnl-pos':'pnl-neg'}">${t.pnl>=0?'+':''}${t.pnl.toFixed(2)}</td>
+                <td class="${t.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${t.pnl_pct>=0?'+':''}${t.pnl_pct.toFixed(2)}%</td>
+                <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.buy_reason||''}">${t.buy_reason||'-'}</td>
+                <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.sell_reason||''}">${t.sell_reason||'-'}</td>
+            </tr>`).join('');
     }
 
-    function formatDate(dateStr) {
-        if (!dateStr) return '-';
-        const d = new Date(dateStr);
+    function fmtDate(s) {
+        if (!s) return '-';
+        const d = new Date(s);
         return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
     }
     </script>

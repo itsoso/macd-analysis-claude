@@ -19,6 +19,10 @@ build/
 
 # Data & Output
 backtest_result.json
+backtest_multi.json
+global_strategy_result.json
+strategy_compare_result.json
+strategy_optimize_result.json
 divergence_analysis.png
 *.png
 *.csv

@@ -41,17 +41,23 @@ def fetch_binance_klines(symbol: str = "ETHUSDT",
     end_time = int(datetime.now().timestamp() * 1000)
     start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
 
-    # 如果请求10分钟, 先获取5分钟再重采样
+    # 非标准周期: 用更小周期获取后重采样
     actual_interval = interval
     need_resample = False
     resample_rule = None
 
-    if interval == '10m':
-        actual_interval = '5m'
+    RESAMPLE_MAP = {
+        '10m': ('5m',  '10min'),
+        '3h':  ('1h',  '3h'),
+        '16h': ('4h',  '16h'),
+        '24h': ('4h',  '24h'),
+        '32h': ('4h',  '32h'),
+    }
+
+    if interval in RESAMPLE_MAP:
+        actual_interval, resample_rule = RESAMPLE_MAP[interval]
         need_resample = True
-        resample_rule = '10min'
-        # 需要更多数据来重采样
-        days = int(days * 1.1)
+        days = int(days * 1.15)  # 多取一些数据用于重采样对齐
         start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
 
     current_start = start_time
