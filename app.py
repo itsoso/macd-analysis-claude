@@ -20,6 +20,7 @@ GLOBAL_STRATEGY_FILE = os.path.join(BASE_DIR, 'global_strategy_result.json')
 STRATEGY_COMPARE_FILE = os.path.join(BASE_DIR, 'strategy_compare_result.json')
 STRATEGY_OPTIMIZE_FILE = os.path.join(BASE_DIR, 'strategy_optimize_result.json')
 STRATEGY_ENHANCED_FILE = os.path.join(BASE_DIR, 'strategy_enhanced_result.json')
+STRATEGY_FUTURES_FILE = os.path.join(BASE_DIR, 'strategy_futures_result.json')
 
 
 def load_json(path):
@@ -86,6 +87,15 @@ def api_strategy_enhanced():
     if data:
         return jsonify(data)
     return jsonify({'error': '未找到增强策略数据, 请先运行 python strategy_enhanced.py'}), 404
+
+
+@app.route('/api/strategy_futures')
+def api_strategy_futures():
+    """返回合约策略结果"""
+    data = load_json(STRATEGY_FUTURES_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({'error': '未找到合约策略数据, 请先运行 python strategy_futures.py'}), 404
 
 
 if __name__ == '__main__':

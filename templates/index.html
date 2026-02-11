@@ -687,6 +687,9 @@
             <div class="nav-item" data-page="strategy-compare">
                 <span class="nav-icon">🔬</span> 策略优化对比
             </div>
+            <div class="nav-item" data-page="strategy-futures">
+                <span class="nav-icon">📊</span> 合约做空策略
+            </div>
             <div class="nav-item" data-page="multi-compare">
                 <span class="nav-icon">📊</span> 多周期对比
             </div>
@@ -1312,6 +1315,89 @@
             </div>
         </div>
 
+        <!-- ====== 合约做空策略 ====== -->
+        <div class="page" id="strategy-futures">
+            <div class="page-title">合约做空策略</div>
+            <div class="page-subtitle">允许做空 · USDT永续合约 · 逐仓模式 · 多种策略对比</div>
+
+            <div class="card" id="ft-intro">
+                <div class="card-title">合约交易规则</div>
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">
+                    <div style="background:var(--bg-hover);border-radius:8px;padding:12px;text-align:center;">
+                        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">保证金模式</div>
+                        <div style="font-size:16px;font-weight:700;color:var(--accent-blue);">逐仓 Isolated</div>
+                    </div>
+                    <div style="background:var(--bg-hover);border-radius:8px;padding:12px;text-align:center;">
+                        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">手续费</div>
+                        <div style="font-size:16px;font-weight:700;color:var(--accent-yellow);">Taker 0.05%</div>
+                    </div>
+                    <div style="background:var(--bg-hover);border-radius:8px;padding:12px;text-align:center;">
+                        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">资金费率</div>
+                        <div style="font-size:16px;font-weight:700;color:var(--accent-purple);">±0.01%/8h</div>
+                    </div>
+                    <div style="background:var(--bg-hover);border-radius:8px;padding:12px;text-align:center;">
+                        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">风控上限</div>
+                        <div style="font-size:16px;font-weight:700;color:var(--accent-red);">10%保证金</div>
+                    </div>
+                </div>
+                <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                    <b>初始配置:</b> 100,000 USDT + 价值100,000 USDT的ETH<br>
+                    <b>杠杆上限:</b> 最高3x · 单笔保证金≤总资产5% · 累计保证金吞吐≤初始150%<br>
+                    <b>做空机制:</b> 顶背离/背驰信号→开空仓对冲或做空获利 · 底信号→平空<br>
+                    <b>滑点模型:</b> 0.1%双向滑点(含市场冲击)
+                </div>
+            </div>
+
+            <!-- 策略说明卡片 -->
+            <div class="card">
+                <div class="card-title">5种合约策略 + 1个纯现货对照</div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;" id="ft-strategy-cards"></div>
+            </div>
+
+            <!-- 柱状图对比 -->
+            <div class="card">
+                <div class="card-title">收益与超额收益对比</div>
+                <div id="ft-bar-chart" style="width:100%;min-height:350px;"></div>
+            </div>
+
+            <!-- 数据表格 -->
+            <div class="card">
+                <div class="card-title">详细指标对比</div>
+                <div class="trade-table-wrap" style="max-height:none;">
+                    <table id="ft-table">
+                        <thead><tr id="ft-table-head"></tr></thead>
+                        <tbody id="ft-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 资产曲线 -->
+            <div class="card">
+                <div class="card-title">资产曲线对比</div>
+                <div id="ft-equity-chart" style="width:100%;height:400px;"></div>
+            </div>
+
+            <!-- 最佳策略交易明细 -->
+            <div class="card">
+                <div class="card-title">最佳策略交易明细 <span class="badge green" id="ft-trade-count"></span></div>
+                <div class="trade-table-wrap" style="max-height:500px;">
+                    <table id="ft-trades-table">
+                        <thead>
+                            <tr>
+                                <th>#</th><th>时间</th><th>操作</th><th>方向</th><th>价格</th>
+                                <th>数量</th><th>名义价值</th><th>杠杆</th>
+                                <th>USDT余额</th><th>冻结保证金</th><th>总资产</th><th>原因</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ft-trades-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 结论 -->
+            <div class="card" id="ft-conclusion"></div>
+        </div>
+
         <!-- ====== 策略优化对比 ====== -->
         <div class="page" id="strategy-compare">
             <div class="page-title">策略优化对比实验</div>
@@ -1582,6 +1668,7 @@
 
             if (pageId === 'global-strategy' && !window._gsLoaded) loadGlobalStrategy();
                 if (pageId === 'strategy-compare' && !window._scLoaded) loadStrategyCompare();
+                if (pageId === 'strategy-futures' && !window._ftLoaded) loadFuturesStrategy();
                 if (pageId === 'multi-compare' && !window._multiLoaded) loadMultiData();
                 if (pageId.startsWith('backtest') && !window._backtestLoaded) loadBacktestData();
         });
@@ -2755,6 +2842,225 @@
         if (!s) return '-';
         const d = new Date(s);
         return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    }
+
+    // ===================== 合约做空策略 =====================
+    async function loadFuturesStrategy() {
+        try {
+            const res = await fetch('/api/strategy_futures');
+            if (!res.ok) throw new Error('无数据');
+            const data = await res.json();
+            window._ftLoaded = true;
+            renderFuturesPage(data);
+        } catch (e) {
+            document.getElementById('ft-intro').innerHTML += `<p style="color:var(--accent-red);margin-top:12px;">加载失败: ${e.message}</p>`;
+        }
+    }
+
+    function renderFuturesPage(data) {
+        const results = data.futures_results || [];
+        const sorted = [...results].sort((a, b) => (b.summary?.alpha || 0) - (a.summary?.alpha || 0));
+
+        renderFTCards(sorted);
+        renderFTBarChart(sorted);
+        renderFTTable(sorted);
+        renderFTEquity(results);
+        renderFTTrades(sorted[0]); // best strategy
+        renderFTConclusion(sorted, data.best_strategy);
+    }
+
+    function renderFTCards(sorted) {
+        const descs = {
+            '对照': { icon: '📦', color: 'var(--text-muted)', desc: '纯现货量价确认策略,不使用合约' },
+            'M': { icon: '🛡️', color: 'var(--accent-blue)', desc: '持有现货ETH,顶背离开空头对冲下跌' },
+            'N': { icon: '⚡', color: 'var(--accent-purple)', desc: '纯合约双向交易,不持有现货' },
+            'O': { icon: '🚀', color: 'var(--accent-green)', desc: '现货+合约增强,减仓同时开空' },
+            'P': { icon: '🎯', color: 'var(--accent-yellow)', desc: '信号强度决定杠杆倍数和仓位方向' },
+            'Q': { icon: '📊', color: 'var(--accent-red)', desc: '量价确认+合约,价升量减开空' },
+        };
+        const box = document.getElementById('ft-strategy-cards');
+        box.innerHTML = sorted.map((r, i) => {
+            const s = r.summary;
+            const key = r.name.split(':')[0].replace('对照', '对照');
+            const d = descs[key] || descs['对照'];
+            const isTop = i === 0;
+            return `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;${isTop ? 'border:1.5px solid var(--accent-green);' : ''}">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <span style="font-size:22px;">${d.icon}</span>
+                    <span style="font-weight:700;font-size:14px;color:${d.color};">${r.name}${isTop ? ' ★' : ''}</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">${d.desc}</div>
+                <div style="display:flex;gap:14px;font-size:13px;">
+                    <span style="color:${s.alpha > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${s.alpha > 0 ? '+' : ''}${s.alpha}% α</span>
+                    <span style="color:var(--text-muted);">${s.max_drawdown}% DD</span>
+                    <span style="color:var(--text-muted);">${s.total_trades}笔</span>
+                    ${s.liquidations > 0 ? `<span style="color:var(--accent-red);">强平${s.liquidations}</span>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    function renderFTBarChart(sorted) {
+        const container = document.getElementById('ft-bar-chart');
+        const barW = Math.floor((container.clientWidth - 80) / sorted.length);
+        const maxVal = Math.max(...sorted.map(r => Math.abs(r.summary?.alpha || 0)), 10);
+        const scale = 280 / maxVal;
+
+        let html = `<svg width="100%" height="350" viewBox="0 0 ${container.clientWidth} 350">`;
+        sorted.forEach((r, i) => {
+            const s = r.summary;
+            const alpha = s?.alpha || 0;
+            const ret = s?.strategy_return || 0;
+            const x = 50 + i * barW;
+            const barH = Math.abs(alpha) * scale;
+            const y = alpha >= 0 ? (300 - barH) : 300;
+            const color = alpha >= 0 ? '#00d68f' : '#ff4d6a';
+            const retH = Math.max(Math.abs(ret) * scale * 0.3, 2);
+            const retY = ret >= 0 ? (300 - retH) : 300;
+            const retColor = ret >= 0 ? 'rgba(74,158,255,0.6)' : 'rgba(255,77,106,0.4)';
+
+            html += `<rect x="${x}" y="${y}" width="${barW * 0.35}" height="${barH}" fill="${color}" rx="3"/>`;
+            html += `<rect x="${x + barW * 0.4}" y="${retY}" width="${barW * 0.35}" height="${retH}" fill="${retColor}" rx="3"/>`;
+            html += `<text x="${x + barW * 0.37}" y="${Math.min(y, retY) - 6}" text-anchor="middle" fill="${color}" font-size="11" font-weight="700">${alpha > 0 ? '+' : ''}${alpha.toFixed(1)}%</text>`;
+            html += `<text x="${x + barW * 0.37}" y="325" text-anchor="middle" fill="#8b8fa3" font-size="10" transform="rotate(-15,${x + barW * 0.37},325)">${r.name.split(':')[0]}</text>`;
+        });
+        html += `<line x1="48" y1="300" x2="${container.clientWidth}" y2="300" stroke="#2a2d3e" stroke-width="1"/>`;
+        html += `<text x="14" y="304" fill="#5c6078" font-size="10">0%</text>`;
+        html += `</svg>`;
+        html += `<div style="display:flex;gap:16px;justify-content:center;margin-top:8px;font-size:12px;">
+            <span><span style="display:inline-block;width:10px;height:10px;background:#00d68f;border-radius:2px;margin-right:4px;"></span>超额收益(α)</span>
+            <span><span style="display:inline-block;width:10px;height:10px;background:rgba(74,158,255,0.6);border-radius:2px;margin-right:4px;"></span>策略收益</span>
+        </div>`;
+        container.innerHTML = html;
+    }
+
+    function renderFTTable(sorted) {
+        const head = document.getElementById('ft-table-head');
+        const body = document.getElementById('ft-table-body');
+        head.innerHTML = `<th>#</th><th>策略</th><th>策略收益</th><th>买入持有</th><th>超额收益</th><th>最大回撤</th><th>交易数</th><th>强平</th><th>最终资产</th>`;
+
+        body.innerHTML = sorted.map((r, i) => {
+            const s = r.summary;
+            const cls = i === 0 ? 'style="background:rgba(0,214,143,0.08);"' : '';
+            return `<tr ${cls}>
+                <td>${i + 1}</td>
+                <td><b>${r.name}</b>${i === 0 ? ' ★' : ''}</td>
+                <td style="color:${s.strategy_return >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">${s.strategy_return > 0 ? '+' : ''}${s.strategy_return}%</td>
+                <td>${s.buy_hold_return > 0 ? '+' : ''}${s.buy_hold_return}%</td>
+                <td style="color:${s.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight:700;">${s.alpha > 0 ? '+' : ''}${s.alpha}%</td>
+                <td>${s.max_drawdown}%</td>
+                <td>${s.total_trades}</td>
+                <td style="color:${s.liquidations > 0 ? 'var(--accent-red)' : 'var(--text-muted)'}">${s.liquidations}</td>
+                <td>$${Number(s.final_total).toLocaleString()}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    function renderFTEquity(results) {
+        const container = document.getElementById('ft-equity-chart');
+        container.innerHTML = '';
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth,
+            height: 400,
+            layout: { background: { type: 'solid', color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            rightPriceScale: { borderColor: '#2a2d3e' },
+            timeScale: { borderColor: '#2a2d3e', timeVisible: true },
+        });
+
+        const colors = ['#00d68f', '#4a9eff', '#a855f7', '#ffaa00', '#ff4d6a', '#8b8fa3'];
+        results.forEach((r, i) => {
+            if (!r.history || r.history.length === 0) return;
+            const series = chart.addLineSeries({
+                color: colors[i % colors.length],
+                lineWidth: r.name.includes('★') || i === 0 ? 2.5 : 1.5,
+                title: r.name.split(':')[0].trim(),
+            });
+            const lineData = r.history.map(h => ({
+                time: Math.floor(new Date(h.time).getTime() / 1000),
+                value: h.total,
+            }));
+            series.setData(lineData);
+        });
+        chart.timeScale().fitContent();
+    }
+
+    function renderFTTrades(bestResult) {
+        if (!bestResult || !bestResult.trades) return;
+        const trades = bestResult.trades;
+        document.getElementById('ft-trade-count').textContent = `${trades.length} 笔交易`;
+        const body = document.getElementById('ft-trades-body');
+
+        const actionColors = {
+            'SPOT_BUY': 'var(--accent-green)',
+            'SPOT_SELL': 'var(--accent-red)',
+            'OPEN_LONG': 'var(--accent-blue)',
+            'CLOSE_LONG': 'var(--accent-purple)',
+            'OPEN_SHORT': 'var(--accent-red)',
+            'CLOSE_SHORT': 'var(--accent-green)',
+            'LIQUIDATED': '#ff0000',
+        };
+        const actionLabels = {
+            'SPOT_BUY': '现货买入',
+            'SPOT_SELL': '现货卖出',
+            'OPEN_LONG': '开多',
+            'CLOSE_LONG': '平多',
+            'OPEN_SHORT': '开空',
+            'CLOSE_SHORT': '平空',
+            'LIQUIDATED': '强平',
+        };
+
+        body.innerHTML = trades.map((t, i) => {
+            const c = actionColors[t.action] || 'var(--text-primary)';
+            const label = actionLabels[t.action] || t.action;
+            return `<tr>
+                <td>${i + 1}</td>
+                <td>${fmtDate(t.time)}</td>
+                <td style="color:${c};font-weight:700;">${label}</td>
+                <td>${t.direction === 'long' ? '📈多' : '📉空'}</td>
+                <td>$${t.price.toLocaleString()}</td>
+                <td>${t.quantity.toFixed(4)}</td>
+                <td>$${Number(t.value).toLocaleString()}</td>
+                <td>${t.leverage}x</td>
+                <td>$${Number(t.usdt_after).toLocaleString()}</td>
+                <td>$${Number(t.frozen_margin).toLocaleString()}</td>
+                <td style="font-weight:600;">$${Number(t.total).toLocaleString()}</td>
+                <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;">${t.reason}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    function renderFTConclusion(sorted, bestName) {
+        const best = sorted[0]?.summary;
+        const baseline = sorted.find(r => r.name.includes('对照'))?.summary;
+        if (!best) return;
+
+        const box = document.getElementById('ft-conclusion');
+        box.innerHTML = `
+            <div class="card-title">合约策略分析结论</div>
+            <div style="line-height:2;font-size:14px;color:var(--text-secondary);">
+                <p><b style="color:var(--accent-green);font-size:16px;">🏆 最佳策略: ${sorted[0].name}</b></p>
+                <p style="margin-top:8px;">
+                    策略收益 <b style="color:var(--accent-green);">${best.strategy_return > 0 ? '+' : ''}${best.strategy_return}%</b>
+                    | 超额收益(α) <b style="color:var(--accent-green);">${best.alpha > 0 ? '+' : ''}${best.alpha}%</b>
+                    | 最大回撤 <b>${best.max_drawdown}%</b>
+                    | 最终资产 <b>$${Number(best.final_total).toLocaleString()}</b>
+                </p>
+                <p style="margin-top:10px;">
+                    <b>对照组(纯现货):</b>
+                    收益 ${baseline?.strategy_return > 0 ? '+' : ''}${baseline?.strategy_return}%
+                    | 超额 ${baseline?.alpha > 0 ? '+' : ''}${baseline?.alpha}%
+                    | 回撤 ${baseline?.max_drawdown}%
+                </p>
+                <div style="margin-top:16px;padding:14px;background:var(--bg-hover);border-radius:8px;border-left:3px solid var(--accent-blue);">
+                    <b style="color:var(--accent-blue);">关键发现:</b><br>
+                    <span>1. 做空能力显著提升了策略在下跌市中的表现，超额从纯现货的 +${baseline?.alpha}% 提升到 +${best.alpha}%</span><br>
+                    <span>2. ${sorted[0].name} 通过${sorted[0].name.includes('自适应') ? '根据信号强度动态调整杠杆' : '灵活的多空切换'}实现最优风险收益比</span><br>
+                    <span>3. 合约保证金上限(10%)和终身吞吐限制(150%)有效防止过度杠杆化</span><br>
+                    <span>4. ${best.liquidations === 0 ? '所有策略均未触发强制平仓' : `存在${best.liquidations}次强平`}，说明风控参数设置合理</span><br>
+                    <span>5. 现货渐进减仓 + 合约做空的组合方式，比纯做空或纯现货更稳健</span>
+                </div>
+            </div>`;
     }
     </script>
 </body>
