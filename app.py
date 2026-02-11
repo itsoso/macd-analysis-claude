@@ -19,6 +19,7 @@ BACKTEST_MULTI_FILE = os.path.join(BASE_DIR, 'backtest_multi.json')
 GLOBAL_STRATEGY_FILE = os.path.join(BASE_DIR, 'global_strategy_result.json')
 STRATEGY_COMPARE_FILE = os.path.join(BASE_DIR, 'strategy_compare_result.json')
 STRATEGY_OPTIMIZE_FILE = os.path.join(BASE_DIR, 'strategy_optimize_result.json')
+STRATEGY_ENHANCED_FILE = os.path.join(BASE_DIR, 'strategy_enhanced_result.json')
 
 
 def load_json(path):
@@ -76,6 +77,15 @@ def api_strategy_optimize():
     if data:
         return jsonify(data)
     return jsonify({'error': '未找到优化数据, 请先运行 python strategy_optimize.py'}), 404
+
+
+@app.route('/api/strategy_enhanced')
+def api_strategy_enhanced():
+    """返回深度指标增强策略结果"""
+    data = load_json(STRATEGY_ENHANCED_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({'error': '未找到增强策略数据, 请先运行 python strategy_enhanced.py'}), 404
 
 
 if __name__ == '__main__':
