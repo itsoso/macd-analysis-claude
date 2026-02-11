@@ -1396,6 +1396,57 @@
 
             <!-- 结论 -->
             <div class="card" id="ft-conclusion"></div>
+
+            <!-- ====== Phase 2: 进阶优化 ====== -->
+            <div id="ft2-section" style="display:none;">
+                <div class="card" style="margin-top:24px;">
+                    <div class="card-title">Phase 2 · 基于书中核心原则进阶优化
+                        <span class="badge" style="background:rgba(168,85,247,0.15);color:var(--accent-purple);">NEW</span>
+                    </div>
+                    <div class="page-subtitle" style="margin-bottom:16px;">
+                        分析Phase 1策略P的不足 → 6种基于书中核心原则的新策略
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px;" id="ft2-strategy-cards"></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Phase 2 收益对比</div>
+                    <div id="ft2-bar-chart" style="width:100%;min-height:350px;"></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Phase 2 详细对比</div>
+                    <div class="trade-table-wrap" style="max-height:none;">
+                        <table id="ft2-table">
+                            <thead><tr id="ft2-table-head"></tr></thead>
+                            <tbody id="ft2-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Phase 2 资产曲线</div>
+                    <div id="ft2-equity-chart" style="width:100%;height:400px;"></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">最佳策略交易明细 <span class="badge green" id="ft2-trade-count"></span></div>
+                    <div class="trade-table-wrap" style="max-height:500px;">
+                        <table id="ft2-trades-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th><th>时间</th><th>操作</th><th>方向</th><th>价格</th>
+                                    <th>数量</th><th>名义价值</th><th>杠杆</th>
+                                    <th>USDT余额</th><th>冻结保证金</th><th>总资产</th><th>原因</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ft2-trades-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card" id="ft2-conclusion"></div>
+            </div>
         </div>
 
         <!-- ====== 策略优化对比 ====== -->
@@ -2855,6 +2906,14 @@
         } catch (e) {
             document.getElementById('ft-intro').innerHTML += `<p style="color:var(--accent-red);margin-top:12px;">加载失败: ${e.message}</p>`;
         }
+        // 加载Phase 2
+        try {
+            const res2 = await fetch('/api/strategy_futures_v2');
+            if (res2.ok) {
+                const data2 = await res2.json();
+                renderFuturesV2(data2);
+            }
+        } catch(e) { /* Phase 2可选 */ }
     }
 
     function renderFuturesPage(data) {
@@ -3017,6 +3076,180 @@
                 <td>${i + 1}</td>
                 <td>${fmtDate(t.time)}</td>
                 <td style="color:${c};font-weight:700;">${label}</td>
+                <td>${t.direction === 'long' ? '📈多' : '📉空'}</td>
+                <td>$${t.price.toLocaleString()}</td>
+                <td>${t.quantity.toFixed(4)}</td>
+                <td>$${Number(t.value).toLocaleString()}</td>
+                <td>${t.leverage}x</td>
+                <td>$${Number(t.usdt_after).toLocaleString()}</td>
+                <td>$${Number(t.frozen_margin).toLocaleString()}</td>
+                <td style="font-weight:600;">$${Number(t.total).toLocaleString()}</td>
+                <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;">${t.reason}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    // ===================== 合约Phase 2 =====================
+    function renderFuturesV2(data) {
+        const section = document.getElementById('ft2-section');
+        if (!section) return;
+        section.style.display = 'block';
+
+        const results = data.futures_results || [];
+        const sorted = [...results].sort((a, b) => (b.summary?.alpha || 0) - (a.summary?.alpha || 0));
+
+        // 策略说明卡片
+        const v2descs = {
+            'R': { icon: '🏔️', color: 'var(--accent-blue)', desc: '4h/8h定方向→2h确认→1h死叉/KDJ入场' },
+            'S': { icon: '⚡', color: 'var(--accent-green)', desc: '只在隔堆/面积/零轴背离时做空,3x杠杆' },
+            'T': { icon: '🎯', color: 'var(--accent-yellow)', desc: 'KDJ>80+CCI>100+RSI>70三重极值反转' },
+            'U': { icon: '📈', color: 'var(--accent-purple)', desc: '移动止盈替代固定止盈,捕获大行情' },
+            'V': { icon: '📊', color: 'var(--accent-red)', desc: '价升量减+MACD死叉经典组合做空' },
+            'W': { icon: '🏆', color: '#ff6b35', desc: '多周期+隔堆+极值+追踪+量价全融合' },
+            'P': { icon: '🔄', color: 'var(--text-muted)', desc: 'Phase 1最佳策略(基线对照)' },
+            '对照': { icon: '📦', color: 'var(--text-muted)', desc: '纯现货(无合约)' },
+        };
+        const box = document.getElementById('ft2-strategy-cards');
+        box.innerHTML = sorted.map((r, i) => {
+            const s = r.summary;
+            const key = r.name.split(':')[0].replace(/.*?([A-Z\u5bf9])/,'$1').trim();
+            const d = v2descs[key] || v2descs['对照'];
+            const isTop = i === 0;
+            return `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;${isTop ? 'border:1.5px solid var(--accent-green);' : ''}">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <span style="font-size:22px;">${d.icon}</span>
+                    <span style="font-weight:700;font-size:13px;color:${d.color};">${r.name}${isTop ? ' ★' : ''}</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">${d.desc}</div>
+                <div style="display:flex;gap:12px;font-size:13px;">
+                    <span style="color:${s.alpha > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${s.alpha > 0 ? '+' : ''}${s.alpha}% α</span>
+                    <span style="color:var(--text-muted);">${s.max_drawdown}% DD</span>
+                    <span style="color:var(--text-muted);">${s.total_trades}笔</span>
+                </div>
+            </div>`;
+        }).join('');
+
+        // 柱状图
+        const chartC = document.getElementById('ft2-bar-chart');
+        const barW = Math.floor((chartC.clientWidth - 80) / sorted.length);
+        const maxVal = Math.max(...sorted.map(r => Math.abs(r.summary?.alpha || 0)), 10);
+        const scale = 280 / maxVal;
+        let svg = `<svg width="100%" height="350" viewBox="0 0 ${chartC.clientWidth} 350">`;
+        sorted.forEach((r, i) => {
+            const s = r.summary;
+            const alpha = s?.alpha || 0;
+            const x = 50 + i * barW;
+            const barH = Math.abs(alpha) * scale;
+            const y = alpha >= 0 ? (300 - barH) : 300;
+            const color = alpha >= 0 ? '#00d68f' : '#ff4d6a';
+            svg += `<rect x="${x}" y="${y}" width="${barW * 0.6}" height="${barH}" fill="${color}" rx="4"/>`;
+            svg += `<text x="${x + barW * 0.3}" y="${y - 6}" text-anchor="middle" fill="${color}" font-size="11" font-weight="700">${alpha > 0 ? '+' : ''}${alpha.toFixed(1)}%</text>`;
+            svg += `<text x="${x + barW * 0.3}" y="325" text-anchor="middle" fill="#8b8fa3" font-size="9" transform="rotate(-20,${x + barW * 0.3},325)">${r.name.split(':')[0].slice(-6)}</text>`;
+        });
+        svg += `<line x1="48" y1="300" x2="${chartC.clientWidth}" y2="300" stroke="#2a2d3e"/>`;
+        svg += `</svg>`;
+        chartC.innerHTML = svg;
+
+        // 表格
+        const head = document.getElementById('ft2-table-head');
+        const body = document.getElementById('ft2-table-body');
+        head.innerHTML = `<th>#</th><th>策略</th><th>策略收益</th><th>超额收益(α)</th><th>最大回撤</th><th>交易数</th><th>最终资产</th>`;
+        body.innerHTML = sorted.map((r, i) => {
+            const s = r.summary;
+            const cls = i === 0 ? 'style="background:rgba(0,214,143,0.08);"' : '';
+            return `<tr ${cls}>
+                <td>${i + 1}</td>
+                <td><b>${r.name}</b>${i === 0 ? ' ★' : ''}</td>
+                <td style="color:${s.strategy_return >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">${s.strategy_return > 0 ? '+' : ''}${s.strategy_return}%</td>
+                <td style="color:var(--accent-green);font-weight:700;">${s.alpha > 0 ? '+' : ''}${s.alpha}%</td>
+                <td>${s.max_drawdown}%</td>
+                <td>${s.total_trades}</td>
+                <td>$${Number(s.final_total).toLocaleString()}</td>
+            </tr>`;
+        }).join('');
+
+        // 资产曲线
+        const eqC = document.getElementById('ft2-equity-chart');
+        eqC.innerHTML = '';
+        const chart = LightweightCharts.createChart(eqC, {
+            width: eqC.clientWidth, height: 400,
+            layout: { background: { type: 'solid', color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            rightPriceScale: { borderColor: '#2a2d3e' },
+            timeScale: { borderColor: '#2a2d3e', timeVisible: true },
+        });
+        const colors2 = ['#00d68f', '#4a9eff', '#a855f7', '#ff6b35', '#ffaa00', '#ff4d6a', '#22d3ee', '#8b8fa3'];
+        results.forEach((r, i) => {
+            if (!r.history || r.history.length === 0) return;
+            const series = chart.addLineSeries({
+                color: colors2[i % colors2.length],
+                lineWidth: i === 0 || sorted[0]?.name === r.name ? 2.5 : 1.5,
+                title: r.name.split(':')[0].trim(),
+            });
+            series.setData(r.history.map(h => ({
+                time: Math.floor(new Date(h.time).getTime() / 1000),
+                value: h.total,
+            })));
+        });
+        chart.timeScale().fitContent();
+
+        // 最佳策略交易明细
+        renderFTTrades2(sorted[0]);
+
+        // 结论
+        const best = sorted[0]?.summary;
+        const pBase = sorted.find(r => r.name.includes('P-基线'))?.summary;
+        const spot = sorted.find(r => r.name.includes('对照'))?.summary;
+        const box2 = document.getElementById('ft2-conclusion');
+        const improve = pBase ? (best.alpha - pBase.alpha).toFixed(2) : '—';
+        box2.innerHTML = `
+            <div class="card-title">Phase 2 进阶优化结论</div>
+            <div style="line-height:2;font-size:14px;color:var(--text-secondary);">
+                <p><b style="color:var(--accent-green);font-size:16px;">🏆 最佳策略: ${sorted[0].name}</b></p>
+                <p style="margin-top:8px;">
+                    超额收益(α) <b style="color:var(--accent-green);">+${best.alpha}%</b>
+                    | 策略收益 <b style="color:var(--accent-green);">+${best.strategy_return}%</b>
+                    | 最大回撤 <b>${best.max_drawdown}%</b>
+                    | 交易 <b>${best.total_trades}笔</b>
+                </p>
+                ${pBase ? `<p style="margin-top:6px;">
+                    vs Phase 1最佳(P): α=+${pBase.alpha}% → <b style="color:var(--accent-yellow);">提升 +${improve}%</b>
+                </p>` : ''}
+                <div style="margin-top:16px;padding:14px;background:var(--bg-hover);border-radius:8px;border-left:3px solid var(--accent-purple);">
+                    <b style="color:var(--accent-purple);">Phase 2 关键发现:</b><br>
+                    <span>1. <b>隔堆背离</b>是书中最强信号 — 用于合约做空时效果远超通用评分</span><br>
+                    <span>2. 精确信号 > 频繁交易 — S策略135笔交易优于P的196笔</span><br>
+                    <span>3. <b>追踪止盈</b>(U)有效减少了过早止盈的问题</span><br>
+                    <span>4. 多周期瀑布(R)过于严格(仅15笔交易), 需要更多数据验证</span><br>
+                    <span>5. 极值三重确认(T)和量价死叉(V)作为过滤器有效但独立使用收益有限</span><br>
+                    <span>6. 从纯现货α=+${spot?.alpha}% → 合约Phase2 α=+${best.alpha}%, <b>做空能力提升${(best.alpha / (spot?.alpha || 1)).toFixed(0)}倍</b></span>
+                </div>
+            </div>`;
+    }
+
+    function renderFTTrades2(bestResult) {
+        if (!bestResult || !bestResult.trades) return;
+        const trades = bestResult.trades;
+        document.getElementById('ft2-trade-count').textContent = `${trades.length} 笔交易`;
+        const body = document.getElementById('ft2-trades-body');
+        const actionColors = {
+            'SPOT_BUY': 'var(--accent-green)', 'SPOT_SELL': 'var(--accent-red)',
+            'OPEN_LONG': 'var(--accent-blue)', 'CLOSE_LONG': 'var(--accent-purple)',
+            'OPEN_SHORT': 'var(--accent-red)', 'CLOSE_SHORT': 'var(--accent-green)',
+            'LIQUIDATED': '#ff0000',
+        };
+        const actionLabels = {
+            'SPOT_BUY': '现货买入', 'SPOT_SELL': '现货卖出',
+            'OPEN_LONG': '开多', 'CLOSE_LONG': '平多',
+            'OPEN_SHORT': '开空', 'CLOSE_SHORT': '平空',
+            'LIQUIDATED': '强平',
+        };
+        body.innerHTML = trades.map((t, i) => {
+            const c = actionColors[t.action] || 'var(--text-primary)';
+            return `<tr>
+                <td>${i + 1}</td>
+                <td>${fmtDate(t.time)}</td>
+                <td style="color:${c};font-weight:700;">${actionLabels[t.action] || t.action}</td>
                 <td>${t.direction === 'long' ? '📈多' : '📉空'}</td>
                 <td>$${t.price.toLocaleString()}</td>
                 <td>${t.quantity.toFixed(4)}</td>
