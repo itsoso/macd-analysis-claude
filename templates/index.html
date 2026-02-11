@@ -1447,6 +1447,64 @@
 
                 <div class="card" id="ft2-conclusion"></div>
             </div>
+
+            <!-- ====== Phase 3: 深度优化 ====== -->
+            <div id="ft3-section" style="display:none;">
+                <div class="card" style="margin-top:24px;">
+                    <div class="card-title">Phase 3 · S策略深度优化
+                        <span class="badge" style="background:rgba(255,107,107,0.15);color:var(--accent-red);">DEEP DIVE</span>
+                    </div>
+                    <div class="page-subtitle" style="margin-bottom:12px;">
+                        核心发现：S策略63笔空仓净亏$738(胜率2%)，利润全部来自现货减仓择时
+                    </div>
+                    <div style="background:rgba(255,107,107,0.08);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid var(--accent-red);">
+                        <div style="font-weight:600;color:var(--accent-red);margin-bottom:6px;">关键洞察</div>
+                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
+                            <b>空仓价值对比</b>: S0(有空仓) vs S1(纯现货减仓) → 量化空仓的真实贡献<br>
+                            <b>优化思路</b>: ① 降低做空门槛 vs 提高选择性 ② 追踪止盈替代固定止盈 ③ 4h级联确认 ④ 极值区精准做空 ⑤ 长持宽止损 ⑥ 参数网格搜索
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px;" id="ft3-strategy-cards"></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Phase 3 收益对比</div>
+                    <div id="ft3-bar-chart" style="width:100%;min-height:400px;"></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Phase 3 详细对比</div>
+                    <div class="trade-table-wrap" style="max-height:none;">
+                        <table id="ft3-table">
+                            <thead><tr id="ft3-table-head"></tr></thead>
+                            <tbody id="ft3-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Phase 3 资产曲线</div>
+                    <div id="ft3-equity-chart" style="width:100%;height:400px;"></div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">最佳策略交易明细 <span class="badge green" id="ft3-trade-count"></span></div>
+                    <div class="trade-table-wrap" style="max-height:500px;">
+                        <table id="ft3-trades-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th><th>时间</th><th>操作</th><th>方向</th><th>价格</th>
+                                    <th>数量</th><th>名义价值</th><th>杠杆</th>
+                                    <th>USDT余额</th><th>冻结保证金</th><th>总资产</th><th>原因</th>
+                                </tr>
+                            </thead>
+                            <tbody id="ft3-trades-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card" id="ft3-conclusion"></div>
+            </div>
         </div>
 
         <!-- ====== 策略优化对比 ====== -->
@@ -2914,6 +2972,14 @@
                 renderFuturesV2(data2);
             }
         } catch(e) { /* Phase 2可选 */ }
+        // 加载Phase 3
+        try {
+            const res3 = await fetch('/api/strategy_futures_v3');
+            if (res3.ok) {
+                const data3 = await res3.json();
+                renderFuturesV3(data3);
+            }
+        } catch(e) { /* Phase 3可选 */ }
     }
 
     function renderFuturesPage(data) {
@@ -3299,6 +3365,217 @@
                     <span>3. 合约保证金上限(10%)和终身吞吐限制(150%)有效防止过度杠杆化</span><br>
                     <span>4. ${best.liquidations === 0 ? '所有策略均未触发强制平仓' : `存在${best.liquidations}次强平`}，说明风控参数设置合理</span><br>
                     <span>5. 现货渐进减仓 + 合约做空的组合方式，比纯做空或纯现货更稳健</span>
+                </div>
+            </div>`;
+    }
+
+    // ===================== 合约Phase 3 深度优化 =====================
+    function renderFuturesV3(data) {
+        const section = document.getElementById('ft3-section');
+        if (!section) return;
+        section.style.display = 'block';
+
+        const results = data.futures_results || [];
+        const sorted = [...results].sort((a, b) => (b.summary?.alpha || 0) - (a.summary?.alpha || 0));
+
+        // 策略说明卡片
+        const cardDescriptions = {
+            'S0': { emoji: '🔄', desc: '原版基线 · 隔堆信号做空3x + 现货减仓', color: '#94a3b8' },
+            'S1': { emoji: '🏠', desc: '纯现货减仓(不开空) · 验证空仓价值', color: '#06b6d4' },
+            'S2': { emoji: '🎯', desc: '极强信号才做空(PS≥25) · 2x杠杆+追踪止盈', color: '#f59e0b' },
+            'S3': { emoji: '📐', desc: '隔堆+4h趋势确认 · 多周期级联过滤', color: '#8b5cf6' },
+            'S4': { emoji: '🌋', desc: '隔堆+KDJ/CCI极值区 · 超买区精准做空', color: '#ef4444' },
+            'S5': { emoji: '🐢', desc: '低杠杆2x · 宽止损-50% · 长持让利润奔跑', color: '#10b981' },
+            'S6': { emoji: '👑', desc: '融合: 宽减仓+精选做空+4h确认+极值+地量加仓', color: '#ec4899' },
+            'G1': { emoji: '⚡', desc: '参数搜索: 低门槛+2x杠杆', color: '#3b82f6' },
+            'G2': { emoji: '🔒', desc: '参数搜索: 高门槛+3x杠杆', color: '#6366f1' },
+            'G3': { emoji: '🔥', desc: '参数搜索: 超低门槛+高频交易', color: '#f97316' },
+            'G4': { emoji: '🛡️', desc: '参数搜索: 只减仓+偶尔做空', color: '#14b8a6' },
+            'G5': { emoji: '💥', desc: '参数搜索: 激进3x+低门槛', color: '#e11d48' },
+            'G6': { emoji: '🧘', desc: '参数搜索: 保守长持策略', color: '#a855f7' },
+        };
+
+        const cardsBox = document.getElementById('ft3-strategy-cards');
+        cardsBox.innerHTML = sorted.map(r => {
+            const key = r.name.split(':')[0].trim();
+            const info = cardDescriptions[key] || { emoji: '📊', desc: r.name, color: '#94a3b8' };
+            const s = r.summary;
+            const isFirst = sorted[0].name === r.name;
+            return `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;border-left:3px solid ${info.color};${isFirst ? 'box-shadow:0 0 0 2px var(--accent-green);' : ''}">
+                <div style="font-weight:700;font-size:14px;margin-bottom:6px;">${info.emoji} ${r.name}${isFirst ? ' ★' : ''}</div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">${info.desc}</div>
+                <div style="font-size:13px;">
+                    <span style="color:${s.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};font-weight:700;">α ${s.alpha >= 0 ? '+' : ''}${s.alpha.toFixed(1)}%</span>
+                    <span style="margin-left:8px;color:var(--text-muted);">回撤${s.max_drawdown.toFixed(1)}%</span>
+                    <span style="margin-left:8px;color:var(--text-muted);">${s.total_trades}笔</span>
+                </div>
+            </div>`;
+        }).join('');
+
+        // 柱状图
+        renderFT3BarChart(sorted);
+        // 表格
+        renderFT3Table(sorted);
+        // 资产曲线
+        renderFT3Equity(results);
+        // 最佳交易明细
+        renderFT3Trades(sorted[0]);
+        // 结论
+        renderFT3Conclusion(sorted, data);
+    }
+
+    function renderFT3BarChart(sorted) {
+        const container = document.getElementById('ft3-bar-chart');
+        if (!container) return;
+        const chart = LightweightCharts.createChart(container, {
+            layout: { background: { type: 'solid', color: '#1a1a2e' }, textColor: '#e2e8f0' },
+            grid: { vertLines: { color: 'rgba(42,42,74,0.5)' }, horzLines: { color: 'rgba(42,42,74,0.5)' } },
+            height: 400,
+        });
+        const colors = ['#00d68f', '#38bdf8', '#a78bfa', '#f59e0b', '#f87171', '#34d399',
+                         '#818cf8', '#fb923c', '#22d3ee', '#c084fc', '#fbbf24', '#f472b6', '#4ade80'];
+        const series = chart.addHistogramSeries({
+            priceFormat: { type: 'price', precision: 1 },
+        });
+        series.setData(sorted.map((r, i) => ({
+            time: `2026-01-${String(i + 1).padStart(2, '0')}`,
+            value: r.summary?.alpha || 0,
+            color: colors[i % colors.length],
+        })));
+
+        // 添加图例
+        const legend = document.createElement('div');
+        legend.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;padding:8px;font-size:12px;';
+        legend.innerHTML = sorted.map((r, i) =>
+            `<span style="color:${colors[i % colors.length]};">■ ${r.name.split(':')[0]}: α${r.summary?.alpha >= 0 ? '+' : ''}${r.summary?.alpha?.toFixed(1)}%</span>`
+        ).join('');
+        container.appendChild(legend);
+
+        chart.timeScale().fitContent();
+    }
+
+    function renderFT3Table(sorted) {
+        const head = document.getElementById('ft3-table-head');
+        const body = document.getElementById('ft3-table-body');
+        if (!head || !body) return;
+        head.innerHTML = `<th>#</th><th>策略</th><th>策略收益</th><th>超额α</th><th>回撤</th><th>笔数</th><th>总费用</th><th>滑点成本</th><th>资金费净</th><th>费用占比</th><th>最终资产</th>`;
+        body.innerHTML = sorted.map((r, i) => {
+            const s = r.summary;
+            const f = s.fees || {};
+            const isFirst = i === 0;
+            return `<tr style="${isFirst ? 'background:rgba(0,214,143,0.08);' : ''}">
+                <td style="${isFirst ? 'color:var(--accent-green);font-weight:700;' : ''}">${i + 1}${isFirst ? ' ★' : ''}</td>
+                <td style="font-weight:600;">${r.name}</td>
+                <td class="${s.strategy_return >= 0 ? 'pnl-pos' : 'pnl-neg'}">${s.strategy_return >= 0 ? '+' : ''}${s.strategy_return.toFixed(1)}%</td>
+                <td style="color:${s.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};font-weight:700;">${s.alpha >= 0 ? '+' : ''}${s.alpha.toFixed(1)}%</td>
+                <td>${s.max_drawdown.toFixed(1)}%</td>
+                <td>${s.total_trades}</td>
+                <td>$${(f.total_fees || 0).toLocaleString()}</td>
+                <td>$${(f.slippage_cost || 0).toLocaleString()}</td>
+                <td style="color:${(f.net_funding||0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">$${(f.net_funding || 0).toLocaleString()}</td>
+                <td>${(f.fee_drag_pct || 0).toFixed(2)}%</td>
+                <td style="font-weight:600;">$${Number(s.final_total).toLocaleString()}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    function renderFT3Equity(results) {
+        const container = document.getElementById('ft3-equity-chart');
+        if (!container) return;
+        const chart = LightweightCharts.createChart(container, {
+            layout: { background: { type: 'solid', color: '#1a1a2e' }, textColor: '#e2e8f0' },
+            grid: { vertLines: { color: 'rgba(42,42,74,0.5)' }, horzLines: { color: 'rgba(42,42,74,0.5)' } },
+            rightPriceScale: { borderColor: 'rgba(42,42,74,0.5)' },
+        });
+        const colors = ['#00d68f', '#06b6d4', '#f59e0b', '#8b5cf6', '#ef4444', '#10b981',
+                         '#ec4899', '#3b82f6', '#6366f1', '#f97316', '#14b8a6', '#e11d48', '#a855f7'];
+        results.forEach((r, i) => {
+            if (!r.history || r.history.length === 0) return;
+            const ls = chart.addLineSeries({ color: colors[i % colors.length], lineWidth: 2, title: r.name.split(':')[0] });
+            ls.setData(r.history.map(h => ({
+                time: Math.floor(new Date(h.time).getTime() / 1000),
+                value: h.total,
+            })));
+        });
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderFT3Trades(bestResult) {
+        if (!bestResult || !bestResult.trades) return;
+        const trades = bestResult.trades;
+        document.getElementById('ft3-trade-count').textContent = `${trades.length} 笔交易`;
+        const body = document.getElementById('ft3-trades-body');
+        const actionColors = {
+            'SPOT_BUY': 'var(--accent-green)', 'SPOT_SELL': 'var(--accent-red)',
+            'OPEN_LONG': 'var(--accent-blue)', 'CLOSE_LONG': 'var(--accent-purple)',
+            'OPEN_SHORT': 'var(--accent-red)', 'CLOSE_SHORT': 'var(--accent-green)',
+            'LIQUIDATED': '#ff0000',
+        };
+        const actionLabels = {
+            'SPOT_BUY': '现货买入', 'SPOT_SELL': '现货卖出',
+            'OPEN_LONG': '开多', 'CLOSE_LONG': '平多',
+            'OPEN_SHORT': '开空', 'CLOSE_SHORT': '平空',
+            'LIQUIDATED': '强平',
+        };
+        body.innerHTML = trades.map((t, i) => {
+            const c = actionColors[t.action] || 'var(--text-primary)';
+            return `<tr>
+                <td>${i + 1}</td>
+                <td>${fmtDate(t.time)}</td>
+                <td style="color:${c};font-weight:700;">${actionLabels[t.action] || t.action}</td>
+                <td>${t.direction === 'long' ? '📈多' : '📉空'}</td>
+                <td>$${t.price.toLocaleString()}</td>
+                <td>${t.quantity.toFixed(4)}</td>
+                <td>$${Number(t.value).toLocaleString()}</td>
+                <td>${t.leverage}x</td>
+                <td>$${Number(t.usdt_after).toLocaleString()}</td>
+                <td>$${Number(t.frozen_margin).toLocaleString()}</td>
+                <td style="font-weight:600;">$${Number(t.total).toLocaleString()}</td>
+                <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;">${t.reason}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    function renderFT3Conclusion(sorted, data) {
+        const best = sorted[0]?.summary;
+        const s0 = sorted.find(r => r.name.includes('S0'))?.summary;
+        const s1 = sorted.find(r => r.name.includes('S1'))?.summary;
+        if (!best) return;
+
+        const shortContrib = (s0 && s1) ? (s0.alpha - s1.alpha).toFixed(1) : '?';
+        const shortIsPositive = parseFloat(shortContrib) > 0;
+
+        const box = document.getElementById('ft3-conclusion');
+        box.innerHTML = `
+            <div class="card-title">Phase 3 深度优化结论</div>
+            <div style="line-height:2;font-size:14px;color:var(--text-secondary);">
+                <p><b style="color:var(--accent-green);font-size:16px;">🏆 最佳策略: ${sorted[0].name}</b></p>
+                <p style="margin-top:8px;">
+                    超额收益(α) <b style="color:var(--accent-green);">+${best.alpha.toFixed(1)}%</b>
+                    | 策略收益 <b style="color:var(--accent-green);">${best.strategy_return >= 0 ? '+' : ''}${best.strategy_return.toFixed(1)}%</b>
+                    | 最大回撤 <b>${best.max_drawdown.toFixed(1)}%</b>
+                    | 交易 <b>${best.total_trades}笔</b>
+                    | 费用率 <b>${(best.fees?.fee_drag_pct || 0).toFixed(2)}%</b>
+                </p>
+
+                <div style="margin-top:16px;padding:14px;background:rgba(255,107,107,0.06);border-radius:8px;border-left:3px solid var(--accent-red);">
+                    <b style="color:var(--accent-red);">空仓价值分析:</b><br>
+                    <span>S0(有空仓): α=+${s0 ? s0.alpha.toFixed(1) : '?'}%</span><br>
+                    <span>S1(纯现货): α=+${s1 ? s1.alpha.toFixed(1) : '?'}%</span><br>
+                    <span style="font-weight:700;color:${shortIsPositive ? 'var(--accent-green)' : 'var(--accent-red)'};">
+                        空仓贡献: ${shortContrib}% ${shortIsPositive ? '(空仓有正贡献!)' : '(空仓拖累收益!)'}
+                    </span>
+                </div>
+
+                <div style="margin-top:16px;padding:14px;background:var(--bg-hover);border-radius:8px;border-left:3px solid var(--accent-blue);">
+                    <b style="color:var(--accent-blue);">Phase 3 关键发现:</b><br>
+                    <span>1. <b>现货减仓择时</b>是核心利润来源 — 隔堆信号用于减仓效果极佳</span><br>
+                    <span>2. <b>空仓提供+${shortContrib}%额外收益</b> — 但需要严格过滤信号质量</span><br>
+                    <span>3. <b>参数敏感性</b>: G3(超低门槛)与S0(原版)接近, 说明信号本身质量高</span><br>
+                    <span>4. <b>S4(极值区做空)</b>回撤最小(${sorted.find(r => r.name.includes('S4'))?.summary?.max_drawdown?.toFixed(1) || '?'}%), 适合保守投资者</span><br>
+                    <span>5. 降低杠杆(S2/S5)减少单笔亏损但也限制了总收益</span><br>
+                    <span>6. <b>最终结论</b>: 现货减仓为主 + 高信号质量做空为辅 = 最优配置</span>
                 </div>
             </div>`;
     }

@@ -26,6 +26,7 @@ strategy_optimize_result.json
 strategy_enhanced_result.json
 strategy_futures_result.json
 strategy_futures_v2_result.json
+strategy_futures_v3_result.json
 divergence_analysis.png
 *.png
 *.csv
