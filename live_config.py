@@ -7,7 +7,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 
 
 class TradingPhase(Enum):
@@ -203,6 +203,14 @@ class StrategyConfig:
     short_max_hold: int = 48
     long_max_hold: int = 48
 
+    # ── 多周期联合决策 ──
+    use_multi_tf: bool = True                    # 是否启用多周期共识
+    decision_timeframes: List[str] = field(      # 参与决策的时间框架
+        default_factory=lambda: ['15m', '30m', '1h', '4h', '8h', '24h']
+    )
+    consensus_min_strength: int = 40             # 共识最低强度才可开仓 (0-100)
+    consensus_position_scale: bool = True        # 是否按共识强度缩放仓位
+
     @classmethod
     def from_optimize_result(cls, filepath: str, timeframe: str = None) -> 'StrategyConfig':
         """从优化结果 JSON 加载最优配置"""
@@ -367,6 +375,9 @@ class LiveTradingConfig:
                 "optimize_result_file": "optimize_six_book_result.json",
                 "symbol": "ETHUSDT",
                 "timeframe": "1h",
+                "use_multi_tf": True,
+                "decision_timeframes": ["15m", "30m", "1h", "4h", "8h", "24h"],
+                "consensus_min_strength": 40,
             },
             "risk": {
                 "max_leverage": 2,

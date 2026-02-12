@@ -131,6 +131,14 @@ class LiveTradingEngine:
         self._last_daily_summary = ""
         self._cumulative_funding = 0.0
 
+        # --- 多周期共识状态 ---
+        self._last_consensus: Optional[dict] = None
+        self._last_consensus_time: float = 0
+        self._use_multi_tf = config.strategy.use_multi_tf
+        self._decision_tfs = config.strategy.decision_timeframes
+        self._consensus_min_strength = config.strategy.consensus_min_strength
+        self._consensus_position_scale = config.strategy.consensus_position_scale
+
         # 加载持久化状态
         self._load_state()
 
@@ -149,7 +157,13 @@ class LiveTradingEngine:
         self.logger.info(f"  实盘交易引擎启动")
         self.logger.info(f"  阶段: {self.phase.value}")
         self.logger.info(f"  交易对: {self.config.strategy.symbol}")
-        self.logger.info(f"  时间框架: {self.config.strategy.timeframe}")
+        self.logger.info(f"  主时间框架: {self.config.strategy.timeframe}")
+        if self._use_multi_tf:
+            self.logger.info(f"  🔗 多周期决策: 启用")
+            self.logger.info(f"  决策TFs: {','.join(self._decision_tfs)}")
+            self.logger.info(f"  最低共识强度: {self._consensus_min_strength}")
+        else:
+            self.logger.info(f"  多周期决策: 关闭 (单TF模式)")
         self.logger.info(f"  执行交易: {self.config.execute_trades}")
         self.logger.info(f"  初始资金: ${self.config.initial_capital:.2f}")
         self.logger.info(f"  杠杆: {self.config.strategy.leverage}x")
@@ -232,7 +246,7 @@ class LiveTradingEngine:
                 # 6. 检查部分止盈
                 self._check_partial_take_profits(current_price)
 
-                # 7. 评估交易动作
+                # 7. 评估交易动作 (先用单TF逻辑处理平仓)
                 sig = self.signal_generator.evaluate_action(
                     sig,
                     has_long="LONG" in self.positions,
@@ -253,9 +267,21 @@ class LiveTradingEngine:
                     long_cooldown=self.long_cooldown,
                 )
 
+                # 7b. 多周期共识门控 —— 开仓决策需要共识确认
+                if self._use_multi_tf and sig.action in ("OPEN_LONG", "OPEN_SHORT"):
+                    sig = self._apply_multi_tf_gate(sig)
+
                 self._last_signal = sig
 
                 # 8. 记录信号日志
+                log_extra = {}
+                if self._last_consensus:
+                    cd = self._last_consensus.get("consensus", {}).get("decision", {})
+                    log_extra = {
+                        "consensus_label": cd.get("label", ""),
+                        "consensus_strength": cd.get("strength", 0),
+                        "consensus_direction": cd.get("direction", ""),
+                    }
                 self.logger.log_signal(
                     sell_score=sig.sell_score,
                     buy_score=sig.buy_score,
@@ -300,6 +326,85 @@ class LiveTradingEngine:
             self.notifier.notify_error(e, "tick 循环")
 
     # ============================================================
+    # 多周期共识门控
+    # ============================================================
+    def _apply_multi_tf_gate(self, sig: SignalResult) -> SignalResult:
+        """
+        多周期共识门控: 开仓信号需要多周期共识确认
+
+        规则:
+          - 获取多TF共识决策
+          - 共识 actionable=True 且方向一致 → 放行开仓
+          - 共识 actionable=True 但方向相反 → 阻止，改为 HOLD
+          - 共识 actionable=False → 阻止，改为 HOLD
+          - 共识 strength >= consensus_min_strength → 放行
+        """
+        try:
+            # 调用多周期信号计算
+            multi_result = self.signal_generator.compute_multi_tf_consensus(
+                self._decision_tfs
+            )
+            self._last_consensus = multi_result
+            self._last_consensus_time = time.time()
+
+            consensus = multi_result.get("consensus", {})
+            decision = consensus.get("decision", {})
+            direction = decision.get("direction", "hold")
+            strength = decision.get("strength", 0)
+            actionable = decision.get("actionable", False)
+            label = decision.get("label", "")
+
+            # 判断开仓方向是否与共识一致
+            sig_direction = "long" if sig.action == "OPEN_LONG" else "short"
+
+            self.logger.info(
+                f"[多周期门控] 单TF建议={sig.action} | "
+                f"共识={label} direction={direction} "
+                f"strength={strength} actionable={actionable}"
+            )
+
+            # 规则 1: 共识不可操作 → 阻止
+            if not actionable:
+                sig.action = "HOLD"
+                sig.reason = (f"多周期共识阻止: {label} "
+                              f"(strength={strength}, 需>={self._consensus_min_strength})")
+                self.logger.info(f"[多周期门控] ⛔ 开仓被阻止: {sig.reason}")
+                return sig
+
+            # 规则 2: 共识方向与单TF方向不一致 → 阻止
+            if direction != sig_direction:
+                sig.action = "HOLD"
+                sig.reason = (f"多周期共识方向不一致: 单TF={sig_direction} "
+                              f"vs 共识={direction} ({label})")
+                self.logger.info(f"[多周期门控] ⛔ 方向不一致: {sig.reason}")
+                return sig
+
+            # 规则 3: 共识强度不够 → 阻止
+            if strength < self._consensus_min_strength:
+                sig.action = "HOLD"
+                sig.reason = (f"多周期共识强度不足: {strength} "
+                              f"< {self._consensus_min_strength} ({label})")
+                self.logger.info(f"[多周期门控] ⛔ 强度不足: {sig.reason}")
+                return sig
+
+            # 通过所有门控 → 放行，附加共识信息
+            sig.reason = (f"{sig.reason} | 多周期确认: {label} "
+                          f"strength={strength}")
+            self.logger.info(
+                f"[多周期门控] ✅ 开仓确认: {sig.action} "
+                f"strength={strength}"
+            )
+
+            return sig
+
+        except Exception as e:
+            # 多周期计算失败不阻止交易，降级为单TF模式
+            self.logger.warning(
+                f"[多周期门控] 计算异常，降级为单TF模式: {e}"
+            )
+            return sig
+
+    # ============================================================
     # 交易执行
     # ============================================================
     def _execute_action(self, sig: SignalResult, price: float):
@@ -328,6 +433,22 @@ class LiveTradingEngine:
         # 计算保证金
         equity = self._calc_equity(price)
         raw_margin = equity * cfg.margin_use * cfg.single_pct
+
+        # 多周期共识强度缩放仓位
+        if (self._use_multi_tf and self._consensus_position_scale
+                and self._last_consensus):
+            consensus_strength = (self._last_consensus
+                                  .get("consensus", {})
+                                  .get("decision", {})
+                                  .get("strength", 50))
+            # strength 40-100 映射到 0.5-1.0 的仓位比例
+            scale = max(0.5, min(1.0, consensus_strength / 100))
+            raw_margin *= scale
+            self.logger.info(
+                f"[仓位缩放] 共识强度={consensus_strength} → "
+                f"仓位比例={scale:.0%}"
+            )
+
         margin = self.risk_manager.constrain_margin(
             raw_margin, equity, self.frozen_margin
         )
@@ -753,6 +874,13 @@ class LiveTradingEngine:
             "running": self.running,
             "pid": os.getpid(),
             "saved_at": datetime.now().isoformat(),
+            "use_multi_tf": self._use_multi_tf,
+            "decision_tfs": self._decision_tfs if self._use_multi_tf else [],
+            "last_consensus": {
+                "decision": (self._last_consensus or {}).get("consensus", {}).get("decision", {}),
+                "time": datetime.fromtimestamp(self._last_consensus_time).isoformat()
+                        if self._last_consensus_time else None,
+            } if self._last_consensus else None,
         }
         os.makedirs(self.config.data_dir, exist_ok=True)
         filepath = os.path.join(self.config.data_dir, "engine_state.json")
@@ -855,6 +983,12 @@ class LiveTradingEngine:
             "risk_status": self.risk_manager.get_status_report(),
             "data_info": self.signal_generator.get_current_data_info(),
             "performance": self.tracker.get_summary(),
+            "multi_tf": {
+                "enabled": self._use_multi_tf,
+                "decision_tfs": self._decision_tfs,
+                "consensus_min_strength": self._consensus_min_strength,
+                "last_consensus": (self._last_consensus or {}).get("consensus", {}).get("decision", {}),
+            },
         }
 
     def kill_switch(self, reason: str = "手动触发"):

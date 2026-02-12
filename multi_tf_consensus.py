@@ -1,0 +1,326 @@
+"""
+多周期联合决策共识算法 (共享模块)
+
+三层判断:
+  1. 加权得分: 大周期权重远高于小周期 (24h=28, 15m=3)
+  2. 连续共振链: 检测相邻周期连续同向的链条 (如 15m→30m→1h)
+  3. 大周期定调: ≥4h 的周期单独统计，作为趋势基调
+
+决策矩阵:
+  - 大小同向 + 共振链 → 强信号，可入场
+  - 大周期有方向 + 小周期反向 → 等待，不逆势
+  - 小周期有方向 + 大周期中性 → 弱信号，轻仓或观望
+  - 多空分歧 → 观望
+
+使用者:
+  - live_runner.py (实时信号检测 CLI)
+  - live_trading_engine.py (实盘交易引擎)
+  - optimize_six_book.py (回测引擎)
+"""
+
+# ================================================================
+# 时间框架常量
+# ================================================================
+
+# 时间框架排序（从小到大）
+TF_ORDER = [
+    '1m', '3m', '5m', '10m', '15m', '30m',
+    '1h', '2h', '3h', '4h', '6h', '8h',
+    '12h', '16h', '24h', '1d',
+]
+
+# 各时间框架权重 (大周期权重远高于小周期)
+TF_WEIGHT = {
+    '1m': 1, '3m': 1, '5m': 1,
+    '10m': 2, '15m': 3, '30m': 5,
+    '1h': 8, '2h': 10, '3h': 12,
+    '4h': 15, '6h': 18, '8h': 20,
+    '12h': 22, '16h': 25, '24h': 28, '1d': 28,
+}
+
+# 各时间框架对应分钟数
+TF_MINUTES = {
+    '1m': 1, '3m': 3, '5m': 5, '10m': 10, '15m': 15, '30m': 30,
+    '1h': 60, '2h': 120, '3h': 180, '4h': 240, '6h': 360,
+    '8h': 480, '12h': 720, '16h': 960, '24h': 1440, '1d': 1440,
+}
+
+# 默认决策周期组合
+DEFAULT_DECISION_TFS = ['15m', '30m', '1h', '4h', '8h', '24h']
+
+# 大周期阈值 (≥4h 视为大周期)
+LARGE_TF_THRESHOLD_MIN = 240
+
+
+# ================================================================
+# 核心共识算法
+# ================================================================
+
+def compute_weighted_consensus(results, timeframes=None):
+    """
+    智能多周期加权共识算法
+
+    参数:
+        results: list[dict] - 各TF的信号结果
+            每个 dict 至少包含: {"tf": "1h", "ok": True, "action": "OPEN_LONG"}
+        timeframes: list[str] - 参与决策的时间框架列表 (可选)
+
+    返回:
+        dict - 包含 decision, weighted_scores, resonance_chains, large_tf_signal 等
+    """
+    # 按时间框架从小到大排序
+    ok_results = [r for r in results if r.get("ok")]
+    ok_results.sort(key=lambda r: TF_ORDER.index(r["tf"]) if r["tf"] in TF_ORDER else 99)
+
+    long_tfs = [r["tf"] for r in ok_results if "LONG" in r.get("action", "")]
+    short_tfs = [r["tf"] for r in ok_results if "SHORT" in r.get("action", "")]
+    hold_tfs = [r["tf"] for r in ok_results if r.get("action") == "HOLD"]
+    n_ok = len(ok_results)
+
+    # ── 1. 加权得分 ──
+    long_score = sum(TF_WEIGHT.get(tf, 5) for tf in long_tfs)
+    short_score = sum(TF_WEIGHT.get(tf, 5) for tf in short_tfs)
+    total_weight = sum(TF_WEIGHT.get(r["tf"], 5) for r in ok_results)
+    # 归一化到 0~100
+    long_pct = round(long_score / total_weight * 100, 1) if total_weight > 0 else 0
+    short_pct = round(short_score / total_weight * 100, 1) if total_weight > 0 else 0
+    net_score = round(long_pct - short_pct, 1)
+
+    weighted_scores = {
+        "long": long_pct,
+        "short": short_pct,
+        "net": net_score,
+        "long_raw": long_score,
+        "short_raw": short_score,
+        "total_weight": total_weight,
+    }
+
+    # ── 2. 连续共振链检测 ──
+    resonance_chains = _detect_resonance_chains(ok_results)
+
+    # ── 3. 大周期定调 (≥4h) ──
+    large_tf_signal = _compute_large_tf_signal(ok_results)
+
+    # 小周期方向 (<4h)
+    small_long = [r["tf"] for r in ok_results
+                  if "LONG" in r.get("action", "") and TF_MINUTES.get(r["tf"], 0) < LARGE_TF_THRESHOLD_MIN]
+    small_short = [r["tf"] for r in ok_results
+                   if "SHORT" in r.get("action", "") and TF_MINUTES.get(r["tf"], 0) < LARGE_TF_THRESHOLD_MIN]
+
+    # ── 4. 综合决策 ──
+    best_chain = resonance_chains[0] if resonance_chains else None
+    decision = _make_decision(
+        weighted_scores, best_chain, large_tf_signal,
+        long_tfs, short_tfs, hold_tfs,
+        small_long, small_short, n_ok
+    )
+
+    return {
+        "long_tfs": long_tfs,
+        "short_tfs": short_tfs,
+        "hold_tfs": hold_tfs,
+        "weighted_scores": weighted_scores,
+        "resonance_chains": resonance_chains,
+        "large_tf_signal": large_tf_signal,
+        "decision": decision,
+        # 兼容旧格式
+        "long": long_tfs,
+        "short": short_tfs,
+        "hold": hold_tfs,
+        "direction": decision["direction"],
+    }
+
+
+def _detect_resonance_chains(ok_results):
+    """检测连续共振链"""
+    resonance_chains = []
+    n_ok = len(ok_results)
+    if n_ok < 2:
+        return resonance_chains
+
+    # 为每个结果标记方向
+    directions = []
+    for r in ok_results:
+        if "LONG" in r.get("action", ""):
+            directions.append(("long", r["tf"]))
+        elif "SHORT" in r.get("action", ""):
+            directions.append(("short", r["tf"]))
+        else:
+            directions.append(("hold", r["tf"]))
+
+    # 扫描连续同向链（只看 long/short，允许1个 hold 间隔）
+    for target_dir in ["long", "short"]:
+        chain = []
+        gap_count = 0
+        for d, tf in directions:
+            if d == target_dir:
+                chain.append(tf)
+                gap_count = 0
+            elif d == "hold" and chain and gap_count == 0:
+                gap_count += 1
+                continue
+            else:
+                if len(chain) >= 2:
+                    has_4h = any(TF_MINUTES.get(t, 0) >= LARGE_TF_THRESHOLD_MIN for t in chain)
+                    resonance_chains.append({
+                        "direction": target_dir,
+                        "chain": chain,
+                        "length": len(chain),
+                        "has_4h_plus": has_4h,
+                        "weight": sum(TF_WEIGHT.get(t, 5) for t in chain),
+                    })
+                chain = []
+                gap_count = 0
+                if d == target_dir:
+                    chain = [tf]
+
+        # 末尾收尾
+        if len(chain) >= 2:
+            has_4h = any(TF_MINUTES.get(t, 0) >= LARGE_TF_THRESHOLD_MIN for t in chain)
+            resonance_chains.append({
+                "direction": target_dir,
+                "chain": chain,
+                "length": len(chain),
+                "has_4h_plus": has_4h,
+                "weight": sum(TF_WEIGHT.get(t, 5) for t in chain),
+            })
+
+    # 按权重排序
+    resonance_chains.sort(key=lambda c: c["weight"], reverse=True)
+    return resonance_chains
+
+
+def _compute_large_tf_signal(ok_results):
+    """计算大周期 (≥4h) 方向"""
+    large_long = [r["tf"] for r in ok_results
+                  if "LONG" in r.get("action", "") and TF_MINUTES.get(r["tf"], 0) >= LARGE_TF_THRESHOLD_MIN]
+    large_short = [r["tf"] for r in ok_results
+                   if "SHORT" in r.get("action", "") and TF_MINUTES.get(r["tf"], 0) >= LARGE_TF_THRESHOLD_MIN]
+
+    if large_long and not large_short:
+        return {"direction": "long", "tfs": large_long}
+    elif large_short and not large_long:
+        return {"direction": "short", "tfs": large_short}
+    elif large_long and large_short:
+        return {"direction": "conflict", "tfs": large_long + large_short}
+    else:
+        return {"direction": "neutral", "tfs": []}
+
+
+def _make_decision(ws, best_chain, large_sig, long_tfs, short_tfs, hold_tfs,
+                   small_long, small_short, n_ok):
+    """
+    决策矩阵 — 综合加权得分、共振链、大周期方向
+
+    优先级:
+      1. 大周期+小周期同向+共振链 → 强入场 (strength 70-100)
+      2. 大周期明确+小周期同向(无共振链) → 中等入场 (strength 50-70)
+      3. 只有小周期信号+大周期中性 → 弱/观望 (strength 20-40)
+      4. 大周期与小周期反向 → 不做 (strength 0-15)
+      5. 完全中性 → 观望 (strength 0)
+    """
+    net = ws["net"]
+    large_dir = large_sig["direction"]
+
+    # ---------- 情况 A: 大小同向 + 共振链 → 强信号 ----------
+    if best_chain and best_chain["has_4h_plus"] and best_chain["length"] >= 3:
+        direction = best_chain["direction"]
+        if (direction == "long" and large_dir in ("long", "neutral") and net > 15) or \
+           (direction == "short" and large_dir in ("short", "neutral") and net < -15):
+            strength = min(100, 50 + best_chain["weight"] * 0.5 + abs(net) * 0.3)
+            label_dir = "做多" if direction == "long" else "做空"
+            return {
+                "direction": direction,
+                "label": f"🔥 强{label_dir}共振",
+                "strength": round(strength),
+                "reason": (f"连续{best_chain['length']}级共振"
+                           f"({' → '.join(best_chain['chain'])}), "
+                           f"大周期{large_dir}, 加权净分{net:+.1f}"),
+                "actionable": True,
+            }
+
+    # ---------- 情况 B: 大周期明确 + 小周期同向 → 中等信号 ----------
+    if large_dir == "long" and small_long and not small_short:
+        strength = min(80, 40 + net * 0.5)
+        return {
+            "direction": "long",
+            "label": "📈 大周期看多 + 小周期确认",
+            "strength": round(max(strength, 40)),
+            "reason": f"大周期({','.join(large_sig['tfs'])})看多, "
+                      f"小周期({','.join(small_long)})确认, 净分{net:+.1f}",
+            "actionable": True,
+        }
+    if large_dir == "short" and small_short and not small_long:
+        strength = min(80, 40 + abs(net) * 0.5)
+        return {
+            "direction": "short",
+            "label": "📉 大周期看空 + 小周期确认",
+            "strength": round(max(strength, 40)),
+            "reason": f"大周期({','.join(large_sig['tfs'])})看空, "
+                      f"小周期({','.join(small_short)})确认, 净分{net:+.1f}",
+            "actionable": True,
+        }
+
+    # ---------- 情况 C: 大小周期反向 → 不做 ----------
+    if large_dir == "long" and small_short and not small_long:
+        return {
+            "direction": "hold",
+            "label": "⛔ 大小周期反向 — 不做",
+            "strength": round(max(0, 10 - abs(net) * 0.1)),
+            "reason": f"大周期看多但小周期({','.join(small_short)})看空, "
+                      f"可能是回调, 等小周期转向后再顺势做多",
+            "actionable": False,
+        }
+    if large_dir == "short" and small_long and not small_short:
+        return {
+            "direction": "hold",
+            "label": "⛔ 大小周期反向 — 不做",
+            "strength": round(max(0, 10 - abs(net) * 0.1)),
+            "reason": f"大周期看空但小周期({','.join(small_long)})看多, "
+                      f"可能是反弹, 等小周期转向后再顺势做空",
+            "actionable": False,
+        }
+
+    # ---------- 情况 D: 多空同时存在 → 观望 ----------
+    if long_tfs and short_tfs:
+        return {
+            "direction": "hold",
+            "label": "⚠️ 多空分歧 — 观望",
+            "strength": round(min(15, abs(net))),
+            "reason": f"做多({','.join(long_tfs)}) vs 做空({','.join(short_tfs)}), "
+                      f"方向不明确, 净分{net:+.1f}, 等待分歧解除",
+            "actionable": False,
+        }
+
+    # ---------- 情况 E: 只有小周期信号 + 大周期中性 → 弱信号 ----------
+    if small_long and large_dir == "neutral":
+        chain_bonus = best_chain["length"] * 5 if best_chain and best_chain["direction"] == "long" else 0
+        strength = min(40, 15 + net * 0.3 + chain_bonus)
+        return {
+            "direction": "long",
+            "label": "📊 小周期看多 — 弱信号",
+            "strength": round(max(strength, 10)),
+            "reason": f"仅小周期({','.join(small_long)})看多, "
+                      f"大周期中性, 可轻仓试探或等待大周期确认",
+            "actionable": False,
+        }
+    if small_short and large_dir == "neutral":
+        chain_bonus = best_chain["length"] * 5 if best_chain and best_chain["direction"] == "short" else 0
+        strength = min(40, 15 + abs(net) * 0.3 + chain_bonus)
+        return {
+            "direction": "short",
+            "label": "📊 小周期看空 — 弱信号",
+            "strength": round(max(strength, 10)),
+            "reason": f"仅小周期({','.join(small_short)})看空, "
+                      f"大周期中性, 可轻仓试探或等待大周期确认",
+            "actionable": False,
+        }
+
+    # ---------- 情况 F: 完全中性 ----------
+    return {
+        "direction": "hold",
+        "label": "⚪ 中性 — 无信号",
+        "strength": 0,
+        "reason": f"全部{len(hold_tfs)}个周期观望, 市场无方向, 耐心等待",
+        "actionable": False,
+    }

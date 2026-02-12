@@ -13,8 +13,9 @@ import os
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,7 @@ from bollinger_strategy import compute_bollinger_scores
 from volume_price_strategy import compute_volume_price_scores
 from kdj_strategy import compute_kdj_scores
 from optimize_six_book import calc_fusion_score_six, compute_signals_six
+from multi_tf_consensus import compute_weighted_consensus
 
 
 class SignalResult:
@@ -489,3 +491,121 @@ class LiveSignalGenerator:
         if self._df is None:
             return True
         return (time.time() - self._last_refresh) >= self._refresh_interval
+
+    # ============================================================
+    # 多周期信号生成
+    # ============================================================
+    def compute_multi_tf_signal(self, tf: str) -> dict:
+        """
+        为指定时间框架计算信号 (独立于主时间框架)
+        返回: {"tf": str, "ok": bool, "action": str, "sell_score": float, "buy_score": float, ...}
+        """
+        try:
+            max_days = self._MAX_LOOKBACK_DAYS.get(tf, 60)
+            lookback = min(self.config.lookback_days, max_days)
+
+            # 获取K线数据
+            df = fetch_binance_klines(self.symbol, interval=tf, days=lookback)
+            if df is None or len(df) < 50:
+                return {"tf": tf, "ok": False, "error": f"数据不足({len(df) if df is not None else 0} bars)"}
+
+            # 计算指标
+            df = add_all_indicators(df)
+            add_moving_averages(df, timeframe=tf)
+            data_all = {tf: df}
+
+            # 获取8h辅助数据
+            if tf not in ('8h', '12h', '16h', '24h'):
+                try:
+                    df_8h = fetch_binance_klines(self.symbol, interval='8h', days=lookback)
+                    if df_8h is not None and len(df_8h) > 20:
+                        df_8h = add_all_indicators(df_8h)
+                        data_all['8h'] = df_8h
+                except Exception:
+                    pass
+
+            # 计算六维信号
+            signals = compute_signals_six(df, tf, data_all, max_bars=1500)
+
+            # 计算融合分数
+            idx = len(df) - 1
+            config_dict = {
+                'fusion_mode': self.config.fusion_mode,
+                'veto_threshold': self.config.veto_threshold,
+                'kdj_bonus': self.config.kdj_bonus,
+            }
+            sell_score, buy_score = calc_fusion_score_six(
+                signals, df, idx, df.index[idx], config_dict
+            )
+            sell_score = float(sell_score)
+            buy_score = float(buy_score)
+
+            # 判断动作
+            action = "HOLD"
+            if sell_score >= self.config.short_threshold and sell_score > buy_score * 1.5:
+                action = "OPEN_SHORT"
+            elif buy_score >= self.config.long_threshold and buy_score > sell_score * 1.5:
+                action = "OPEN_LONG"
+
+            return {
+                "tf": tf,
+                "ok": True,
+                "action": action,
+                "sell_score": sell_score,
+                "buy_score": buy_score,
+                "price": float(df['close'].iloc[idx]),
+                "timestamp": str(df.index[idx]),
+                "bars": len(df),
+            }
+
+        except Exception as e:
+            return {"tf": tf, "ok": False, "error": str(e)}
+
+    def compute_multi_tf_consensus(self, decision_tfs: List[str]) -> dict:
+        """
+        并行计算多个时间框架的信号，并生成智能共识决策
+
+        参数:
+            decision_tfs: 参与决策的时间框架列表
+
+        返回:
+            dict - 包含 consensus (共识决策) 和 tf_results (各TF信号)
+        """
+        if self.logger:
+            self.logger.info(f"多周期共识: 计算 {','.join(decision_tfs)} ...")
+
+        start_time = time.time()
+        results = []
+
+        # 并行获取各TF信号
+        with ThreadPoolExecutor(max_workers=min(4, len(decision_tfs))) as executor:
+            futures = {
+                executor.submit(self.compute_multi_tf_signal, tf): tf
+                for tf in decision_tfs
+            }
+            for future in as_completed(futures):
+                tf = futures[future]
+                try:
+                    result = future.result(timeout=120)
+                    results.append(result)
+                except Exception as e:
+                    results.append({"tf": tf, "ok": False, "error": str(e)})
+
+        # 计算加权共识
+        consensus = compute_weighted_consensus(results, decision_tfs)
+
+        elapsed = time.time() - start_time
+        if self.logger:
+            decision = consensus.get("decision", {})
+            self.logger.info(
+                f"多周期共识完成 ({elapsed:.1f}s): "
+                f"{decision.get('label', '?')} "
+                f"strength={decision.get('strength', 0)} "
+                f"direction={decision.get('direction', '?')}"
+            )
+
+        return {
+            "consensus": consensus,
+            "tf_results": results,
+            "elapsed_sec": round(elapsed, 1),
+        }
