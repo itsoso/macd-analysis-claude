@@ -42,6 +42,10 @@ class Position:
         self.partial_tp_1_done = False
         self.partial_tp_2_done = False
         self.entry_fee = 0.0
+        # 入场决策详情
+        self.entry_reason: str = ""          # 开仓原因
+        self.entry_signal: dict = {}         # 信号详情 {buy_score, sell_score, components, ...}
+        self.entry_consensus: dict = {}      # 多周期共识 {direction, strength, label, ...}
 
     def calc_pnl(self, current_price: float) -> float:
         """计算未实现盈亏"""
@@ -68,6 +72,9 @@ class Position:
             "max_pnl_ratio": self.max_pnl_ratio,
             "partial_tp_1_done": self.partial_tp_1_done,
             "partial_tp_2_done": self.partial_tp_2_done,
+            "entry_reason": self.entry_reason,
+            "entry_signal": self.entry_signal,
+            "entry_consensus": self.entry_consensus,
         }
 
 
@@ -413,10 +420,10 @@ class LiveTradingEngine:
         symbol = self.config.strategy.symbol
 
         if action == "OPEN_LONG":
-            self._open_position("LONG", price, sig.reason)
+            self._open_position("LONG", price, sig.reason, sig=sig)
 
         elif action == "OPEN_SHORT":
-            self._open_position("SHORT", price, sig.reason)
+            self._open_position("SHORT", price, sig.reason, sig=sig)
 
         elif action == "CLOSE_LONG":
             self._close_position("LONG", price, sig.reason)
@@ -424,7 +431,8 @@ class LiveTradingEngine:
         elif action == "CLOSE_SHORT":
             self._close_position("SHORT", price, sig.reason)
 
-    def _open_position(self, side: str, price: float, reason: str):
+    def _open_position(self, side: str, price: float, reason: str,
+                       sig: 'SignalResult | None' = None):
         """开仓"""
         symbol = self.config.strategy.symbol
         cfg = self.config.strategy
@@ -524,6 +532,29 @@ class LiveTradingEngine:
             order_id=order_id,
         )
         pos.entry_fee = fee
+        # 保存入场决策详情
+        pos.entry_reason = reason
+        if sig is not None:
+            pos.entry_signal = {
+                "buy_score": sig.buy_score,
+                "sell_score": sig.sell_score,
+                "components": sig.components,
+                "conflict": sig.conflict,
+                "price": sig.price,
+                "timestamp": sig.timestamp,
+            }
+        if self._last_consensus:
+            consensus = self._last_consensus.get("consensus", {})
+            decision = consensus.get("decision", {})
+            tf_scores = consensus.get("tf_scores", {})
+            pos.entry_consensus = {
+                "direction": decision.get("direction", ""),
+                "strength": decision.get("strength", 0),
+                "label": decision.get("label", ""),
+                "actionable": decision.get("actionable", False),
+                "tf_scores": tf_scores,
+                "decision_tfs": self._decision_tfs,
+            }
         self.positions[side] = pos
 
         # 更新资金
@@ -924,6 +955,10 @@ class LiveTradingEngine:
                 self.positions[side].max_pnl_ratio = pos_data.get("max_pnl_ratio", 0)
                 self.positions[side].partial_tp_1_done = pos_data.get("partial_tp_1_done", False)
                 self.positions[side].partial_tp_2_done = pos_data.get("partial_tp_2_done", False)
+                # 恢复入场决策详情
+                self.positions[side].entry_reason = pos_data.get("entry_reason", "")
+                self.positions[side].entry_signal = pos_data.get("entry_signal", {})
+                self.positions[side].entry_consensus = pos_data.get("entry_consensus", {})
 
             self.logger.info(
                 f"状态已恢复: usdt=${self.usdt:.2f} "

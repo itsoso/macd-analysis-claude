@@ -1109,11 +1109,102 @@ async function refreshStatus() {
                         const tp1 = p.partial_tp_1_done ? '✅' : '⬜';
                         const tp2 = p.partial_tp_2_done ? '✅' : '⬜';
                         const entryTime = p.entry_time || '--';
+
+                        // === 入场决策详情 ===
+                        let decisionHtml = '';
+                        const reason = p.entry_reason || '';
+                        const sig = p.entry_signal || {};
+                        const cons = p.entry_consensus || {};
+
+                        if (reason || Object.keys(sig).length > 0 || Object.keys(cons).length > 0) {
+                            // 开仓原因
+                            let reasonLine = '';
+                            if (reason) {
+                                reasonLine = `<div style="margin-bottom:6px;"><span style="color:var(--accent);">📋 开仓原因:</span> ${reason}</div>`;
+                            }
+
+                            // 六书信号评分
+                            let signalHtml = '';
+                            if (Object.keys(sig).length > 0) {
+                                const bs = Number(sig.buy_score || 0).toFixed(1);
+                                const ss = Number(sig.sell_score || 0).toFixed(1);
+                                const comp = sig.components || {};
+                                const bookNames = {
+                                    'div': '背离', 'ma': '均线', 'cs': 'K线形态',
+                                    'bb': '布林带', 'vp': '量价', 'kdj': 'KDJ'
+                                };
+                                const isBuy = side.includes('LONG');
+                                let booksHtml = '';
+                                for (const [key, label] of Object.entries(bookNames)) {
+                                    const bVal = Number(comp[key + '_b'] || 0);
+                                    const sVal = Number(comp[key + '_s'] || 0);
+                                    const val = isBuy ? bVal : sVal;
+                                    const barWidth = Math.min(val * 100 / 3, 100);
+                                    const barColor = val > 1.5 ? '#22c55e' : val > 0.5 ? '#eab308' : '#64748b';
+                                    booksHtml += `<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">
+                                        <span style="width:52px;text-align:right;color:var(--text-muted);font-size:11px;">${label}</span>
+                                        <div style="flex:1;height:6px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden;">
+                                            <div style="width:${barWidth}%;height:100%;background:${barColor};border-radius:3px;"></div>
+                                        </div>
+                                        <span style="width:30px;font-size:11px;color:${barColor};">${val.toFixed(1)}</span>
+                                    </div>`;
+                                }
+                                signalHtml = `<div style="margin-bottom:6px;">
+                                    <div style="margin-bottom:4px;">
+                                        <span style="color:var(--accent);">📊 信号评分:</span>
+                                        <span style="color:#22c55e;font-weight:600;">买入 ${bs}</span>
+                                        <span style="margin:0 4px;color:var(--text-muted);">/</span>
+                                        <span style="color:#ef4444;font-weight:600;">卖出 ${ss}</span>
+                                        ${sig.conflict ? '<span style="margin-left:6px;color:#eab308;">⚠️冲突</span>' : ''}
+                                    </div>
+                                    <div style="padding:4px 0;">${booksHtml}</div>
+                                </div>`;
+                            }
+
+                            // 多周期共识
+                            let consensusHtml = '';
+                            if (Object.keys(cons).length > 0) {
+                                const dir = cons.direction || '--';
+                                const str = cons.strength || 0;
+                                const lbl = cons.label || '--';
+                                const tfs = (cons.decision_tfs || []).join(', ');
+                                const strColor = str >= 70 ? '#22c55e' : str >= 50 ? '#eab308' : '#ef4444';
+                                // 各周期评分
+                                let tfScoresHtml = '';
+                                const tfScores = cons.tf_scores || {};
+                                if (Object.keys(tfScores).length > 0) {
+                                    tfScoresHtml = '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">';
+                                    for (const [tf, score] of Object.entries(tfScores)) {
+                                        const sc = Number(score);
+                                        const c = sc > 0 ? '#22c55e' : sc < 0 ? '#ef4444' : '#64748b';
+                                        tfScoresHtml += `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,0.05);font-size:11px;">
+                                            <span style="color:var(--text-muted);">${tf}</span>
+                                            <span style="color:${c};font-weight:600;margin-left:3px;">${sc > 0 ? '+' : ''}${sc.toFixed(1)}</span>
+                                        </span>`;
+                                    }
+                                    tfScoresHtml += '</div>';
+                                }
+                                consensusHtml = `<div>
+                                    <span style="color:var(--accent);">🔗 多周期共识:</span>
+                                    <span style="font-weight:600;color:${strColor};">${lbl}</span>
+                                    <span style="color:var(--text-muted);margin-left:4px;">方向=${dir} 强度=${str}</span>
+                                    ${tfs ? '<span style="color:var(--text-muted);margin-left:4px;">[' + tfs + ']</span>' : ''}
+                                    ${tfScoresHtml}
+                                </div>`;
+                            }
+
+                            decisionHtml = `<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06);">
+                                <div style="font-weight:600;font-size:12px;margin-bottom:6px;color:var(--text-secondary);">📌 入场决策详情</div>
+                                ${reasonLine}${signalHtml}${consensusHtml}
+                            </div>`;
+                        }
+
                         return `<div style="background:var(--bg-secondary);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px;line-height:1.8;">
                             <div style="font-weight:700;font-size:13px;margin-bottom:4px;">${icon} ${side} · ${lev}x杠杆</div>
                             <div>入场价: <b>$${entry}</b> · 数量: <b>${qty}</b> ETH · 保证金: $${margin}</div>
                             <div>入场时间: ${entryTime} · 持仓K线: ${bars}</div>
                             <div>最高盈利比: ${maxPnl} · 分段止盈: ${tp1}① ${tp2}②</div>
+                            ${decisionHtml}
                         </div>`;
                     }).join('');
                 } else {
