@@ -26,10 +26,13 @@ APP_PORT="5100"  # gunicorn 监听端口，避免与其他服务冲突
 SERVICE_NAME="macd-analysis"
 WORKERS=3        # gunicorn worker 数量
 
+# GitHub 仓库
+GITHUB_REPO="git@github.com:itsoso/macd-analysis-claude.git"
+GITHUB_BRANCH="main"
+
 # SSH 连接参数
 SSH_CMD="ssh -p ${REMOTE_PORT} -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST}"
 SCP_CMD="scp -P ${REMOTE_PORT} -o StrictHostKeyChecking=no"
-RSYNC_CMD="rsync -avz --progress -e 'ssh -p ${REMOTE_PORT} -o StrictHostKeyChecking=no'"
 
 # 本地项目路径
 LOCAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,103 +50,6 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step()  { echo -e "\n${BLUE}==>${NC} ${BLUE}$1${NC}"; }
 
 # ============================================================
-# 需要同步的文件列表
-# ============================================================
-SYNC_FILES=(
-    # 核心应用
-    "app.py"
-    "config.py"
-    "requirements.txt"
-    "gunicorn_config.py"
-    # 数据获取
-    "binance_fetcher.py"
-    "data_fetcher.py"
-    # 指标和策略
-    "indicators.py"
-    "ma_indicators.py"
-    "kdj_strategy.py"
-    "bollinger_strategy.py"
-    "candlestick_patterns.py"
-    "volume_price_strategy.py"
-    "ma_strategy.py"
-    # 融合策略
-    "five_book_fusion.py"
-    "six_book_fusion.py"
-    "combined_strategy.py"
-    "global_strategy.py"
-    # 期货和优化
-    "strategy_futures.py"
-    "strategy_futures_final.py"
-    "strategy_futures_v2.py"
-    "strategy_futures_v3.py"
-    "strategy_futures_v4.py"
-    "strategy_futures_v5.py"
-    "optimize_six_book.py"
-    "optimize_sl_tp.py"
-    # 回测
-    "backtest.py"
-    "backtest_30d_7d.py"
-    "strategy_compare.py"
-    "strategy_enhanced.py"
-    "strategy_optimize.py"
-    "strategy_15m.py"
-    "strategy_timeframe_analysis.py"
-    # 海龟交易策略
-    "turtle_strategy.py"
-    # 其他
-    "main.py"
-    "visualization.py"
-    "test_core.py"
-    "test_timeframes.py"
-    # 实盘交易系统
-    "live_config.py"
-    "trading_logger.py"
-    "notifier.py"
-    "risk_manager.py"
-    "order_manager.py"
-    "live_signal_generator.py"
-    "live_trading_engine.py"
-    "live_runner.py"
-    "performance_tracker.py"
-)
-
-SYNC_DIRS=(
-    "templates"
-    "divergence"
-)
-
-# JSON 数据文件
-JSON_FILES=(
-    "backtest_result.json"
-    "backtest_multi.json"
-    "backtest_all_intervals.json"
-    "backtest_30d_7d_result.json"
-    "global_strategy_result.json"
-    "strategy_compare_result.json"
-    "bollinger_result.json"
-    "candlestick_result.json"
-    "combined_strategy_result.json"
-    "five_book_fusion_result.json"
-    "six_book_fusion_result.json"
-    "ma_strategy_result.json"
-    "optimize_six_book_result.json"
-    "optimize_sl_tp_result.json"
-    "strategy_15m_result.json"
-    "strategy_enhanced_result.json"
-    "strategy_futures_result.json"
-    "strategy_futures_final_result.json"
-    "strategy_futures_v2_result.json"
-    "strategy_futures_v3_result.json"
-    "strategy_futures_v4_result.json"
-    "strategy_futures_v5_result.json"
-    "strategy_optimize_result.json"
-    "timeframe_analysis_result.json"
-    "timeframe_test_result.json"
-    "volume_price_result.json"
-    "turtle_result.json"
-)
-
-# ============================================================
 # 功能函数
 # ============================================================
 
@@ -158,40 +64,33 @@ check_connection() {
 }
 
 sync_code() {
-    log_step "同步代码到服务器..."
-    
-    # 创建远程目录
-    $SSH_CMD "mkdir -p ${REMOTE_DIR}/templates ${REMOTE_DIR}/divergence"
-    
-    # 同步 Python 文件
-    local file_count=0
-    for f in "${SYNC_FILES[@]}"; do
-        if [ -f "${LOCAL_DIR}/${f}" ]; then
-            $SCP_CMD "${LOCAL_DIR}/${f}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/${f}" &>/dev/null
-            file_count=$((file_count + 1))
-        else
-            log_warn "文件不存在，跳过: ${f}"
-        fi
-    done
-    log_info "已同步 ${file_count} 个 Python 文件"
-    
-    # 同步目录
-    for d in "${SYNC_DIRS[@]}"; do
-        if [ -d "${LOCAL_DIR}/${d}" ]; then
-            eval $RSYNC_CMD --delete "'${LOCAL_DIR}/${d}/'" "'${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/${d}/'" &>/dev/null
-            log_info "已同步目录: ${d}/"
-        fi
-    done
-    
-    # 同步 JSON 数据文件
-    local json_count=0
-    for f in "${JSON_FILES[@]}"; do
-        if [ -f "${LOCAL_DIR}/${f}" ]; then
-            $SCP_CMD "${LOCAL_DIR}/${f}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_DIR}/${f}" &>/dev/null
-            json_count=$((json_count + 1))
-        fi
-    done
-    log_info "已同步 ${json_count} 个 JSON 数据文件"
+    log_step "通过 GitHub 同步代码到服务器..."
+
+    $SSH_CMD << REMOTE_SCRIPT
+cd ${REMOTE_DIR} 2>/dev/null || {
+    echo "首次部署: clone 仓库..."
+    git clone ${GITHUB_REPO} ${REMOTE_DIR}
+    cd ${REMOTE_DIR}
+}
+
+# 确保是 git 仓库
+if [ ! -d ".git" ]; then
+    echo "目录已存在但非 git 仓库, 重新初始化..."
+    git init
+    git remote add origin ${GITHUB_REPO} 2>/dev/null || git remote set-url origin ${GITHUB_REPO}
+fi
+
+# 拉取最新代码
+echo "拉取 ${GITHUB_BRANCH} 分支最新代码..."
+git fetch origin ${GITHUB_BRANCH}
+git reset --hard origin/${GITHUB_BRANCH}
+
+echo "当前版本: \$(git log --oneline -1)"
+echo "文件数量: \$(find . -name '*.py' | wc -l) 个 Python 文件"
+echo "模板数量: \$(find templates/ -name '*.html' 2>/dev/null | wc -l) 个 HTML 模板"
+REMOTE_SCRIPT
+
+    log_info "代码同步完成 (via GitHub)"
 }
 
 setup_venv() {
@@ -447,10 +346,11 @@ update_deploy() {
     sync_code
     
     # 更新依赖（如果 requirements.txt 有变化）
+    log_step "检查依赖更新..."
     $SSH_CMD << 'REMOTE_SCRIPT'
 cd /opt/macd-analysis
 source venv/bin/activate
-pip install -r requirements.txt -q 2>&1 | tail -3
+pip install -r requirements.txt -q 2>&1 | tail -5
 REMOTE_SCRIPT
     
     start_service
