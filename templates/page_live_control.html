@@ -1106,8 +1106,12 @@ async function refreshStatus() {
                         const lev = p.leverage || '-';
                         const bars = p.bars_held || 0;
                         const maxPnl = p.max_pnl_ratio != null ? (Number(p.max_pnl_ratio) * 100).toFixed(2) + '%' : '--';
-                        const tp1 = p.partial_tp_1_done ? '✅' : '⬜';
-                        const tp2 = p.partial_tp_2_done ? '✅' : '⬜';
+                        const tp1 = p.partial_tp_1_done
+                            ? '<span style="color:#22c55e;">✓已触发</span>'
+                            : '<span style="color:#64748b;">未触发</span>';
+                        const tp2 = p.partial_tp_2_done
+                            ? '<span style="color:#22c55e;">✓已触发</span>'
+                            : '<span style="color:#64748b;">未触发</span>';
                         const entryTime = p.entry_time || '--';
 
                         // === 入场决策详情 ===
@@ -1203,7 +1207,8 @@ async function refreshStatus() {
                             <div style="font-weight:700;font-size:13px;margin-bottom:4px;">${icon} ${side} · ${lev}x杠杆</div>
                             <div>入场价: <b>$${entry}</b> · 数量: <b>${qty}</b> ETH · 保证金: $${margin}</div>
                             <div>入场时间: ${entryTime} · 持仓K线: ${bars}</div>
-                            <div>最高盈利比: ${maxPnl} · 分段止盈: ${tp1}① ${tp2}②</div>
+                            <div>最高盈利比: ${maxPnl}</div>
+                            <div>分段止盈: TP1 ${tp1} · TP2 ${tp2}</div>
                             ${decisionHtml}
                         </div>`;
                     }).join('');
