@@ -164,13 +164,34 @@ def cmd_test_connection(args):
     if om.test_connection():
         print("\n  ✅ API 连接成功!")
 
-        # 获取余额
+        # 获取余额 — 优先从引擎状态文件读取真实余额
         try:
-            balance = om.get_balance()
-            print(f"  💰 USDT 余额: ${balance['balance']:.2f}")
-            print(f"  💰 可用余额: ${balance['available']:.2f}")
+            engine_state_path = os.path.join(
+                config.data_dir or "data", "engine_state.json"
+            )
+            if os.path.exists(engine_state_path):
+                import json as _json
+                with open(engine_state_path, 'r') as _f:
+                    _state = _json.load(_f)
+                usdt = _state.get("usdt", 0)
+                frozen = _state.get("frozen_margin", 0)
+                equity = _state.get("equity", usdt)
+                print(f"  💰 USDT 余额: ${usdt:.2f}")
+                print(f"  💰 可用余额: ${usdt - frozen:.2f}")
+                if frozen > 0:
+                    print(f"  🔒 冻结保证金: ${frozen:.2f}")
+                print(f"  📈 当前权益: ${equity:.2f}")
+            else:
+                balance = om.get_balance()
+                print(f"  💰 USDT 余额: ${balance['balance']:.2f}")
+                print(f"  💰 可用余额: ${balance['available']:.2f}")
         except Exception:
-            pass
+            try:
+                balance = om.get_balance()
+                print(f"  💰 USDT 余额: ${balance['balance']:.2f}")
+                print(f"  💰 可用余额: ${balance['available']:.2f}")
+            except Exception:
+                pass
 
         # 获取价格
         try:
