@@ -1,8 +1,9 @@
 """
-多周期联合决策 · 30天 vs 7天 真实回测对比
+多周期联合决策 · 60天/30天/7天 真实回测对比
 
 使用 optimize_six_book 优化出的最优策略配置,
-在 多周期联合决策模式 下分别在最近30天和最近7天的真实币安数据上回测。
+在 多周期联合决策模式 下分别在最近60天、30天和7天的真实币安数据上回测。
+使用统一的 fuse_tf_scores 融合算法 (与实盘完全一致)。
 """
 
 import pandas as pd
@@ -41,8 +42,9 @@ def fetch_data_for_tf(tf, days):
 
 def main():
     print("=" * 120)
-    print("  多周期联合决策 · 30天 vs 7天 真实回测对比")
+    print("  多周期联合决策 · 60天/30天/7天 真实回测对比")
     print("  数据源: 币安 ETH/USDT 真实K线 · 含手续费/滑点/资金费率")
+    print("  融合算法: fuse_tf_scores (回测/实盘统一)")
     print("=" * 120)
 
     # ======================================================
@@ -135,8 +137,8 @@ def main():
 
     all_data = {}
     for tf in all_tfs_needed:
-        print(f"  获取 {tf} 数据 (90天)...")
-        df = fetch_data_for_tf(tf, 90)
+        print(f"  获取 {tf} 数据 (120天)...")
+        df = fetch_data_for_tf(tf, 120)
         if df is not None:
             all_data[tf] = df
             print(f"    {tf}: {len(df)} 条K线, {df.index[0]} ~ {df.index[-1]}")
@@ -181,6 +183,7 @@ def main():
     }
 
     periods = [
+        {'days': 60, 'label': '最近60天'},
         {'days': 30, 'label': '最近30天'},
         {'days': 7,  'label': '最近7天'},
     ]
@@ -309,44 +312,50 @@ def main():
                   f"回撤={r['max_drawdown']:.2f}% 交易={r['total_trades']}")
 
     # ======================================================
-    # 30天 vs 7天 对比
+    # 60天 vs 30天 vs 7天 对比
     # ======================================================
+    r60 = all_period_results.get(60, [])
     r30 = all_period_results.get(30, [])
     r7 = all_period_results.get(7, [])
 
     print(f"\n{'=' * 120}")
-    print(f"  30天 vs 7天 多周期联合决策对比")
+    print(f"  60天 vs 30天 vs 7天 多周期联合决策对比")
     print(f"{'=' * 120}")
 
-    print(f"\n  {'方案':<30} {'30天Alpha':>12} {'7天Alpha':>12} {'差异':>10}")
-    print('  ' + '-' * 70)
+    print(f"\n  {'方案':<30} {'60天Alpha':>12} {'30天Alpha':>12} {'7天Alpha':>12}")
+    print('  ' + '-' * 80)
 
-    for s30 in r30[:15]:
-        key = f"{s30['combo_name']}@{s30['primary_tf']}"
+    for s60 in r60[:15]:
+        key = f"{s60['combo_name']}@{s60['primary_tf']}"
+        s30_match = next((r for r in r30
+                          if r['combo_name'] == s60['combo_name']
+                          and r['primary_tf'] == s60['primary_tf']), None)
         s7_match = next((r for r in r7
-                         if r['combo_name'] == s30['combo_name']
-                         and r['primary_tf'] == s30['primary_tf']), None)
-        if s7_match:
-            diff = s7_match['alpha'] - s30['alpha']
-            print(f"  {key:<30} {s30['alpha']:>+11.2f}% {s7_match['alpha']:>+11.2f}% {diff:>+9.2f}%")
+                         if r['combo_name'] == s60['combo_name']
+                         and r['primary_tf'] == s60['primary_tf']), None)
+        a30 = f"{s30_match['alpha']:>+11.2f}%" if s30_match else f"{'--':>12}"
+        a7 = f"{s7_match['alpha']:>+11.2f}%" if s7_match else f"{'--':>12}"
+        print(f"  {key:<30} {s60['alpha']:>+11.2f}% {a30} {a7}")
 
     # 总体统计
-    if r30 and r7:
+    all_periods_data = [(60, r60, '60天'), (30, r30, '30天'), (7, r7, '7天')]
+    valid_periods = [(d, r, l) for d, r, l in all_periods_data if r]
+    if len(valid_periods) >= 2:
         print(f"\n  === 总体统计 ===")
-        print(f"  {'指标':<25} {'30天':>15} {'7天':>15}")
-        print('  ' + '-' * 60)
-        print(f"  {'平均Alpha':<25} {np.mean([r['alpha'] for r in r30]):>+14.2f}% "
-              f"{np.mean([r['alpha'] for r in r7]):>+14.2f}%")
-        print(f"  {'最优Alpha':<25} {max(r['alpha'] for r in r30):>+14.2f}% "
-              f"{max(r['alpha'] for r in r7):>+14.2f}%")
-        print(f"  {'最差Alpha':<25} {min(r['alpha'] for r in r30):>+14.2f}% "
-              f"{min(r['alpha'] for r in r7):>+14.2f}%")
-        print(f"  {'盈利策略数':<25} "
-              f"{sum(1 for r in r30 if r['alpha'] > 0):>15} "
-              f"{sum(1 for r in r7 if r['alpha'] > 0):>15}")
-        print(f"  {'平均交易数':<25} "
-              f"{np.mean([r['total_trades'] for r in r30]):>15.0f} "
-              f"{np.mean([r['total_trades'] for r in r7]):>15.0f}")
+        header = f"  {'指标':<25}" + "".join(f"{l:>15}" for _, _, l in valid_periods)
+        print(header)
+        print('  ' + '-' * (25 + 15 * len(valid_periods)))
+
+        def _stat_line(label, fn):
+            return f"  {label:<25}" + "".join(f"{fn(r):>+14.2f}%" for _, r, _ in valid_periods)
+
+        print(_stat_line('平均Alpha', lambda r: np.mean([x['alpha'] for x in r])))
+        print(_stat_line('最优Alpha', lambda r: max(x['alpha'] for x in r)))
+        print(_stat_line('最差Alpha', lambda r: min(x['alpha'] for x in r)))
+        print(f"  {'盈利策略数':<25}" +
+              "".join(f"{sum(1 for x in r if x['alpha'] > 0):>15}" for _, r, _ in valid_periods))
+        print(f"  {'平均交易数':<25}" +
+              "".join(f"{np.mean([x['total_trades'] for x in r]):>15.0f}" for _, r, _ in valid_periods))
 
     # ======================================================
     # 保存结果
@@ -366,10 +375,39 @@ def main():
             return str(obj)
         return obj
 
+    def _format_period_results(results_list):
+        return [{
+            'rank': i + 1,
+            'combo_name': r['combo_name'],
+            'primary_tf': r['primary_tf'],
+            'decision_tfs': r['decision_tfs'],
+            'alpha': r['alpha'],
+            'strategy_return': r['strategy_return'],
+            'buy_hold_return': r['buy_hold_return'],
+            'max_drawdown': r['max_drawdown'],
+            'total_trades': r['total_trades'],
+            'liquidations': r.get('liquidations', 0),
+            'total_cost': r.get('total_cost', 0),
+            'vs_single_tf': r.get('vs_single_tf', 0),
+        } for i, r in enumerate(results_list)]
+
+    def _period_summary(results_list):
+        if not results_list:
+            return {}
+        return {
+            'avg_alpha': round(np.mean([r['alpha'] for r in results_list]), 2),
+            'best_alpha': round(max(r['alpha'] for r in results_list), 2),
+            'worst_alpha': round(min(r['alpha'] for r in results_list), 2),
+            'profitable_count': sum(1 for r in results_list if r['alpha'] > 0),
+            'total_count': len(results_list),
+            'avg_trades': round(np.mean([r['total_trades'] for r in results_list]), 1),
+        }
+
     output = {
-        'description': '多周期联合决策 · 30天 vs 7天 真实回测对比',
+        'description': '多周期联合决策 · 60天/30天/7天 真实回测对比 (统一fuse_tf_scores)',
         'run_time': datetime.now().isoformat(),
         'data_source': '币安 ETH/USDT 真实K线',
+        'fusion_algorithm': 'fuse_tf_scores (回测/实盘统一)',
         'base_config': {
             'best_single_tf': best_tf,
             'best_single_alpha': best_alpha,
@@ -382,55 +420,18 @@ def main():
             'liquidation_fee': '0.5%',
         },
         'single_tf_baselines': single_tf_baselines,
-        'results_30d': [{
-            'rank': i + 1,
-            'combo_name': r['combo_name'],
-            'primary_tf': r['primary_tf'],
-            'decision_tfs': r['decision_tfs'],
-            'alpha': r['alpha'],
-            'strategy_return': r['strategy_return'],
-            'buy_hold_return': r['buy_hold_return'],
-            'max_drawdown': r['max_drawdown'],
-            'total_trades': r['total_trades'],
-            'liquidations': r.get('liquidations', 0),
-            'total_cost': r.get('total_cost', 0),
-            'vs_single_tf': r.get('vs_single_tf', 0),
-        } for i, r in enumerate(r30)],
-        'results_7d': [{
-            'rank': i + 1,
-            'combo_name': r['combo_name'],
-            'primary_tf': r['primary_tf'],
-            'decision_tfs': r['decision_tfs'],
-            'alpha': r['alpha'],
-            'strategy_return': r['strategy_return'],
-            'buy_hold_return': r['buy_hold_return'],
-            'max_drawdown': r['max_drawdown'],
-            'total_trades': r['total_trades'],
-            'liquidations': r.get('liquidations', 0),
-            'total_cost': r.get('total_cost', 0),
-            'vs_single_tf': r.get('vs_single_tf', 0),
-        } for i, r in enumerate(r7)],
+        'results_60d': _format_period_results(r60),
+        'results_30d': _format_period_results(r30),
+        'results_7d': _format_period_results(r7),
     }
 
-    if r30 and r7:
-        output['summary'] = {
-            '30d': {
-                'avg_alpha': round(np.mean([r['alpha'] for r in r30]), 2),
-                'best_alpha': round(max(r['alpha'] for r in r30), 2),
-                'worst_alpha': round(min(r['alpha'] for r in r30), 2),
-                'profitable_count': sum(1 for r in r30 if r['alpha'] > 0),
-                'total_count': len(r30),
-                'avg_trades': round(np.mean([r['total_trades'] for r in r30]), 1),
-            },
-            '7d': {
-                'avg_alpha': round(np.mean([r['alpha'] for r in r7]), 2),
-                'best_alpha': round(max(r['alpha'] for r in r7), 2),
-                'worst_alpha': round(min(r['alpha'] for r in r7), 2),
-                'profitable_count': sum(1 for r in r7 if r['alpha'] > 0),
-                'total_count': len(r7),
-                'avg_trades': round(np.mean([r['total_trades'] for r in r7]), 1),
-            },
-        }
+    summary = {}
+    for key, results in [('60d', r60), ('30d', r30), ('7d', r7)]:
+        s = _period_summary(results)
+        if s:
+            summary[key] = s
+    if summary:
+        output['summary'] = summary
 
     out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'backtest_multi_tf_30d_7d_result.json')
