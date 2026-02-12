@@ -650,6 +650,22 @@ def api_live_test_signal_multi():
             except Exception:
                 pass
 
+        # 写入带时间戳的服务器端缓存 (供页面加载时恢复)
+        if result_data:
+            try:
+                from datetime import datetime as _dt
+                cache = {
+                    "data": result_data,
+                    "timeframes": timeframes,
+                    "ts": _dt.now().isoformat(),
+                    "ts_epoch": __import__('time').time(),
+                }
+                cache_path = os.path.join(BASE_DIR, 'multi_signal_cache.json')
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    json.dump(cache, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
         return jsonify({
             "success": r.returncode == 0,
             "output": r.stdout,
@@ -660,6 +676,29 @@ def api_live_test_signal_multi():
         return jsonify({"success": False, "output": "", "error": "超时 (300s)"}), 504
     except Exception as e:
         return jsonify({"success": False, "output": "", "error": str(e)}), 500
+
+
+@app.route('/api/live/signal_cache')
+def api_live_signal_cache():
+    """读取服务器端缓存的最新多周期检测结果"""
+    cache_path = os.path.join(BASE_DIR, 'multi_signal_cache.json')
+    if not os.path.exists(cache_path):
+        return jsonify({"success": False, "message": "暂无缓存"})
+    try:
+        with open(cache_path, 'r', encoding='utf-8') as f:
+            cache = json.load(f)
+        # 计算缓存年龄
+        import time as _time
+        age_sec = _time.time() - cache.get("ts_epoch", 0)
+        cache["age_sec"] = round(age_sec)
+        cache["age_text"] = (
+            f"{int(age_sec)}秒前" if age_sec < 60
+            else f"{int(age_sec/60)}分钟前" if age_sec < 3600
+            else f"{int(age_sec/3600)}小时前"
+        )
+        return jsonify({"success": True, **cache})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
 
 
 @app.route('/api/live/test_connection', methods=['POST'])

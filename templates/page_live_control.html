@@ -306,14 +306,25 @@
                 </label>
             </div>
 
-            <div class="btn-group">
+            <div class="btn-group" style="flex-wrap:wrap;">
                 <button class="btn btn-primary" onclick="testSignalMulti()">
                     <span id="signalMultiBtnText">🚀 全部检测</span>
                 </button>
                 <button class="btn btn-outline btn-sm" onclick="selectAllTF(true)">全选</button>
                 <button class="btn btn-outline btn-sm" onclick="selectAllTF(false)">全不选</button>
+                <button class="btn btn-outline btn-sm" id="autoDetectBtn" onclick="toggleAutoDetect()" style="margin-left:8px;">
+                    ⏱️ <span id="autoDetectText">自动检测: 关</span>
+                </button>
+                <select id="autoDetectInterval" style="background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;">
+                    <option value="300">5分钟</option>
+                    <option value="600">10分钟</option>
+                    <option value="900" selected>15分钟</option>
+                    <option value="1800">30分钟</option>
+                    <option value="3600">1小时</option>
+                </select>
                 <span id="signalMultiTimer" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>
             </div>
+            <div id="signalCacheHint" style="display:none;font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
 
             <div id="signalMultiResult" style="display:none;margin-top:16px;">
                 <table class="multi-result-table">
@@ -532,6 +543,8 @@ async function apiCall(url, options = {}) {
 const LS_KEY_TFS = 'lc_selected_tfs';
 const LS_KEY_RESULT = 'lc_last_result';
 const LS_KEY_TAB = 'lc_active_tab';
+const LS_KEY_AUTO = 'lc_auto_detect';
+const LS_KEY_AUTO_INTERVAL = 'lc_auto_interval';
 
 function saveTFSelection() {
     const tfs = [];
@@ -562,23 +575,60 @@ function saveLastResult(data) {
     } catch(e) {}
 }
 
-function restoreLastResult() {
+async function restoreLastResult() {
+    // 优先级: 服务器缓存 > localStorage
+    let restored = false;
+
+    // 1. 尝试从服务器读取缓存
     try {
-        const saved = localStorage.getItem(LS_KEY_RESULT);
-        if (!saved) return;
-        const { data, ts } = JSON.parse(saved);
-        if (!data || !data.results) return;
-        // 结果超过 30 分钟则不恢复
-        if (Date.now() - ts > 30 * 60 * 1000) return;
-        renderMultiSignalResult(data);
-        // 显示恢复提示
-        const ago = Math.round((Date.now() - ts) / 1000);
-        const agoText = ago < 60 ? `${ago}秒前` : `${Math.round(ago/60)}分钟前`;
-        const hint = document.createElement('div');
-        hint.style.cssText = 'font-size:11px;color:var(--text-muted);margin-top:4px;text-align:right;';
-        hint.textContent = `📌 上次检测结果 (${agoText})`;
-        document.getElementById('signalConsensus')?.appendChild(hint);
-    } catch(e) {}
+        const resp = await fetch('/api/live/signal_cache');
+        const cache = await resp.json();
+        if (cache.success && cache.data && cache.data.results) {
+            // 缓存不超过 2 小时才恢复
+            if (cache.age_sec < 7200) {
+                renderMultiSignalResult(cache.data);
+                _showCacheHint(`📌 服务器缓存 (${cache.age_text})`, cache.timeframes);
+                // 同步到 localStorage
+                saveLastResult(cache.data);
+                restored = true;
+            }
+        }
+    } catch(e) { /* 服务器不可用，fallback */ }
+
+    // 2. 服务器缓存不可用 → 从 localStorage 恢复
+    if (!restored) {
+        try {
+            const saved = localStorage.getItem(LS_KEY_RESULT);
+            if (!saved) return;
+            const { data, ts } = JSON.parse(saved);
+            if (!data || !data.results) return;
+            if (Date.now() - ts > 2 * 60 * 60 * 1000) return;
+            renderMultiSignalResult(data);
+            const ago = Math.round((Date.now() - ts) / 1000);
+            const agoText = ago < 60 ? `${ago}秒前` : `${Math.round(ago/60)}分钟前`;
+            _showCacheHint(`📌 浏览器缓存 (${agoText})`);
+        } catch(e) {}
+    }
+}
+
+function _showCacheHint(text, timeframes) {
+    const hint = document.getElementById('signalCacheHint');
+    if (hint) {
+        let html = text;
+        if (timeframes && timeframes.length) {
+            html += ` · 周期: ${timeframes.join(', ')}`;
+        }
+        hint.innerHTML = html;
+        hint.style.display = 'block';
+    }
+    // 也在共识面板底部添加
+    const cEl = document.getElementById('signalConsensus');
+    if (cEl) {
+        const div = document.createElement('div');
+        div.style.cssText = 'font-size:11px;color:var(--text-muted);margin-top:4px;text-align:right;';
+        div.textContent = text;
+        cEl.appendChild(div);
+    }
 }
 
 function saveActiveTab(tabName) {
@@ -591,6 +641,79 @@ function restoreActiveTab() {
         if (!saved) return;
         const btn = document.querySelector(`.tab-btn[data-tab="${saved}"]`);
         if (btn) btn.click();
+    } catch(e) {}
+}
+
+// ============================================================
+// 自动定时检测
+// ============================================================
+let _autoDetectTimer = null;
+let _autoDetectCountdown = null;
+
+function toggleAutoDetect() {
+    if (_autoDetectTimer) {
+        // 关闭
+        clearInterval(_autoDetectTimer);
+        clearInterval(_autoDetectCountdown);
+        _autoDetectTimer = null;
+        _autoDetectCountdown = null;
+        document.getElementById('autoDetectText').textContent = '自动检测: 关';
+        document.getElementById('autoDetectBtn').classList.remove('btn-success');
+        document.getElementById('autoDetectBtn').classList.add('btn-outline');
+        document.getElementById('signalMultiTimer').textContent = '';
+        try { localStorage.removeItem(LS_KEY_AUTO); } catch(e) {}
+    } else {
+        // 开启
+        const intervalSec = parseInt(document.getElementById('autoDetectInterval').value) || 900;
+        _startAutoDetect(intervalSec);
+        // 立即执行一次
+        if (!_signalMultiRunning) testSignalMulti();
+    }
+}
+
+function _startAutoDetect(intervalSec) {
+    document.getElementById('autoDetectText').textContent = `自动检测: 开`;
+    document.getElementById('autoDetectBtn').classList.remove('btn-outline');
+    document.getElementById('autoDetectBtn').classList.add('btn-success');
+
+    // 保存状态
+    try {
+        localStorage.setItem(LS_KEY_AUTO, JSON.stringify({ on: true, interval: intervalSec }));
+    } catch(e) {}
+
+    // 设定间隔
+    _autoDetectTimer = setInterval(() => {
+        if (!_signalMultiRunning) testSignalMulti();
+    }, intervalSec * 1000);
+
+    // 倒计时显示
+    let remaining = intervalSec;
+    const timerEl = document.getElementById('signalMultiTimer');
+    _autoDetectCountdown = setInterval(() => {
+        remaining--;
+        if (remaining <= 0) remaining = intervalSec;
+        if (!_signalMultiRunning) {
+            const m = Math.floor(remaining / 60);
+            const s = remaining % 60;
+            timerEl.textContent = `下次检测: ${m}:${s.toString().padStart(2, '0')}`;
+        }
+    }, 1000);
+}
+
+function restoreAutoDetect() {
+    try {
+        const saved = localStorage.getItem(LS_KEY_AUTO);
+        if (!saved) return;
+        const { on, interval } = JSON.parse(saved);
+        if (!on) return;
+        // 恢复 interval 下拉框
+        const sel = document.getElementById('autoDetectInterval');
+        if (sel) {
+            for (const opt of sel.options) {
+                if (parseInt(opt.value) === interval) { opt.selected = true; break; }
+            }
+        }
+        _startAutoDetect(interval);
     } catch(e) {}
 }
 
@@ -647,6 +770,12 @@ async function testSignalMulti() {
         if (data.data && data.data.results) {
             renderMultiSignalResult(data.data);
             saveLastResult(data.data);
+            // 更新缓存提示
+            const hint = document.getElementById('signalCacheHint');
+            if (hint) {
+                hint.innerHTML = `✅ 刚刚检测完成 · ${new Date().toLocaleTimeString('zh-CN')}`;
+                hint.style.display = 'block';
+            }
         }
         // 同时显示文本输出（可折叠）
         if (data.output) {
@@ -1061,8 +1190,9 @@ function autoRefreshLogs() {
 
 // 初始加载: 恢复持久化状态
 restoreTFSelection();
-restoreLastResult();
+restoreLastResult();   // async, 优先从服务器读缓存
 restoreActiveTab();
+restoreAutoDetect();   // 恢复自动检测开关
 refreshStatus();
 setInterval(refreshStatus, 30000); // 每30秒刷新状态
 </script>
