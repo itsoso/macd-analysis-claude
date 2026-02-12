@@ -1700,6 +1700,276 @@
                     <div class="card-title">费用明细</div>
                     <div id="s15m-fees"></div>
                 </div>
+                <!-- S3策略详解 -->
+                <div class="card" id="s15m-strategy-detail">
+                    <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:12px;flex-wrap:wrap;">
+                        <button class="s15m-tab active" onclick="switch15mTab(this,'s15m-tab-overview')" style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;background:rgba(249,115,22,0.15);color:#f97316;">策略总览</button>
+                        <button class="s15m-tab" onclick="switch15mTab(this,'s15m-tab-signals')" style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;background:var(--bg-hover);color:var(--text-secondary);">信号系统</button>
+                        <button class="s15m-tab" onclick="switch15mTab(this,'s15m-tab-risk')" style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;background:var(--bg-hover);color:var(--text-secondary);">风控规则</button>
+                        <button class="s15m-tab" onclick="switch15mTab(this,'s15m-tab-params')" style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;background:var(--bg-hover);color:var(--text-secondary);">全部参数</button>
+                        <button class="s15m-tab" onclick="switch15mTab(this,'s15m-tab-flow')" style="padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;background:var(--bg-hover);color:var(--text-secondary);">决策流程</button>
+                    </div>
+
+                    <!-- Tab 1: 策略总览 -->
+                    <div id="s15m-tab-overview" class="s15m-tab-content">
+                        <div class="card-title">S3: 激进做空 · 策略详解</div>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px;">
+                            <div style="background:rgba(249,115,22,0.06);border-radius:10px;padding:16px;border-left:3px solid #f97316;">
+                                <div style="font-weight:700;color:#f97316;font-size:15px;margin-bottom:8px;">核心思路</div>
+                                <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                                    基于书中<b>背离技术分析</b>理论，在15分钟K线上检测<b>顶背离</b>(价格创新高但MACD柱缩短)时，同时做两件事:<br>
+                                    <span style="color:#ef4444;">❶ 卖出现货ETH</span> — 锁定利润，降低持仓风险<br>
+                                    <span style="color:#ef4444;">❷ 开空合约(5x杠杆)</span> — 利用下跌赚取额外收益<br><br>
+                                    当检测到<b>底背离</b>时:<br>
+                                    <span style="color:#22c55e;">❶ 买入现货ETH</span> — 低位补仓<br>
+                                    <span style="color:#22c55e;">❷ 开多合约(5x杠杆)</span> — 利用反弹赚取额外收益
+                                </div>
+                            </div>
+                            <div style="background:rgba(34,197,94,0.06);border-radius:10px;padding:16px;border-left:3px solid #22c55e;">
+                                <div style="font-weight:700;color:#22c55e;font-size:15px;margin-bottom:8px;">为什么叫"激进"?</div>
+                                <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                                    对比书本标准策略(S1)，S3做了以下调整:<br><br>
+                                    <b>① 开空阈值更低:</b> TS≥15即可开空 (S1要求TS≥22)<br>
+                                    → 更早入场，捕捉更多机会<br><br>
+                                    <b>② 杠杆更高:</b> 5x (S1为3x)<br>
+                                    → 同样的保证金，收益放大2.5倍<br><br>
+                                    <b>③ 仓位更大:</b> 单笔20%、总敞口50% (S1为15%/40%)<br>
+                                    → 更多资金参与合约交易<br><br>
+                                    <b>④ 止损更宽:</b> -35% (S1为-25%)<br>
+                                    → 容忍更大波动，避免被短暂反弹洗出
+                                </div>
+                            </div>
+                        </div>
+                        <div style="background:var(--bg-hover);border-radius:10px;padding:16px;">
+                            <div style="font-weight:700;color:var(--text-primary);margin-bottom:10px;">实盘交易时间线 (30天12笔交易)</div>
+                            <div style="position:relative;padding-left:24px;">
+                                <div style="position:absolute;left:8px;top:0;bottom:0;width:2px;background:rgba(255,255,255,0.1);"></div>
+                                <div style="margin-bottom:14px;position:relative;">
+                                    <div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:#ef4444;"></div>
+                                    <div style="font-size:13px;"><b style="color:#ef4444;">1/15 04:45</b> — ETH@$3,305 · TS=128(双隔堆+面积背离)</div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">卖出50%现货 → 同时开空 5x · 15m MACD检测到强顶背离</div>
+                                </div>
+                                <div style="margin-bottom:14px;position:relative;">
+                                    <div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:#ef4444;"></div>
+                                    <div style="font-size:13px;"><b style="color:#ef4444;">1/15~1/16</b> — 连续3次卖出现货</div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">信号持续强势(TS=85~128)，每12小时卖出一次，逐步清仓</div>
+                                </div>
+                                <div style="margin-bottom:14px;position:relative;">
+                                    <div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:#f59e0b;"></div>
+                                    <div style="font-size:13px;"><b style="color:#f59e0b;">1/17 04:30</b> — 超时平仓空头 PnL=+$454</div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">持仓48小时到期，小赚平仓</div>
+                                </div>
+                                <div style="margin-bottom:14px;position:relative;">
+                                    <div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:#ef4444;"></div>
+                                    <div style="font-size:13px;"><b style="color:#ef4444;">1/17 05:30</b> — 二次开空 @$3,294 · TS=88</div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">1/18底部信号(BS=31)触发平仓, PnL=-$1,324 (唯一亏损)</div>
+                                </div>
+                                <div style="margin-bottom:14px;position:relative;">
+                                    <div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:#6b7280;"></div>
+                                    <div style="font-size:13px;"><b style="color:#6b7280;">1/18~2/05</b> — 信号冲突期，不交易</div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">TS和BS同时较高(冲突)，策略自动跳过 · ETH从$3,300跌到$1,930</div>
+                                </div>
+                                <div style="margin-bottom:14px;position:relative;">
+                                    <div style="position:absolute;left:-20px;top:4px;width:10px;height:10px;border-radius:50%;background:#22c55e;"></div>
+                                    <div style="font-size:13px;"><b style="color:#22c55e;">2/06 01:45</b> — ETH@$1,932 · BS=81(强底部信号)</div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">买入现货 + 开多 5x · 底背离+多指标共振</div>
+                                </div>
+                                <div style="position:relative;">
+                                    <div style="position:absolute;left:-20px;top:4px;width:12px;height:12px;border-radius:50%;background:#22c55e;border:2px solid #fff;"></div>
+                                    <div style="font-size:13px;"><b style="color:#22c55e;">2/06 20:30</b> — 平多 @$2,068 · PnL=<b>+$10,905</b></div>
+                                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">顶部信号(TS=37)触发平仓 · 持仓19小时, ETH涨7%, 5x杠杆放大为35%收益 · <b>贡献了策略绝大部分利润</b></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: 信号系统 -->
+                    <div id="s15m-tab-signals" class="s15m-tab-content" style="display:none;">
+                        <div class="card-title">信号系统 · 基于书本的多指标融合</div>
+                        <div style="margin-bottom:16px;">
+                            <div style="font-weight:700;color:#ef4444;font-size:14px;margin-bottom:8px;">顶部信号(TS) — 触发卖出/开空</div>
+                            <div style="background:var(--bg-hover);border-radius:8px;padding:14px;font-size:13px;line-height:1.8;">
+                                TS是多个指标的<b>加权综合评分</b>，满分约150+：<br><br>
+                                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;">
+                                    <div>
+                                        <b>MACD背离 (最高48分)</b><br>
+                                        · 双隔堆背离: +30分<br>
+                                        · 单隔堆背离: +18分<br>
+                                        · 柱面积背离: +12分<br>
+                                        · DIF/DEA背离: +8分
+                                    </div>
+                                    <div>
+                                        <b>背驰信号 (+28分)</b><br>
+                                        · 书中"卖点背驰": +18分<br>
+                                        · 零轴回归: +10分<br>
+                                        · 通用顶部评分: TOP×0.2
+                                    </div>
+                                </div>
+                                <div style="margin-top:8px;">
+                                    <b>趋势加成:</b> 1h/4h确认下降趋势 → 总分×1.3倍<br>
+                                    <b>实时指标:</b> KDJ>80 / RSI>70 / CCI>100 → 增加可信度
+                                </div>
+                            </div>
+                        </div>
+                        <div style="margin-bottom:16px;">
+                            <div style="font-weight:700;color:#22c55e;font-size:14px;margin-bottom:8px;">底部信号(BS) — 触发买入/开多/平空</div>
+                            <div style="background:var(--bg-hover);border-radius:8px;padding:14px;font-size:13px;line-height:1.8;">
+                                BS是底部指标的综合评分:<br><br>
+                                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;">
+                                    <div>
+                                        <b>MACD底背离 (最高45分)</b><br>
+                                        · 双隔堆底背离: +30分<br>
+                                        · 单隔堆底背离: +15分<br>
+                                        · 面积底背离: +10分
+                                    </div>
+                                    <div>
+                                        <b>其他信号</b><br>
+                                        · 买点背驰: +18分<br>
+                                        · 通用底部评分: BOT×0.15<br>
+                                        · 上升趋势加成: ×1.2倍
+                                    </div>
+                                </div>
+                                <div style="margin-top:8px;">
+                                    <b>实时辅助:</b> KDJ&lt;20 / RSI&lt;30 / CCI&lt;-100 → 增加底部确认
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <div style="font-weight:700;color:#f59e0b;font-size:14px;margin-bottom:8px;">多周期融合权重</div>
+                            <div style="background:var(--bg-hover);border-radius:8px;padding:14px;font-size:13px;line-height:1.8;">
+                                <b>15m (主信号): 权重1.0</b> — 主要决策依据，2880根K线覆盖30天<br>
+                                <b>1h (辅助): 权重0.4</b> — 过滤15m噪声，确认中期趋势<br>
+                                <b>8h (辅助): 权重0.3</b> — 大级别信号确认(8h最早检测到顶部，比实际顶部早36小时)<br><br>
+                                最终: TS = 15m_top×1.0 + 1h_top×0.4 + 8h_top×0.3 &nbsp;|&nbsp; BS同理
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: 风控规则 -->
+                    <div id="s15m-tab-risk" class="s15m-tab-content" style="display:none;">
+                        <div class="card-title">风控规则 · 5层保护机制</div>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;">
+                            <div>
+                                <div style="font-weight:700;color:#ef4444;margin-bottom:10px;">做空风控</div>
+                                <div style="background:var(--bg-hover);border-radius:8px;padding:14px;font-size:13px;line-height:2.0;">
+                                    <b>① 硬止损:</b> -35% <span style="color:var(--text-muted);">(亏损超保证金35%立即平仓)</span><br>
+                                    <b>② 硬止盈:</b> +80% <span style="color:var(--text-muted);">(盈利达保证金80%立即锁定)</span><br>
+                                    <b>③ 追踪止盈:</b> 启动+30%, 保留60% <span style="color:var(--text-muted);">(浮盈回撤40%则平仓)</span><br>
+                                    <b>④ 底部信号:</b> BS≥30 <span style="color:var(--text-muted);">(底部背离出现，尊重信号立即平仓)</span><br>
+                                    <b>⑤ 超时平仓:</b> 48小时 <span style="color:var(--text-muted);">(最长持仓2天)</span>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="font-weight:700;color:#22c55e;margin-bottom:10px;">做多风控</div>
+                                <div style="background:var(--bg-hover);border-radius:8px;padding:14px;font-size:13px;line-height:2.0;">
+                                    <b>① 硬止损:</b> -20% <span style="color:var(--text-muted);">(多仓止损更紧，风险集中)</span><br>
+                                    <b>② 硬止盈:</b> +60% <span style="color:var(--text-muted);">(盈利达保证金60%锁定)</span><br>
+                                    <b>③ 追踪止盈:</b> 启动+25%, 保留60% <span style="color:var(--text-muted);">(浮盈回撤则锁定利润)</span><br>
+                                    <b>④ 顶部信号:</b> TS≥30 <span style="color:var(--text-muted);">(顶部背离出现，平掉多仓)</span><br>
+                                    <b>⑤ 超时平仓:</b> 48小时 <span style="color:var(--text-muted);">(最长持仓2天)</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="margin-top:16px;background:rgba(249,115,22,0.06);border-radius:8px;padding:14px;border-left:3px solid #f97316;">
+                            <div style="font-weight:700;color:#f97316;margin-bottom:6px;">防过度交易机制</div>
+                            <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                                <b>信号冲突过滤:</b> 当TS≥15且BS≥15同时出现 → 信号矛盾，不做现货交易<br>
+                                <b>统一冷却:</b> 每次现货交易后12小时内不再交易(买卖共用冷却)<br>
+                                <b>合约冷却:</b> 平仓后至少1小时才能重新开仓<br>
+                                <b>为什么重要:</b> 没有这些机制，15m信号持续期间每个bar都交易，费用从$1,735暴涨到$155,000
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 4: 全部参数 -->
+                    <div id="s15m-tab-params" class="s15m-tab-content" style="display:none;">
+                        <div class="card-title">S3: 激进做空 · 全部参数</div>
+                        <div class="trade-table-wrap" style="max-height:none;">
+                            <table style="font-size:13px;">
+                                <thead><tr><th>参数</th><th>S3值</th><th>S1基准</th><th>说明</th></tr></thead>
+                                <tbody>
+                                    <tr style="background:rgba(249,115,22,0.06);"><td colspan="4" style="font-weight:700;color:#f97316;">信号阈值</td></tr>
+                                    <tr><td>ts_sell</td><td>15</td><td>15</td><td>现货卖出的顶部信号阈值</td></tr>
+                                    <tr><td><b>ts_short</b></td><td><b style="color:#f97316;">15</b></td><td>22</td><td>开空仓的顶部信号阈值 (比S1低30%)</td></tr>
+                                    <tr><td>bs_buy</td><td>15</td><td>15</td><td>现货买入的底部信号阈值</td></tr>
+                                    <tr><td>bs_long</td><td>22</td><td>22</td><td>开多仓的底部信号阈值</td></tr>
+                                    <tr><td>bs_close</td><td>30</td><td>30</td><td>底部信号触发平空阈值</td></tr>
+                                    <tr><td>ts_close</td><td>30</td><td>30</td><td>顶部信号触发平多阈值</td></tr>
+                                    <tr><td>conflict_threshold</td><td>15</td><td>15</td><td>TS和BS同时高于此值=信号冲突</td></tr>
+                                    <tr style="background:rgba(249,115,22,0.06);"><td colspan="4" style="font-weight:700;color:#f97316;">仓位管理</td></tr>
+                                    <tr><td><b>lev</b></td><td><b style="color:#f97316;">5x</b></td><td>3x</td><td>杠杆倍数 (比S1高67%)</td></tr>
+                                    <tr><td><b>single_pct</b></td><td><b style="color:#f97316;">20%</b></td><td>15%</td><td>单笔最大保证金(占总资产%)</td></tr>
+                                    <tr><td><b>total_pct</b></td><td><b style="color:#f97316;">50%</b></td><td>40%</td><td>总合约敞口上限(占总资产%)</td></tr>
+                                    <tr><td><b>margin_use</b></td><td><b style="color:#f97316;">80%</b></td><td>60%</td><td>可用保证金使用比例</td></tr>
+                                    <tr><td>sell_pct</td><td>50%</td><td>50%</td><td>每次现货卖出比例</td></tr>
+                                    <tr><td>buy_pct</td><td>30%</td><td>30%</td><td>每次买入使用USDT比例</td></tr>
+                                    <tr style="background:rgba(249,115,22,0.06);"><td colspan="4" style="font-weight:700;color:#f97316;">风控参数</td></tr>
+                                    <tr><td><b>short_sl</b></td><td><b style="color:#f97316;">-35%</b></td><td>-25%</td><td>空仓止损 (比S1宽40%)</td></tr>
+                                    <tr><td>short_tp</td><td>+80%</td><td>+80%</td><td>空仓止盈</td></tr>
+                                    <tr><td>short_trail</td><td>+30%</td><td>+30%</td><td>空仓追踪止盈启动点</td></tr>
+                                    <tr><td>short_max_hold</td><td>48h</td><td>48h</td><td>空仓最大持仓时间</td></tr>
+                                    <tr><td>long_sl</td><td>-20%</td><td>-20%</td><td>多仓止损</td></tr>
+                                    <tr><td>long_tp</td><td>+60%</td><td>+60%</td><td>多仓止盈</td></tr>
+                                    <tr><td>spot_cooldown</td><td>12h</td><td>12h</td><td>现货交易统一冷却时间</td></tr>
+                                    <tr><td>cooldown</td><td>1h</td><td>1h</td><td>合约开仓冷却时间</td></tr>
+                                    <tr style="background:rgba(249,115,22,0.06);"><td colspan="4" style="font-weight:700;color:#f97316;">手续费模型</td></tr>
+                                    <tr><td>taker_fee</td><td colspan="2">0.05%</td><td>币安标准Taker费率</td></tr>
+                                    <tr><td>slippage</td><td colspan="2">0.10%</td><td>滑点(含市场冲击)</td></tr>
+                                    <tr><td>funding_rate</td><td colspan="2">0.01%/8h</td><td>资金费率(30%概率反向)</td></tr>
+                                    <tr><td>liquidation_fee</td><td colspan="2">0.50%</td><td>强平清算手续费</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style="margin-top:12px;font-size:12px;color:var(--text-muted);">
+                            <b style="color:#f97316;">橙色</b>标记的是S3与S1不同的参数。核心调整: 更低的开空阈值 + 更高杠杆 + 更大仓位 + 更宽止损。
+                        </div>
+                    </div>
+
+                    <!-- Tab 5: 决策流程 -->
+                    <div id="s15m-tab-flow" class="s15m-tab-content" style="display:none;">
+                        <div class="card-title">策略决策流程</div>
+                        <div style="background:var(--bg-hover);border-radius:10px;padding:20px;font-size:13px;overflow-x:auto;">
+                            <pre style="font-family:monospace;color:var(--text-secondary);line-height:2;margin:0;white-space:pre-wrap;"><b style="color:var(--text-primary);">每15分钟执行一次:</b>
+
+<b style="color:#a855f7;">1. 获取信号</b>
+   ├─ 计算15m信号(主): MACD背离 + KDJ + CCI + RSI + 量价 + 几何形态
+   ├─ 获取1h信号(辅): 权重0.4
+   ├─ 获取8h信号(辅): 权重0.3
+   └─ 融合: TS = Σ(各周期top × 权重), BS = Σ(各周期bottom × 权重)
+
+<b style="color:#ef4444;">2. 判断卖出/开空</b>
+   ├─ TS ≥ 15? ──否──→ 跳过
+   ├─ 冷却中? ──是──→ 跳过
+   ├─ TS≥15 且 BS≥15? ──是──→ <b style="color:#f59e0b;">信号冲突, 跳过现货</b>
+   ├─ <span style="color:#ef4444;">卖出50%现货ETH</span> (冷却12小时)
+   └─ 无空仓 且 BS&lt;20?
+      └─ <span style="color:#ef4444;">开空 5x</span> (冷却1小时)
+
+<b style="color:#22c55e;">3. 判断买入/开多</b>
+   ├─ BS ≥ 15? ──否──→ 跳过
+   ├─ 冷却中? ──是──→ 跳过
+   ├─ TS≥15 且 BS≥15? ──是──→ <b style="color:#f59e0b;">信号冲突, 跳过现货</b>
+   ├─ <span style="color:#22c55e;">买入现货(30%可用USDT)</span> (冷却12小时)
+   └─ 无多仓 且 TS&lt;20?
+      └─ <span style="color:#22c55e;">开多 5x</span> (冷却1小时)
+
+<b style="color:#f59e0b;">4. 管理持仓 (每个bar都检查)</b>
+   ├─ <b>空仓:</b>
+   │   ├─ PnL ≥ +80%? → 止盈
+   │   ├─ 浮盈曾达+30%且回撤&gt;40%? → 追踪止盈
+   │   ├─ BS ≥ 30? → 底部信号平仓
+   │   ├─ PnL ≤ -35%? → 硬止损
+   │   └─ 持仓 ≥ 48h? → 超时平仓
+   └─ <b>多仓:</b>
+       ├─ PnL ≥ +60%? → 止盈
+       ├─ 浮盈曾达+25%且回撤&gt;40%? → 追踪止盈
+       ├─ TS ≥ 30? → 顶部信号平仓
+       ├─ PnL ≤ -20%? → 硬止损
+       └─ 持仓 ≥ 48h? → 超时平仓</pre>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="card" id="s15m-conclusion"></div>
             </div>
         </div>
@@ -4118,6 +4388,22 @@
                     <span>真实前向回测: α=+${(best.alpha||0).toFixed(0)}% — 这才是实盘可预期的收益水平</span>
                 </div>
             </div>`;
+    }
+
+    function switch15mTab(btn, tabId) {
+        // 切换按钮样式
+        document.querySelectorAll('.s15m-tab').forEach(b => {
+            b.style.background = 'var(--bg-hover)';
+            b.style.color = 'var(--text-secondary)';
+            b.classList.remove('active');
+        });
+        btn.style.background = 'rgba(249,115,22,0.15)';
+        btn.style.color = '#f97316';
+        btn.classList.add('active');
+        // 切换内容
+        document.querySelectorAll('.s15m-tab-content').forEach(c => c.style.display = 'none');
+        const target = document.getElementById(tabId);
+        if (target) target.style.display = 'block';
     }
 
     function render15mStrategy(data) {
