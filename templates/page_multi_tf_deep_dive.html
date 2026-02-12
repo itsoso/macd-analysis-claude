@@ -1,0 +1,580 @@
+{% extends "base.html" %}
+{% block title %}多周期联合决策 · 策略与代码详解{% endblock %}
+{% block content %}
+<h1 class="page-title">多周期联合决策 · 策略与代码详解</h1>
+<p class="page-subtitle">从单TF信号 → 加权共识 → 共振链检测 → 大周期定调 → 实盘门控，完整拆解多周期联合决策系统</p>
+
+<style>
+.deep-toc { background: var(--bg-secondary); border-radius: 12px; padding: 24px; margin-bottom: 32px; }
+.deep-toc h3 { margin: 0 0 16px; color: var(--accent-yellow); }
+.deep-toc ol { margin: 0; padding-left: 20px; }
+.deep-toc li { margin: 6px 0; }
+.deep-toc a { color: var(--accent-blue); text-decoration: none; }
+.deep-toc a:hover { text-decoration: underline; }
+
+.section-title { font-size: 1.4em; font-weight: 700; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--accent-blue); color: var(--text-primary); }
+.section-title .num { color: var(--accent-yellow); margin-right: 8px; }
+.subsection-title { font-size: 1.1em; font-weight: 600; color: var(--accent-blue); margin: 24px 0 12px; }
+
+.code-block { background: #1a1b26; border-radius: 10px; padding: 20px; margin: 16px 0; overflow-x: auto; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.85em; line-height: 1.6; color: #c0caf5; border: 1px solid #2a2b3d; }
+.code-block .comment { color: #565f89; }
+.code-block .keyword { color: #bb9af7; }
+.code-block .string { color: #9ece6a; }
+.code-block .number { color: #ff9e64; }
+.code-block .func { color: #7aa2f7; }
+.code-block .var { color: #73daca; }
+.code-block .op { color: #89ddff; }
+.code-block .highlight-line { background: rgba(74, 158, 255, 0.1); display: block; margin: 0 -20px; padding: 0 20px; border-left: 3px solid var(--accent-blue); }
+.code-block .highlight-green { background: rgba(0, 214, 143, 0.1); display: block; margin: 0 -20px; padding: 0 20px; border-left: 3px solid var(--accent-green); }
+.code-block .highlight-red { background: rgba(255, 77, 106, 0.1); display: block; margin: 0 -20px; padding: 0 20px; border-left: 3px solid var(--accent-red); }
+.code-block .highlight-gold { background: rgba(255, 215, 0, 0.1); display: block; margin: 0 -20px; padding: 0 20px; border-left: 3px solid gold; }
+.code-filename { background: #2a2b3d; display: inline-block; padding: 4px 14px; border-radius: 8px 8px 0 0; font-family: 'JetBrains Mono', monospace; font-size: 0.8em; color: #7aa2f7; margin-bottom: -1px; }
+
+.explain-box { background: var(--bg-card); border-radius: 10px; padding: 20px; margin: 16px 0; border-left: 4px solid var(--accent-blue); }
+.explain-box.warn { border-left-color: var(--accent-yellow); }
+.explain-box.key { border-left-color: var(--accent-green); }
+.explain-box.red { border-left-color: var(--accent-red); }
+.explain-box h4 { margin: 0 0 8px; color: var(--text-primary); }
+.explain-box p { margin: 4px 0; color: var(--text-secondary); line-height: 1.7; }
+
+.flow-diagram { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: center; margin: 20px 0; }
+.flow-box { background: var(--bg-card); border: 2px solid var(--border-subtle); border-radius: 10px; padding: 14px 18px; text-align: center; min-width: 130px; }
+.flow-box.primary { border-color: var(--accent-blue); background: rgba(74,158,255,0.08); }
+.flow-box.secondary { border-color: var(--accent-green); background: rgba(0,214,143,0.08); }
+.flow-box.danger { border-color: var(--accent-red); background: rgba(255,77,106,0.08); }
+.flow-box.gold { border-color: gold; background: rgba(255,215,0,0.08); }
+.flow-box.purple { border-color: #bb9af7; background: rgba(187,154,247,0.08); }
+.flow-box .label { font-size: 0.8em; color: var(--text-dim); }
+.flow-box .value { font-weight: 700; font-size: 1.1em; margin-top: 4px; }
+.flow-arrow { font-size: 1.5em; color: var(--text-dim); }
+
+.param-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9em; }
+.param-table th, .param-table td { padding: 10px 14px; border: 1px solid var(--border-subtle); text-align: left; }
+.param-table th { background: var(--bg-secondary); color: var(--text-primary); font-weight: 600; }
+.param-table td { color: var(--text-secondary); }
+.param-table tr:hover { background: var(--bg-hover); }
+.param-table code { background: rgba(74,158,255,0.1); padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.9em; color: var(--accent-blue); }
+
+.decision-card { background: var(--bg-card); border-radius: 12px; padding: 20px; margin: 12px 0; border: 1px solid var(--border-subtle); }
+.decision-card h4 { margin: 0 0 8px; }
+.decision-card .formula { background: #1a1b26; padding: 12px 16px; border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-size: 0.85em; color: #73daca; margin: 8px 0; }
+.decision-card p { color: var(--text-secondary); line-height: 1.7; }
+.decision-card.strong { border-left: 4px solid #ff9e64; }
+.decision-card.medium { border-left: 4px solid var(--accent-blue); }
+.decision-card.weak { border-left: 4px solid var(--accent-yellow); }
+.decision-card.block { border-left: 4px solid var(--accent-red); }
+
+.arch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin: 20px 0; }
+.arch-card { background: var(--bg-card); border-radius: 12px; padding: 20px; border: 1px solid var(--border-subtle); }
+.arch-card h4 { margin: 0 0 8px; color: var(--accent-blue); }
+.arch-card .tag { display: inline-block; background: rgba(74,158,255,0.15); color: var(--accent-blue); padding: 2px 8px; border-radius: 4px; font-size: 0.8em; margin: 2px 4px 2px 0; }
+</style>
+
+<!-- 目录 -->
+<div class="deep-toc">
+    <h3>📋 目录</h3>
+    <ol>
+        <li><a href="#s1">设计哲学: 为什么需要多周期联合决策</a></li>
+        <li><a href="#s2">系统架构: 5个文件的协作关系</a></li>
+        <li><a href="#s3">层1 — 加权得分算法: 大周期权重碾压小周期</a></li>
+        <li><a href="#s4">层2 — 共振链检测: 相邻TF连续同向的链条</a></li>
+        <li><a href="#s5">层3 — 大周期定调: ≥4h的趋势基调</a></li>
+        <li><a href="#s6">决策矩阵: 6种情况的综合判断 (A→F)</a></li>
+        <li><a href="#s7">实盘门控: 从信号到交易的最后一关</a></li>
+        <li><a href="#s8">仓位缩放: 共识强度驱动仓位大小</a></li>
+        <li><a href="#s9">配置参数: 可调节的决策旋钮</a></li>
+        <li><a href="#s10">安全设计: 降级机制与风控不变原则</a></li>
+    </ol>
+</div>
+
+<!-- ==================== 1. 设计哲学 ==================== -->
+<div id="s1" class="section-title"><span class="num">1</span>设计哲学: 为什么需要多周期联合决策</div>
+
+<div class="explain-box key">
+    <h4>核心问题: 单TF信号的局限性</h4>
+    <p>传统策略只看一个时间框架(如1h)，但市场是分形的——<strong>同一时刻</strong>，15分钟图可能在上涨，而4小时图在下跌。单TF策略无法区分"趋势中的回调"和"真正的反转"。</p>
+</div>
+
+<div class="explain-box warn">
+    <h4>解决方案: 三层判断体系</h4>
+    <p>多周期联合决策系统从三个维度评估市场方向：</p>
+    <p>1. <strong>加权得分</strong> — 把所有TF的信号汇总，大周期权重远高于小周期 (24h=28 vs 15m=3)</p>
+    <p>2. <strong>共振链检测</strong> — 相邻TF连续同向(如15m→30m→1h都看多)视为更强确认</p>
+    <p>3. <strong>大周期定调</strong> — ≥4h的周期作为趋势基调，小周期不能逆势操作</p>
+    <p>这确保了: <strong>只有当多个时间维度形成共识时，才发出交易信号</strong>。</p>
+</div>
+
+<div class="explain-box">
+    <h4>交易哲学: 不做比做错更重要</h4>
+    <p>系统的默认倾向是<strong>不交易</strong>。在6种决策情况中，只有2种(情况A和B)会发出可操作信号。其余4种都会阻止交易。这意味着大部分时间系统在"等待"——等待大小周期形成一致时才出手。</p>
+</div>
+
+<!-- ==================== 2. 系统架构 ==================== -->
+<div id="s2" class="section-title"><span class="num">2</span>系统架构: 5个文件的协作关系</div>
+
+<div class="flow-diagram">
+    <div class="flow-box primary"><div class="label">配置层</div><div class="value">live_config.py</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box gold"><div class="label">信号层</div><div class="value">live_signal<br>_generator.py</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box purple"><div class="label">共识算法</div><div class="value">multi_tf<br>_consensus.py</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box secondary"><div class="label">交易引擎</div><div class="value">live_trading<br>_engine.py</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box danger"><div class="label">CLI入口</div><div class="value">live_runner.py</div></div>
+</div>
+
+<div class="arch-grid">
+    <div class="arch-card">
+        <h4>📄 multi_tf_consensus.py (共享模块)</h4>
+        <p>多周期共识算法的核心，被所有其他模块导入。包含:</p>
+        <div class="tag">TF_WEIGHT 权重表</div>
+        <div class="tag">compute_weighted_consensus()</div>
+        <div class="tag">_detect_resonance_chains()</div>
+        <div class="tag">_compute_large_tf_signal()</div>
+        <div class="tag">_make_decision()</div>
+    </div>
+    <div class="arch-card">
+        <h4>📄 live_signal_generator.py (信号生成)</h4>
+        <p>负责从币安获取K线数据，并行计算多个TF的六维信号:</p>
+        <div class="tag">compute_multi_tf_signal(tf)</div>
+        <div class="tag">compute_multi_tf_consensus(tfs)</div>
+        <div class="tag">ThreadPoolExecutor 并行</div>
+    </div>
+    <div class="arch-card">
+        <h4>📄 live_trading_engine.py (交易引擎)</h4>
+        <p>核心交易循环中集成了多周期门控:</p>
+        <div class="tag">_apply_multi_tf_gate()</div>
+        <div class="tag">仓位缩放</div>
+        <div class="tag">降级机制</div>
+    </div>
+    <div class="arch-card">
+        <h4>📄 live_config.py (配置)</h4>
+        <p>多周期决策的可调参数:</p>
+        <div class="tag">use_multi_tf</div>
+        <div class="tag">decision_timeframes</div>
+        <div class="tag">consensus_min_strength</div>
+        <div class="tag">consensus_position_scale</div>
+    </div>
+</div>
+
+<div class="explain-box">
+    <h4>数据流: 从K线到交易决策</h4>
+    <p>1. <strong>每个Tick</strong>: 主TF(如1h)收盘时触发 → 计算主TF的sell/buy分数</p>
+    <p>2. <strong>单TF决策</strong>: 基于分数决定 OPEN_LONG / OPEN_SHORT / CLOSE / HOLD</p>
+    <p>3. <strong>平仓直接执行</strong>: 止损/止盈/追踪止盈不受多周期影响 (风控优先)</p>
+    <p>4. <strong>开仓需过门控</strong>: 如果是 OPEN_LONG/SHORT → 调用多周期共识 → 6个TF并行计算 → 三层判断 → 放行或阻止</p>
+</div>
+
+<!-- ==================== 3. 加权得分 ==================== -->
+<div id="s3" class="section-title"><span class="num">3</span>层1 — 加权得分算法: 大周期权重碾压小周期</div>
+
+<div class="explain-box key">
+    <h4>核心思想: 大周期的意见更重要</h4>
+    <p>一个24h图上的多头信号，应该比15分钟图上的多头信号更有"发言权"。权重设计反映了这个直觉：24h权重28，是15m权重3的<strong>9.3倍</strong>。</p>
+</div>
+
+<table class="param-table">
+    <tr>
+        <th>时间框架</th><th>权重</th><th>归类</th><th>说明</th>
+    </tr>
+    <tr><td><code>1m</code> <code>3m</code> <code>5m</code></td><td>1</td><td>超短线</td><td>噪声极大，几乎不参与实盘决策</td></tr>
+    <tr><td><code>10m</code></td><td>2</td><td>短线</td><td>略有参考价值</td></tr>
+    <tr><td><code>15m</code></td><td>3</td><td>短线</td><td>默认决策TF中最小的</td></tr>
+    <tr><td><code>30m</code></td><td>5</td><td>中短线</td><td>开始有趋势意义</td></tr>
+    <tr><td><code>1h</code></td><td>8</td><td>中线</td><td>多数策略的主周期</td></tr>
+    <tr><td><code>2h</code></td><td>10</td><td>中线</td><td></td></tr>
+    <tr><td><code>4h</code></td><td>15</td><td>⭐ 大周期起始</td><td>≥4h视为大周期，权重跃升</td></tr>
+    <tr><td><code>8h</code></td><td>20</td><td>⭐ 大周期</td><td>日内趋势的核心</td></tr>
+    <tr><td><code>12h</code></td><td>22</td><td>⭐ 大周期</td><td></td></tr>
+    <tr><td><code>24h</code> <code>1d</code></td><td>28</td><td>⭐ 大周期</td><td>最高权重，趋势定调者</td></tr>
+</table>
+
+<div class="code-filename">multi_tf_consensus.py · 加权得分计算</div>
+<div class="code-block">
+<span class="comment"># ── 1. 加权得分 ──</span>
+<span class="var">long_score</span>  = <span class="func">sum</span>(<span class="var">TF_WEIGHT</span>.get(tf, <span class="number">5</span>) <span class="keyword">for</span> tf <span class="keyword">in</span> long_tfs)
+<span class="var">short_score</span> = <span class="func">sum</span>(<span class="var">TF_WEIGHT</span>.get(tf, <span class="number">5</span>) <span class="keyword">for</span> tf <span class="keyword">in</span> short_tfs)
+<span class="var">total_weight</span> = <span class="func">sum</span>(<span class="var">TF_WEIGHT</span>.get(r[<span class="string">"tf"</span>], <span class="number">5</span>) <span class="keyword">for</span> r <span class="keyword">in</span> ok_results)
+
+<span class="comment"># 归一化到 0~100</span>
+<span class="highlight-line"><span class="var">long_pct</span>  = <span class="func">round</span>(long_score / total_weight * <span class="number">100</span>, <span class="number">1</span>)</span>
+<span class="highlight-line"><span class="var">short_pct</span> = <span class="func">round</span>(short_score / total_weight * <span class="number">100</span>, <span class="number">1</span>)</span>
+<span class="highlight-line"><span class="var">net_score</span> = <span class="func">round</span>(long_pct - short_pct, <span class="number">1</span>)</span>
+<span class="comment"># net_score > 0 偏多; < 0 偏空; ≈0 中性</span>
+</div>
+
+<div class="explain-box">
+    <h4>举例: 默认6个决策TF的权重分布</h4>
+    <p>默认TFs: <code>15m(3) + 30m(5) + 1h(8) + 4h(15) + 8h(20) + 24h(28)</code> = 总权重 <strong>79</strong></p>
+    <p>假设 15m看多, 30m看多, 1h看多, 4h观望, 8h看空, 24h看空:</p>
+    <p>→ 多头权重 = 3+5+8 = <strong>16</strong> (20.3%)</p>
+    <p>→ 空头权重 = 20+28 = <strong>48</strong> (60.8%)</p>
+    <p>→ 净分 = 20.3 - 60.8 = <strong>-40.5</strong> → 虽然3个TF看多，但净分依然严重偏空，因为8h和24h权重太高了。</p>
+    <p><strong>这就是加权的价值: 3个小周期看多无法对抗2个大周期看空。</strong></p>
+</div>
+
+<!-- ==================== 4. 共振链 ==================== -->
+<div id="s4" class="section-title"><span class="num">4</span>层2 — 共振链检测: 相邻TF连续同向的链条</div>
+
+<div class="explain-box key">
+    <h4>什么是共振链?</h4>
+    <p>当<strong>相邻的</strong>时间框架连续发出同方向信号时，形成"共振链"。例如 <code>1h→4h→8h→24h</code> 全部看多，这是一条<strong>4级做多共振链</strong>，权重 = 8+15+20+28 = 71。</p>
+    <p>共振链越长、包含的大周期越多，信号越可靠。算法允许<strong>1个hold间隔</strong>不打断链条（如 15m多→30m观望→1h多 仍算连续）。</p>
+</div>
+
+<div class="code-filename">multi_tf_consensus.py · _detect_resonance_chains()</div>
+<div class="code-block">
+<span class="keyword">for</span> target_dir <span class="keyword">in</span> [<span class="string">"long"</span>, <span class="string">"short"</span>]:
+    chain = []
+    gap_count = <span class="number">0</span>
+    <span class="keyword">for</span> d, tf <span class="keyword">in</span> directions:
+        <span class="keyword">if</span> d == target_dir:
+<span class="highlight-green">            chain.append(tf)        <span class="comment"># 同向: 加入链</span></span>
+            gap_count = <span class="number">0</span>
+<span class="highlight-line">        <span class="keyword">elif</span> d == <span class="string">"hold"</span> <span class="keyword">and</span> chain <span class="keyword">and</span> gap_count == <span class="number">0</span>:</span>
+<span class="highlight-line">            gap_count += <span class="number">1</span>          <span class="comment"># 允许1个hold间隔</span></span>
+<span class="highlight-line">            <span class="keyword">continue</span></span>
+        <span class="keyword">else</span>:
+            <span class="keyword">if</span> <span class="func">len</span>(chain) >= <span class="number">2</span>:
+<span class="highlight-gold">                has_4h = <span class="func">any</span>(TF_MINUTES.get(t,<span class="number">0</span>) >= <span class="number">240</span> <span class="keyword">for</span> t <span class="keyword">in</span> chain)</span>
+                resonance_chains.append({
+                    <span class="string">"direction"</span>: target_dir,
+                    <span class="string">"chain"</span>: chain,
+                    <span class="string">"length"</span>: <span class="func">len</span>(chain),
+                    <span class="string">"has_4h_plus"</span>: has_4h,   <span class="comment"># 是否包含大周期</span>
+                    <span class="string">"weight"</span>: <span class="func">sum</span>(TF_WEIGHT.get(t,<span class="number">5</span>) <span class="keyword">for</span> t <span class="keyword">in</span> chain),
+                })
+            chain = []              <span class="comment"># 链断裂，重置</span>
+</div>
+
+<div class="explain-box warn">
+    <h4>共振链的关键判断标准</h4>
+    <p>1. <strong>长度 ≥ 2</strong>: 至少2个相邻TF同向才算链</p>
+    <p>2. <strong>has_4h_plus</strong>: 链中是否包含≥4h的大周期 (这很关键，决策矩阵中会用到)</p>
+    <p>3. <strong>权重</strong>: 链中所有TF权重之和，用于在多条链中选最强的</p>
+    <p>4. <strong>允许1个hold间隔</strong>: 模糊容错，避免一个观望TF就打断整条链</p>
+</div>
+
+<!-- ==================== 5. 大周期定调 ==================== -->
+<div id="s5" class="section-title"><span class="num">5</span>层3 — 大周期定调: ≥4h的趋势基调</div>
+
+<div class="explain-box key">
+    <h4>大周期 = 趋势方向的"裁判"</h4>
+    <p>≥4h的TF(4h/8h/12h/24h)被视为大周期。它们的方向决定了市场的<strong>趋势基调</strong>——小周期信号如果与大周期方向相反，被视为"噪声"或"回调"，不应交易。</p>
+</div>
+
+<div class="code-filename">multi_tf_consensus.py · _compute_large_tf_signal()</div>
+<div class="code-block">
+<span class="keyword">def</span> <span class="func">_compute_large_tf_signal</span>(ok_results):
+    large_long  = [r[<span class="string">"tf"</span>] <span class="keyword">for</span> r <span class="keyword">in</span> ok_results
+                   <span class="keyword">if</span> <span class="string">"LONG"</span> <span class="keyword">in</span> r.get(<span class="string">"action"</span>,<span class="string">""</span>) <span class="keyword">and</span> TF_MINUTES[r[<span class="string">"tf"</span>]] >= <span class="number">240</span>]
+    large_short = [r[<span class="string">"tf"</span>] <span class="keyword">for</span> r <span class="keyword">in</span> ok_results
+                   <span class="keyword">if</span> <span class="string">"SHORT"</span> <span class="keyword">in</span> r.get(<span class="string">"action"</span>,<span class="string">""</span>) <span class="keyword">and</span> TF_MINUTES[r[<span class="string">"tf"</span>]] >= <span class="number">240</span>]
+
+<span class="highlight-green">    <span class="keyword">if</span> large_long <span class="keyword">and not</span> large_short:              <span class="comment"># 大周期一致看多</span></span>
+        <span class="keyword">return</span> {<span class="string">"direction"</span>: <span class="string">"long"</span>, <span class="string">"tfs"</span>: large_long}
+<span class="highlight-red">    <span class="keyword">elif</span> large_short <span class="keyword">and not</span> large_long:            <span class="comment"># 大周期一致看空</span></span>
+        <span class="keyword">return</span> {<span class="string">"direction"</span>: <span class="string">"short"</span>, <span class="string">"tfs"</span>: large_short}
+    <span class="keyword">elif</span> large_long <span class="keyword">and</span> large_short:                <span class="comment"># 大周期自身冲突</span>
+        <span class="keyword">return</span> {<span class="string">"direction"</span>: <span class="string">"conflict"</span>, ...}
+    <span class="keyword">else</span>:                                           <span class="comment"># 大周期全部观望</span>
+        <span class="keyword">return</span> {<span class="string">"direction"</span>: <span class="string">"neutral"</span>, ...}
+</div>
+
+<div class="explain-box">
+    <h4>4种大周期状态</h4>
+    <p>1. <strong>long</strong> — 所有大周期TF看多(如 4h多+8h多+24h多) → 允许做多</p>
+    <p>2. <strong>short</strong> — 所有大周期TF看空 → 允许做空</p>
+    <p>3. <strong>conflict</strong> — 大周期内部分歧(如 4h多但24h空) → 观望</p>
+    <p>4. <strong>neutral</strong> — 大周期全部HOLD → 无趋势基调，小周期信号只能作为弱信号</p>
+</div>
+
+<!-- ==================== 6. 决策矩阵 ==================== -->
+<div id="s6" class="section-title"><span class="num">6</span>决策矩阵: 6种情况的综合判断 (A→F)</div>
+
+<div class="explain-box key">
+    <h4>决策优先级: A > B > C > D > E > F</h4>
+    <p>系统按优先级从高到低检查6种情况。命中第一个就返回，不再继续检查。<strong>只有情况A和B会输出 actionable=True</strong>，其余都会阻止交易。</p>
+</div>
+
+<div class="decision-card strong">
+    <h4>🔥 情况A: 强信号 — 大小同向 + 共振链 (strength 70-100)</h4>
+    <div class="formula">条件: 共振链≥3级 && 包含≥4h周期 && 大周期方向一致 && |净分|>15</div>
+    <p>这是最高级别信号。多个时间维度形成完美共识，且有≥3级连续共振链跨越大小周期。</p>
+    <p><strong>举例</strong>: 30m→1h→4h→8h 连续看多，24h也看多，净分+65 → 🔥 强做多共振 strength=89</p>
+
+    <div class="formula">strength = min(100, 50 + chain_weight * 0.5 + |net| * 0.3)</div>
+</div>
+
+<div class="decision-card medium">
+    <h4>📈 情况B: 中等信号 — 大周期明确 + 小周期确认 (strength 40-80)</h4>
+    <div class="formula">条件: 大周期方向明确(long/short) && 小周期同向 && 小周期无反向</div>
+    <p>大周期定了方向，小周期也确认了。虽然不一定有共振链，但方向一致。</p>
+    <p><strong>举例</strong>: 4h+8h看空，15m+1h也看空 → 📉 大周期看空+小周期确认 strength=55</p>
+
+    <div class="formula">strength = min(80, 40 + |net| * 0.5)</div>
+</div>
+
+<div class="decision-card block">
+    <h4>⛔ 情况C: 大小周期反向 — 不做 (strength 0-10)</h4>
+    <div class="formula">条件: 大周期看多 && 小周期只看空 (或反过来)</div>
+    <p><strong>核心原则: 不逆大势</strong>。大周期看多但小周期看空，说明可能是趋势中的正常回调。正确做法是等回调结束后顺势做多，而不是逆势做空。</p>
+    <p><strong>举例</strong>: 4h+8h+24h看多，但15m+30m+1h看空 → ⛔ 可能是回调, 等小周期转向后再顺势做多</p>
+</div>
+
+<div class="decision-card block">
+    <h4>⚠️ 情况D: 多空分歧 — 观望 (strength 0-15)</h4>
+    <div class="formula">条件: 同时存在看多TF和看空TF (不论大小)</div>
+    <p>市场方向不明确，多空力量交织。此时交易等于赌博，系统选择观望。</p>
+</div>
+
+<div class="decision-card weak">
+    <h4>📊 情况E: 弱信号 — 只有小周期看多/空 (strength 10-40)</h4>
+    <div class="formula">条件: 小周期有方向 && 大周期中性(neutral)</div>
+    <p>大周期没有给出方向，只有小周期有信号。可能是趋势正在形成的早期阶段，也可能只是噪声。系统标记为弱信号，<strong>不允许开仓</strong>(actionable=False)。</p>
+    <p>如果有共振链加成，强度会略高，但仍不足以触发交易。</p>
+</div>
+
+<div class="decision-card">
+    <h4>⚪ 情况F: 完全中性 — 无信号 (strength 0)</h4>
+    <div class="formula">条件: 所有TF都是HOLD</div>
+    <p>市场完全没有方向。耐心等待。</p>
+</div>
+
+<div class="code-filename">multi_tf_consensus.py · _make_decision() 核心逻辑</div>
+<div class="code-block">
+<span class="keyword">def</span> <span class="func">_make_decision</span>(ws, best_chain, large_sig, ...):
+    net = ws[<span class="string">"net"</span>]
+    large_dir = large_sig[<span class="string">"direction"</span>]
+
+<span class="highlight-gold">    <span class="comment"># A: 大小同向 + 共振链(≥3级,含4h+) → 强信号</span></span>
+    <span class="keyword">if</span> best_chain <span class="keyword">and</span> best_chain[<span class="string">"has_4h_plus"</span>] <span class="keyword">and</span> best_chain[<span class="string">"length"</span>] >= <span class="number">3</span>:
+        ...  <span class="comment"># actionable=True, strength 70-100</span>
+
+<span class="highlight-green">    <span class="comment"># B: 大周期明确 + 小周期同向 → 中等信号</span></span>
+    <span class="keyword">if</span> large_dir == <span class="string">"long"</span> <span class="keyword">and</span> small_long <span class="keyword">and not</span> small_short:
+        ...  <span class="comment"># actionable=True, strength 40-80</span>
+
+<span class="highlight-red">    <span class="comment"># C: 大小周期反向 → 不做</span></span>
+    <span class="keyword">if</span> large_dir == <span class="string">"long"</span> <span class="keyword">and</span> small_short <span class="keyword">and not</span> small_long:
+        ...  <span class="comment"># actionable=False, "等回调结束顺势"</span>
+
+    <span class="comment"># D: 多空同时存在 → 观望</span>
+    <span class="keyword">if</span> long_tfs <span class="keyword">and</span> short_tfs:
+        ...  <span class="comment"># actionable=False</span>
+
+    <span class="comment"># E: 只有小周期信号 → 弱信号</span>
+    <span class="keyword">if</span> small_long <span class="keyword">and</span> large_dir == <span class="string">"neutral"</span>:
+        ...  <span class="comment"># actionable=False</span>
+
+    <span class="comment"># F: 完全中性</span>
+    <span class="keyword">return</span> {<span class="string">"direction"</span>: <span class="string">"hold"</span>, <span class="string">"strength"</span>: <span class="number">0</span>, <span class="string">"actionable"</span>: <span class="keyword">False</span>}
+</div>
+
+<!-- ==================== 7. 实盘门控 ==================== -->
+<div id="s7" class="section-title"><span class="num">7</span>实盘门控: 从信号到交易的最后一关</div>
+
+<div class="explain-box key">
+    <h4>门控设计: 平仓不拦，开仓必查</h4>
+    <p>多周期共识<strong>仅作为开仓门控</strong>。平仓逻辑(止损/止盈/追踪止盈/超时)完全独立，由主TF的信号和持仓状态驱动。这确保了: 即使多周期系统出故障，风控仍然100%正常工作。</p>
+</div>
+
+<div class="flow-diagram">
+    <div class="flow-box primary"><div class="label">主TF信号</div><div class="value">sell/buy分数</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box gold"><div class="label">evaluate_action</div><div class="value">OPEN/CLOSE/HOLD</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><div class="label">分流</div><div class="value">CLOSE?</div></div>
+    <div class="flow-arrow" style="color: var(--accent-green)">→ 直接执行</div>
+</div>
+<div class="flow-diagram">
+    <div class="flow-box" style="visibility:hidden"><div class="value">.</div></div>
+    <div class="flow-arrow" style="visibility:hidden">→</div>
+    <div class="flow-box" style="visibility:hidden"><div class="value">.</div></div>
+    <div class="flow-arrow" style="visibility:hidden">→</div>
+    <div class="flow-box"><div class="label">分流</div><div class="value">OPEN?</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box purple"><div class="label">多周期门控</div><div class="value">_apply_multi_tf_gate</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box secondary"><div class="label">✅ 通过</div><div class="value">执行开仓</div></div>
+</div>
+
+<div class="code-filename">live_trading_engine.py · _apply_multi_tf_gate()</div>
+<div class="code-block">
+<span class="keyword">def</span> <span class="func">_apply_multi_tf_gate</span>(self, sig):
+    <span class="comment"># 1. 并行计算6个TF的信号 + 共识决策</span>
+    multi_result = self.signal_generator.<span class="func">compute_multi_tf_consensus</span>(
+        self._decision_tfs  <span class="comment"># ['15m','30m','1h','4h','8h','24h']</span>
+    )
+
+    direction = decision.get(<span class="string">"direction"</span>)
+    strength  = decision.get(<span class="string">"strength"</span>)
+    actionable = decision.get(<span class="string">"actionable"</span>)
+
+    sig_direction = <span class="string">"long"</span> <span class="keyword">if</span> sig.action == <span class="string">"OPEN_LONG"</span> <span class="keyword">else</span> <span class="string">"short"</span>
+
+<span class="highlight-red">    <span class="comment"># 规则1: 共识不可操作(情况C/D/E/F) → 阻止</span></span>
+<span class="highlight-red">    <span class="keyword">if not</span> actionable:</span>
+<span class="highlight-red">        sig.action = <span class="string">"HOLD"</span></span>
+<span class="highlight-red">        <span class="keyword">return</span> sig</span>
+
+<span class="highlight-red">    <span class="comment"># 规则2: 共识方向与单TF方向不一致 → 阻止</span></span>
+<span class="highlight-red">    <span class="keyword">if</span> direction != sig_direction:</span>
+<span class="highlight-red">        sig.action = <span class="string">"HOLD"</span></span>
+<span class="highlight-red">        <span class="keyword">return</span> sig</span>
+
+<span class="highlight-red">    <span class="comment"># 规则3: 共识强度不够 → 阻止</span></span>
+<span class="highlight-red">    <span class="keyword">if</span> strength < self._consensus_min_strength:</span>
+<span class="highlight-red">        sig.action = <span class="string">"HOLD"</span></span>
+<span class="highlight-red">        <span class="keyword">return</span> sig</span>
+
+<span class="highlight-green">    <span class="comment"># ✅ 全部通过 → 放行开仓</span></span>
+<span class="highlight-green">    sig.reason += <span class="string">f" | 多周期确认 strength={strength}"</span></span>
+<span class="highlight-green">    <span class="keyword">return</span> sig</span>
+</div>
+
+<div class="explain-box warn">
+    <h4>三重门控: 必须全部通过</h4>
+    <p>1. <strong>actionable = True</strong> — 共识决策标记为可操作 (仅情况A和B)</p>
+    <p>2. <strong>方向一致</strong> — 共识方向必须与单TF信号方向相同</p>
+    <p>3. <strong>strength ≥ 40</strong> — 共识强度必须达到最低阈值</p>
+    <p>三个条件缺一不可。任何一个不满足，开仓信号都会被降级为HOLD。</p>
+</div>
+
+<!-- ==================== 8. 仓位缩放 ==================== -->
+<div id="s8" class="section-title"><span class="num">8</span>仓位缩放: 共识强度驱动仓位大小</div>
+
+<div class="explain-box key">
+    <h4>强共识 = 大仓位，弱共识 = 小仓位</h4>
+    <p>当多周期共识通过门控后，仓位大小不是固定的，而是<strong>按共识强度缩放</strong>:</p>
+    <p><code>仓位比例 = max(50%, min(100%, strength / 100))</code></p>
+    <p>strength=40(最低门槛) → 仓位50% | strength=70 → 仓位70% | strength=100 → 仓位100%</p>
+</div>
+
+<div class="code-filename">live_trading_engine.py · _open_position() 仓位缩放</div>
+<div class="code-block">
+<span class="comment"># 基础保证金</span>
+raw_margin = equity * cfg.margin_use * cfg.single_pct
+
+<span class="comment"># 多周期共识强度缩放仓位</span>
+<span class="keyword">if</span> self._use_multi_tf <span class="keyword">and</span> self._consensus_position_scale:
+    consensus_strength = self._last_consensus \
+        .get(<span class="string">"consensus"</span>, {}).get(<span class="string">"decision"</span>, {}).get(<span class="string">"strength"</span>, <span class="number">50</span>)
+
+<span class="highlight-line">    <span class="comment"># strength 40-100 映射到 0.5-1.0 的仓位比例</span></span>
+<span class="highlight-line">    scale = <span class="func">max</span>(<span class="number">0.5</span>, <span class="func">min</span>(<span class="number">1.0</span>, consensus_strength / <span class="number">100</span>))</span>
+<span class="highlight-line">    raw_margin *= scale</span>
+</div>
+
+<div class="explain-box">
+    <h4>设计意图</h4>
+    <p>1. <strong>强信号多下注</strong>: 大小周期完美共振(strength=90) → 用90%仓位</p>
+    <p>2. <strong>弱信号少下注</strong>: 刚过门槛(strength=42) → 只用50%仓位</p>
+    <p>3. <strong>最低50%保底</strong>: 既然已经通过了三重门控，至少用一半仓位</p>
+    <p>4. <strong>可关闭</strong>: 设置 <code>consensus_position_scale: false</code> 则固定仓位</p>
+</div>
+
+<!-- ==================== 9. 配置参数 ==================== -->
+<div id="s9" class="section-title"><span class="num">9</span>配置参数: 可调节的决策旋钮</div>
+
+<table class="param-table">
+    <tr>
+        <th>参数</th><th>类型</th><th>默认值</th><th>说明</th>
+    </tr>
+    <tr>
+        <td><code>use_multi_tf</code></td>
+        <td>bool</td>
+        <td><code>True</code></td>
+        <td>总开关。设为 False 可一键回退到单TF模式</td>
+    </tr>
+    <tr>
+        <td><code>decision_timeframes</code></td>
+        <td>list</td>
+        <td><code>['15m','30m','1h','4h','8h','24h']</code></td>
+        <td>参与共识决策的时间框架列表。建议覆盖大小周期</td>
+    </tr>
+    <tr>
+        <td><code>consensus_min_strength</code></td>
+        <td>int</td>
+        <td><code>40</code></td>
+        <td>共识强度最低阈值。提高此值会减少交易次数但提高精度</td>
+    </tr>
+    <tr>
+        <td><code>consensus_position_scale</code></td>
+        <td>bool</td>
+        <td><code>True</code></td>
+        <td>是否按共识强度缩放仓位。关闭则固定仓位</td>
+    </tr>
+</table>
+
+<div class="code-filename">live_trading_config.json · 策略配置示例</div>
+<div class="code-block">
+{
+    <span class="string">"strategy"</span>: {
+        <span class="string">"optimize_result_file"</span>: <span class="string">"optimize_six_book_result.json"</span>,
+        <span class="string">"symbol"</span>: <span class="string">"ETHUSDT"</span>,
+        <span class="string">"timeframe"</span>: <span class="string">"1h"</span>,
+<span class="highlight-line">        <span class="string">"use_multi_tf"</span>: <span class="keyword">true</span>,</span>
+<span class="highlight-line">        <span class="string">"decision_timeframes"</span>: [<span class="string">"15m"</span>, <span class="string">"30m"</span>, <span class="string">"1h"</span>, <span class="string">"4h"</span>, <span class="string">"8h"</span>, <span class="string">"24h"</span>],</span>
+<span class="highlight-line">        <span class="string">"consensus_min_strength"</span>: <span class="number">40</span></span>
+    }
+}
+</div>
+
+<div class="explain-box warn">
+    <h4>调参建议</h4>
+    <p>1. <strong>更保守</strong>: 提高 consensus_min_strength 到 60, 减少TF列表中的小周期 → 更少交易但更精准</p>
+    <p>2. <strong>更激进</strong>: 降低 consensus_min_strength 到 30, 增加更多小周期TF → 更多交易机会</p>
+    <p>3. <strong>调试模式</strong>: use_multi_tf=False 可快速回退，对比单TF与多TF的效果差异</p>
+</div>
+
+<!-- ==================== 10. 安全设计 ==================== -->
+<div id="s10" class="section-title"><span class="num">10</span>安全设计: 降级机制与风控不变原则</div>
+
+<div class="explain-box key">
+    <h4>原则1: 风控层级高于策略层级</h4>
+    <p>止损、止盈、追踪止盈、最大回撤熔断等风控逻辑<strong>完全不受多周期影响</strong>。它们由 RiskManager 和 evaluate_action() 独立管理。多周期共识只影响"是否开仓"，不影响"何时平仓"。</p>
+</div>
+
+<div class="explain-box red">
+    <h4>原则2: 故障降级而不是故障停止</h4>
+    <p>如果多周期信号计算超时或异常(如网络问题导致某个TF数据获取失败)，系统<strong>自动降级为单TF模式</strong>，不会阻止正常交易。</p>
+</div>
+
+<div class="code-filename">live_trading_engine.py · 降级机制</div>
+<div class="code-block">
+<span class="keyword">def</span> <span class="func">_apply_multi_tf_gate</span>(self, sig):
+    <span class="keyword">try</span>:
+        multi_result = self.signal_generator.<span class="func">compute_multi_tf_consensus</span>(...)
+        <span class="comment"># ... 正常三重门控逻辑 ...</span>
+        <span class="keyword">return</span> sig
+
+<span class="highlight-gold">    <span class="keyword">except</span> <span class="var">Exception</span> <span class="keyword">as</span> e:</span>
+<span class="highlight-gold">        <span class="comment"># 多周期计算失败 → 不阻止交易，降级为单TF模式</span></span>
+<span class="highlight-gold">        self.logger.<span class="func">warning</span>(</span>
+<span class="highlight-gold">            <span class="string">f"[多周期门控] 计算异常，降级为单TF模式: {e}"</span></span>
+<span class="highlight-gold">        )</span>
+<span class="highlight-gold">        <span class="keyword">return</span> sig  <span class="comment"># 原样返回，不修改action</span></span>
+</div>
+
+<div class="explain-box">
+    <h4>原则3: 并行计算有超时保护</h4>
+    <p>多TF信号并行计算使用 <code>ThreadPoolExecutor</code>，每个TF有120秒超时。即使某个TF的数据获取卡住，也不会影响其他TF的计算和整体决策流程。失败的TF会被标记为 <code>ok: false</code>，在共识计算中被忽略。</p>
+</div>
+
+<div class="explain-box">
+    <h4>交易引擎完整tick流程 (集成多周期后)</h4>
+    <p>1. ⏰ 主TF收盘 → 刷新数据</p>
+    <p>2. 📊 compute_latest_signal() → 主TF的 sell_score / buy_score</p>
+    <p>3. 📈 更新持仓盈亏</p>
+    <p>4. 🛡️ 风控检查 (RiskManager)</p>
+    <p>5. ✂️ 检查部分止盈</p>
+    <p>6. 🔍 evaluate_action() → 决定动作 (OPEN / CLOSE / HOLD)</p>
+    <p>7. 🔗 <strong>如果是OPEN → 多周期门控</strong> (新增)</p>
+    <p>8. 📝 记录信号日志</p>
+    <p>9. ⚡ 执行交易 (如果动作不是HOLD)</p>
+    <p>10. 📲 通知推送</p>
+</div>
+
+{% endblock %}

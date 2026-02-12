@@ -259,6 +259,11 @@ def page_multi_tf_backtest():
     return render_template('page_multi_tf_backtest.html', active_page='multi-tf-backtest')
 
 
+@app.route('/strategy/multi-tf-deep-dive')
+def page_multi_tf_deep_dive():
+    return render_template('page_multi_tf_deep_dive.html', active_page='multi-tf-deep-dive')
+
+
 @app.route('/strategy/six-book-deep-dive')
 def page_six_book_deep_dive():
     return render_template('page_six_book_deep_dive.html', active_page='six-book-deep-dive')
