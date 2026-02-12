@@ -137,7 +137,10 @@ class PerformanceTracker:
         # 当前权益
         current_equity = (self.equity_curve[-1]["equity"]
                          if self.equity_curve else self.initial_capital)
-        total_return = (current_equity - self.initial_capital) / self.initial_capital
+        # 口径统一: 初始资金缺失时避免除零，退化为0收益
+        capital_base = self.initial_capital if self.initial_capital > 0 else 0
+        total_return = ((current_equity - capital_base) / capital_base
+                        if capital_base > 0 else 0)
 
         # 滑点统计
         avg_slippage = 0
@@ -146,19 +149,22 @@ class PerformanceTracker:
                               for s in self.slippage_records) / len(self.slippage_records)
 
         return {
-            "initial_capital": self.initial_capital,
+            "initial_capital": capital_base,
             "current_equity": current_equity,
             "total_return": total_return,
+            "total_return_pct": total_return * 100,
             "total_pnl": total_pnl,
             "total_trades": total_trades,
             "wins": len(wins),
             "losses": len(losses),
             "win_rate": win_rate,
+            "win_rate_pct": win_rate * 100,
             "avg_win": avg_win,
             "avg_loss": avg_loss,
             "profit_factor": profit_factor,
             "max_consecutive_losses": max_consec_loss,
             "max_drawdown": self.max_drawdown,
+            "max_drawdown_pct": self.max_drawdown * 100,
             "total_fees": self.total_fees,
             "total_funding": self.total_funding,
             "fee_ratio": self.total_fees / total_pnl if total_pnl > 0 else 0,
@@ -194,9 +200,21 @@ class PerformanceTracker:
         """与回测结果对比"""
         live = self.get_summary()
 
-        bt_return = backtest_result.get("total_return", 0)
-        bt_win_rate = backtest_result.get("win_rate", 0)
-        bt_max_dd = backtest_result.get("max_drawdown", 0)
+        # 回测结果兼容两种口径:
+        # 1) ratio: 0.12  2) percent: 12.0
+        def _to_ratio(v):
+            try:
+                x = float(v)
+            except (TypeError, ValueError):
+                return 0.0
+            return x / 100.0 if abs(x) > 1.0 else x
+
+        bt_return = _to_ratio(
+            backtest_result.get("total_return",
+                                backtest_result.get("strategy_return", 0))
+        )
+        bt_win_rate = _to_ratio(backtest_result.get("win_rate", 0))
+        bt_max_dd = _to_ratio(backtest_result.get("max_drawdown", 0))
         bt_trades = backtest_result.get("total_trades", 0)
 
         return {
@@ -259,6 +277,7 @@ class PerformanceTracker:
             try:
                 with open(filepath, 'r') as f:
                     data = json.load(f)
+                self.initial_capital = data.get("initial_capital", self.initial_capital)
                 self.trades = data.get("trades", [])
                 self.equity_curve = data.get("equity_curve", [])
                 self.daily_stats = data.get("daily_stats", {})

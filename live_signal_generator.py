@@ -31,7 +31,7 @@ from candlestick_patterns import compute_candlestick_scores
 from bollinger_strategy import compute_bollinger_scores
 from volume_price_strategy import compute_volume_price_scores
 from kdj_strategy import compute_kdj_scores
-from optimize_six_book import calc_fusion_score_six, compute_signals_six
+from signal_core import calc_fusion_score_six, compute_signals_six
 from multi_tf_consensus import compute_weighted_consensus
 
 

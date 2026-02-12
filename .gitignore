@@ -29,4 +29,5 @@ data/
 
 # 临时文件
 multi_signal_result.json
+multi_signal_cache.json
 gunicorn.pid

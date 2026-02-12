@@ -39,6 +39,10 @@ from candlestick_patterns import compute_candlestick_scores
 from bollinger_strategy import compute_bollinger_scores
 from volume_price_strategy import compute_volume_price_scores
 from kdj_strategy import compute_kdj_scores
+from signal_core import (
+    compute_signals_six as _compute_signals_six_core,
+    calc_fusion_score_six as _calc_fusion_score_six_core,
+)
 
 
 # ======================================================
@@ -68,288 +72,35 @@ def fetch_multi_tf_data(timeframes=None, days=60):
 
 
 def compute_signals_six(df, tf, data_all, max_bars=0):
-    """为指定时间框架计算六维信号(含KDJ)
-
-    参数:
-        df: 主周期 DataFrame (已含指标)
-        tf: 时间框架字符串
-        data_all: 多周期数据 dict
-        max_bars: >0 时只保留尾部 max_bars 根K线用于计算，大幅降低耗时。
-                  0 = 不限制 (全量计算，用于回测)。
-    """
-    # ---- 尾部截断优化 ----
-    if max_bars > 0 and len(df) > max_bars:
-        df = df.iloc[-max_bars:].copy()
-
-    signals = {}
-
-    # 1. 背离信号(主周期)
-    lookback = max(60, min(200, len(df) // 3))
-    div_signals = analyze_signals_enhanced(df, lookback)
-    signals['div'] = div_signals
-
-    # 8h辅助背离(如果可用)
-    signals['div_8h'] = {}
-    if '8h' in data_all and tf not in ('8h', '12h', '16h', '24h'):
-        signals['div_8h'] = analyze_signals_enhanced(data_all['8h'], 90)
-
-    # 2. 均线信号
-    ma_signals = compute_ma_signals(df, timeframe=tf)
-    signals['ma'] = ma_signals
-
-    # 3. 蜡烛图
-    cs_sell, cs_buy, cs_names = compute_candlestick_scores(df)
-    signals['cs_sell'] = cs_sell
-    signals['cs_buy'] = cs_buy
-
-    # 4. 布林带
-    bb_sell, bb_buy, bb_names = compute_bollinger_scores(df)
-    signals['bb_sell'] = bb_sell
-    signals['bb_buy'] = bb_buy
-
-    # 5. 量价
-    vp_sell, vp_buy, vp_names = compute_volume_price_scores(df)
-    signals['vp_sell'] = vp_sell
-    signals['vp_buy'] = vp_buy
-
-    # 6. KDJ ★新增★
-    kdj_sell, kdj_buy, kdj_names = compute_kdj_scores(df)
-    signals['kdj_sell'] = kdj_sell
-    signals['kdj_buy'] = kdj_buy
-
-    return signals
+    """兼容包装: 委托给 signal_core.compute_signals_six。"""
+    return _compute_signals_six_core(df, tf, data_all, max_bars=max_bars)
 
 
 # ======================================================
 #   六维融合评分(支持多模式)
 # ======================================================
 def calc_fusion_score_six(signals, df, idx, dt, config):
-    """六维融合评分 — 支持c6_veto_4/kdj_weighted/kdj_timing三种模式"""
-    price = df['close'].iloc[idx]
-    mode = config.get('fusion_mode', 'c6_veto_4')
-
-    # 1. 背离
-    sig_main = get_signal_at(signals['div'], dt) or dict(DEFAULT_SIG)
-    sig_8h = get_signal_at(signals.get('div_8h', {}), dt) or dict(DEFAULT_SIG)
-
-    merged = dict(DEFAULT_SIG)
-    merged['top'] = 0; merged['bottom'] = 0
-    for sig_src, w in [(sig_main, 1.0), (sig_8h, 0.5)]:
-        merged['top'] += sig_src.get('top', 0) * w
-        merged['bottom'] += sig_src.get('bottom', 0) * w
-        for k in DEFAULT_SIG:
-            if isinstance(DEFAULT_SIG[k], bool) and sig_src.get(k):
-                merged[k] = True
-            elif isinstance(DEFAULT_SIG[k], (int, float)) and k not in ('top', 'bottom'):
-                merged[k] = max(merged.get(k, 0), sig_src.get(k, 0))
-
-    trend = {'is_downtrend': False, 'is_uptrend': False,
-             'ma_bearish': False, 'ma_bullish': False,
-             'ma_slope_down': False, 'ma_slope_up': False}
-    if idx >= 30:
-        c5 = df['close'].iloc[max(0, idx-5):idx].mean()
-        c20 = df['close'].iloc[max(0, idx-20):idx].mean()
-        if c5 < c20 * 0.99: trend['is_downtrend'] = True; trend['ma_bearish'] = True
-        elif c5 > c20 * 1.01: trend['is_uptrend'] = True; trend['ma_bullish'] = True
-
-    div_sell, _ = _calc_top_score(merged, trend)
-    div_buy = _calc_bottom_score(merged, trend)
-
-    # 2. 均线
-    ma_sell = float(signals['ma']['sell_score'].iloc[idx]) if idx < len(signals['ma']['sell_score']) else 0
-    ma_buy = float(signals['ma']['buy_score'].iloc[idx]) if idx < len(signals['ma']['buy_score']) else 0
-
-    # 3-6. K线、布林、量价、KDJ
-    cs_sell = float(signals['cs_sell'].iloc[idx]) if idx < len(signals['cs_sell']) else 0
-    cs_buy = float(signals['cs_buy'].iloc[idx]) if idx < len(signals['cs_buy']) else 0
-    bb_sell = float(signals['bb_sell'].iloc[idx]) if idx < len(signals['bb_sell']) else 0
-    bb_buy = float(signals['bb_buy'].iloc[idx]) if idx < len(signals['bb_buy']) else 0
-    vp_sell = float(signals['vp_sell'].iloc[idx]) if idx < len(signals['vp_sell']) else 0
-    vp_buy = float(signals['vp_buy'].iloc[idx]) if idx < len(signals['vp_buy']) else 0
-    kdj_sell = float(signals['kdj_sell'].iloc[idx]) if idx < len(signals['kdj_sell']) else 0
-    kdj_buy = float(signals['kdj_buy'].iloc[idx]) if idx < len(signals['kdj_buy']) else 0
-
-    # MA排列加成
-    ma_arr_bonus_sell = 1.0
-    ma_arr_bonus_buy = 1.0
-    if idx < len(signals['ma']['sell_score']):
-        ma_data = signals['ma']
-        if 'arrangement' in ma_data:
-            arr_series = ma_data.get('arrangement', None)
-            if arr_series is not None and hasattr(arr_series, 'iloc') and idx < len(arr_series):
-                try:
-                    arr_val = float(arr_series.iloc[idx])
-                    if arr_val < 0: ma_arr_bonus_sell = 1.10
-                    elif arr_val > 0: ma_arr_bonus_buy = 1.10
-                except (ValueError, TypeError):
-                    pass
-
-    if mode == 'c6_veto_4':
-        # === C6底座 + 四书否决权 ===
-        base_sell = (div_sell * 0.7 + ma_sell * 0.3) * ma_arr_bonus_sell
-        base_buy = (div_buy * 0.7 + ma_buy * 0.3) * ma_arr_bonus_buy
-
-        veto_threshold = config.get('veto_threshold', 25)
-        kdj_bonus = config.get('kdj_bonus', 0.09)
-        bb_bonus = config.get('bb_bonus', 0.10)
-        vp_bonus = config.get('vp_bonus', 0.08)
-        cs_bonus = config.get('cs_bonus', 0.06)
-
-        # 否决逻辑: 4个辅助系统, 至少2个强烈反对 → 削弱
-        sell_vetoes = sum(1 for s in [bb_buy, vp_buy, cs_buy, kdj_buy] if s >= veto_threshold)
-        buy_vetoes = sum(1 for s in [bb_sell, vp_sell, cs_sell, kdj_sell] if s >= veto_threshold)
-
-        veto_dampen = config.get('veto_dampen', 0.30)
-
-        if sell_vetoes >= 2:
-            sell_score = base_sell * veto_dampen
-        else:
-            sb = 0
-            if bb_sell >= 15: sb += bb_bonus
-            if vp_sell >= 15: sb += vp_bonus
-            if cs_sell >= 25: sb += cs_bonus
-            if kdj_sell >= 15: sb += kdj_bonus
-            sell_score = base_sell * (1 + sb)
-
-        if buy_vetoes >= 2:
-            buy_score = base_buy * veto_dampen
-        else:
-            bb_ = 0
-            if bb_buy >= 15: bb_ += bb_bonus
-            if vp_buy >= 15: bb_ += vp_bonus
-            if cs_buy >= 25: bb_ += cs_bonus
-            if kdj_buy >= 15: bb_ += kdj_bonus
-            buy_score = base_buy * (1 + bb_)
-
-    elif mode == 'c6_veto':
-        # 五书兼容模式(无KDJ) — 用作对照
-        base_sell = (div_sell * 0.7 + ma_sell * 0.3) * ma_arr_bonus_sell
-        base_buy = (div_buy * 0.7 + ma_buy * 0.3) * ma_arr_bonus_buy
-        veto_threshold = config.get('veto_threshold', 25)
-
-        sell_vetoes = sum(1 for s in [bb_buy, vp_buy, cs_buy] if s >= veto_threshold)
-        buy_vetoes = sum(1 for s in [bb_sell, vp_sell, cs_sell] if s >= veto_threshold)
-
-        if sell_vetoes >= 2:
-            sell_score = base_sell * 0.3
-        else:
-            sb = 0
-            if bb_sell >= 15: sb += 0.10
-            if vp_sell >= 15: sb += 0.08
-            if cs_sell >= 25: sb += 0.06
-            sell_score = base_sell * (1 + sb)
-
-        if buy_vetoes >= 2:
-            buy_score = base_buy * 0.3
-        else:
-            bb_ = 0
-            if bb_buy >= 15: bb_ += 0.10
-            if vp_buy >= 15: bb_ += 0.08
-            if cs_buy >= 25: bb_ += 0.06
-            buy_score = base_buy * (1 + bb_)
-
-    elif mode == 'kdj_weighted':
-        # KDJ加权模式: KDJ参与基础分计算
-        kdj_w = config.get('kdj_weight', 0.20)
-        div_w = config.get('div_weight', 0.55)
-        ma_w = 1.0 - div_w - kdj_w  # 剩余给均线
-        base_sell = (div_sell * div_w + ma_sell * ma_w + kdj_sell * kdj_w) * ma_arr_bonus_sell
-        base_buy = (div_buy * div_w + ma_buy * ma_w + kdj_buy * kdj_w) * ma_arr_bonus_buy
-
-        sb = 0
-        if bb_sell >= 15: sb += 0.08
-        if vp_sell >= 15: sb += 0.06
-        if cs_sell >= 25: sb += 0.05
-        sell_score = base_sell * (1 + sb)
-
-        bb_ = 0
-        if bb_buy >= 15: bb_ += 0.08
-        if vp_buy >= 15: bb_ += 0.06
-        if cs_buy >= 25: bb_ += 0.05
-        buy_score = base_buy * (1 + bb_)
-
-    elif mode == 'kdj_timing':
-        # KDJ择时模式: C6基础上KDJ做乘法确认
-        base_sell = (div_sell * 0.7 + ma_sell * 0.3) * ma_arr_bonus_sell
-        base_buy = (div_buy * 0.7 + ma_buy * 0.3) * ma_arr_bonus_buy
-
-        kdj_strong = config.get('kdj_strong_mult', 1.25)
-        kdj_normal = config.get('kdj_normal_mult', 1.12)
-        kdj_reverse = config.get('kdj_reverse_mult', 0.70)
-
-        if kdj_sell >= 30:
-            sell_score = base_sell * kdj_strong
-        elif kdj_sell >= 15:
-            sell_score = base_sell * kdj_normal
-        elif kdj_buy >= 25:
-            sell_score = base_sell * kdj_reverse
-        else:
-            sell_score = base_sell
-
-        if kdj_buy >= 30:
-            buy_score = base_buy * kdj_strong
-        elif kdj_buy >= 15:
-            buy_score = base_buy * kdj_normal
-        elif kdj_sell >= 25:
-            buy_score = base_buy * kdj_reverse
-        else:
-            buy_score = base_buy
-
-        if bb_sell >= 15: sell_score *= 1.08
-        if vp_sell >= 15: sell_score *= 1.06
-        if bb_buy >= 15: buy_score *= 1.08
-        if vp_buy >= 15: buy_score *= 1.06
-
-    elif mode == 'kdj_gate':
-        # KDJ门控模式: KDJ不满足条件直接不开仓
-        base_sell = (div_sell * 0.7 + ma_sell * 0.3) * ma_arr_bonus_sell
-        base_buy = (div_buy * 0.7 + ma_buy * 0.3) * ma_arr_bonus_buy
-
-        kdj_gate_threshold = config.get('kdj_gate_threshold', 10)
-
-        # KDJ必须同向才能开仓
-        if kdj_sell < kdj_gate_threshold and base_sell > 0:
-            sell_score = base_sell * 0.4  # KDJ不配合, 大幅削弱
-        else:
-            sb = 0
-            if bb_sell >= 15: sb += 0.10
-            if vp_sell >= 15: sb += 0.08
-            if kdj_sell >= 20: sb += 0.12
-            sell_score = base_sell * (1 + sb)
-
-        if kdj_buy < kdj_gate_threshold and base_buy > 0:
-            buy_score = base_buy * 0.4
-        else:
-            bb_ = 0
-            if bb_buy >= 15: bb_ += 0.10
-            if vp_buy >= 15: bb_ += 0.08
-            if kdj_buy >= 20: bb_ += 0.12
-            buy_score = base_buy * (1 + bb_)
-
-    else:
-        # fallback
-        sell_score = div_sell * 0.5 + ma_sell * 0.2 + kdj_sell * 0.15 + bb_sell * 0.08 + vp_sell * 0.05 + cs_sell * 0.02
-        buy_score = div_buy * 0.5 + ma_buy * 0.2 + kdj_buy * 0.15 + bb_buy * 0.08 + vp_buy * 0.05 + cs_buy * 0.02
-
-    return sell_score, buy_score
+    """兼容包装: 委托给 signal_core.calc_fusion_score_six。"""
+    return _calc_fusion_score_six_core(signals, df, idx, dt, config)
 
 
 # ======================================================
 #   通用回测引擎(六书版)
 # ======================================================
-def run_strategy(df, signals, config, tf='1h', trade_days=30):
-    """在指定时间框架上运行六书策略回测"""
+def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provider):
+    """统一交易执行循环: 单TF/多TF共用。"""
     eng = FuturesEngine(config.get('name', 'opt'), max_leverage=config.get('max_lev', 5))
 
     start_dt = None
     if trade_days and trade_days < 60:
-        start_dt = df.index[-1] - pd.Timedelta(days=trade_days)
+        start_dt = primary_df.index[-1] - pd.Timedelta(days=trade_days)
 
     init_idx = 0
     if start_dt:
-        init_idx = df.index.searchsorted(start_dt)
-        if init_idx >= len(df): init_idx = 0
-    eng.spot_eth = eng.initial_eth_value / df['close'].iloc[init_idx]
+        init_idx = primary_df.index.searchsorted(start_dt)
+        if init_idx >= len(primary_df):
+            init_idx = 0
+    eng.spot_eth = eng.initial_eth_value / primary_df['close'].iloc[init_idx]
 
     eng.max_single_margin = eng.initial_total * config.get('single_pct', 0.20)
     eng.max_margin_total = eng.initial_total * config.get('total_pct', 0.50)
@@ -394,20 +145,23 @@ def run_strategy(df, signals, config, tf='1h', trade_days=30):
     short_partial_done = False; long_partial_done = False
     short_partial2_done = False; long_partial2_done = False
 
-    warmup = max(60, int(len(df) * 0.05))
+    warmup = max(60, int(len(primary_df) * 0.05))
 
-    tf_hours = {'10m': 1/6, '15m': 0.25, '30m': 0.5, '1h': 1, '2h': 2, '3h': 3,
-                '4h': 4, '6h': 6, '8h': 8, '12h': 12, '16h': 16, '24h': 24}
-    bars_per_8h = max(1, int(8 / tf_hours.get(tf, 1)))
+    tf_hours = {
+        '10m': 1/6, '15m': 0.25, '30m': 0.5, '1h': 1, '2h': 2, '3h': 3,
+        '4h': 4, '6h': 6, '8h': 8, '12h': 12, '16h': 16, '24h': 24,
+    }
+    bars_per_8h = max(1, int(8 / tf_hours.get(primary_tf, 1)))
 
-    record_interval = max(1, len(df) // 500)
+    record_interval = max(1, len(primary_df) // 500)
 
-    for idx in range(warmup, len(df)):
-        dt = df.index[idx]
-        price = df['close'].iloc[idx]
+    for idx in range(warmup, len(primary_df)):
+        dt = primary_df.index[idx]
+        price = primary_df['close'].iloc[idx]
 
         if start_dt and dt < start_dt:
-            if idx % record_interval == 0: eng.record_history(dt, price)
+            if idx % record_interval == 0:
+                eng.record_history(dt, price)
             continue
 
         # 记录强平前的仓位状态
@@ -443,7 +197,7 @@ def run_strategy(df, signals, config, tf='1h', trade_days=30):
         if long_cd > 0: long_cd -= 1
         if spot_cd > 0: spot_cd -= 1
 
-        ss, bs = calc_fusion_score_six(signals, df, idx, dt, config)
+        ss, bs = score_provider(idx, dt, price)
 
         in_conflict = False
         if ss > 0 and bs > 0:
@@ -454,13 +208,15 @@ def run_strategy(df, signals, config, tf='1h', trade_days=30):
         actual_short_sl = short_sl
         actual_long_sl = long_sl
         if use_atr_sl and idx >= 20:
-            high = df['high'].iloc[max(0,idx-14):idx]
-            low = df['low'].iloc[max(0,idx-14):idx]
-            close_prev = df['close'].iloc[max(0,idx-15):idx-1]
+            high = primary_df['high'].iloc[max(0, idx - 14):idx]
+            low = primary_df['low'].iloc[max(0, idx - 14):idx]
+            close_prev = primary_df['close'].iloc[max(0, idx - 15):idx - 1]
             if len(high) > 0 and len(close_prev) > 0:
                 min_len = min(len(high), len(low), len(close_prev))
-                tr = pd.Series([max(h-l, abs(h-c), abs(l-c))
-                                for h, l, c in zip(high[-min_len:], low[-min_len:], close_prev[-min_len:])])
+                tr = pd.Series([
+                    max(h - l, abs(h - c), abs(l - c))
+                    for h, l, c in zip(high[-min_len:], low[-min_len:], close_prev[-min_len:])
+                ])
                 atr = tr.mean()
                 atr_pct = atr / price
                 actual_short_sl = max(short_sl, -(atr_pct * atr_sl_mult))
@@ -470,7 +226,7 @@ def run_strategy(df, signals, config, tf='1h', trade_days=30):
         actual_short_tp = short_tp
         actual_long_tp = long_tp
         if use_dynamic_tp and idx >= 20:
-            recent_returns = df['close'].iloc[max(0,idx-20):idx].pct_change().dropna()
+            recent_returns = primary_df['close'].iloc[max(0, idx - 20):idx].pct_change().dropna()
             if len(recent_returns) > 5:
                 vol = recent_returns.std()
                 if vol > 0.03:
@@ -644,15 +400,27 @@ def run_strategy(df, signals, config, tf='1h', trade_days=30):
             eng.record_history(dt, price)
 
     # 期末平仓
-    last_price = df['close'].iloc[-1]
-    last_dt = df.index[-1]
-    if eng.futures_short: eng.close_short(last_price, last_dt, "期末平仓")
-    if eng.futures_long: eng.close_long(last_price, last_dt, "期末平仓")
+    last_price = primary_df['close'].iloc[-1]
+    last_dt = primary_df.index[-1]
+    if eng.futures_short:
+        eng.close_short(last_price, last_dt, "期末平仓")
+    if eng.futures_long:
+        eng.close_long(last_price, last_dt, "期末平仓")
 
     if start_dt:
-        trade_df = df[df.index >= start_dt]
-        if len(trade_df) > 1: return eng.get_result(trade_df)
-    return eng.get_result(df)
+        trade_df = primary_df[primary_df.index >= start_dt]
+        if len(trade_df) > 1:
+            return eng.get_result(trade_df)
+    return eng.get_result(primary_df)
+
+
+def run_strategy(df, signals, config, tf='1h', trade_days=30):
+    """在指定时间框架上运行六书策略回测。"""
+
+    def _single_tf_score(idx, dt, _price):
+        return calc_fusion_score_six(signals, df, idx, dt, config)
+
+    return _run_strategy_core(df, config, tf, trade_days, _single_tf_score)
 
 
 # ======================================================
@@ -844,329 +612,19 @@ def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
 
 def run_strategy_multi_tf(primary_df, tf_score_map, decision_tfs, config,
                           primary_tf='1h', trade_days=30):
-    """
-    多周期联合决策回测引擎
+    """多周期联合决策回测引擎。"""
 
-    与 run_strategy 的区别:
-      - 在每根K线(主TF)决策时, 查询所有辅助TF的最新信号
-      - 通过 calc_multi_tf_consensus 生成加权共识 ss/bs
-      - 交易引擎与仓位管理逻辑复用 run_strategy
-
-    参数:
-      primary_df: 主时间框架 DataFrame (决定决策频率)
-      tf_score_map: _build_tf_score_index 的输出
-      decision_tfs: 参与决策的时间框架列表
-      config: 策略参数
-      primary_tf: 主TF名 (用于计算持仓周期等)
-      trade_days: 回测天数
-    """
-    eng = FuturesEngine(config.get('name', 'multi_tf'), max_leverage=config.get('max_lev', 5))
-
-    start_dt = None
-    if trade_days and trade_days < 60:
-        start_dt = primary_df.index[-1] - pd.Timedelta(days=trade_days)
-
-    init_idx = 0
-    if start_dt:
-        init_idx = primary_df.index.searchsorted(start_dt)
-        if init_idx >= len(primary_df): init_idx = 0
-    eng.spot_eth = eng.initial_eth_value / primary_df['close'].iloc[init_idx]
-
-    eng.max_single_margin = eng.initial_total * config.get('single_pct', 0.20)
-    eng.max_margin_total = eng.initial_total * config.get('total_pct', 0.50)
-    eng.max_lifetime_margin = eng.initial_total * config.get('lifetime_pct', 5.0)
-
-    sell_threshold = config.get('sell_threshold', 18)
-    buy_threshold = config.get('buy_threshold', 25)
-    short_threshold = config.get('short_threshold', 25)
-    long_threshold = config.get('long_threshold', 40)
-    sell_pct = config.get('sell_pct', 0.55)
-    margin_use = config.get('margin_use', 0.70)
-    lev = config.get('lev', 5)
-    cooldown = config.get('cooldown', 4)
-    spot_cooldown = config.get('spot_cooldown', 12)
-
-    short_sl = config.get('short_sl', -0.30)
-    short_tp = config.get('short_tp', 0.80)
-    short_trail = config.get('short_trail', 0.25)
-    short_max_hold = config.get('short_max_hold', 72)
-    long_sl = config.get('long_sl', -0.15)
-    long_tp = config.get('long_tp', 0.50)
-    long_trail = config.get('long_trail', 0.20)
-    long_max_hold = config.get('long_max_hold', 72)
-    trail_pullback = config.get('trail_pullback', 0.60)
-
-    use_dynamic_tp = config.get('use_dynamic_tp', False)
-    use_partial_tp = config.get('use_partial_tp', False)
-    partial_tp_1 = config.get('partial_tp_1', 0.30)
-    partial_tp_1_pct = config.get('partial_tp_1_pct', 0.40)
-
-    use_atr_sl = config.get('use_atr_sl', False)
-    atr_sl_mult = config.get('atr_sl_mult', 3.0)
-
-    use_partial_tp_2 = config.get('use_partial_tp_2', False)
-    partial_tp_2 = config.get('partial_tp_2', 0.50)
-    partial_tp_2_pct = config.get('partial_tp_2_pct', 0.30)
-
-    short_cd = 0; long_cd = 0; spot_cd = 0
-    short_bars = 0; long_bars = 0
-    short_max_pnl = 0; long_max_pnl = 0
-    short_partial_done = False; long_partial_done = False
-    short_partial2_done = False; long_partial2_done = False
-
-    warmup = max(60, int(len(primary_df) * 0.05))
-
-    tf_hours = {'10m': 1/6, '15m': 0.25, '30m': 0.5, '1h': 1, '2h': 2, '3h': 3,
-                '4h': 4, '6h': 6, '8h': 8, '12h': 12, '16h': 16, '24h': 24}
-    bars_per_8h = max(1, int(8 / tf_hours.get(primary_tf, 1)))
-
-    record_interval = max(1, len(primary_df) // 500)
-
-    for idx in range(warmup, len(primary_df)):
-        dt = primary_df.index[idx]
-        price = primary_df['close'].iloc[idx]
-
-        if start_dt and dt < start_dt:
-            if idx % record_interval == 0: eng.record_history(dt, price)
-            continue
-
-        had_short_before_liq = eng.futures_short is not None
-        had_long_before_liq = eng.futures_long is not None
-        eng.check_liquidation(price, dt)
-        if had_short_before_liq and eng.futures_short is None:
-            short_cd = max(short_cd, cooldown * 6)
-            short_bars = 0; short_max_pnl = 0
-        if had_long_before_liq and eng.futures_long is None:
-            long_cd = max(long_cd, cooldown * 6)
-            long_bars = 0; long_max_pnl = 0
-        short_just_opened = False; long_just_opened = False
-
-        eng.funding_counter += 1
-        if eng.funding_counter % bars_per_8h == 0:
-            is_neg = (eng.funding_counter * 7 + 3) % 10 < 3
-            rate = FuturesEngine.FUNDING_RATE if not is_neg else -FuturesEngine.FUNDING_RATE * 0.5
-            if eng.futures_long:
-                cost = eng.futures_long.quantity * price * rate
-                eng.usdt -= cost
-                if cost > 0: eng.total_funding_paid += cost
-                else: eng.total_funding_received += abs(cost)
-            if eng.futures_short:
-                income = eng.futures_short.quantity * price * rate
-                eng.usdt += income
-                if income > 0: eng.total_funding_received += income
-                else: eng.total_funding_paid += abs(income)
-
-        if short_cd > 0: short_cd -= 1
-        if long_cd > 0: long_cd -= 1
-        if spot_cd > 0: spot_cd -= 1
-
-        # ★★★ 核心区别: 用多周期共识评分替代单TF评分 ★★★
+    def _multi_tf_score(_idx, dt, _price):
         ss, bs, _meta = calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config)
+        return ss, bs
 
-        in_conflict = False
-        if ss > 0 and bs > 0:
-            ratio = min(ss, bs) / max(ss, bs)
-            in_conflict = ratio >= 0.6 and min(ss, bs) >= 15
-
-        # ATR自适应止损
-        actual_short_sl = short_sl
-        actual_long_sl = long_sl
-        if use_atr_sl and idx >= 20:
-            high = primary_df['high'].iloc[max(0,idx-14):idx]
-            low = primary_df['low'].iloc[max(0,idx-14):idx]
-            close_prev = primary_df['close'].iloc[max(0,idx-15):idx-1]
-            if len(high) > 0 and len(close_prev) > 0:
-                min_len = min(len(high), len(low), len(close_prev))
-                tr = pd.Series([max(h-l, abs(h-c), abs(l-c))
-                                for h, l, c in zip(high[-min_len:], low[-min_len:], close_prev[-min_len:])])
-                atr = tr.mean()
-                atr_pct = atr / price
-                actual_short_sl = max(short_sl, -(atr_pct * atr_sl_mult))
-                actual_long_sl = max(long_sl, -(atr_pct * atr_sl_mult))
-
-        # 动态止盈
-        actual_short_tp = short_tp
-        actual_long_tp = long_tp
-        if use_dynamic_tp and idx >= 20:
-            recent_returns = primary_df['close'].iloc[max(0,idx-20):idx].pct_change().dropna()
-            if len(recent_returns) > 5:
-                vol = recent_returns.std()
-                if vol > 0.03:
-                    actual_short_tp = short_tp * 1.3
-                    actual_long_tp = long_tp * 1.3
-                elif vol < 0.01:
-                    actual_short_tp = short_tp * 0.7
-                    actual_long_tp = long_tp * 0.7
-
-        # 卖出现货
-        if ss >= sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * price > 500:
-            eng.spot_sell(price, dt, sell_pct, f"卖出 SS={ss:.0f}")
-            spot_cd = spot_cooldown
-
-        # 开空
-        sell_dom = (ss > bs * 1.5) if bs > 0 else True
-        if short_cd == 0 and ss >= short_threshold and not eng.futures_short and sell_dom:
-            margin = eng.available_margin() * margin_use
-            actual_lev = min(lev if ss >= 50 else min(lev, 3) if ss >= 35 else 2, eng.max_leverage)
-            eng.open_short(price, dt, margin, actual_lev, f"开空 {actual_lev}x")
-            short_max_pnl = 0; short_bars = 0; short_cd = cooldown
-            short_just_opened = True; short_partial_done = False; short_partial2_done = False
-
-        # 管理空仓
-        if eng.futures_short and not short_just_opened:
-            short_bars += 1
-            pnl_r = eng.futures_short.calc_pnl(price) / eng.futures_short.margin
-
-            if use_partial_tp and not short_partial_done and pnl_r >= partial_tp_1:
-                old_qty = eng.futures_short.quantity
-                partial_qty = old_qty * partial_tp_1_pct
-                actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)
-                partial_pnl = (eng.futures_short.entry_price - actual_close_p) * partial_qty
-                margin_released = eng.futures_short.margin * partial_tp_1_pct
-                eng.usdt += margin_released + partial_pnl
-                eng.frozen_margin -= margin_released
-                fee = partial_qty * actual_close_p * FuturesEngine.TAKER_FEE
-                slippage_cost = partial_qty * price * FuturesEngine.SLIPPAGE
-                eng.usdt -= fee; eng.total_futures_fees += fee
-                eng.total_slippage_cost += slippage_cost
-                eng.futures_short.quantity = old_qty - partial_qty
-                eng.futures_short.margin *= (1 - partial_tp_1_pct)
-                short_partial_done = True
-                eng.trades.append({'time': str(dt), 'action': '分段止盈空',
-                    'price': price, 'pnl': partial_pnl, 'reason': f'分段TP1 +{pnl_r*100:.0f}%'})
-
-            elif use_partial_tp_2 and short_partial_done and not short_partial2_done and pnl_r >= partial_tp_2:
-                old_qty = eng.futures_short.quantity
-                partial_qty = old_qty * partial_tp_2_pct
-                actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)
-                partial_pnl = (eng.futures_short.entry_price - actual_close_p) * partial_qty
-                margin_released = eng.futures_short.margin * partial_tp_2_pct
-                eng.usdt += margin_released + partial_pnl
-                eng.frozen_margin -= margin_released
-                fee = partial_qty * actual_close_p * FuturesEngine.TAKER_FEE
-                slippage_cost = partial_qty * price * FuturesEngine.SLIPPAGE
-                eng.usdt -= fee; eng.total_futures_fees += fee
-                eng.total_slippage_cost += slippage_cost
-                eng.futures_short.quantity = old_qty - partial_qty
-                eng.futures_short.margin *= (1 - partial_tp_2_pct)
-                short_partial2_done = True
-                eng.trades.append({'time': str(dt), 'action': '分段止盈空2',
-                    'price': price, 'pnl': partial_pnl, 'reason': f'分段TP2 +{pnl_r*100:.0f}%'})
-
-            if pnl_r >= actual_short_tp:
-                eng.close_short(price, dt, f"止盈 +{pnl_r*100:.0f}%")
-                short_max_pnl = 0; short_cd = cooldown * 2; short_bars = 0
-            else:
-                if pnl_r > short_max_pnl: short_max_pnl = pnl_r
-                if short_max_pnl >= short_trail and eng.futures_short:
-                    if pnl_r < short_max_pnl * trail_pullback:
-                        eng.close_short(price, dt, "追踪止盈")
-                        short_max_pnl = 0; short_cd = cooldown; short_bars = 0
-                if eng.futures_short and bs >= config.get('close_short_bs', 40):
-                    bs_dom = (ss < bs * 0.7) if bs > 0 else True
-                    if bs_dom:
-                        eng.close_short(price, dt, f"反向平空 BS={bs:.0f}")
-                        short_max_pnl = 0; short_cd = cooldown * 3; short_bars = 0
-                if eng.futures_short and pnl_r < actual_short_sl:
-                    eng.close_short(price, dt, f"止损 {pnl_r*100:.0f}%")
-                    short_max_pnl = 0; short_cd = cooldown * 4; short_bars = 0
-                if eng.futures_short and short_bars >= short_max_hold:
-                    eng.close_short(price, dt, "超时")
-                    short_max_pnl = 0; short_cd = cooldown; short_bars = 0
-        elif eng.futures_short and short_just_opened:
-            short_bars = 1
-
-        # 买入现货
-        if bs >= buy_threshold and spot_cd == 0 and not in_conflict and eng.available_usdt() > 500:
-            eng.spot_buy(price, dt, eng.available_usdt() * 0.25, f"买入 BS={bs:.0f}")
-            spot_cd = spot_cooldown
-
-        # 开多
-        buy_dom = (bs > ss * 1.5) if ss > 0 else True
-        if long_cd == 0 and bs >= long_threshold and not eng.futures_long and buy_dom:
-            margin = eng.available_margin() * margin_use
-            actual_lev = min(lev if bs >= 50 else min(lev, 3) if bs >= 35 else 2, eng.max_leverage)
-            eng.open_long(price, dt, margin, actual_lev, f"开多 {actual_lev}x")
-            long_max_pnl = 0; long_bars = 0; long_cd = cooldown
-            long_just_opened = True; long_partial_done = False; long_partial2_done = False
-
-        # 管理多仓
-        if eng.futures_long and not long_just_opened:
-            long_bars += 1
-            pnl_r = eng.futures_long.calc_pnl(price) / eng.futures_long.margin
-
-            if use_partial_tp and not long_partial_done and pnl_r >= partial_tp_1:
-                old_qty = eng.futures_long.quantity
-                partial_qty = old_qty * partial_tp_1_pct
-                actual_close_p = price * (1 - FuturesEngine.SLIPPAGE)
-                partial_pnl = (actual_close_p - eng.futures_long.entry_price) * partial_qty
-                margin_released = eng.futures_long.margin * partial_tp_1_pct
-                eng.usdt += margin_released + partial_pnl
-                eng.frozen_margin -= margin_released
-                fee = partial_qty * actual_close_p * FuturesEngine.TAKER_FEE
-                slippage_cost = partial_qty * price * FuturesEngine.SLIPPAGE
-                eng.usdt -= fee; eng.total_futures_fees += fee
-                eng.total_slippage_cost += slippage_cost
-                eng.futures_long.quantity = old_qty - partial_qty
-                eng.futures_long.margin *= (1 - partial_tp_1_pct)
-                long_partial_done = True
-                eng.trades.append({'time': str(dt), 'action': '分段止盈多',
-                    'price': price, 'pnl': partial_pnl, 'reason': f'分段TP1 +{pnl_r*100:.0f}%'})
-
-            elif use_partial_tp_2 and long_partial_done and not long_partial2_done and pnl_r >= partial_tp_2:
-                old_qty = eng.futures_long.quantity
-                partial_qty = old_qty * partial_tp_2_pct
-                actual_close_p = price * (1 - FuturesEngine.SLIPPAGE)
-                partial_pnl = (actual_close_p - eng.futures_long.entry_price) * partial_qty
-                margin_released = eng.futures_long.margin * partial_tp_2_pct
-                eng.usdt += margin_released + partial_pnl
-                eng.frozen_margin -= margin_released
-                fee = partial_qty * actual_close_p * FuturesEngine.TAKER_FEE
-                slippage_cost = partial_qty * price * FuturesEngine.SLIPPAGE
-                eng.usdt -= fee; eng.total_futures_fees += fee
-                eng.total_slippage_cost += slippage_cost
-                eng.futures_long.quantity = old_qty - partial_qty
-                eng.futures_long.margin *= (1 - partial_tp_2_pct)
-                long_partial2_done = True
-                eng.trades.append({'time': str(dt), 'action': '分段止盈多2',
-                    'price': price, 'pnl': partial_pnl, 'reason': f'分段TP2 +{pnl_r*100:.0f}%'})
-
-            if pnl_r >= actual_long_tp:
-                eng.close_long(price, dt, f"止盈 +{pnl_r*100:.0f}%")
-                long_max_pnl = 0; long_cd = cooldown * 2; long_bars = 0
-            else:
-                if pnl_r > long_max_pnl: long_max_pnl = pnl_r
-                if long_max_pnl >= long_trail and eng.futures_long:
-                    if pnl_r < long_max_pnl * trail_pullback:
-                        eng.close_long(price, dt, "追踪止盈")
-                        long_max_pnl = 0; long_cd = cooldown; long_bars = 0
-                if eng.futures_long and ss >= config.get('close_long_ss', 40):
-                    ss_dom = (bs < ss * 0.7) if bs > 0 else True
-                    if ss_dom:
-                        eng.close_long(price, dt, f"反向平多 SS={ss:.0f}")
-                        long_max_pnl = 0; long_cd = cooldown * 3; long_bars = 0
-                if eng.futures_long and pnl_r < actual_long_sl:
-                    eng.close_long(price, dt, f"止损 {pnl_r*100:.0f}%")
-                    long_max_pnl = 0; long_cd = cooldown * 4; long_bars = 0
-                if eng.futures_long and long_bars >= long_max_hold:
-                    eng.close_long(price, dt, "超时")
-                    long_max_pnl = 0; long_cd = cooldown; long_bars = 0
-        elif eng.futures_long and long_just_opened:
-            long_bars = 1
-
-        if idx % record_interval == 0:
-            eng.record_history(dt, price)
-
-    # 期末平仓
-    last_price = primary_df['close'].iloc[-1]
-    last_dt = primary_df.index[-1]
-    if eng.futures_short: eng.close_short(last_price, last_dt, "期末平仓")
-    if eng.futures_long: eng.close_long(last_price, last_dt, "期末平仓")
-
-    if start_dt:
-        trade_df = primary_df[primary_df.index >= start_dt]
-        if len(trade_df) > 1: return eng.get_result(trade_df)
-    return eng.get_result(primary_df)
+    return _run_strategy_core(
+        primary_df,
+        config=config,
+        primary_tf=primary_tf,
+        trade_days=trade_days,
+        score_provider=_multi_tf_score,
+    )
 
 
 # ======================================================

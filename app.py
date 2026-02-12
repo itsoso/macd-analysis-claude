@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, render_template, jsonify, request, redirect, url_for, session
 from werkzeug.security import generate_password_hash, check_password_hash
+from web_routes import register_page_routes, register_result_api_routes
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'macd-analysis-secret-key-2026-change-in-production')
@@ -104,6 +105,34 @@ OPTIMIZE_SIX_BOOK_FILE = os.path.join(BASE_DIR, 'optimize_six_book_result.json')
 BACKTEST_30D_7D_FILE = os.path.join(BASE_DIR, 'backtest_30d_7d_result.json')
 MULTI_TF_BACKTEST_30D_7D_FILE = os.path.join(BASE_DIR, 'backtest_multi_tf_30d_7d_result.json')
 
+RESULT_FILE_PATHS = {
+    'BACKTEST_FILE': BACKTEST_FILE,
+    'BACKTEST_MULTI_FILE': BACKTEST_MULTI_FILE,
+    'GLOBAL_STRATEGY_FILE': GLOBAL_STRATEGY_FILE,
+    'STRATEGY_COMPARE_FILE': STRATEGY_COMPARE_FILE,
+    'STRATEGY_OPTIMIZE_FILE': STRATEGY_OPTIMIZE_FILE,
+    'STRATEGY_ENHANCED_FILE': STRATEGY_ENHANCED_FILE,
+    'STRATEGY_FUTURES_FILE': STRATEGY_FUTURES_FILE,
+    'STRATEGY_FUTURES_V2_FILE': STRATEGY_FUTURES_V2_FILE,
+    'STRATEGY_FUTURES_V3_FILE': STRATEGY_FUTURES_V3_FILE,
+    'STRATEGY_FUTURES_V4_FILE': STRATEGY_FUTURES_V4_FILE,
+    'STRATEGY_FUTURES_V5_FILE': STRATEGY_FUTURES_V5_FILE,
+    'STRATEGY_FUTURES_FINAL_FILE': STRATEGY_FUTURES_FINAL_FILE,
+    'TIMEFRAME_ANALYSIS_FILE': TIMEFRAME_ANALYSIS_FILE,
+    'STRATEGY_15M_FILE': STRATEGY_15M_FILE,
+    'MA_STRATEGY_FILE': MA_STRATEGY_FILE,
+    'COMBINED_STRATEGY_FILE': COMBINED_STRATEGY_FILE,
+    'CANDLESTICK_FILE': CANDLESTICK_FILE,
+    'BOLLINGER_FILE': BOLLINGER_FILE,
+    'VOLUME_PRICE_FILE': VOLUME_PRICE_FILE,
+    'FIVE_BOOK_FILE': FIVE_BOOK_FILE,
+    'SIX_BOOK_FILE': SIX_BOOK_FILE,
+    'OPTIMIZE_SL_TP_FILE': OPTIMIZE_SL_TP_FILE,
+    'OPTIMIZE_SIX_BOOK_FILE': OPTIMIZE_SIX_BOOK_FILE,
+    'BACKTEST_30D_7D_FILE': BACKTEST_30D_7D_FILE,
+    'MULTI_TF_BACKTEST_30D_7D_FILE': MULTI_TF_BACKTEST_30D_7D_FILE,
+}
+
 
 def load_json(path):
     if os.path.exists(path):
@@ -113,428 +142,10 @@ def load_json(path):
 
 
 # ======================================================
-#   独立页面路由 (每个tab一个独立页面)
+#   页面路由与结果 API 路由（模块化注册）
 # ======================================================
-@app.route('/')
-def page_overview():
-    return render_template('page_overview.html', active_page='overview')
-
-
-@app.route('/architecture')
-def page_architecture():
-    return render_template('page_architecture.html', active_page='architecture')
-
-
-@app.route('/code/indicators')
-def page_code_indicators():
-    return render_template('page_code_indicators.html', active_page='code-indicators')
-
-
-@app.route('/code/pattern')
-def page_code_pattern():
-    return render_template('page_code_pattern.html', active_page='code-pattern')
-
-
-@app.route('/code/macd')
-def page_code_macd():
-    return render_template('page_code_macd.html', active_page='code-macd')
-
-
-@app.route('/code/exhaustion')
-def page_code_exhaustion():
-    return render_template('page_code_exhaustion.html', active_page='code-exhaustion')
-
-
-@app.route('/code/other')
-def page_code_other():
-    return render_template('page_code_other.html', active_page='code-other')
-
-
-@app.route('/strategy/global')
-def page_global_strategy():
-    return render_template('page_global_strategy.html', active_page='global-strategy')
-
-
-@app.route('/strategy/compare')
-def page_strategy_compare():
-    return render_template('page_strategy_compare.html', active_page='strategy-compare')
-
-
-@app.route('/strategy/futures')
-def page_strategy_futures():
-    return render_template('page_strategy_futures.html', active_page='strategy-futures')
-
-
-@app.route('/strategy/ma')
-def page_ma_strategy():
-    return render_template('page_ma_strategy.html', active_page='ma-strategy')
-
-
-@app.route('/strategy/combined')
-def page_combined_strategy():
-    return render_template('page_combined_strategy.html', active_page='combined-strategy')
-
-
-@app.route('/strategy/c6-detail')
-def page_c6_detail():
-    return render_template('page_c6_detail.html', active_page='c6-detail')
-
-
-@app.route('/strategy/candlestick')
-def page_candlestick():
-    return render_template('page_candlestick.html', active_page='candlestick')
-
-
-@app.route('/strategy/bollinger')
-def page_bollinger():
-    return render_template('page_bollinger.html', active_page='bollinger')
-
-
-@app.route('/strategy/volume-price')
-def page_volume_price():
-    return render_template('page_volume_price.html', active_page='volume-price')
-
-
-@app.route('/strategy/five-book')
-def page_five_book():
-    return render_template('page_five_book.html', active_page='five-book')
-
-
-@app.route('/strategy/best')
-def page_best_strategy():
-    return render_template('page_best_strategy.html', active_page='best-strategy')
-
-
-@app.route('/strategy/optimize-sl-tp')
-def page_optimize_sl_tp():
-    return render_template('page_optimize_sl_tp.html', active_page='optimize-sl-tp')
-
-
-@app.route('/strategy/optimal')
-def page_optimal_strategy():
-    return render_template('page_optimal_strategy.html', active_page='optimal-strategy')
-
-
-@app.route('/book/ma')
-def page_book_ma():
-    return render_template('page_book_ma.html', active_page='book-ma')
-
-
-@app.route('/book/candlestick')
-def page_book_candlestick():
-    return render_template('page_book_candlestick.html', active_page='book-candlestick')
-
-
-@app.route('/book/bollinger')
-def page_book_bollinger():
-    return render_template('page_book_bollinger.html', active_page='book-bollinger')
-
-
-@app.route('/book/volume-price')
-def page_book_volume_price():
-    return render_template('page_book_volume_price.html', active_page='book-volume-price')
-
-
-@app.route('/book/kdj')
-def page_book_kdj():
-    return render_template('page_book_kdj.html', active_page='book-kdj')
-
-
-@app.route('/book/turtle')
-def page_book_turtle():
-    return render_template('page_book_turtle.html', active_page='book-turtle')
-
-
-@app.route('/strategy/six-book')
-def page_six_book():
-    return render_template('page_six_book.html', active_page='six-book')
-
-
-@app.route('/strategy/optimize-six-book')
-def page_optimize_six_book():
-    return render_template('page_optimize_six_book.html', active_page='optimize-six-book')
-
-
-@app.route('/strategy/multi-tf-backtest')
-def page_multi_tf_backtest():
-    return render_template('page_multi_tf_backtest.html', active_page='multi-tf-backtest')
-
-
-@app.route('/strategy/multi-tf-deep-dive')
-def page_multi_tf_deep_dive():
-    return render_template('page_multi_tf_deep_dive.html', active_page='multi-tf-deep-dive')
-
-
-@app.route('/strategy/multi-tf-backtest-30d-7d')
-def page_multi_tf_backtest_30d_7d():
-    return render_template('page_multi_tf_backtest_30d_7d.html', active_page='multi-tf-backtest-30d-7d')
-
-
-@app.route('/strategy/six-book-deep-dive')
-def page_six_book_deep_dive():
-    return render_template('page_six_book_deep_dive.html', active_page='six-book-deep-dive')
-
-
-@app.route('/strategy/live-trading-guide')
-def page_live_trading_guide():
-    return render_template('page_live_trading_guide.html', active_page='live-trading-guide')
-
-
-@app.route('/strategy/backtest-30d-7d')
-def page_backtest_30d_7d():
-    return render_template('page_backtest_30d_7d.html', active_page='backtest-30d-7d')
-
-
-@app.route('/strategy/multi')
-def page_multi_compare():
-    return render_template('page_multi_compare.html', active_page='multi-compare')
-
-
-@app.route('/strategy/backtest')
-def page_backtest():
-    return render_template('page_backtest.html', active_page='backtest')
-
-
-# ======================================================
-#   API 路由 (数据接口)
-# ======================================================
-@app.route('/api/backtest')
-def api_backtest():
-    """返回单周期回测数据 (兼容旧逻辑)"""
-    data = load_json(BACKTEST_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到回测数据'}), 404
-
-
-@app.route('/api/backtest_multi')
-def api_backtest_multi():
-    """返回全部12周期回测数据"""
-    data = load_json(BACKTEST_MULTI_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到多周期回测数据, 请先生成'}), 404
-
-
-@app.route('/api/global_strategy')
-def api_global_strategy():
-    """返回全局多周期融合策略结果"""
-    data = load_json(GLOBAL_STRATEGY_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到全局策略数据, 请先运行 python global_strategy.py'}), 404
-
-
-@app.route('/api/strategy_compare')
-def api_strategy_compare():
-    """返回6种策略变体对比数据"""
-    data = load_json(STRATEGY_COMPARE_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到策略对比数据, 请先运行 python strategy_compare.py'}), 404
-
-
-@app.route('/api/strategy_optimize')
-def api_strategy_optimize():
-    """返回策略优化变体对比数据"""
-    data = load_json(STRATEGY_OPTIMIZE_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到优化数据, 请先运行 python strategy_optimize.py'}), 404
-
-
-@app.route('/api/strategy_enhanced')
-def api_strategy_enhanced():
-    """返回深度指标增强策略结果"""
-    data = load_json(STRATEGY_ENHANCED_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到增强策略数据, 请先运行 python strategy_enhanced.py'}), 404
-
-
-@app.route('/api/strategy_futures')
-def api_strategy_futures():
-    """返回合约策略结果"""
-    data = load_json(STRATEGY_FUTURES_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到合约策略数据, 请先运行 python strategy_futures.py'}), 404
-
-
-@app.route('/api/strategy_futures_v2')
-def api_strategy_futures_v2():
-    """返回合约策略Phase 2进阶优化结果"""
-    data = load_json(STRATEGY_FUTURES_V2_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到合约Phase2数据, 请先运行 python strategy_futures_v2.py'}), 404
-
-
-@app.route('/api/strategy_futures_v3')
-def api_strategy_futures_v3():
-    """返回合约策略Phase 3深度优化结果"""
-    data = load_json(STRATEGY_FUTURES_V3_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到Phase3数据, 请先运行 python strategy_futures_v3.py'}), 404
-
-
-@app.route('/api/strategy_futures_v4')
-def api_strategy_futures_v4():
-    """返回合约策略Phase 4引擎修正后优化结果"""
-    data = load_json(STRATEGY_FUTURES_V4_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到Phase4数据, 请先运行 python strategy_futures_v4.py'}), 404
-
-
-@app.route('/api/strategy_futures_v5')
-def api_strategy_futures_v5():
-    """返回合约策略Phase 5终极优化结果"""
-    data = load_json(STRATEGY_FUTURES_V5_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到Phase5数据, 请先运行 python strategy_futures_v5.py'}), 404
-
-
-@app.route('/api/strategy_futures_final')
-def api_strategy_futures_final():
-    """返回合约策略Phase 6+7+8终极优化结果"""
-    data = load_json(STRATEGY_FUTURES_FINAL_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到终极优化数据, 请先运行 python strategy_futures_final.py'}), 404
-
-
-@app.route('/api/timeframe_analysis')
-def api_timeframe_analysis():
-    """返回多时间周期信号价值分析结果"""
-    data = load_json(TIMEFRAME_ANALYSIS_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到时间周期分析数据, 请先运行 python strategy_timeframe_analysis.py'}), 404
-
-
-@app.route('/api/strategy_15m')
-def api_strategy_15m():
-    """返回15分钟双向回测结果"""
-    data = load_json(STRATEGY_15M_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到15m回测数据, 请先运行 python strategy_15m.py'}), 404
-
-
-@app.route('/api/ma_strategy')
-def api_ma_strategy():
-    """返回均线技术分析回测结果"""
-    data = load_json(MA_STRATEGY_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到均线策略数据, 请先运行 python ma_strategy.py'}), 404
-
-
-@app.route('/api/combined_strategy')
-def api_combined_strategy():
-    """返回双书融合策略回测结果"""
-    data = load_json(COMBINED_STRATEGY_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到融合策略数据, 请先运行 python combined_strategy.py'}), 404
-
-
-@app.route('/api/candlestick')
-def api_candlestick():
-    """返回蜡烛图形态策略结果"""
-    data = load_json(CANDLESTICK_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到蜡烛图策略数据, 请先运行 python candlestick_patterns.py'}), 404
-
-
-@app.route('/api/bollinger')
-def api_bollinger():
-    """返回布林带策略结果"""
-    data = load_json(BOLLINGER_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到布林带策略数据, 请先运行 python bollinger_strategy.py'}), 404
-
-
-@app.route('/api/volume_price')
-def api_volume_price():
-    """返回量价分析策略结果"""
-    data = load_json(VOLUME_PRICE_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到量价策略数据, 请先运行 python volume_price_strategy.py'}), 404
-
-
-@app.route('/api/five_book')
-def api_five_book():
-    """返回五书融合策略结果"""
-    data = load_json(FIVE_BOOK_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到五书融合数据, 请先运行 python five_book_fusion.py'}), 404
-
-
-@app.route('/api/six_book')
-def api_six_book():
-    """返回六书融合策略结果"""
-    data = load_json(SIX_BOOK_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到六书融合数据, 请先运行 python six_book_fusion.py'}), 404
-
-
-@app.route('/api/optimize_sl_tp')
-def api_optimize_sl_tp():
-    """返回止盈止损优化结果"""
-    data = load_json(OPTIMIZE_SL_TP_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到优化数据, 请先运行 python optimize_sl_tp.py'}), 404
-
-
-@app.route('/api/optimize_six_book')
-def api_optimize_six_book():
-    """返回六书优化结果"""
-    data = load_json(OPTIMIZE_SIX_BOOK_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到六书优化数据, 请先运行 python optimize_six_book.py'}), 404
-
-
-@app.route('/api/backtest_30d_7d')
-def api_backtest_30d_7d():
-    """返回30天vs7天回测对比数据"""
-    data = load_json(BACKTEST_30D_7D_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到回测对比数据, 请先运行 python backtest_30d_7d.py'}), 404
-
-
-@app.route('/api/multi_tf_backtest_30d_7d')
-def api_multi_tf_backtest_30d_7d():
-    """返回多周期联合决策30天vs7天回测对比数据"""
-    data = load_json(MULTI_TF_BACKTEST_30D_7D_FILE)
-    if data:
-        return jsonify(data)
-    return jsonify({'error': '未找到多周期回测数据, 请先运行 python backtest_multi_tf_30d_7d.py'}), 404
-
-
-@app.route('/api/turtle_backtest')
-def api_turtle_backtest():
-    """运行海龟交易策略回测"""
-    try:
-        days = int(request.args.get('days', 60))
-        from turtle_strategy import main as turtle_main
-        result = turtle_main(trade_days=days)
-        if result:
-            return jsonify(result)
-        return jsonify({'error': '回测失败: 数据不足'}), 500
-    except Exception as e:
-        return jsonify({'error': f'回测异常: {str(e)}'}), 500
+register_page_routes(app)
+register_result_api_routes(app, load_json=load_json, result_paths=RESULT_FILE_PATHS)
 
 
 # ======================================================
@@ -774,7 +385,13 @@ def _read_latest_balance_from_log():
 def api_live_status():
     """获取引擎状态 - 通过文件 + 进程检测，不依赖内存变量"""
     data_dir = os.path.join(BASE_DIR, 'data', 'live')
-    result = {"engine": None, "risk": None, "performance": None, "process": None}
+    result = {
+        "engine": None,
+        "risk": None,
+        "performance": None,
+        "performance_summary": None,
+        "process": None,
+    }
 
     # 1. 引擎状态文件
     engine_file = os.path.join(data_dir, 'engine_state.json')
@@ -799,7 +416,32 @@ def api_live_status():
     if os.path.exists(perf_file):
         try:
             with open(perf_file, 'r') as f:
-                result["performance"] = json.load(f)
+                perf_raw = json.load(f)
+            result["performance"] = perf_raw
+
+            # 统一口径: 额外提供 summary 字段，避免前端自行推导时单位不一致
+            try:
+                from performance_tracker import PerformanceTracker
+                tracker = PerformanceTracker(
+                    initial_capital=perf_raw.get("initial_capital", 0),
+                    data_dir=data_dir,
+                )
+                summary = tracker.get_summary()
+                result["performance_summary"] = summary
+
+                # 兼容旧前端: 将常用汇总字段回填到 performance 顶层
+                merged = dict(perf_raw)
+                for k in [
+                    "initial_capital", "current_equity", "total_return",
+                    "total_return_pct", "total_pnl", "total_trades",
+                    "wins", "losses", "win_rate", "win_rate_pct",
+                    "max_drawdown", "max_drawdown_pct", "total_fees",
+                ]:
+                    if k in summary:
+                        merged[k] = summary[k]
+                result["performance"] = merged
+            except Exception:
+                pass
         except (json.JSONDecodeError, IOError):
             pass
 

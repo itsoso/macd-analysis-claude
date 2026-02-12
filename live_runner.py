@@ -254,7 +254,7 @@ def cmd_test_signal(args):
         df = gen._df
         for i in range(max(0, len(df) - 5), len(df)):
             dt = df.index[i]
-            from optimize_six_book import calc_fusion_score_six
+            from signal_core import calc_fusion_score_six
             ss, bs = calc_fusion_score_six(
                 gen._signals, df, i, dt,
                 {'fusion_mode': config.strategy.fusion_mode,

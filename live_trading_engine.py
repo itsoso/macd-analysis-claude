@@ -889,6 +889,7 @@ class LiveTradingEngine:
 
         state = {
             "phase": self.phase.value,
+            "initial_capital": self.config.initial_capital,
             "usdt": self.usdt,
             "frozen_margin": self.frozen_margin,
             "positions": {k: v.to_dict() for k, v in self.positions.items()},
@@ -1007,6 +1008,7 @@ class LiveTradingEngine:
             "phase": self.phase.value,
             "running": self.running,
             "execute_trades": self.config.execute_trades,
+            "initial_capital": self.config.initial_capital,
             "usdt": self.usdt,
             "equity": self._calc_equity(price),
             "frozen_margin": self.frozen_margin,

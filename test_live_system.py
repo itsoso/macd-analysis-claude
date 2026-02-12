@@ -400,6 +400,35 @@ class TestPerformanceTracker:
         assert len(t2.trades) == 1
         assert t2.total_fees == 10
 
+    def test_load_initial_capital_from_file(self):
+        """initial_capital 应从持久化文件恢复，避免口径漂移"""
+        t1 = PerformanceTracker(10000, self._tmpdir)
+        t1.record_equity(10500)
+        t1._save()
+
+        t2 = PerformanceTracker(0, self._tmpdir)
+        s = t2.get_summary()
+        assert s["initial_capital"] == 10000
+        assert s["total_return"] == pytest.approx(0.05, abs=1e-6)
+
+    def test_compare_with_backtest_percent_units(self):
+        """回测百分比口径应自动归一为 ratio 后再对比"""
+        t = self._create_tracker()
+        t.record_trade({"action": "CLOSE_LONG", "pnl": 500, "fee": 10})
+        t.record_trade({"action": "CLOSE_SHORT", "pnl": -200, "fee": 10})
+        t.record_equity(10300)
+
+        c = t.compare_with_backtest({
+            "strategy_return": 12.5,  # 百分比
+            "win_rate": 60.0,         # 百分比
+            "max_drawdown": 8.0,      # 百分比
+            "total_trades": 20,
+        })
+
+        assert c["return"]["backtest"] == pytest.approx(0.125, abs=1e-9)
+        assert c["win_rate"]["backtest"] == pytest.approx(0.60, abs=1e-9)
+        assert c["max_drawdown"]["backtest"] == pytest.approx(0.08, abs=1e-9)
+
 
 # ============================================================
 # 6. 日志系统测试

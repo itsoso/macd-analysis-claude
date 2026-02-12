@@ -1255,6 +1255,7 @@ async function refreshStatus() {
 
         // 绩效 (从 risk state / performance / engine_state 综合读取)
         const perf = data.performance || {};
+        const perfSummary = data.performance_summary || perf;
 
         // 未实现盈亏 (从 engine_state)
         const unrealizedPnl = eng.unrealized_pnl;
@@ -1268,24 +1269,31 @@ async function refreshStatus() {
         }
 
         // 已实现盈亏
-        const totalPnl = risk.total_pnl ?? perf.total_pnl;
+        const totalPnl = risk.total_pnl ?? perfSummary.total_pnl;
         document.getElementById('p_pnl').textContent = totalPnl != null ? '$' + Number(totalPnl).toFixed(2) : '$0.00';
         document.getElementById('p_pnl').className = 'value ' + ((totalPnl||0) >= 0 ? 'green' : 'red');
-        const totalTrades = risk.total_trades || perf.total_trades || 0;
-        const totalWins = risk.total_wins || perf.total_wins || 0;
+        const totalTrades = risk.total_trades || perfSummary.total_trades || 0;
+        const totalWins = risk.total_wins || perfSummary.wins || perfSummary.total_wins || 0;
         const wr = totalTrades > 0 ? (totalWins / totalTrades * 100).toFixed(0) + '%' : '--';
         document.getElementById('p_winrate').textContent = wr;
-        const fees = risk.total_fees ?? perf.total_fees;
+        const fees = risk.total_fees ?? perfSummary.total_fees;
         document.getElementById('p_fees').textContent = fees != null ? '$' + Number(fees).toFixed(2) : '$0.00';
-        const peak = risk.peak_equity ?? perf.peak_equity;
+        const peak = risk.peak_equity ?? perfSummary.peak_equity;
         document.getElementById('p_peak').textContent = peak != null ? '$' + Number(peak).toFixed(2) : '--';
 
         // 当前权益
         const eqEl = document.getElementById('p_equity');
         if (equity != null) {
             eqEl.textContent = '$' + Number(equity).toFixed(2);
-            const eqChg = equity - 100000;
-            eqEl.className = 'value ' + (eqChg >= 0 ? 'green' : 'red');
+            const initialCapital = Number(
+                perfSummary.initial_capital ?? eng.initial_capital ?? 0
+            );
+            if (initialCapital > 0) {
+                const eqChg = equity - initialCapital;
+                eqEl.className = 'value ' + (eqChg >= 0 ? 'green' : 'red');
+            } else {
+                eqEl.className = 'value';
+            }
         } else {
             eqEl.textContent = '--';
         }
