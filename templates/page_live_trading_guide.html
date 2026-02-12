@@ -1,0 +1,1353 @@
+{% extends "base.html" %}
+{% block title %}实盘交易指南 - 技术分析平台{% endblock %}
+
+{% block extra_styles %}
+.section-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 40px 0;
+}
+.section-title {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.section-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+}
+/* Bug cards */
+.bug-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 12px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+}
+.bug-card:hover {
+    border-color: var(--accent-blue);
+}
+.bug-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 3px;
+}
+.bug-card.critical::before { background: var(--accent-red); }
+.bug-card.warning::before { background: var(--accent-yellow); }
+.bug-card.info::before { background: var(--accent-blue); }
+.bug-card .bug-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.bug-card .bug-id {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent-red);
+    background: rgba(255,77,106,0.1);
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+.bug-card .bug-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.bug-card .bug-file {
+    font-size: 12px;
+    color: var(--accent-purple);
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    margin-bottom: 6px;
+}
+.bug-card .bug-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 8px;
+}
+.bug-card .bug-fix {
+    font-size: 13px;
+    color: var(--accent-green);
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+}
+.bug-card .bug-impact {
+    font-size: 12px;
+    color: var(--accent-yellow);
+    margin-top: 4px;
+}
+/* Limitation cards */
+.limitation-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+.limitation-item:last-child { border-bottom: none; }
+.limitation-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+/* Test table */
+.test-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+.test-category {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.test-category .tc-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.test-category .tc-stats {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.test-category .tc-count {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent-green);
+}
+.test-category .tc-status {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: rgba(0,214,143,0.15);
+    color: var(--accent-green);
+}
+/* Log format */
+.log-line {
+    display: flex;
+    gap: 0;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    line-height: 1.8;
+    white-space: nowrap;
+}
+.log-time { color: var(--text-muted); }
+.log-tag { font-weight: 600; padding: 0 4px; }
+.log-tag.trade { color: var(--accent-blue); }
+.log-tag.signal { color: var(--accent-purple); }
+.log-tag.funding { color: var(--accent-yellow); }
+.log-tag.risk { color: var(--accent-red); }
+.log-tag.balance { color: var(--accent-green); }
+.log-msg { color: var(--text-secondary); }
+/* Log level cards */
+.log-level-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+.log-level-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+}
+.log-level-card .ll-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.log-level-card .ll-name {
+    font-size: 14px;
+    font-weight: 700;
+}
+.log-level-card .ll-fields {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+}
+.log-level-card .ll-field-name {
+    color: var(--accent-blue);
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 11px;
+}
+/* Viz cards */
+.viz-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+}
+.viz-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    transition: border-color 0.2s;
+}
+.viz-card:hover { border-color: var(--accent-blue); }
+.viz-card .viz-icon { font-size: 28px; margin-bottom: 10px; }
+.viz-card .viz-name {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: var(--text-primary);
+}
+.viz-card .viz-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+/* Phase timeline */
+.phase-timeline {
+    position: relative;
+    padding-left: 32px;
+}
+.phase-timeline::before {
+    content: '';
+    position: absolute;
+    left: 15px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(180deg, var(--accent-green), var(--accent-blue), var(--accent-yellow), var(--accent-red));
+}
+.phase-block {
+    position: relative;
+    margin-bottom: 32px;
+}
+.phase-block:last-child { margin-bottom: 0; }
+.phase-dot {
+    position: absolute;
+    left: -25px;
+    top: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 3px solid;
+    background: var(--bg-primary);
+    z-index: 1;
+}
+.phase-block.p0 .phase-dot { border-color: var(--accent-green); }
+.phase-block.p1 .phase-dot { border-color: var(--accent-blue); }
+.phase-block.p2 .phase-dot { border-color: var(--accent-yellow); }
+.phase-block.p3 .phase-dot { border-color: var(--accent-purple); }
+.phase-block.p4 .phase-dot { border-color: var(--accent-red); }
+.phase-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.phase-tag {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.phase-block.p0 .phase-tag { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+.phase-block.p1 .phase-tag { background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+.phase-block.p2 .phase-tag { background: rgba(255,170,0,0.15); color: var(--accent-yellow); }
+.phase-block.p3 .phase-tag { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+.phase-block.p4 .phase-tag { background: rgba(255,77,106,0.15); color: var(--accent-red); }
+.phase-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+.phase-duration {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+.phase-steps {
+    list-style: none;
+    padding: 0;
+}
+.phase-steps li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+.phase-steps li .step-num {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--bg-hover);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+}
+.phase-target {
+    margin-top: 10px;
+    padding: 10px 14px;
+    background: rgba(74,158,255,0.08);
+    border-left: 3px solid var(--accent-blue);
+    border-radius: 0 8px 8px 0;
+    font-size: 13px;
+    color: var(--accent-blue);
+    font-weight: 500;
+}
+/* Safety rules */
+.safety-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+.safety-col h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.safety-col.danger h4 { color: var(--accent-red); }
+.safety-col.safe h4 { color: var(--accent-green); }
+.safety-rule {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.safety-rule.danger {
+    background: rgba(255,77,106,0.06);
+    border: 1px solid rgba(255,77,106,0.15);
+    color: var(--text-secondary);
+}
+.safety-rule.safe {
+    background: rgba(0,214,143,0.06);
+    border: 1px solid rgba(0,214,143,0.15);
+    color: var(--text-secondary);
+}
+.safety-rule .sr-icon { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
+/* Risk matrix */
+.risk-matrix {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+}
+.risk-row {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg-secondary);
+}
+.risk-level {
+    width: 140px;
+    padding: 14px 16px;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    flex-shrink: 0;
+}
+.risk-level.low { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+.risk-level.medium { background: rgba(255,170,0,0.15); color: var(--accent-yellow); }
+.risk-level.high { background: rgba(255,77,106,0.15); color: var(--accent-red); }
+.risk-level.extreme { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+.risk-detail {
+    flex: 1;
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+.risk-detail .risk-condition {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    font-style: italic;
+}
+/* Summary stats */
+.top-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 28px;
+}
+.top-stat {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+}
+.top-stat .ts-value {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.top-stat .ts-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+/* Metrics table */
+.metrics-list {
+    list-style: none;
+    padding: 0;
+}
+.metrics-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.metrics-list li:last-child { border-bottom: none; }
+.metrics-list .ml-key { color: var(--text-muted); }
+.metrics-list .ml-val { font-weight: 600; color: var(--text-primary); }
+@media (max-width: 900px) {
+    .safety-grid { grid-template-columns: 1fr; }
+    .top-stats { grid-template-columns: repeat(2, 1fr); }
+    .test-summary-grid { grid-template-columns: 1fr 1fr; }
+    .log-level-grid { grid-template-columns: 1fr; }
+    .viz-grid { grid-template-columns: 1fr; }
+}
+{% endblock %}
+
+{% block content %}
+<div class="page-title">实盘交易验证指南</div>
+<div class="page-subtitle">从代码审查到实盘部署的完整路线图 — 六书融合策略 ETH/USDT 合约交易</div>
+
+<!-- Top summary stats -->
+<div class="top-stats">
+    <div class="top-stat">
+        <div class="ts-value" style="color: var(--accent-red);">7</div>
+        <div class="ts-label">Critical Bugs Fixed</div>
+    </div>
+    <div class="top-stat">
+        <div class="ts-value" style="color: var(--accent-green);">40</div>
+        <div class="ts-label">Unit Tests Passed</div>
+    </div>
+    <div class="top-stat">
+        <div class="ts-value" style="color: var(--accent-blue);">5</div>
+        <div class="ts-label">Log Levels Defined</div>
+    </div>
+    <div class="top-stat">
+        <div class="ts-value" style="color: var(--accent-yellow);">4</div>
+        <div class="ts-label">Deployment Phases</div>
+    </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 1: Code Review Findings & Fixes -->
+<!-- ============================================================ -->
+<div class="section-title">
+    <span style="color: var(--accent-red);">&#128027;</span>
+    Section 1: 代码审查发现与修复
+</div>
+<div class="section-subtitle">Code Review Findings &amp; Fixes — 回测引擎与策略代码的关键缺陷修复记录</div>
+
+<div class="card">
+    <div class="card-title">
+        <span style="color: var(--accent-red);">&#9888;&#65039;</span>
+        Critical Bugs Fixed
+        <span class="badge red">7 issues</span>
+    </div>
+
+    <!-- Bug 1 -->
+    <div class="bug-card critical">
+        <div class="bug-header">
+            <span class="bug-id">BUG-001</span>
+            <span class="bug-title">KDJ Slope 全 NaN — 4个信号块成为死代码</span>
+        </div>
+        <div class="bug-file">kdj_strategy.py : lines 81-84</div>
+        <div class="bug-desc">
+            <code>pd.Series(k_values).shift(3)</code> 创建了 RangeIndex (0,1,2…)，与原始 DataFrame 的 DatetimeIndex 对齐时产生全 NaN。
+            导致依赖 KDJ slope 的 4 个信号判断块全部失效，相当于死代码。
+        </div>
+        <div class="bug-fix">
+            <span>&#9989;</span>
+            <span><strong>Fix:</strong> 直接使用 <code>df['kdj_k'].shift(3)</code>，保持 DatetimeIndex 一致性。</span>
+        </div>
+        <div class="bug-impact">&#9889; Impact: 4 signal blocks were dead code — strategy was operating without KDJ slope information</div>
+    </div>
+
+    <!-- Bug 2 -->
+    <div class="bug-card critical">
+        <div class="bug-header">
+            <span class="bug-id">BUG-002</span>
+            <span class="bug-title">D-line 用错 alpha 系数</span>
+        </div>
+        <div class="bug-file">kdj_strategy.py : line 66</div>
+        <div class="bug-desc">
+            K 线和 D 线的 EMA 平滑都使用了 <code>alpha=1/m1</code>。当 m1 &#8800; m2 时，D 线使用了错误的平滑系数，
+            导致 D 线实际上是 K 线的复制品，而非独立的平滑指标。
+        </div>
+        <div class="bug-fix">
+            <span>&#9989;</span>
+            <span><strong>Fix:</strong> 分离 <code>alpha_k = 1/m1</code> 和 <code>alpha_d = 1/m2</code>，各自独立使用。</span>
+        </div>
+        <div class="bug-impact">&#9889; Impact: KDJ D-line was a duplicate of K-line, gold/dead cross signals unreliable</div>
+    </div>
+
+    <!-- Bug 3 -->
+    <div class="bug-card critical">
+        <div class="bug-header">
+            <span class="bug-id">BUG-003</span>
+            <span class="bug-title">可靠性乘数混合计数 — 买卖信号互相增强</span>
+        </div>
+        <div class="bug-file">kdj_strategy.py : lines 492-496</div>
+        <div class="bug-desc">
+            <code>reasons</code> 列表同时收集 buy 和 sell 信号。当计算可靠性乘数时，一个 buy 信号可能因为存在大量 sell 信号而获得
+            不当的增强。例如：1 个 buy reason + 5 个 sell reasons = 6 个 total reasons，buy 信号获得高可靠性乘数。
+        </div>
+        <div class="bug-fix">
+            <span>&#9989;</span>
+            <span><strong>Fix:</strong> 分别维护 <code>sell_reasons</code> 和 <code>buy_reasons</code> 列表，独立计数。</span>
+        </div>
+        <div class="bug-impact">&#9889; Impact: Signal reliability scores were inflated by opposing signals</div>
+    </div>
+
+    <!-- Bug 4 -->
+    <div class="bug-card critical">
+        <div class="bug-header">
+            <span class="bug-id">BUG-004</span>
+            <span class="bug-title">frozen_margin 泄漏 — 永久性正残差累积</span>
+        </div>
+        <div class="bug-file">optimize_six_book.py : lines 485-489</div>
+        <div class="bug-desc">
+            部分止盈 (Partial TP) 将保证金归还到 usdt 余额，但从未减少 <code>frozen_margin</code>。
+            每次部分止盈循环后，frozen_margin 累积永久正残差，导致可用保证金逐渐减少，最终影响开仓能力。
+        </div>
+        <div class="bug-fix">
+            <span>&#9989;</span>
+            <span><strong>Fix:</strong> 部分止盈时添加 <code>eng.frozen_margin -= margin_released</code>。</span>
+        </div>
+        <div class="bug-impact">&#9889; Impact: Available margin shrinks over time, reducing position sizing capability</div>
+    </div>
+
+    <!-- Bug 5 -->
+    <div class="bug-card critical">
+        <div class="bug-header">
+            <span class="bug-id">BUG-005</span>
+            <span class="bug-title">Partial TP 缺少滑点 — 部分止盈价格失真</span>
+        </div>
+        <div class="bug-file">optimize_six_book.py : line 484</div>
+        <div class="bug-desc">
+            Full close 操作正确应用了滑点 (slippage)，但 Partial TP 使用原始价格执行。
+            这导致部分止盈的回测结果偏乐观，因为实际交易中每次成交都会有滑点成本。
+        </div>
+        <div class="bug-fix">
+            <span>&#9989;</span>
+            <span><strong>Fix:</strong> 对 Partial TP 同样应用 <code>price * (1 &#177; SLIPPAGE)</code>。</span>
+        </div>
+        <div class="bug-impact">&#9889; Impact: Backtest PnL was slightly overestimated for partial TP scenarios</div>
+    </div>
+
+    <!-- Bug 6 -->
+    <div class="bug-card critical">
+        <div class="bug-header">
+            <span class="bug-id">BUG-006</span>
+            <span class="bug-title">同 bar 多次触发 — TP1/TP2/Full TP 可同时执行</span>
+        </div>
+        <div class="bug-file">optimize_six_book.py : lines 481-506</div>
+        <div class="bug-desc">
+            TP1、TP2 和 Full TP 的判断使用独立的 <code>if</code> 语句。在同一根 K 线内，价格可能同时满足多个止盈条件，
+            导致一个仓位被重复处理，产生不正确的 PnL 和仓位状态。
+        </div>
+        <div class="bug-fix">
+            <span>&#9989;</span>
+            <span><strong>Fix:</strong> 将独立 <code>if</code> 改为 <code>elif</code> 链，确保每根 bar 最多触发一个 exit 动作。</span>
+        </div>
+        <div class="bug-impact">&#9889; Impact: Positions could be closed multiple times on same bar, corrupting PnL tracking</div>
+    </div>
+
+    <!-- Bug 7 -->
+    <div class="bug-card critical">
+        <div class="bug-header">
+            <span class="bug-id">BUG-007</span>
+            <span class="bug-title">强平后无冷却 — 清算后立即重新开仓</span>
+        </div>
+        <div class="bug-file">optimize_six_book.py</div>
+        <div class="bug-desc">
+            发生强制平仓后，策略在同一根 K 线即可重新开仓。在极端行情中，这会导致连续强平，快速耗尽全部资金。
+            真实交易所在强平后通常有系统冷却期。
+        </div>
+        <div class="bug-fix">
+            <span>&#9989;</span>
+            <span><strong>Fix:</strong> 强平后设置 <code>cooldown * 6</code> 的冷却期，防止过早重新入场。</span>
+        </div>
+        <div class="bug-impact">&#9889; Impact: Rapid re-entry after liquidation could cause cascading losses</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">
+        <span style="color: var(--accent-yellow);">&#9888;&#65039;</span>
+        Known Limitations
+        <span class="badge yellow">Not Fixed — Document for Awareness</span>
+    </div>
+
+    <div class="limitation-item">
+        <span class="limitation-icon">&#128200;</span>
+        <div><strong>Funding Rate 模型失真</strong> — 使用确定性伪随机模型 (&#177;0.01%)，而非真实 Binance 费率 (可达 &#177;0.375%)。极端行情下的 funding rate 飙升未被模拟。</div>
+    </div>
+    <div class="limitation-item">
+        <span class="limitation-icon">&#128184;</span>
+        <div><strong>固定滑点 0.1%</strong> — 真实滑点在高波动期间可能远超此值。大仓位/低流动性时段的市场冲击未被建模。</div>
+    </div>
+    <div class="limitation-item">
+        <span class="limitation-icon">&#128683;</span>
+        <div><strong>无连续亏损熔断机制</strong> — 缺少 circuit breaker。连续多次止损不会自动暂停策略，可能导致情绪化交易或系统性失效时的持续亏损。</div>
+    </div>
+    <div class="limitation-item">
+        <span class="limitation-icon">&#128230;</span>
+        <div><strong>无部分成交 / 订单拒绝处理</strong> — 回测假设所有订单立即全部成交。实盘中可能遇到部分成交、API超时、订单被拒绝等情况。</div>
+    </div>
+    <div class="limitation-item">
+        <span class="limitation-icon">&#128260;</span>
+        <div><strong>顺序 bar 处理的结构性偏差</strong> — 按时间顺序逐 bar 处理，同一根 bar 内先判断 sell 再判断 buy，创造了 sell-before-buy 的结构性偏差。</div>
+    </div>
+</div>
+
+<div class="section-divider"></div>
+
+<!-- ============================================================ -->
+<!-- SECTION 2: Unit Test Results -->
+<!-- ============================================================ -->
+<div class="section-title">
+    <span style="color: var(--accent-green);">&#9989;</span>
+    Section 2: 单元测试结果
+</div>
+<div class="section-subtitle">Unit Test Results — 40 个测试用例全部通过</div>
+
+<div class="card">
+    <div class="card-title">
+        <span>&#128202;</span> 测试总览
+        <span class="badge green">40/40 PASSED</span>
+    </div>
+
+    <div class="test-summary-grid">
+        <div class="test-category">
+            <span class="tc-name">FuturesPosition (PnL / 强平)</span>
+            <div class="tc-stats">
+                <span class="tc-count">8</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+        <div class="test-category">
+            <span class="tc-name">FuturesEngine (基础操作)</span>
+            <div class="tc-stats">
+                <span class="tc-count">8</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+        <div class="test-category">
+            <span class="tc-name">Fee 一致性 (手工验算)</span>
+            <div class="tc-stats">
+                <span class="tc-count">3</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+        <div class="test-category">
+            <span class="tc-name">强平机制</span>
+            <div class="tc-stats">
+                <span class="tc-count">3</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+        <div class="test-category">
+            <span class="tc-name">资金费率</span>
+            <div class="tc-stats">
+                <span class="tc-count">1</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+        <div class="test-category">
+            <span class="tc-name">frozen_margin 一致性</span>
+            <div class="tc-stats">
+                <span class="tc-count">2</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+        <div class="test-category">
+            <span class="tc-name">KDJ 计算</span>
+            <div class="tc-stats">
+                <span class="tc-count">7</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+        <div class="test-category">
+            <span class="tc-name">边界条件</span>
+            <div class="tc-stats">
+                <span class="tc-count">5</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+        <div class="test-category">
+            <span class="tc-name">会计恒等式</span>
+            <div class="tc-stats">
+                <span class="tc-count">1</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+        <div class="test-category">
+            <span class="tc-name">融合评分</span>
+            <div class="tc-stats">
+                <span class="tc-count">2</span>
+                <span class="tc-status">&#10003; All Pass</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">
+        <span>&#128269;</span> 关键测试示例 — 手工验算 Fee 一致性
+    </div>
+    <div class="code-section">
+        <div class="code-header">
+            <span class="code-file">test_futures_engine.py</span>
+            <span>Fee Manual Calculation Verification</span>
+        </div>
+        <pre><code><span class="kw">def</span> <span class="fn">test_fee_consistency_manual_calc</span>(<span class="cl">self</span>):
+    <span class="cm">"""手工验算: 开仓fee = qty * price * fee_rate"""</span>
+    eng = <span class="cl">FuturesEngine</span>(initial_usdt=<span class="nu">100000</span>, leverage=<span class="nu">5</span>)
+    price = <span class="nu">2500.0</span>
+    margin = <span class="nu">10000.0</span>
+    qty = margin * eng.leverage / price  <span class="cm"># = 10000*5/2500 = 20.0</span>
+
+    <span class="cm"># 手工计算</span>
+    expected_fee = qty * price * eng.fee_rate  <span class="cm"># = 20.0 * 2500 * 0.0005 = 25.0</span>
+
+    eng.<span class="fn">open_position</span>(<span class="st">'short'</span>, price, margin)
+    actual_fee = eng.positions[<span class="nu">0</span>].entry_fee
+
+    <span class="cl">self</span>.<span class="fn">assertAlmostEqual</span>(actual_fee, expected_fee, places=<span class="nu">6</span>)
+    <span class="cl">self</span>.<span class="fn">assertAlmostEqual</span>(actual_fee, <span class="nu">25.0</span>, places=<span class="nu">6</span>)
+
+    <span class="cm"># 验证 USDT 扣减: margin + fee</span>
+    expected_usdt = <span class="nu">100000</span> - margin - expected_fee  <span class="cm"># = 89975.0</span>
+    <span class="cl">self</span>.<span class="fn">assertAlmostEqual</span>(eng.usdt, expected_usdt, places=<span class="nu">2</span>)</code></pre>
+    </div>
+
+    <div class="code-section">
+        <div class="code-header">
+            <span class="code-file">test_futures_engine.py</span>
+            <span>Accounting Identity Verification</span>
+        </div>
+        <pre><code><span class="kw">def</span> <span class="fn">test_accounting_identity</span>(<span class="cl">self</span>):
+    <span class="cm">"""会计恒等式: total_equity = usdt + unrealized_pnl + spot_value
+    在任意时刻都必须成立"""</span>
+    eng = <span class="cl">FuturesEngine</span>(initial_usdt=<span class="nu">100000</span>, leverage=<span class="nu">5</span>)
+
+    <span class="cm"># 开仓</span>
+    eng.<span class="fn">open_position</span>(<span class="st">'short'</span>, <span class="nu">2500.0</span>, <span class="nu">10000.0</span>)
+
+    <span class="cm"># 在不同价格点验证恒等式</span>
+    <span class="kw">for</span> test_price <span class="kw">in</span> [<span class="nu">2400</span>, <span class="nu">2500</span>, <span class="nu">2600</span>, <span class="nu">2700</span>, <span class="nu">2300</span>]:
+        equity = eng.<span class="fn">get_total_equity</span>(test_price)
+        usdt = eng.usdt
+        unrealized = <span class="fn">sum</span>(p.<span class="fn">unrealized_pnl</span>(test_price) <span class="kw">for</span> p <span class="kw">in</span> eng.positions)
+        frozen = eng.frozen_margin
+
+        <span class="cm"># equity == usdt + frozen_margin + unrealized_pnl</span>
+        <span class="cl">self</span>.<span class="fn">assertAlmostEqual</span>(
+            equity, usdt + frozen + unrealized, places=<span class="nu">2</span>,
+            msg=<span class="kw">f</span><span class="st">"Identity broken at price={test_price}"</span>
+        )</code></pre>
+    </div>
+</div>
+
+<div class="section-divider"></div>
+
+<!-- ============================================================ -->
+<!-- SECTION 3: Logging System Design -->
+<!-- ============================================================ -->
+<div class="section-title">
+    <span style="color: var(--accent-blue);">&#128221;</span>
+    Section 3: 日志系统设计
+</div>
+<div class="section-subtitle">Logging System Design — 五级日志体系覆盖交易全生命周期</div>
+
+<div class="card">
+    <div class="card-title">
+        <span>&#128218;</span> 日志级别定义
+    </div>
+
+    <div class="log-level-grid">
+        <div class="log-level-card">
+            <div class="ll-header">
+                <span style="font-size: 18px;">&#128176;</span>
+                <span class="ll-name" style="color: var(--accent-blue);">TRADE</span>
+            </div>
+            <div class="ll-fields">
+                Every open / close / partial_tp:<br>
+                <span class="ll-field-name">time</span>, <span class="ll-field-name">action</span>,
+                <span class="ll-field-name">price</span>, <span class="ll-field-name">qty</span>,
+                <span class="ll-field-name">margin</span>, <span class="ll-field-name">leverage</span>,
+                <span class="ll-field-name">fee</span>, <span class="ll-field-name">slippage</span>,
+                <span class="ll-field-name">pnl</span>, <span class="ll-field-name">reason</span>
+            </div>
+        </div>
+        <div class="log-level-card">
+            <div class="ll-header">
+                <span style="font-size: 18px;">&#128225;</span>
+                <span class="ll-name" style="color: var(--accent-purple);">SIGNAL</span>
+            </div>
+            <div class="ll-fields">
+                Every signal computation:<br>
+                <span class="ll-field-name">time</span>, <span class="ll-field-name">sell_score</span>,
+                <span class="ll-field-name">buy_score</span>, <span class="ll-field-name">components</span>
+                (div / ma / kdj / bb / vp / cs),
+                <span class="ll-field-name">conflict_detected</span>
+            </div>
+        </div>
+        <div class="log-level-card">
+            <div class="ll-header">
+                <span style="font-size: 18px;">&#128680;</span>
+                <span class="ll-name" style="color: var(--accent-red);">RISK</span>
+            </div>
+            <div class="ll-fields">
+                Every risk event:<br>
+                <span class="ll-field-name">liquidation_check</span>,
+                <span class="ll-field-name">stop_loss_trigger</span>,
+                <span class="ll-field-name">margin_warning</span>,
+                <span class="ll-field-name">drawdown_alert</span>
+            </div>
+        </div>
+        <div class="log-level-card">
+            <div class="ll-header">
+                <span style="font-size: 18px;">&#128181;</span>
+                <span class="ll-name" style="color: var(--accent-green);">BALANCE</span>
+            </div>
+            <div class="ll-fields">
+                Periodic snapshot:<br>
+                <span class="ll-field-name">total_equity</span>,
+                <span class="ll-field-name">usdt</span>,
+                <span class="ll-field-name">spot_value</span>,
+                <span class="ll-field-name">unrealized_pnl</span>,
+                <span class="ll-field-name">frozen_margin</span>,
+                <span class="ll-field-name">available_margin</span>
+            </div>
+        </div>
+        <div class="log-level-card">
+            <div class="ll-header">
+                <span style="font-size: 18px;">&#128337;</span>
+                <span class="ll-name" style="color: var(--accent-yellow);">FUNDING</span>
+            </div>
+            <div class="ll-fields">
+                Every funding charge:<br>
+                <span class="ll-field-name">time</span>, <span class="ll-field-name">rate</span>,
+                <span class="ll-field-name">direction</span>,
+                <span class="ll-field-name">amount</span>,
+                <span class="ll-field-name">cumulative</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">
+        <span>&#128196;</span> 日志输出格式示例
+    </div>
+    <pre style="border-radius: 8px; overflow-x: auto;"><code><span class="log-line"><span class="log-time">[2025-01-15 14:00:00]</span> <span class="log-tag trade">[TRADE]</span> <span class="log-msg">OPEN_SHORT price=2700.00 qty=18.50 margin=10000 lev=5x fee=$25.00 slip=$50.00 reason="开空 SS=45"</span></span>
+<span class="log-line"><span class="log-time">[2025-01-15 14:00:00]</span> <span class="log-tag signal">[SIGNAL]</span> <span class="log-msg">SS=45.2 BS=12.1 div_s=30 ma_s=15 kdj_s=8 bb_s=5 vp_s=3 cs_s=0 conflict=NO</span></span>
+<span class="log-line"><span class="log-time">[2025-01-15 22:00:00]</span> <span class="log-tag funding">[FUNDING]</span> <span class="log-msg">rate=+0.010% direction=SHORT_RECEIVE amount=+$5.00 cumulative=$15.00</span></span>
+<span class="log-line"><span class="log-time">[2025-01-16 03:00:00]</span> <span class="log-tag risk">[RISK]</span> <span class="log-msg">STOP_LOSS SHORT pnl_ratio=-25.3% action=CLOSE price=2780 loss=$2530</span></span>
+<span class="log-line"><span class="log-time">[2025-01-16 03:00:00]</span> <span class="log-tag balance">[BALANCE]</span> <span class="log-msg">equity=$97,445 usdt=$97,445 spot=$0 unrealized=$0 frozen=$0 avail=$48,722</span></span></code></pre>
+</div>
+
+<div class="card">
+    <div class="card-title">
+        <span>&#128736;&#65039;</span> 日志系统实现建议
+    </div>
+    <div class="code-section">
+        <div class="code-header">
+            <span class="code-file">trading_logger.py</span>
+            <span>Recommended Implementation</span>
+        </div>
+        <pre><code><span class="kw">import</span> logging
+<span class="kw">from</span> datetime <span class="kw">import</span> datetime
+
+<span class="cm"># Custom log levels</span>
+TRADE   = <span class="nu">25</span>
+SIGNAL  = <span class="nu">24</span>
+RISK    = <span class="nu">23</span>
+BALANCE = <span class="nu">22</span>
+FUNDING = <span class="nu">21</span>
+
+logging.<span class="fn">addLevelName</span>(TRADE,   <span class="st">"TRADE"</span>)
+logging.<span class="fn">addLevelName</span>(SIGNAL,  <span class="st">"SIGNAL"</span>)
+logging.<span class="fn">addLevelName</span>(RISK,    <span class="st">"RISK"</span>)
+logging.<span class="fn">addLevelName</span>(BALANCE, <span class="st">"BALANCE"</span>)
+logging.<span class="fn">addLevelName</span>(FUNDING, <span class="st">"FUNDING"</span>)
+
+<span class="kw">class</span> <span class="cl">TradingLogger</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(<span class="cl">self</span>, log_dir=<span class="st">"logs/"</span>):
+        <span class="cl">self</span>.logger = logging.<span class="fn">getLogger</span>(<span class="st">"trading"</span>)
+        <span class="cl">self</span>.logger.<span class="fn">setLevel</span>(FUNDING)  <span class="cm"># capture all custom levels</span>
+
+        <span class="cm"># File handler — one file per day</span>
+        fmt = <span class="st">"[%(asctime)s] [%(levelname)-8s] %(message)s"</span>
+        handler = logging.<span class="cl">FileHandler</span>(
+            <span class="kw">f</span><span class="st">"{log_dir}/trade_{datetime.now():%Y%m%d}.log"</span>
+        )
+        handler.<span class="fn">setFormatter</span>(logging.<span class="cl">Formatter</span>(fmt))
+        <span class="cl">self</span>.logger.<span class="fn">addHandler</span>(handler)
+
+    <span class="kw">def</span> <span class="fn">log_trade</span>(<span class="cl">self</span>, action, price, qty, margin, lev, fee, slip, pnl, reason):
+        <span class="cl">self</span>.logger.<span class="fn">log</span>(TRADE,
+            <span class="kw">f</span><span class="st">"{action} price={price:.2f} qty={qty:.2f} margin={margin:.0f} "</span>
+            <span class="kw">f</span><span class="st">"lev={lev}x fee=${fee:.2f} slip=${slip:.2f} "</span>
+            <span class="kw">f</span><span class="st">"pnl=${pnl:.2f} reason=\"{reason}\""</span>
+        )
+
+    <span class="kw">def</span> <span class="fn">log_signal</span>(<span class="cl">self</span>, ss, bs, components, conflict):
+        <span class="cl">self</span>.logger.<span class="fn">log</span>(SIGNAL,
+            <span class="kw">f</span><span class="st">"SS={ss:.1f} BS={bs:.1f} "</span>
+            <span class="kw">f</span><span class="st">"div_s={components['div']:.0f} ma_s={components['ma']:.0f} "</span>
+            <span class="kw">f</span><span class="st">"kdj_s={components['kdj']:.0f} bb_s={components['bb']:.0f} "</span>
+            <span class="kw">f</span><span class="st">"vp_s={components['vp']:.0f} cs_s={components['cs']:.0f} "</span>
+            <span class="kw">f</span><span class="st">"conflict={'YES' if conflict else 'NO'}"</span>
+        )</code></pre>
+    </div>
+</div>
+
+<div class="section-divider"></div>
+
+<!-- ============================================================ -->
+<!-- SECTION 4: Trade Visualization -->
+<!-- ============================================================ -->
+<div class="section-title">
+    <span style="color: var(--accent-yellow);">&#128202;</span>
+    Section 4: 交易可视化说明
+</div>
+<div class="section-subtitle">Trade Visualization — 实盘监控所需的五大可视化维度</div>
+
+<div class="card">
+    <div class="card-title">
+        <span>&#127912;</span> 可视化监控面板
+    </div>
+
+    <div class="viz-grid">
+        <div class="viz-card">
+            <div class="viz-icon">&#128200;</div>
+            <div class="viz-name">1. 资金曲线 (Equity Curve)</div>
+            <div class="viz-desc">
+                追踪 total equity 随时间变化，叠加 drawdown 阴影区域。
+                关键指标：最大回撤深度、回撤持续时间、新高频率。
+                参考已有回测页面中的 equity curve 实现。
+            </div>
+        </div>
+        <div class="viz-card">
+            <div class="viz-icon">&#128205;</div>
+            <div class="viz-name">2. 交易标注图 (Trade Markers)</div>
+            <div class="viz-desc">
+                K 线图上叠加 Buy / Sell / TP / SL 标记。
+                绿色三角 = 开多/平空获利，红色三角 = 开空/止损。
+                配合成交量柱状图，直观展示入场出场时机。
+            </div>
+        </div>
+        <div class="viz-card">
+            <div class="viz-icon">&#127777;&#65039;</div>
+            <div class="viz-name">3. 信号热力图 (Signal Heatmap)</div>
+            <div class="viz-desc">
+                六维信号强度 (Divergence / MA / KDJ / Bollinger / Volume-Price / Candlestick)
+                随时间的热力图。颜色深浅反映分数高低，快速定位信号聚集区域。
+            </div>
+        </div>
+        <div class="viz-card">
+            <div class="viz-icon">&#128176;</div>
+            <div class="viz-name">4. 费用累积图 (Fee Accumulation)</div>
+            <div class="viz-desc">
+                四条累积曲线：交易手续费、滑点成本、资金费率、总费用。
+                Running total 视角展示费用对净利润的侵蚀程度。
+                目标：总费用 &lt; 总利润的 30%。
+            </div>
+        </div>
+        <div class="viz-card">
+            <div class="viz-icon">&#128203;</div>
+            <div class="viz-name">5. 仓位状态图 (Position Status)</div>
+            <div class="viz-desc">
+                时间轴展示仓位开闭状态、保证金变化、杠杆使用率。
+                色带表示持仓方向 (蓝色=多头, 红色=空头)，宽度表示仓位大小。
+                标注 partial TP 和 margin 调整事件。
+            </div>
+        </div>
+    </div>
+
+    <div style="margin-top: 16px; padding: 12px 16px; background: rgba(74,158,255,0.08); border-radius: 8px; font-size: 13px; color: var(--accent-blue);">
+        &#128161; 提示：以上可视化组件已在现有回测页面中部分实现。实盘部署时复用回测页面的图表组件，
+        增加实时数据推送 (WebSocket) 即可。参考：
+        <strong>六书融合策略</strong>、<strong>六书优化(超越86.69%)</strong>、<strong>30天 vs 7天回测</strong> 页面。
+    </div>
+</div>
+
+<div class="section-divider"></div>
+
+<!-- ============================================================ -->
+<!-- SECTION 5: Live Trading Validation Steps -->
+<!-- ============================================================ -->
+<div class="section-title">
+    <span style="color: var(--accent-purple);">&#128640;</span>
+    Section 5: 实盘验证步骤指导
+</div>
+<div class="section-subtitle">Live Trading Validation Steps — 从零到实盘的四阶段验证路线图 (THIS IS THE MOST IMPORTANT SECTION)</div>
+
+<div class="card">
+    <div class="card-title">
+        <span>&#128507;&#65039;</span> 阶段路线图
+    </div>
+
+    <div class="phase-timeline">
+
+        <!-- Phase 0 -->
+        <div class="phase-block p0">
+            <div class="phase-dot"></div>
+            <div class="phase-header">
+                <span class="phase-tag">Phase 0</span>
+                <span class="phase-name">准备工作</span>
+                <span class="phase-duration">2-3 天</span>
+            </div>
+            <ul class="phase-steps">
+                <li>
+                    <span class="step-num">1</span>
+                    <span>创建 Binance <strong>Testnet</strong> 账户 (<code>testnet.binancefuture.com</code>)。Testnet 提供免费模拟资金，API 接口与主网完全一致。</span>
+                </li>
+                <li>
+                    <span class="step-num">2</span>
+                    <span>设置 API keys，权限<strong>仅开启交易</strong> (Trade)，<strong>禁止提现</strong> (NO Withdrawal)。这是最基本的资金安全防线。</span>
+                </li>
+                <li>
+                    <span class="step-num">3</span>
+                    <span>配置 <strong>IP 白名单</strong>：仅允许你的服务器 IP 访问 API。避免 key 泄露后被他人利用。</span>
+                </li>
+                <li>
+                    <span class="step-num">4</span>
+                    <span>安装 <code>python-binance</code> 库，验证 API 连接。测试下单/查询/撤单的完整流程。</span>
+                </li>
+                <li>
+                    <span class="step-num">5</span>
+                    <span>搭建监控告警系统：推荐 <strong>Telegram Bot</strong> 或 <strong>Discord Webhook</strong>，每笔交易、每个风险事件实时推送通知。</span>
+                </li>
+            </ul>
+        </div>
+
+        <!-- Phase 1 -->
+        <div class="phase-block p1">
+            <div class="phase-dot"></div>
+            <div class="phase-header">
+                <span class="phase-tag">Phase 1</span>
+                <span class="phase-name">纸上交易 Paper Trading</span>
+                <span class="phase-duration">1-2 周</span>
+            </div>
+            <ul class="phase-steps">
+                <li>
+                    <span class="step-num">1</span>
+                    <span>实时运行策略但<strong>不执行任何真实交易</strong>。仅记录信号和"本应执行"的操作。</span>
+                </li>
+                <li>
+                    <span class="step-num">2</span>
+                    <span>记录每个信号的完整日志：时间、sell_score、buy_score、六维分量、以及"假设交易"的入场/出场价格。</span>
+                </li>
+                <li>
+                    <span class="step-num">3</span>
+                    <span>将纸上交易结果与实际市场走势对比：假设入场后，市场是否朝预期方向运动？</span>
+                </li>
+                <li>
+                    <span class="step-num">4</span>
+                    <span>验证信号时机：信号发出时间是否符合预期？是否存在明显的延迟或提前触发？</span>
+                </li>
+                <li>
+                    <span class="step-num">5</span>
+                    <span>验证费用计算：比对 Binance 实际费率表，确认策略中的 fee_rate 参数准确。</span>
+                </li>
+                <li>
+                    <span class="step-num">6</span>
+                    <span>检查信号稳定性：同一数据重跑策略，信号是否完全一致 (确定性验证)。</span>
+                </li>
+            </ul>
+            <div class="phase-target">
+                &#127919; 目标：100+ 纸上交易信号，信号一致性 >90%
+            </div>
+        </div>
+
+        <!-- Phase 2 -->
+        <div class="phase-block p2">
+            <div class="phase-dot"></div>
+            <div class="phase-header">
+                <span class="phase-tag">Phase 2</span>
+                <span class="phase-name">测试网实盘 Testnet Live</span>
+                <span class="phase-duration">1-2 周</span>
+            </div>
+            <ul class="phase-steps">
+                <li>
+                    <span class="step-num">1</span>
+                    <span>在 Binance Testnet 上部署策略，使用<strong>真实 API 调用</strong>执行交易。</span>
+                </li>
+                <li>
+                    <span class="step-num">2</span>
+                    <span>使用<strong>极小仓位</strong> (预定资金的 1%)，目的是验证执行流程而非盈利。</span>
+                </li>
+                <li>
+                    <span class="step-num">3</span>
+                    <span>监控每笔交易的执行情况：下单成功率、成交延迟、部分成交处理。</span>
+                </li>
+                <li>
+                    <span class="step-num">4</span>
+                    <span>检查<strong>滑点验证</strong>：实际成交价 vs 信号触发时价格，统计真实滑点分布。</span>
+                </li>
+                <li>
+                    <span class="step-num">5</span>
+                    <span>检查<strong>费用验证</strong>：API 返回的实际手续费 vs 策略计算的预估手续费。</span>
+                </li>
+                <li>
+                    <span class="step-num">6</span>
+                    <span>验证<strong>强平价格</strong>：Binance 显示的 liquidation price 是否与策略计算值一致。</span>
+                </li>
+                <li>
+                    <span class="step-num">7</span>
+                    <span>测试<strong>所有退出机制</strong>：TP1、TP2、Full TP、Stop Loss、Trailing Stop、Timeout、Reverse Signal — 每种至少触发一次。</span>
+                </li>
+            </ul>
+            <div class="phase-target">
+                &#127919; 目标：所有 exit 类型至少触发一次，执行成功率 100%
+            </div>
+        </div>
+
+        <!-- Phase 3 -->
+        <div class="phase-block p3">
+            <div class="phase-dot"></div>
+            <div class="phase-header">
+                <span class="phase-tag">Phase 3</span>
+                <span class="phase-name">小资金实盘 Small Capital Live</span>
+                <span class="phase-duration">2-4 周</span>
+            </div>
+            <ul class="phase-steps">
+                <li>
+                    <span class="step-num">1</span>
+                    <span>使用 <strong>$500-$1000</strong> 真实资金开始，<strong>绝对不要一上来就满仓</strong>。</span>
+                </li>
+                <li>
+                    <span class="step-num">2</span>
+                    <span>杠杆设为<strong>最低 2x</strong> (而非回测中的 5x)。降低杠杆是最有效的风控手段。</span>
+                </li>
+                <li>
+                    <span class="step-num">3</span>
+                    <span>设置<strong>手动熔断</strong>：回撤超过 10% 立即停止策略，人工审查后再决定是否恢复。</span>
+                </li>
+                <li>
+                    <span class="step-num">4</span>
+                    <span>每日对比：实盘 PnL vs 同期回测模拟 PnL。偏差超过 20% 需要深入分析原因。</span>
+                </li>
+                <li>
+                    <span class="step-num">5</span>
+                    <span>监控<strong>执行延迟</strong>：从信号生成 → API下单 → 订单成交的完整链路耗时。</span>
+                </li>
+                <li>
+                    <span class="step-num">6</span>
+                    <span>记录每一个<strong>回测与实盘的偏差</strong>，建立偏差档案用于后续参数调整。</span>
+                </li>
+            </ul>
+            <div style="margin-top: 12px; padding: 14px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px;">
+                <div style="font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px;">&#128202; 关键跟踪指标</div>
+                <ul class="metrics-list">
+                    <li><span class="ml-key">Win Rate (实盘 vs 回测)</span> <span class="ml-val">目标偏差 &lt; 10%</span></li>
+                    <li><span class="ml-key">Average PnL per Trade</span> <span class="ml-val">实盘应 &ge; 回测的 70%</span></li>
+                    <li><span class="ml-key">Actual Slippage vs 0.1% Assumption</span> <span class="ml-val">记录真实分布</span></li>
+                    <li><span class="ml-key">Actual Funding Rates vs Model</span> <span class="ml-val">特别关注极端费率</span></li>
+                    <li><span class="ml-key">Order Execution Latency</span> <span class="ml-val">目标 &lt; 500ms</span></li>
+                    <li><span class="ml-key">API Error Rate</span> <span class="ml-val">目标 &lt; 0.1%</span></li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Phase 4 -->
+        <div class="phase-block p4">
+            <div class="phase-dot"></div>
+            <div class="phase-header">
+                <span class="phase-tag">Phase 4</span>
+                <span class="phase-name">逐步加仓 Scale Up</span>
+                <span class="phase-duration">持续</span>
+            </div>
+            <ul class="phase-steps">
+                <li>
+                    <span class="step-num">1</span>
+                    <span>每个<strong>盈利 2 周周期</strong>后，资金增加 <strong>2x</strong>。亏损周期<strong>不加仓</strong>。</span>
+                </li>
+                <li>
+                    <span class="step-num">2</span>
+                    <span><strong>永远不超过总可用资金的 50%</strong>。至少保留 50% 作为风险储备。</span>
+                </li>
+                <li>
+                    <span class="step-num">3</span>
+                    <span>保持<strong>应急储备金</strong>：即使策略全部亏完，生活/其他投资不受影响。</span>
+                </li>
+                <li>
+                    <span class="step-num">4</span>
+                    <span><strong>月度复盘</strong>：审查参数有效性，根据市场变化调整策略参数 (但不要过度拟合)。</span>
+                </li>
+                <li>
+                    <span class="step-num">5</span>
+                    <span>设置<strong>绝对止损</strong>：周亏损超过总权益的 5% → 立即暂停，不容商量。</span>
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Critical Safety Rules -->
+<div class="card" style="border-color: var(--accent-red); border-width: 2px;">
+    <div class="card-title" style="color: var(--accent-red);">
+        <span>&#128680;</span> 关键安全规则 Critical Safety Rules
+    </div>
+
+    <div class="safety-grid">
+        <div class="safety-col danger">
+            <h4><span>&#9940;</span> NEVER (绝不)</h4>
+            <div class="safety-rule danger">
+                <span class="sr-icon">&#9940;</span>
+                <span><strong>绝不</strong>使用开启了提现权限的 API key。一旦 key 泄露，资金将被直接转走。</span>
+            </div>
+            <div class="safety-rule danger">
+                <span class="sr-icon">&#9940;</span>
+                <span><strong>绝不</strong>首次交易就全仓投入。无论回测多漂亮，实盘总会有意外。</span>
+            </div>
+            <div class="safety-rule danger">
+                <span class="sr-icon">&#9940;</span>
+                <span><strong>绝不</strong>在亏损连续时增加杠杆。这是赌徒谬误，会加速爆仓。</span>
+            </div>
+            <div class="safety-rule danger">
+                <span class="sr-icon">&#9940;</span>
+                <span><strong>绝不</strong>手动覆盖止损。止损存在的意义就是在你情绪化时保护你。</span>
+            </div>
+        </div>
+        <div class="safety-col safe">
+            <h4><span>&#9989;</span> ALWAYS (务必)</h4>
+            <div class="safety-rule safe">
+                <span class="sr-icon">&#9989;</span>
+                <span><strong>务必</strong>使用 IP 限制的 API key。即使 key 泄露，攻击者也无法从其他 IP 调用。</span>
+            </div>
+            <div class="safety-rule safe">
+                <span class="sr-icon">&#9989;</span>
+                <span><strong>务必</strong>在交易所层面设置止损单。策略崩溃时交易所止损仍然生效。</span>
+            </div>
+            <div class="safety-rule safe">
+                <span class="sr-icon">&#9989;</span>
+                <span><strong>务必</strong>在高波动事件期间监控仓位 (CPI、FOMC、非农等)。这些时间窗口滑点/费率飙升。</span>
+            </div>
+            <div class="safety-rule safe">
+                <span class="sr-icon">&#9989;</span>
+                <span><strong>务必</strong>准备一键平仓 (Kill Switch)。紧急情况下能在秒级关闭所有仓位。</span>
+            </div>
+            <div class="safety-rule safe">
+                <span class="sr-icon">&#9989;</span>
+                <span><strong>务必</strong>保留至少 30% 资金作为储备。永远不要 all-in。</span>
+            </div>
+            <div class="safety-rule safe">
+                <span class="sr-icon">&#9989;</span>
+                <span><strong>务必</strong>每周对比实盘结果与回测结果。偏差过大说明市场环境可能已变。</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Risk Assessment Matrix -->
+<div class="card">
+    <div class="card-title">
+        <span>&#128678;</span> 风险等级评估 Risk Assessment Matrix
+    </div>
+
+    <div class="risk-matrix">
+        <div class="risk-row">
+            <div class="risk-level low">&#128994; Low Risk<br>低风险</div>
+            <div class="risk-detail">
+                <strong>Paper trading + Testnet</strong> — 使用模拟资金，零真实损失风险。这是推荐的入门起点。
+                <div class="risk-condition">&#8594; 任何人都可以立即开始</div>
+            </div>
+        </div>
+        <div class="risk-row">
+            <div class="risk-level medium">&#128992; Medium Risk<br>中等风险</div>
+            <div class="risk-detail">
+                <strong>小资金 (&lt; $1000) + 2x 杠杆</strong> — 真实资金但损失可控。最大亏损限于投入金额。
+                <div class="risk-condition">&#8594; 前置条件：Testnet 连续 2 周盈利 + 所有 exit 机制验证通过</div>
+            </div>
+        </div>
+        <div class="risk-row">
+            <div class="risk-level high">&#128308; High Risk<br>高风险</div>
+            <div class="risk-detail">
+                <strong>全额资金 + 5x 杠杆</strong> — 回测中使用的配置。5x 杠杆意味着 20% 的反向波动即触发强平。
+                <div class="risk-condition">&#8594; 前置条件：小资金实盘连续 1 个月盈利 + 偏差分析完成</div>
+            </div>
+        </div>
+        <div class="risk-row">
+            <div class="risk-level extreme">&#128995; Extreme Risk<br>极高风险</div>
+            <div class="risk-detail">
+                <strong>多交易对 + 高频交易</strong> — 需要专用基础设施 (co-location、低延迟网络)。
+                <span style="color: var(--accent-red); font-weight: 600;">NOT recommended</span> — 除非你有专业量化交易团队的基础设施。
+                <div class="risk-condition">&#8594; 不推荐个人交易者尝试</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Final note -->
+<div class="card" style="background: linear-gradient(135deg, rgba(74,158,255,0.05), rgba(168,85,247,0.05)); border-color: var(--accent-blue);">
+    <div class="card-title" style="color: var(--accent-blue);">
+        <span>&#128218;</span> 总结
+    </div>
+    <div style="font-size: 14px; color: var(--text-secondary); line-height: 1.8;">
+        <p style="margin-bottom: 12px;">
+            本指南涵盖了从代码审查到实盘部署的完整路径。<strong>7 个关键 bug</strong> 已修复，
+            <strong>40 个单元测试</strong>验证了引擎正确性，<strong>5 级日志系统</strong>确保了交易全过程可追溯。
+        </p>
+        <p style="margin-bottom: 12px;">
+            请严格按照 Phase 0 → Phase 1 → Phase 2 → Phase 3 → Phase 4 的顺序推进。
+            <strong>跳过任何阶段都可能导致不可挽回的资金损失。</strong>
+        </p>
+        <p>
+            记住：<span style="color: var(--accent-yellow); font-weight: 600;">回测不等于实盘</span>。
+            回测中的 86.69% 收益率是在理想条件下取得的。实盘交易面临滑点、延迟、流动性、market impact 等
+            回测无法完全模拟的因素。保持谨慎，持续验证，逐步放大。
+        </p>
+    </div>
+</div>
+
+{% endblock %}

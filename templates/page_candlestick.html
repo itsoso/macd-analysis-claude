@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}蜡烛图形态策略 - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">蜡烛图形态策略</div>
+            <div class="page-subtitle">《日本蜡烛图技术-K线分析》Steve Nison完整版 · 30+种形态 + 量价确认 + 关键位增强 + 形态失败检测</div>
+
+            <div id="cs-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载蜡烛图策略数据...
+            </div>
+
+            <div id="cs-content" style="display:none;">
+                <!-- 形态统计 -->
+                <div class="card">
+                    <div class="card-title">K线形态分布
+                        <span class="badge yellow">PATTERN ANALYSIS</span>
+                    </div>
+                    <div id="cs-pattern-stats"></div>
+                </div>
+
+                <!-- 策略卡片 -->
+                <div class="card">
+                    <div class="card-title" id="cs-strat-title">蜡烛图策略对比</div>
+                    <div style="background:rgba(255,170,0,0.06);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid #ffaa00;">
+                        <div style="font-weight:600;color:#ffaa00;margin-bottom:6px;">策略说明</div>
+                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;" id="cs-desc">
+                            基于Steve Nison《日本蜡烛图技术-K线分析》完整理论体系的交易策略。<br>
+                            <b>30+种形态</b>: 锤子线、上吊线、流星、十字星(4种)、纺锤线、光头光脚、吞没、乌云盖顶、刺透、
+                            孕线(含十字孕线)、启明星/黄昏星(含十字版)、弃婴、三兵(含受阻/停顿)、三鸦、
+                            三内升降、三外升降、窗口(缺口)、塔形顶底、上升/下降三法等。<br>
+                            <b>Nison四大增强</b>: ① 成交量确认(放量+30%~50%) ② 关键支撑/阻力位增强(+25%)
+                            ③ 形态失败反向信号 ④ 多级趋势判断(5/10/20周期综合)
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px;" id="cs-cards"></div>
+                </div>
+
+                <!-- Alpha对比图 -->
+                <div class="card">
+                    <div class="card-title">策略Alpha对比</div>
+                    <div id="cs-alpha-chart" style="height:300px;"></div>
+                </div>
+
+                <!-- 策略详情表格 -->
+                <div class="card">
+                    <div class="card-title">策略详细对比</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="cs-table">
+                            <thead><tr>
+                                <th>排名</th><th>策略</th><th>&alpha;%</th>
+                                <th>策略收益</th><th>BH收益</th><th>最大回撤</th>
+                                <th>交易数</th><th>强平</th><th>总费用</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 最佳策略交易明细 -->
+                <div class="card">
+                    <div class="card-title" id="cs-best-title">最佳策略交易明细</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="cs-trades-table">
+                            <thead><tr>
+                                <th>时间</th><th>操作</th><th>方向</th>
+                                <th>价格</th><th>杠杆</th><th>总资产</th><th>原因</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="cs-conclusion"></div>
+            </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadCandlestick() {
+        try {
+            const res = await fetch('/api/candlestick');
+            if (res.ok) {
+                renderCandlestick(await res.json());
+            } else {
+                document.getElementById('cs-loading').innerHTML = '<p style="color:var(--accent-red);">蜡烛图策略数据未找到, 请先运行 python candlestick_patterns.py</p>';
+            }
+        } catch(e) {
+            document.getElementById('cs-loading').innerHTML = `<p style="color:var(--accent-red);">加载失败: ${e.message}</p>`;
+        }
+    }
+
+    function renderCandlestick(data) {
+        document.getElementById('cs-loading').style.display = 'none';
+        document.getElementById('cs-content').style.display = 'block';
+
+        const results = data.results || [];
+        const ranked = [...results].sort((a, b) => b.alpha - a.alpha);
+        const best = ranked[0] || {};
+        const patterns = data.pattern_distribution || {};
+
+        // 标题
+        document.getElementById('cs-strat-title').textContent = `${results.length}种蜡烛图策略对比 · ${data.trade_days || 30}天`;
+
+        // 形态分布
+        const patternEl = document.getElementById('cs-pattern-stats');
+        if (patternEl) {
+            const patternKeys = Object.keys(patterns);
+            const totalPatterns = data.total_patterns || Object.values(patterns).reduce((a,b)=>a+b,0);
+            patternEl.innerHTML = `
+                <div style="margin-bottom:12px;font-size:14px;color:var(--text-secondary);">
+                    总共检测到 <b style="color:#ffaa00;">${totalPatterns}</b> 个K线形态信号
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                    ${patternKeys.map(k => `
+                        <div style="background:var(--bg-hover);border-radius:6px;padding:6px 12px;font-size:13px;display:flex;align-items:center;gap:6px;">
+                            <span style="color:var(--text-secondary);">${k}</span>
+                            <span style="color:#ffaa00;font-weight:700;">${patterns[k]}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        // 策略卡片
+        const cardsEl = document.getElementById('cs-cards');
+        if (cardsEl) {
+            const colors = ['#f59e0b', '#ef4444', '#22c55e', '#6b7280'];
+            cardsEl.innerHTML = ranked.map((r, i) => {
+                const isBest = i === 0;
+                const c = colors[i % colors.length];
+                return `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;${isBest ? 'border:1.5px solid #22c55e;' : ''}">
+                    <div style="font-weight:700;font-size:14px;color:${c};margin-bottom:4px;">${r.name}${isBest ? ' ★' : ''}</div>
+                    <div style="display:flex;gap:12px;font-size:13px;flex-wrap:wrap;">
+                        <span style="color:${r.alpha > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}% &alpha;</span>
+                        <span style="color:var(--text-muted);">${r.max_drawdown.toFixed(1)}% DD</span>
+                        <span style="color:var(--text-muted);">${r.total_trades}笔</span>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // Alpha柱状图
+        const chartEl = document.getElementById('cs-alpha-chart');
+        if (chartEl && ranked.length > 0) {
+            const maxAlpha = Math.max(...ranked.map(r => Math.abs(r.alpha)), 1);
+            chartEl.innerHTML = `<div style="display:flex;align-items:flex-end;gap:16px;height:260px;padding:20px;">
+                ${ranked.map((r, i) => {
+                    const h = Math.max(Math.abs(r.alpha) / maxAlpha * 200, 8);
+                    const isPos = r.alpha >= 0;
+                    const c = isPos ? '#22c55e' : '#ef4444';
+                    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;">
+                        <div style="font-size:11px;color:${c};font-weight:700;margin-bottom:4px;">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</div>
+                        <div style="width:100%;max-width:80px;height:${h}px;background:${c}30;border:1px solid ${c};border-radius:4px 4px 0 0;"></div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;text-align:center;">${r.name}</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+        }
+
+        // 策略表格
+        const tableBody = document.querySelector('#cs-table tbody');
+        if (tableBody) {
+            tableBody.innerHTML = ranked.map((r, i) => {
+                const fees = r.fees || {};
+                return `<tr ${i === 0 ? 'style="background:rgba(34,197,94,0.06);"' : ''}>
+                    <td>#${i + 1}${i === 0 ? ' ★' : ''}</td>
+                    <td><b>${r.name}</b></td>
+                    <td style="color:${r.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</td>
+                    <td>${r.strategy_return > 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</td>
+                    <td>${r.buy_hold_return > 0 ? '+' : ''}${r.buy_hold_return.toFixed(2)}%</td>
+                    <td>${r.max_drawdown.toFixed(2)}%</td>
+                    <td>${r.total_trades}</td>
+                    <td>${r.liquidations || 0}</td>
+                    <td>$${(fees.total_costs || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 交易明细
+        document.getElementById('cs-best-title').textContent = `最佳策略: ${best.name} · 交易明细`;
+        const tradesBody = document.querySelector('#cs-trades-table tbody');
+        if (tradesBody && best.trades) {
+            tradesBody.innerHTML = best.trades.slice(0, 50).map(t => {
+                const isSell = t.action?.includes('SELL') || t.action?.includes('SHORT');
+                const color = isSell ? 'var(--accent-red)' : 'var(--accent-green)';
+                return `<tr>
+                    <td style="font-size:12px;">${String(t.time).substring(0, 16)}</td>
+                    <td style="color:${color};font-weight:600;">${t.action || ''}</td>
+                    <td>${t.direction || ''}</td>
+                    <td>$${(t.price || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td>${t.leverage || 1}x</td>
+                    <td>$${(t.total || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;">${(t.reason || '').substring(0, 80)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 结论
+        const conclusionEl = document.getElementById('cs-conclusion');
+        if (conclusionEl) {
+            conclusionEl.innerHTML = `
+                <div class="card-title">回测结论</div>
+                <div style="background:rgba(255,170,0,0.06);border-radius:8px;padding:16px;border-left:3px solid #ffaa00;">
+                    <div style="font-weight:700;color:#ffaa00;margin-bottom:8px;">
+                        最佳策略: ${best.name} · &alpha; = ${best.alpha > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%
+                    </div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                        基于《日本蜡烛图技术-K线分析》Steve Nison完整版理论, 在ETH/USDT ${data.trade_days || 30}天回测中:<br>
+                        &middot; 买入持有收益: ${(best.buy_hold_return || 0).toFixed(2)}%<br>
+                        &middot; 最佳策略收益: ${(best.strategy_return || 0).toFixed(2)}%, 超额&alpha; = ${best.alpha > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%<br>
+                        &middot; 交易${best.total_trades || 0}笔, 最大回撤${(best.max_drawdown || 0).toFixed(2)}%<br>
+                        &middot; 检测形态数: ${data.total_patterns || 0}个 (30+种形态识别)<br>
+                        &middot; Nison增强: 成交量确认 + 关键支撑/阻力位增强 + 形态失败反向信号 + 多级趋势判断<br>
+                        &middot; 核心形态: 锤子线/上吊线/吞没/启明星/黄昏星/十字星(4种)/弃婴/三内外升降/窗口/塔形等30+种
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadCandlestick();
+});
+</script>
+{% endblock %}

@@ -1,0 +1,531 @@
+{% extends "base.html" %}
+{% block title %}止盈止损优化 - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">多时间框架止盈止损优化</div>
+            <div class="page-subtitle">12个时间周期 × 94种参数变体 × 精细组合搜索 · 基于F12(C6+三书否决)策略的系统性优化</div>
+
+            <div id="loading" style="text-align:center;padding:40px;color:var(--text-secondary);">
+                加载优化数据中...
+            </div>
+            <div id="content" style="display:none;">
+
+            <!-- 总览卡片 -->
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
+                <div class="card" style="text-align:center;border-top:3px solid var(--accent-green);">
+                    <div style="font-size:12px;color:var(--text-tertiary);">全局最优Alpha</div>
+                    <div id="best-alpha" style="font-size:28px;font-weight:700;color:var(--accent-green);margin:4px 0;">--</div>
+                    <div id="best-tag" style="font-size:11px;color:var(--text-secondary);">--</div>
+                </div>
+                <div class="card" style="text-align:center;border-top:3px solid var(--accent-blue);">
+                    <div style="font-size:12px;color:var(--text-tertiary);">最优时间框架</div>
+                    <div id="best-tf" style="font-size:28px;font-weight:700;color:var(--accent-blue);margin:4px 0;">--</div>
+                    <div id="best-return" style="font-size:11px;color:var(--text-secondary);">策略收益 --</div>
+                </div>
+                <div class="card" style="text-align:center;border-top:3px solid var(--accent-yellow);">
+                    <div style="font-size:12px;color:var(--text-tertiary);">F12基准Alpha(1h)</div>
+                    <div id="baseline-alpha" style="font-size:28px;font-weight:700;color:var(--accent-yellow);margin:4px 0;">--</div>
+                    <div id="improve-pct" style="font-size:11px;color:var(--accent-green);">提升 --</div>
+                </div>
+                <div class="card" style="text-align:center;border-top:3px solid var(--accent-purple);">
+                    <div style="font-size:12px;color:var(--text-tertiary);">测试总量</div>
+                    <div id="total-tests" style="font-size:28px;font-weight:700;color:var(--accent-purple);margin:4px 0;">--</div>
+                    <div style="font-size:11px;color:var(--text-secondary);">参数变体×时间框架</div>
+                </div>
+            </div>
+
+            <!-- Tab切换 -->
+            <div style="display:flex;gap:4px;margin-bottom:20px;flex-wrap:wrap;">
+                <button class="tab-btn active" onclick="showTab('tf-baseline')">各时间框架基准</button>
+                <button class="tab-btn" onclick="showTab('global-top')">全局TOP排名</button>
+                <button class="tab-btn" onclick="showTab('best-params')">最优参数详解</button>
+                <button class="tab-btn" onclick="showTab('best-trades')">最优策略交易明细</button>
+                <button class="tab-btn" onclick="showTab('best-equity')">资金曲线</button>
+            </div>
+
+            <!-- Tab 1: 各时间框架基准 -->
+            <div id="tab-tf-baseline" class="tab-content active">
+                <div class="card">
+                    <div class="card-title">12个时间框架 F12基准策略性能对比</div>
+                    <div style="margin-bottom:16px;">
+                        <svg id="tf-chart" width="100%" height="400" viewBox="0 0 900 400"></svg>
+                    </div>
+                    <table class="data-table" id="tf-table">
+                        <thead>
+                            <tr>
+                                <th>时间框架</th>
+                                <th>K线数</th>
+                                <th>Alpha</th>
+                                <th>策略收益</th>
+                                <th>BH收益</th>
+                                <th>最大回撤</th>
+                                <th>交易次数</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Tab 2: 全局TOP排名 -->
+            <div id="tab-global-top" class="tab-content">
+                <div class="card">
+                    <div class="card-title">全局TOP20参数组合</div>
+                    <table class="data-table" id="top-table">
+                        <thead>
+                            <tr>
+                                <th>排名</th>
+                                <th>时间框架</th>
+                                <th>参数标签</th>
+                                <th>Alpha</th>
+                                <th>策略收益</th>
+                                <th>最大回撤</th>
+                                <th>交易</th>
+                                <th>费用</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Tab 3: 最优参数详解 -->
+            <div id="tab-best-params" class="tab-content">
+                <div class="card">
+                    <div class="card-title">最优策略参数配置</div>
+                    <div id="best-params-content"></div>
+                </div>
+
+                <div class="card" style="margin-top:16px;">
+                    <div class="card-title">核心发现: 分段止盈(Partial Take-Profit)</div>
+                    <div style="font-size:14px;color:var(--text-secondary);line-height:1.8;">
+                        <p>优化结果显示，<span style="color:var(--accent-green);font-weight:600;">分段止盈</span>是最大的性能提升因素。</p>
+
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+                            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:16px;">
+                                <div style="font-weight:600;color:var(--accent-red);margin-bottom:8px;">传统止盈(全仓)</div>
+                                <ul style="font-size:13px;padding-left:16px;">
+                                    <li>盈利达到TP阈值时一次性全部平仓</li>
+                                    <li>可能错过后续更大的行情</li>
+                                    <li>止盈后需要等待冷却期重新入场</li>
+                                    <li>如果行情继续，需要付二次入场费用</li>
+                                </ul>
+                            </div>
+                            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:16px;">
+                                <div style="font-weight:600;color:var(--accent-green);margin-bottom:8px;">分段止盈(最优)</div>
+                                <ul style="font-size:13px;padding-left:16px;">
+                                    <li>盈利达20%时先平30%仓位锁定利润</li>
+                                    <li>剩余70%继续持有追踪更大行情</li>
+                                    <li>兼顾"落袋为安"和"让利润奔跑"</li>
+                                    <li>减少二次入场的费用摩擦</li>
+                                </ul>
+                            </div>
+                        </div>
+
+                        <div style="margin-top:16px;padding:12px;background:rgba(0,200,150,0.08);border-radius:8px;border-left:3px solid var(--accent-green);">
+                            <b>关键洞察：</b>分段止盈在几乎所有时间框架上都是TOP1参数变体。<br>
+                            在1h上：Alpha从+44.02%提升到+85.38%(+41.36%)；<br>
+                            在16h上：Alpha从+51.06%提升到+72.39%(+21.33%)；<br>
+                            在12h上：Alpha从+39.31%提升到+61.49%(+22.18%)。
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top:16px;">
+                    <div class="card-title">时间框架分析</div>
+                    <div style="font-size:14px;color:var(--text-secondary);line-height:1.8;">
+                        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+                            <div style="background:rgba(0,200,150,0.06);border-radius:8px;padding:12px;text-align:center;">
+                                <div style="font-size:11px;color:var(--text-tertiary);">短周期(10m-30m)</div>
+                                <div style="font-size:18px;font-weight:600;color:var(--accent-yellow);margin:4px 0;">适中</div>
+                                <div style="font-size:12px;">信号多但噪音大<br>费用高(交易频繁)</div>
+                            </div>
+                            <div style="background:rgba(0,200,150,0.06);border-radius:8px;padding:12px;text-align:center;">
+                                <div style="font-size:11px;color:var(--text-tertiary);">中周期(1h-4h)</div>
+                                <div style="font-size:18px;font-weight:600;color:var(--accent-green);margin:4px 0;">最优</div>
+                                <div style="font-size:12px;">信号质量高<br>1h为最佳Alpha框架</div>
+                            </div>
+                            <div style="background:rgba(0,200,150,0.06);border-radius:8px;padding:12px;text-align:center;">
+                                <div style="font-size:11px;color:var(--text-tertiary);">长周期(8h-24h)</div>
+                                <div style="font-size:18px;font-weight:600;color:var(--accent-blue);margin:4px 0;">稳健</div>
+                                <div style="font-size:12px;">低回撤低交易<br>16h回撤仅-2.79%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 4: 交易明细 -->
+            <div id="tab-best-trades" class="tab-content">
+                <div class="card">
+                    <div class="card-title">最优策略交易明细</div>
+                    <table class="data-table" id="trades-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>操作</th>
+                                <th>价格</th>
+                                <th>杠杆</th>
+                                <th>总资产</th>
+                                <th>原因</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Tab 5: 资金曲线 -->
+            <div id="tab-best-equity" class="tab-content">
+                <div class="card">
+                    <div class="card-title">最优策略资金曲线</div>
+                    <svg id="equity-chart" width="100%" height="450" viewBox="0 0 900 450"></svg>
+                </div>
+                <div class="card" style="margin-top:16px;">
+                    <div class="card-title">费用分析</div>
+                    <div id="fee-analysis" style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;"></div>
+                </div>
+            </div>
+
+            </div><!-- end #content -->
+
+            <style>
+                .tab-btn {
+                    padding: 8px 16px; border: 1px solid var(--border);
+                    background: var(--card-bg); color: var(--text-secondary);
+                    border-radius: 6px; cursor: pointer; font-size: 13px;
+                    transition: all 0.2s;
+                }
+                .tab-btn.active, .tab-btn:hover {
+                    background: var(--accent-green); color: #fff; border-color: var(--accent-green);
+                }
+                .tab-content { display: none; }
+                .tab-content.active { display: block; }
+                .data-table {
+                    width: 100%; border-collapse: collapse; font-size: 13px;
+                }
+                .data-table th {
+                    text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border);
+                    color: var(--text-tertiary); font-weight: 600; font-size: 12px;
+                }
+                .data-table td {
+                    padding: 6px 12px; border-bottom: 1px solid var(--border);
+                }
+                .data-table tr:hover td { background: rgba(255,255,255,0.02); }
+                .pos { color: var(--accent-green); }
+                .neg { color: var(--accent-red); }
+                .param-grid {
+                    display: grid; grid-template-columns: repeat(3, 1fr);
+                    gap: 12px; margin-top: 12px;
+                }
+                .param-item {
+                    background: var(--card-bg); border: 1px solid var(--border);
+                    border-radius: 8px; padding: 12px; text-align: center;
+                }
+                .param-item .label { font-size: 11px; color: var(--text-tertiary); }
+                .param-item .value { font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 4px 0; }
+                .param-item .desc { font-size: 11px; color: var(--text-secondary); }
+            </style>
+
+            <script>
+            function showTab(id) {
+                document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.getElementById('tab-' + id).classList.add('active');
+                event.target.classList.add('active');
+            }
+
+            function fmt(v, d=2) {
+                if (v == null) return '--';
+                return (v >= 0 ? '+' : '') + v.toFixed(d) + '%';
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                fetch('/api/optimize_sl_tp')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('loading').style.display = 'none';
+                    document.getElementById('content').style.display = 'block';
+
+                    // 总览
+                    const gb = data.global_best || data.global_top20?.[0] || {};
+                    const gbCfg = gb.config || {};
+                    document.getElementById('best-alpha').textContent = fmt(gb.alpha);
+                    document.getElementById('best-tag').textContent = gb.tag || '--';
+                    document.getElementById('best-tf').textContent = gb.tf || '--';
+                    document.getElementById('best-return').textContent = '策略收益 ' + fmt(gb.strategy_return);
+                    document.getElementById('total-tests').textContent = data.total_variants_tested || '--';
+
+                    // baseline
+                    const bl1h = (data.baseline_by_tf || []).find(b => b.tf === '1h');
+                    if (bl1h) {
+                        document.getElementById('baseline-alpha').textContent = fmt(bl1h.alpha);
+                        const diff = (gb.alpha || 0) - bl1h.alpha;
+                        document.getElementById('improve-pct').textContent = '提升 ' + fmt(diff);
+                    }
+
+                    // Tab 1: 时间框架基准
+                    const tfData = data.baseline_by_tf || [];
+                    const tbody1 = document.querySelector('#tf-table tbody');
+                    tfData.forEach(t => {
+                        const tr = document.createElement('tr');
+                        const isTop = data.top_timeframes?.includes(t.tf);
+                        tr.innerHTML = `
+                            <td style="font-weight:${isTop?'600':'400'}">${t.tf} ${isTop?'★':''}</td>
+                            <td>--</td>
+                            <td class="${t.alpha>=0?'pos':'neg'}" style="font-weight:600">${fmt(t.alpha)}</td>
+                            <td class="${t.strategy_return>=0?'pos':'neg'}">${fmt(t.strategy_return)}</td>
+                            <td class="${t.buy_hold_return>=0?'pos':'neg'}">${fmt(t.buy_hold_return)}</td>
+                            <td class="neg">${t.max_drawdown?.toFixed(2)}%</td>
+                            <td>${t.total_trades}</td>
+                        `;
+                        tbody1.appendChild(tr);
+                    });
+
+                    // 柱状图
+                    drawTfChart(tfData);
+
+                    // Tab 2: 全局TOP
+                    const topData = data.global_top20 || [];
+                    const tbody2 = document.querySelector('#top-table tbody');
+                    topData.forEach(t => {
+                        const tr = document.createElement('tr');
+                        const medal = t.rank <= 3 ? ['','🥇','🥈','🥉'][t.rank] : '';
+                        tr.innerHTML = `
+                            <td style="font-weight:600">${medal} #${t.rank}</td>
+                            <td>${t.tf}</td>
+                            <td>${t.tag}</td>
+                            <td class="pos" style="font-weight:600">${fmt(t.alpha)}</td>
+                            <td class="${t.strategy_return>=0?'pos':'neg'}">${fmt(t.strategy_return)}</td>
+                            <td class="neg">${t.max_drawdown?.toFixed(2)}%</td>
+                            <td>${t.total_trades}</td>
+                            <td>$${(t.fees||0).toLocaleString()}</td>
+                        `;
+                        tbody2.appendChild(tr);
+                    });
+
+                    // Tab 3: 最优参数
+                    renderBestParams(gb);
+
+                    // Tab 4: 交易明细
+                    const trades = data.global_best_trades || [];
+                    const tbody4 = document.querySelector('#trades-table tbody');
+                    trades.forEach(t => {
+                        const tr = document.createElement('tr');
+                        const action = t.action || '';
+                        const isOpen = action.includes('开') || action.includes('open');
+                        const isClose = action.includes('平') || action.includes('close') || action.includes('止');
+                        const color = isOpen ? 'var(--accent-blue)' : isClose ? 'var(--accent-yellow)' : '';
+                        tr.innerHTML = `
+                            <td style="font-size:12px">${(t.time||'').substring(0,16)}</td>
+                            <td style="color:${color};font-weight:500">${action}</td>
+                            <td>$${(t.price||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                            <td>${t.leverage||'-'}x</td>
+                            <td>$${(t.total||0).toLocaleString()}</td>
+                            <td style="font-size:11px;color:var(--text-secondary)">${(t.reason||'').substring(0,60)}</td>
+                        `;
+                        tbody4.appendChild(tr);
+                    });
+
+                    // Tab 5: 资金曲线
+                    const history = data.global_best_history || [];
+                    if (history.length > 0) drawEquityChart(history);
+
+                    const fees = data.global_best_fees || {};
+                    const feeDiv = document.getElementById('fee-analysis');
+                    const feeItems = [
+                        ['现货费用', fees.spot_fees],
+                        ['合约费用', fees.futures_fees],
+                        ['资金费率(净)', fees.net_funding],
+                        ['滑点成本', fees.slippage_cost],
+                        ['总成本', fees.total_costs],
+                    ];
+                    feeItems.forEach(([label, val]) => {
+                        feeDiv.innerHTML += `
+                            <div style="text-align:center;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:12px;">
+                                <div style="font-size:11px;color:var(--text-tertiary)">${label}</div>
+                                <div style="font-size:16px;font-weight:600;color:var(--accent-red);margin:4px 0">
+                                    $${(val||0).toLocaleString()}
+                                </div>
+                            </div>
+                        `;
+                    });
+                })
+                .catch(err => {
+                    document.getElementById('loading').innerHTML =
+                        '<span style="color:var(--accent-red)">加载失败: ' + err.message +
+                        '</span><br><small>请先运行 python optimize_sl_tp.py</small>';
+                });
+            });
+
+            function renderBestParams(gb) {
+                const cfg = gb.config || {};
+                const div = document.getElementById('best-params-content');
+                div.innerHTML = `
+                    <div class="param-grid">
+                        <div class="param-item" style="border-color:var(--accent-red)">
+                            <div class="label">空头止损</div>
+                            <div class="value" style="color:var(--accent-red)">${((cfg.short_sl||0)*100).toFixed(0)}%</div>
+                            <div class="desc">short_sl</div>
+                        </div>
+                        <div class="param-item" style="border-color:var(--accent-green)">
+                            <div class="label">空头止盈</div>
+                            <div class="value" style="color:var(--accent-green)">${((cfg.short_tp||0)*100).toFixed(0)}%</div>
+                            <div class="desc">short_tp</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="label">追踪止盈激活</div>
+                            <div class="value">${((cfg.short_trail||0)*100).toFixed(0)}%</div>
+                            <div class="desc">short_trail</div>
+                        </div>
+                        <div class="param-item" style="border-color:var(--accent-red)">
+                            <div class="label">多头止损</div>
+                            <div class="value" style="color:var(--accent-red)">${((cfg.long_sl||0)*100).toFixed(0)}%</div>
+                            <div class="desc">long_sl</div>
+                        </div>
+                        <div class="param-item" style="border-color:var(--accent-green)">
+                            <div class="label">多头止盈</div>
+                            <div class="value" style="color:var(--accent-green)">${((cfg.long_tp||0)*100).toFixed(0)}%</div>
+                            <div class="desc">long_tp</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="label">回撤平仓比例</div>
+                            <div class="value">${((cfg.trail_pullback||0)*100).toFixed(0)}%</div>
+                            <div class="desc">trail_pullback</div>
+                        </div>
+                        <div class="param-item">
+                            <div class="label">最大持仓</div>
+                            <div class="value">${cfg.short_max_hold||72} bars</div>
+                            <div class="desc">short_max_hold</div>
+                        </div>
+                        <div class="param-item" style="border-color:var(--accent-blue)">
+                            <div class="label">分段止盈点</div>
+                            <div class="value" style="color:var(--accent-blue)">${cfg.use_partial_tp?((cfg.partial_tp_1||0)*100).toFixed(0)+'%':'关闭'}</div>
+                            <div class="desc">partial_tp_1</div>
+                        </div>
+                        <div class="param-item" style="border-color:var(--accent-blue)">
+                            <div class="label">分段平仓比例</div>
+                            <div class="value" style="color:var(--accent-blue)">${cfg.use_partial_tp?((cfg.partial_tp_1_pct||0)*100).toFixed(0)+'%':'--'}</div>
+                            <div class="desc">partial_tp_1_pct</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top:20px;padding:12px 16px;background:rgba(0,200,150,0.06);border-radius:8px;">
+                        <div style="font-weight:600;margin-bottom:8px;">最优 vs F12基准 参数对比</div>
+                        <table style="width:100%;font-size:13px;border-collapse:collapse;">
+                            <tr style="border-bottom:1px solid var(--border)">
+                                <th style="text-align:left;padding:4px 8px;color:var(--text-tertiary)">参数</th>
+                                <th style="text-align:center;padding:4px 8px;color:var(--text-tertiary)">F12基准</th>
+                                <th style="text-align:center;padding:4px 8px;color:var(--text-tertiary)">最优</th>
+                                <th style="text-align:center;padding:4px 8px;color:var(--text-tertiary)">变化</th>
+                            </tr>
+                            <tr><td style="padding:4px 8px">空头止损</td><td style="text-align:center">-30%</td>
+                                <td style="text-align:center;font-weight:600">${((cfg.short_sl||0)*100).toFixed(0)}%</td>
+                                <td style="text-align:center;color:var(--accent-yellow)">${cfg.short_sl!=-0.30?'已优化':'不变'}</td></tr>
+                            <tr><td style="padding:4px 8px">空头止盈</td><td style="text-align:center">+80%</td>
+                                <td style="text-align:center;font-weight:600">${((cfg.short_tp||0)*100).toFixed(0)}%</td>
+                                <td style="text-align:center;color:var(--accent-yellow)">${cfg.short_tp!=0.80?'已优化':'不变'}</td></tr>
+                            <tr><td style="padding:4px 8px">多头止损</td><td style="text-align:center">-15%</td>
+                                <td style="text-align:center;font-weight:600">${((cfg.long_sl||0)*100).toFixed(0)}%</td>
+                                <td style="text-align:center;color:var(--accent-yellow)">${cfg.long_sl!=-0.15?'已优化':'不变'}</td></tr>
+                            <tr><td style="padding:4px 8px">多头止盈</td><td style="text-align:center">+50%</td>
+                                <td style="text-align:center;font-weight:600">${((cfg.long_tp||0)*100).toFixed(0)}%</td>
+                                <td style="text-align:center;color:var(--accent-yellow)">${cfg.long_tp!=0.50?'已优化':'不变'}</td></tr>
+                            <tr><td style="padding:4px 8px">分段止盈</td><td style="text-align:center">无</td>
+                                <td style="text-align:center;font-weight:600;color:var(--accent-green)">${cfg.use_partial_tp?'开启':''}</td>
+                                <td style="text-align:center;color:var(--accent-green)">${cfg.use_partial_tp?'新增!':''}</td></tr>
+                        </table>
+                    </div>
+                `;
+            }
+
+            function drawTfChart(tfData) {
+                const svg = document.getElementById('tf-chart');
+                const W = 900, H = 400, pad = {t:30,r:40,b:60,l:60};
+                const plotW = W - pad.l - pad.r;
+                const plotH = H - pad.t - pad.b;
+
+                const alphas = tfData.map(t => t.alpha);
+                const maxA = Math.max(...alphas, 10);
+                const minA = Math.min(...alphas, -10);
+                const range = maxA - minA || 1;
+                const barW = plotW / tfData.length * 0.6;
+                const gap = plotW / tfData.length;
+
+                let html = '';
+                // Y axis
+                for (let i = 0; i <= 5; i++) {
+                    const val = minA + (range * i / 5);
+                    const y = pad.t + plotH - (plotH * i / 5);
+                    html += `<line x1="${pad.l}" y1="${y}" x2="${W-pad.r}" y2="${y}" stroke="rgba(255,255,255,0.05)"/>`;
+                    html += `<text x="${pad.l-8}" y="${y+4}" fill="rgba(255,255,255,0.4)" font-size="11" text-anchor="end">${val.toFixed(0)}%</text>`;
+                }
+
+                // Zero line
+                const zeroY = pad.t + plotH - (plotH * (-minA) / range);
+                html += `<line x1="${pad.l}" y1="${zeroY}" x2="${W-pad.r}" y2="${zeroY}" stroke="rgba(255,255,255,0.2)" stroke-dasharray="4,4"/>`;
+
+                // Bars
+                tfData.forEach((t, i) => {
+                    const x = pad.l + i * gap + (gap - barW) / 2;
+                    const h = Math.abs(t.alpha) / range * plotH;
+                    const y = t.alpha >= 0 ? zeroY - h : zeroY;
+                    const color = t.alpha >= 0 ? 'rgba(0,200,150,0.7)' : 'rgba(255,80,80,0.7)';
+                    html += `<rect x="${x}" y="${y}" width="${barW}" height="${h}" fill="${color}" rx="3"/>`;
+                    html += `<text x="${x+barW/2}" y="${H-pad.b+15}" fill="rgba(255,255,255,0.6)" font-size="11" text-anchor="middle">${t.tf}</text>`;
+                    html += `<text x="${x+barW/2}" y="${(t.alpha>=0?y-5:y+h+14)}" fill="rgba(255,255,255,0.8)" font-size="11" text-anchor="middle" font-weight="600">${t.alpha>=0?'+':''}${t.alpha.toFixed(1)}%</text>`;
+                });
+
+                svg.innerHTML = html;
+            }
+
+            function drawEquityChart(history) {
+                const svg = document.getElementById('equity-chart');
+                const W = 900, H = 450, pad = {t:30,r:40,b:40,l:70};
+                const plotW = W - pad.l - pad.r;
+                const plotH = H - pad.t - pad.b;
+
+                const totals = history.map(h => h.total || h.value || 0);
+                const bhs = history.map(h => h.bh || h.buy_hold || 0);
+                const maxV = Math.max(...totals, ...bhs) * 1.05;
+                const minV = Math.min(...totals, ...bhs) * 0.95;
+                const range = maxV - minV || 1;
+
+                let html = '';
+
+                // Grid
+                for (let i = 0; i <= 5; i++) {
+                    const val = minV + (range * i / 5);
+                    const y = pad.t + plotH - (plotH * i / 5);
+                    html += `<line x1="${pad.l}" y1="${y}" x2="${W-pad.r}" y2="${y}" stroke="rgba(255,255,255,0.05)"/>`;
+                    html += `<text x="${pad.l-8}" y="${y+4}" fill="rgba(255,255,255,0.4)" font-size="11" text-anchor="end">$${(val/1000).toFixed(0)}k</text>`;
+                }
+
+                // BH line
+                let bhPath = '';
+                history.forEach((h, i) => {
+                    const x = pad.l + (i / (history.length - 1)) * plotW;
+                    const y = pad.t + plotH - ((bhs[i] - minV) / range) * plotH;
+                    bhPath += (i === 0 ? 'M' : 'L') + `${x},${y}`;
+                });
+                html += `<path d="${bhPath}" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1.5"/>`;
+
+                // Strategy line
+                let stratPath = '';
+                history.forEach((h, i) => {
+                    const x = pad.l + (i / (history.length - 1)) * plotW;
+                    const y = pad.t + plotH - ((totals[i] - minV) / range) * plotH;
+                    stratPath += (i === 0 ? 'M' : 'L') + `${x},${y}`;
+                });
+                html += `<path d="${stratPath}" fill="none" stroke="rgb(0,200,150)" stroke-width="2"/>`;
+
+                // Legend
+                html += `<rect x="${pad.l+10}" y="${pad.t+5}" width="12" height="3" fill="rgb(0,200,150)"/>`;
+                html += `<text x="${pad.l+26}" y="${pad.t+10}" fill="rgba(255,255,255,0.7)" font-size="11">优化策略</text>`;
+                html += `<rect x="${pad.l+100}" y="${pad.t+5}" width="12" height="3" fill="rgba(255,255,255,0.25)"/>`;
+                html += `<text x="${pad.l+116}" y="${pad.t+10}" fill="rgba(255,255,255,0.7)" font-size="11">买入持有</text>`;
+
+                svg.innerHTML = html;
+            }
+            </script>
+{% endblock %}

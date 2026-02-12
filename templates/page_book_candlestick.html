@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block title %}《日本蜡烛图技术》书籍大纲 - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">《日本蜡烛图技术-K线分析》书籍大纲</div>
+            <div class="page-subtitle">Steve Nison 著 · K线技术的西方引入者 · 蜡烛图分析圣经 · 30+种经典形态完全解析</div>
+
+            <!-- 书籍概述 -->
+            <div class="card" style="border-left: 3px solid var(--accent-yellow);">
+                <div class="card-title">
+                    <span style="color:var(--accent-yellow);">🕯️</span> 全书核心思想
+                </div>
+                <div style="font-size:14px;color:var(--text-secondary);line-height:1.8;">
+                    蜡烛图技术源自日本江户时代的米市交易，由Munehisa Homma(本间宗久)首创。<br>
+                    Steve Nison首次将这一古老技术系统性地介绍给西方金融界。本书的核心理念：<br>
+                    <span style="color:var(--accent-yellow);font-weight:600;">形态是市场心理的直观投影</span> —
+                    每一根K线都记录了多空博弈的结果，形态组合揭示了市场情绪的转变。
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">一</div>
+                    <div class="chapter-title">第一~三章 · K线基础与单根蜡烛线</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>理解每根蜡烛线的<span class="key-concept">实体、影线、颜色</span>所传达的市场信息。</p>
+                    <ul>
+                        <li><span class="key-concept">实体(Body)</span> — 开盘价与收盘价之间的矩形。阳线(白/绿)=收盘>开盘，阴线(黑/红)=收盘<开盘</li>
+                        <li><span class="key-concept">影线(Shadow)</span> — 上影线=最高价到实体顶端，下影线=最低价到实体底端。影线越长，该方向的拒绝力越强</li>
+                        <li><span class="key-concept">光头光脚(Marubozu)</span> — 无影线的长实体，表示一方完全控制，最强的趋势信号</li>
+                        <li><span class="key-concept">纺锤线(Spinning Top)</span> — 小实体+两端影线，多空博弈后平手，在趋势极端位是警告信号</li>
+                        <li><b>Nison原则</b>：实体越长，趋势推动力越强；影线越长，方向拒绝力越强</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch2">二</div>
+                    <div class="chapter-title">第四~五章 · 反转形态——锤子线家族</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>锤子线家族是最重要的<span class="key-concept">单根反转信号</span>，关键在于出现的位置和趋势背景。</p>
+                    <ul>
+                        <li><span class="key-concept">锤子线(Hammer)</span> — 下降趋势底部，小实体在顶端，长下影线(≥实体2倍)。含义：多方在低位强力反击
+                            <ul>
+                                <li>阳线锤子比阴线锤子更看涨(Nison特别强调)</li>
+                                <li>下影线越长，看涨意味越浓</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">上吊线(Hanging Man)</span> — 上升趋势顶部，外形同锤子线。<b>需要验证</b>：次日收盘低于上吊线实体才确认</li>
+                        <li><span class="key-concept">流星线(Shooting Star)</span> — 上升趋势顶部，小实体在底端，长上影线。含义：多方冲高后被空方打压</li>
+                        <li><span class="key-concept">倒锤子线(Inverted Hammer)</span> — 下降趋势底部，长上影线+小实体。需要次日验证(高开确认)</li>
+                        <li><b>Nison核心原则</b>：这四种形态<span style="color:var(--accent-yellow);font-weight:600;">必须出现在正确的趋势位置</span>才有意义——锤子线只在下降后有效，上吊线只在上升后有效</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch3">三</div>
+                    <div class="chapter-title">第六章 · 双蜡烛线形态 (核心章节)</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>两根蜡烛线的组合是<span class="key-concept">最常用、最可靠</span>的交易信号来源。</p>
+                    <ul>
+                        <li><span class="key-concept">吞没形态(Engulfing)</span> — 后一根实体完全包住前一根实体。<b>最强的双线反转信号</b>
+                            <ul>
+                                <li>看涨吞没：阴线+阳线(阳包阴)，出现在下降趋势</li>
+                                <li>看跌吞没：阳线+阴线(阴包阳)，出现在上升趋势</li>
+                                <li>Nison增强条件：第一根小实体+第二根长实体=更强；放量吞没=最强</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">乌云盖顶(Dark Cloud Cover)</span> — 阳线+阴线，阴线开盘高于前阳最高价，收盘穿入阳线实体50%以上。穿入越深越看跌</li>
+                        <li><span class="key-concept">刺透形态(Piercing)</span> — 阴线+阳线，阳线开盘低于前阴最低价，收盘穿入阴线实体50%以上。乌云盖顶的镜像</li>
+                        <li><span class="key-concept">孕线(Harami)</span> — 前一根长实体包含后一根小实体。比吞没弱，表示趋势<b>犹豫</b>而非立即反转
+                            <ul>
+                                <li><b>十字孕线</b>(第二根是十字线)比普通孕线更强</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">平头形态(Tweezers)</span> — 两根K线最高点(顶)/最低点(底)基本一致，形成双重测试</li>
+                        <li><span class="key-concept">反击线(Counterattack)</span> — 颜色相反但收盘价相同或极接近，两根都必须是长实体</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch4">四</div>
+                    <div class="chapter-title">第七章 · 三蜡烛线形态</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>三根蜡烛线组成的形态提供<span class="key-concept">更高确信度</span>的交易信号。</p>
+                    <ul>
+                        <li><span class="key-concept">启明星(Morning Star)</span> — 长阴+小实体(星)+长阳。三合一的底部反转信号
+                            <ul>
+                                <li>第三根阳线穿入第一根阴线实体越深越好(至少50%)</li>
+                                <li><b>十字启明星</b>(星线是十字)是最强形式</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">黄昏星(Evening Star)</span> — 长阳+小实体(星)+长阴。启明星的镜像，顶部反转</li>
+                        <li><span class="key-concept">弃婴形态(Abandoned Baby)</span> — 类似启明星/黄昏星，但星线与前后都有缺口。极其罕见但<b>极其可靠</b></li>
+                        <li><span class="key-concept">三只乌鸦(Three Black Crows)</span> — 三根依次下降的长阴线，每根开盘在前一根实体内，收盘接近最低价。强烈看跌</li>
+                        <li><span class="key-concept">前进白色三兵(Three White Soldiers)</span> — 三根依次上升的长阳线。强烈看涨
+                            <ul>
+                                <li>Nison细分：<b>标准三兵</b>(可靠) vs <b>前方受阻</b>(第三根有长上影→减弱) vs <b>停顿形态</b>(第三根缩小→犹豫)</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">三内升/三内降(Three Inside)</span> — 孕线+确认线，比单纯孕线更可靠</li>
+                        <li><span class="key-concept">三外升/三外降(Three Outside)</span> — 吞没+确认线，是吞没形态的强化版</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch5">五</div>
+                    <div class="chapter-title">第七章(续) · 持续形态与窗口</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>不是所有形态都是反转信号，<span class="key-concept">持续形态</span>确认当前趋势将延续。</p>
+                    <ul>
+                        <li><span class="key-concept">上升三法(Rising Three Methods)</span> — 长阳+2~3根小阴/十字(不跌破)+长阳(创新高)。"旗帜"式持续</li>
+                        <li><span class="key-concept">下降三法(Falling Three Methods)</span> — 长阴+2~3根小阳(不突破)+长阴(创新低)。上升三法的镜像</li>
+                        <li><span class="key-concept">窗口(Window/Gap)</span> — Nison将西方的"缺口"称为"窗口"
+                            <ul>
+                                <li><b>向上窗口</b>=支撑：价格回落到窗口位置会受到支撑</li>
+                                <li><b>向下窗口</b>=阻力：价格反弹到窗口位置会受到阻力</li>
+                                <li>"窗口必须关闭"是日本的说法，但未必立即关闭</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">塔形顶/底(Tower Top/Bottom)</span> — 长实体→数根小实体→反向长实体，多根蜡烛构成的反转形态</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">六</div>
+                    <div class="chapter-title">第八章 · 十字线详论</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>十字线是市场<span class="key-concept">犹豫不决</span>的标志，在关键位置具有重大意义。</p>
+                    <ul>
+                        <li><span class="key-concept">普通十字线</span> — 开盘=收盘，实体为一条线。含义：多空平衡，趋势可能转变</li>
+                        <li><span class="key-concept">长腿十字线(Long-legged Doji)</span> — 上下影线都很长。多空剧烈拉锯后打成平手，不确定性最大</li>
+                        <li><span class="key-concept">墓碑十字线(Gravestone Doji)</span> — 长上影线，开盘=收盘=最低价。在顶部极为看跌</li>
+                        <li><span class="key-concept">蜻蜓十字线(Dragonfly Doji)</span> — 长下影线，开盘=收盘=最高价。在底部极为看涨</li>
+                        <li><b>Nison核心原则</b>：
+                            <ul>
+                                <li>十字线在<b>上升趋势后</b>的看跌含义比在下降趋势后的看涨含义更强</li>
+                                <li>连续出现多个十字线是强烈的变盘信号</li>
+                                <li>十字线在高位大阳线后出现("十字线暮星")是顶部经典信号</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch2">七</div>
+                    <div class="chapter-title">第九~十一章 · 蜡烛图与西方技术的融合</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>Nison强烈主张蜡烛图与<span class="key-concept">西方技术分析工具</span>结合使用，而非独立使用。</p>
+                    <ul>
+                        <li><span class="key-concept">蜡烛图+趋势线</span> — 在趋势线支撑/阻力位出现蜡烛线形态，信号可靠性大幅增强</li>
+                        <li><span class="key-concept">蜡烛图+移动平均线</span> — 均线附近出现反转形态=高概率交易机会</li>
+                        <li><span class="key-concept">蜡烛图+振荡指标</span> — RSI超买区出现看跌形态，或超卖区出现看涨形态=最佳信号</li>
+                        <li><span class="key-concept">蜡烛图+成交量</span> — 放量确认形态有效性(本书反复强调成交量的重要性)
+                            <ul>
+                                <li>放量吞没比缩量吞没可靠得多</li>
+                                <li>放量锤子线比缩量锤子线更可信</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">蜡烛图+斐波那契</span> — 关键回撤位(38.2%/50%/61.8%)出现K线反转形态=精准入场</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch3">八</div>
+                    <div class="chapter-title">第十二~十三章 · 实战原则与总结</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>Nison的<span class="key-concept">十大实战原则</span>和交易哲学。</p>
+                    <ul>
+                        <li><span class="key-concept">形态不是万能的</span> — 蜡烛图是概率工具，不是确定性工具。每个信号只是"提高胜率"而非保证</li>
+                        <li><span class="key-concept">趋势背景第一</span> — 任何形态都必须放在趋势背景下解读。脱离趋势的形态分析毫无意义</li>
+                        <li><span class="key-concept">形态失败=反向信号</span> — 看涨形态出现后价格反而下跌，这本身就是很强的看跌信号</li>
+                        <li><span class="key-concept">确认是关键</span> — 很多形态(尤其是上吊线、倒锤子)需要次日确认才能行动</li>
+                        <li><span class="key-concept">多个形态共振</span> — 同一位置出现多个同向形态，信号强度翻倍</li>
+                        <li><span class="key-concept">风险管理永远第一</span> — 不论形态多完美，止损是必须的。Nison反复强调风控</li>
+                        <li><span class="key-concept">关键支撑/阻力位的形态权重更高</span> — 在重要价位出现的形态比随机位置的形态可靠得多</li>
+                        <li><span class="key-concept">蜡烛图给出"做什么"</span>，西方技术分析给出"在哪里做" — 两者结合才是完整的交易系统</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 代码实现说明 -->
+            <div class="card" style="border-left: 3px solid var(--accent-blue);">
+                <div class="card-title">
+                    <span style="color:var(--accent-blue);">💻</span> 代码实现
+                </div>
+                <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                    <code>candlestick_patterns.py</code> — 30+种形态识别引擎(25个检测器) + Nison四大增强(成交量确认/关键位增强/形态失败检测/多级趋势判断)<br>
+                    包含：锤子线、上吊线、流星线、倒锤子线、十字线(4种)、纺锤线、光头光脚、吞没、乌云盖顶、刺透、孕线(含十字孕线)、<br>
+                    平头、反击线、窗口、启明星/黄昏星(含十字版)、弃婴、三兵(含受阻/停顿)、三鸦、三内升降、三外升降、上升/下降三法、塔形顶底
+                </div>
+            </div>
+{% endblock %}

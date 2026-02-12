@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}code-other - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">第五章 · 其他指标背离</div>
+            <div class="page-subtitle">KDJ / CCI / RSI / 量价背离</div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/kdj_divergence.py</span>
+                    <span>KDJ指标背离</span>
+                </div>
+                <pre><code><span class="kw">class</span> <span class="cl">KDJDivergenceAnalyzer</span>:
+    <span class="kw">def</span> <span class="fn">detect_top_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+        <span class="st">"""价格创新高 + K值在超买区(>80) + K值未创新高 = KDJ顶背离"""</span>
+        price_highs = find_swing_highs(df[<span class="st">'high'</span>], order)
+        <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nu">1</span>, len(price_highs)):
+            k_val = df[<span class="st">'K'</span>].iloc[price_highs[i]]
+            <span class="kw">if</span> k_val > <span class="nu">80</span> <span class="kw">and</span> k_val < df[<span class="st">'K'</span>].iloc[price_highs[i-<span class="nu">1</span>]]:
+                signals.append({<span class="st">'type'</span>: <span class="st">'top'</span>, <span class="st">'indicator'</span>: <span class="st">'KDJ'</span>})
+
+    <span class="kw">def</span> <span class="fn">detect_bottom_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+        <span class="st">"""价格创新低 + K值在超卖区(<20) + K值未创新低 = KDJ底背离"""</span></code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/cci_divergence.py · divergence/rsi_divergence.py</span>
+                    <span>CCI & RSI 背离</span>
+                </div>
+                <pre><code><span class="cm"># CCI: 天线+100, 地线-100</span>
+<span class="kw">class</span> <span class="cl">CCIDivergenceAnalyzer</span>:
+    <span class="kw">def</span> <span class="fn">detect_top_divergence</span>(<span class="kw">self</span>):
+        <span class="st">"""价格新高 + CCI在+100以上 + CCI未新高"""</span>
+    <span class="kw">def</span> <span class="fn">detect_spring_autumn_crosses</span>(<span class="kw">self</span>):
+        <span class="st">"""CCI穿越天线+100(做多) / 跌破地线-100(做空)"""</span>
+
+<span class="cm"># RSI: 超买>80, 超卖<20</span>
+<span class="kw">class</span> <span class="cl">RSIDivergenceAnalyzer</span>:
+    <span class="kw">def</span> <span class="fn">detect_top_divergence</span>(<span class="kw">self</span>):
+        <span class="st">"""价格新高 + RSI>80 + RSI未新高"""</span>
+    <span class="kw">def</span> <span class="fn">detect_bottom_divergence</span>(<span class="kw">self</span>):
+        <span class="st">"""价格新低 + RSI<20 + RSI未新低"""</span></code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/volume_price_divergence.py</span>
+                    <span>量价背离</span>
+                </div>
+                <pre><code><span class="kw">class</span> <span class="cl">VolumePriceDivergenceAnalyzer</span>:
+    <span class="kw">def</span> <span class="fn">detect_price_up_volume_down</span>(<span class="kw">self</span>):
+        <span class="st">"""价升量减: 价格上涨但成交量下降, 上涨趋势可能衰竭"""</span>
+        <span class="cm"># 比较相邻上涨段的成交量: 后段量 < 前段量</span>
+
+    <span class="kw">def</span> <span class="fn">detect_price_down_volume_up</span>(<span class="kw">self</span>):
+        <span class="st">"""价跌量增: 价格下跌但成交量增加, 可能是恐慌抛售"""</span>
+
+    <span class="kw">def</span> <span class="fn">detect_ground_volume</span>(<span class="kw">self</span>):
+        <span class="st">"""地量地价: 成交量极低+价格低位, 可能是底部信号
+        量 < 近期均量的30% -> 地量"""</span></code></pre>
+            </div>
+{% endblock %}

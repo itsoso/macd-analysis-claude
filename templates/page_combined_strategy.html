@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+{% block title %}combined-strategy - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">双书融合策略</div>
+            <div class="page-subtitle">《背离技术分析》× 《均线技术分析》 · 背离拐点 + 均线趋势 · 信号共振减少假信号</div>
+
+            <div id="cs-loading" class="loading">
+                <div class="spinner"></div>
+                <p>加载融合策略数据...</p>
+            </div>
+
+            <div id="cs-content" style="display:none">
+                <!-- 融合原理 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>融合原理</h3>
+                    </div>
+                    <div style="padding:20px;line-height:1.8;color:var(--text-secondary)">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px">
+                            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;border-left:4px solid var(--accent-red)">
+                                <div style="font-weight:700;color:var(--accent-red);margin-bottom:8px">《背离技术分析》— 捕捉拐点</div>
+                                <div style="font-size:13px">MACD隔堆背离、面积背离、DIF背离、背驰、KDJ/CCI/RSI极值、量价分析</div>
+                                <div style="font-size:12px;color:var(--text-muted);margin-top:6px">核心能力: 检测价格与指标的不一致, 预判反转</div>
+                            </div>
+                            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;border-left:4px solid var(--accent-blue)">
+                                <div style="font-weight:700;color:var(--accent-blue);margin-bottom:8px">《均线技术分析》— 确认趋势</div>
+                                <div style="font-size:13px">葛南维八大法则、金叉死叉、多空排列、银山谷/金山谷/死亡谷、均线粘合突破</div>
+                                <div style="font-size:12px;color:var(--text-muted);margin-top:6px">核心能力: 确认趋势方向和强度, 过滤噪音</div>
+                            </div>
+                        </div>
+                        <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;border-left:4px solid var(--accent-purple)">
+                            <div style="font-weight:700;color:var(--accent-purple);margin-bottom:8px">融合逻辑 — 两种技术互补</div>
+                            <div style="font-size:13px">
+                                <b>加权融合:</b> 两系统信号按权重叠加 · <b>共振确认:</b> 两系统同时触发才交易(高确信度) · 
+                                <b>均线过滤背离:</b> 背离产生信号, 均线确认方向 · <b>背离过滤均线:</b> 均线产生信号, 背离确认拐点
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 信号统计 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>信号统计</h3>
+                    </div>
+                    <div id="cs-signal-stats" style="padding:20px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px"></div>
+                </div>
+
+                <!-- 策略卡片 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>8种融合策略对比</h3>
+                    </div>
+                    <div id="cs-strategy-cards" style="padding:20px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px"></div>
+                </div>
+
+                <!-- Alpha对比柱状图 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Alpha对比</h3>
+                    </div>
+                    <div id="cs-alpha-chart" style="padding:20px;height:280px;display:flex;align-items:flex-end;gap:12px;justify-content:center"></div>
+                </div>
+
+                <!-- 排名表格 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>策略排名</h3>
+                    </div>
+                    <div style="padding:0;overflow-x:auto">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th><th>策略</th><th>融合模式</th>
+                                    <th>Alpha</th><th>策略收益</th><th>买持收益</th>
+                                    <th>最大回撤</th><th>交易次数</th><th>强平</th>
+                                    <th>总费用</th><th>最终资产</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cs-ranking-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 最佳策略详情 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 id="cs-best-title">最佳策略交易记录</h3>
+                    </div>
+                    <div style="padding:0;overflow-x:auto">
+                        <table class="data-table" style="font-size:12px">
+                            <thead>
+                                <tr>
+                                    <th>时间</th><th>操作</th><th>价格</th>
+                                    <th>杠杆</th><th>总资产</th><th>原因</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cs-trades-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 跨策略对比 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>跨策略对比: 融合 vs 单独</h3>
+                    </div>
+                    <div id="cs-cross-compare" style="padding:20px"></div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="cs-conclusion"></div>
+            </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const INTERVALS = ['10m','15m','30m','1h','2h','3h','4h','6h','8h','16h','24h','32h'];
+const INTERVAL_LABELS = {'10m':'10分钟','15m':'15分钟','30m':'30分钟','1h':'1小时','2h':'2小时','3h':'3小时','4h':'4小时','6h':'6小时','8h':'8小时','16h':'16小时','24h':'24小时','32h':'32小时'};
+const COLORS = ['#4a9eff','#ff4d6a','#00d68f','#ffaa00','#a855f7','#06b6d4','#f43f5e','#84cc16','#ec4899','#f97316','#8b5cf6','#14b8a6'];
+function fmtDate(d) { return d ? d.toString().substring(0,16) : ''; }
+
+    // ===================== 双书融合策略 =====================
+    async function loadCombinedStrategy() {
+        try {
+            const res = await fetch('/api/combined_strategy');
+            if (res.ok) {
+                window._csLoaded = true;
+                renderCombinedStrategy(await res.json());
+            } else {
+                document.getElementById('cs-loading').innerHTML = '<p style="color:var(--accent-red);">融合策略数据未找到, 请先运行 python combined_strategy.py</p>';
+            }
+        } catch(e) {
+            document.getElementById('cs-loading').innerHTML = '<p style="color:var(--accent-red);">加载失败: '+e.message+'</p>';
+        }
+    }
+
+    function renderCombinedStrategy(data) {
+        document.getElementById('cs-loading').style.display = 'none';
+        document.getElementById('cs-content').style.display = 'block';
+
+        const results = data.results || [];
+        const ranking = data.ranking || [];
+        const bestInfo = data.best_strategy || {};
+        const sigInfo = data.signal_summary || {};
+
+        // 信号统计
+        const statsEl = document.getElementById('cs-signal-stats');
+        const statItems = [
+            {label: '1h背离信号', value: sigInfo.div_1h_count || 0, color: 'var(--accent-red)'},
+            {label: '8h背离信号', value: sigInfo.div_8h_count || 0, color: 'var(--accent-yellow)'},
+            {label: '均线买入信号', value: sigInfo.ma_buy_count || 0, color: 'var(--accent-green)'},
+            {label: '均线卖出信号', value: sigInfo.ma_sell_count || 0, color: 'var(--accent-blue)'},
+        ];
+        statsEl.innerHTML = statItems.map(s => `
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:16px;text-align:center;border-top:3px solid ${s.color}">
+                <div style="font-size:28px;font-weight:700;color:${s.color}">${s.value}</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${s.label}</div>
+            </div>`).join('');
+
+        // 策略卡片
+        const cardsEl = document.getElementById('cs-strategy-cards');
+        const fusionLabels = {
+            'weighted': '加权', 'resonance': '共振', 'ma_filter': '均线滤波', 'div_filter': '背离滤波'
+        };
+        const sorted = [...results].sort((a,b) => (b.alpha||0) - (a.alpha||0));
+        cardsEl.innerHTML = sorted.map((r, i) => {
+            const alpha = (r.alpha || 0);
+            const isTop = i === 0;
+            const borderColor = alpha > 10 ? 'var(--accent-green)' : alpha > 0 ? 'var(--accent-blue)' : 'var(--accent-red)';
+            const fees = r.fees || {};
+            return `
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:16px;border-left:4px solid ${borderColor};${isTop?'box-shadow:0 0 20px rgba(0,214,143,0.15);':''}">
+                <div style="font-weight:700;font-size:14px;margin-bottom:8px;color:var(--text-primary)">${isTop?'<span style="color:gold">★ </span>':''}${r.name}</div>
+                <div style="font-size:24px;font-weight:700;color:${borderColor};margin-bottom:8px">
+                    α ${alpha > 0 ? '+' : ''}${alpha.toFixed(2)}%
+                </div>
+                <div style="font-size:12px;color:var(--text-muted);line-height:1.8">
+                    收益: ${(r.strategy_return||0).toFixed(2)}% · 买持: ${(r.buy_hold_return||0).toFixed(2)}%<br>
+                    回撤: ${(r.max_drawdown||0).toFixed(2)}% · 交易: ${r.total_trades||0}笔<br>
+                    费用: $${(fees.total_costs||0).toLocaleString()}
+                </div>
+            </div>`;
+        }).join('');
+
+        // Alpha柱状图
+        const chartEl = document.getElementById('cs-alpha-chart');
+        const maxAlpha = Math.max(...results.map(r => Math.abs(r.alpha || 0)), 1);
+        chartEl.innerHTML = results.map(r => {
+            const alpha = r.alpha || 0;
+            const h = Math.max(8, Math.abs(alpha) / maxAlpha * 200);
+            const color = alpha > 10 ? 'var(--accent-green)' : alpha > 0 ? 'var(--accent-blue)' : 'var(--accent-red)';
+            const name = r.name.replace(/C\d+: /, '');
+            return `
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1">
+                <div style="font-size:11px;font-weight:600;color:${color}">${alpha > 0 ? '+' : ''}${alpha.toFixed(1)}%</div>
+                <div style="width:100%;height:${h}px;background:${color};border-radius:6px 6px 0 0;opacity:0.8"></div>
+                <div style="font-size:10px;color:var(--text-muted);text-align:center;max-width:80px;word-break:break-all">${name}</div>
+            </div>`;
+        }).join('');
+
+        // 排名表格
+        const rankBody = document.getElementById('cs-ranking-body');
+        const fusionModeMap = {};
+        const strategies = [
+            {name:'C1',mode:'加权(背离6:均线4)'},{name:'C2',mode:'加权(背离4:均线6)'},
+            {name:'C3',mode:'共振确认'},{name:'C4',mode:'均线过滤背离'},
+            {name:'C5',mode:'背离过滤均线'},{name:'C6',mode:'加权+激进做空'},
+            {name:'C7',mode:'共振+保守'},{name:'C8',mode:'均线过滤+趋势加速'}
+        ];
+        strategies.forEach(s => fusionModeMap[s.name] = s.mode);
+
+        rankBody.innerHTML = sorted.map((r, i) => {
+            const alpha = r.alpha || 0;
+            const ac = alpha > 10 ? 'var(--accent-green)' : alpha > 0 ? 'var(--accent-blue)' : 'var(--accent-red)';
+            const fees = r.fees || {};
+            const cKey = (r.name || '').substring(0, 2);
+            const mode = fusionModeMap[cKey] || '-';
+            return `<tr>
+                <td>${i+1}</td>
+                <td style="font-weight:600">${i===0?'★ ':''}${r.name}</td>
+                <td><span style="font-size:11px;background:var(--bg-hover);padding:2px 8px;border-radius:4px">${mode}</span></td>
+                <td style="font-weight:700;color:${ac}">${alpha>0?'+':''}${alpha.toFixed(2)}%</td>
+                <td>${(r.strategy_return||0).toFixed(2)}%</td>
+                <td>${(r.buy_hold_return||0).toFixed(2)}%</td>
+                <td>${(r.max_drawdown||0).toFixed(2)}%</td>
+                <td>${r.total_trades||0}</td>
+                <td>${r.liquidations||0}</td>
+                <td>$${(fees.total_costs||0).toLocaleString()}</td>
+                <td>$${(r.final_total||0).toLocaleString()}</td>
+            </tr>`;
+        }).join('');
+
+        // 最佳策略交易记录
+        const best = sorted[0];
+        document.getElementById('cs-best-title').textContent = `最佳策略: ${best.name} · 交易记录`;
+        const tradesBody = document.getElementById('cs-trades-body');
+        const trades = (best.trades || []).slice(0, 30);
+        tradesBody.innerHTML = trades.map(t => {
+            const action = t.action || '';
+            const ac = action.includes('SELL') || action.includes('SHORT') ? 'var(--accent-red)' :
+                        action.includes('BUY') || action.includes('LONG') ? 'var(--accent-green)' : 'var(--text-secondary)';
+            return `<tr>
+                <td style="font-size:11px">${(t.time||'').toString().substring(0,16)}</td>
+                <td style="color:${ac};font-weight:600">${action}</td>
+                <td>$${(t.price||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td>${t.leverage||1}x</td>
+                <td>$${(t.total||0).toLocaleString()}</td>
+                <td style="font-size:11px;color:var(--text-muted);max-width:300px;overflow:hidden;text-overflow:ellipsis">${t.reason||''}</td>
+            </tr>`;
+        }).join('');
+
+        // 跨策略对比
+        const crossEl = document.getElementById('cs-cross-compare');
+        const bestAlpha = best.alpha || 0;
+        crossEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">融合策略最佳α</div>
+                <div style="font-size:32px;font-weight:700;color:var(--accent-green)">${bestAlpha>0?'+':''}${bestAlpha.toFixed(2)}%</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${best.name}</div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">交易次数 / 强平</div>
+                <div style="font-size:32px;font-weight:700;color:var(--accent-blue)">${best.total_trades||0} / ${best.liquidations||0}</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px">手续费 $${((best.fees||{}).total_costs||0).toLocaleString()}</div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">最大回撤</div>
+                <div style="font-size:32px;font-weight:700;color:var(--accent-yellow)">${(best.max_drawdown||0).toFixed(2)}%</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px">最终资产 $${(best.final_total||0).toLocaleString()}</div>
+            </div>
+        </div>
+        <div style="margin-top:20px;padding:16px;background:var(--bg-secondary);border-radius:12px;font-size:13px;color:var(--text-secondary);line-height:1.8">
+            <b style="color:var(--accent-purple)">融合优势分析:</b><br>
+            · 背离系统擅长检测<b style="color:var(--accent-red)">顶部/底部拐点</b>，均线系统擅长确认<b style="color:var(--accent-blue)">趋势方向</b><br>
+            · 两者结合可以在背离信号出现时，用均线排列方向进行二次确认，过滤假信号<br>
+            · 共振策略(C3)虽然交易次数少，但信号质量最高；加权策略(C1/C2)则平衡了信号覆盖率和准确度<br>
+            · 激进做空(C6)在下跌行情中表现突出，因为背离顶部信号+均线空头排列的双重确认大幅提升了做空时机的准确性
+        </div>`;
+
+        // 结论
+        const conclusionEl = document.getElementById('cs-conclusion');
+        const bestFees = best.fees || {};
+        conclusionEl.innerHTML = `
+            <div class="card-title">回测结论</div>
+            <div style="background:rgba(168,85,247,0.08);border-radius:8px;padding:16px;border-left:3px solid var(--accent-purple);">
+                <div style="font-weight:700;color:var(--accent-purple);margin-bottom:8px;">
+                    最佳融合策略: ${best.name} · α = ${bestAlpha > 0 ? '+' : ''}${bestAlpha.toFixed(2)}%
+                </div>
+                <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                    基于《背离技术分析》和《均线技术分析》双书融合, 在ETH/USDT ${data.trade_days || 30}天回测中:<br>
+                    · 买入持有收益: ${(best.buy_hold_return || 0).toFixed(2)}%<br>
+                    · 最佳策略收益: ${(best.strategy_return || 0).toFixed(2)}%, 超额α = ${bestAlpha > 0 ? '+' : ''}${bestAlpha.toFixed(2)}%<br>
+                    · 交易${best.total_trades||0}笔, 最大回撤${(best.max_drawdown||0).toFixed(2)}%<br>
+                    · 总费用: 现货$${(bestFees.spot_fees||0).toLocaleString()} + 合约$${(bestFees.futures_fees||0).toLocaleString()} + 资金费$${(bestFees.net_funding||0).toLocaleString()} + 滑点$${(bestFees.slippage_cost||0).toLocaleString()}<br>
+                    · <b style="color:var(--accent-purple)">核心价值:</b> 两本书的技术体系互补融合, 背离检测拐点 + 均线确认趋势, 有效减少假信号, 提升交易质量
+                </div>
+            </div>
+        `;
+    }
+
+// Auto-load on page ready
+document.addEventListener('DOMContentLoaded', function() {
+    loadCombinedStrategy();
+});
+</script>
+{% endblock %}

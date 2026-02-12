@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}code-macd - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">第三章 · MACD 技术指标背离</div>
+            <div class="page-subtitle">macd_divergence.py · 书中最核心的背离检测</div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/macd_divergence.py</span>
+                    <span>黄白线(DIF/DEA)背离</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_dif_dea_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+    <span class="st">"""价格创新高但DIF/DEA未创新高 = 顶背离
+    价格创新低但DIF/DEA未创新低 = 底背离"""</span>
+    price_highs = find_swing_highs(df[<span class="st">'high'</span>], order)
+    dif_at_highs = [df[<span class="st">'DIF'</span>].iloc[h] <span class="kw">for</span> h <span class="kw">in</span> price_highs]
+
+    <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nu">1</span>, len(price_highs)):
+        <span class="cm"># 价格新高但DIF未新高 -> 顶背离</span>
+        <span class="kw">if</span> df[<span class="st">'high'</span>].iloc[price_highs[i]] > df[<span class="st">'high'</span>].iloc[price_highs[i-<span class="nu">1</span>]] \
+           <span class="kw">and</span> dif_at_highs[i] < dif_at_highs[i-<span class="nu">1</span>] * <span class="nu">0.9</span>:
+            signals.append({<span class="st">'type'</span>: <span class="st">'top'</span>, <span class="st">'subtype'</span>: <span class="st">'dif_dea'</span>, ...})</code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/macd_divergence.py</span>
+                    <span>彩柱线长度背离 (当堆/邻堆/隔堆)</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_bar_length_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+    <span class="st">"""MACD柱线长度背离 — 三种子类型"""</span>
+    groups = identify_bar_groups(df[<span class="st">'MACD_BAR'</span>])
+
+    <span class="cm"># 1. 当堆背离: 同一堆内后面柱子的最大值开始缩小</span>
+    <span class="kw">for</span> g <span class="kw">in</span> groups:
+        bars = df[<span class="st">'MACD_BAR'</span>].iloc[g[<span class="st">'start'</span>]:g[<span class="st">'end'</span>]+<span class="nu">1</span>]
+        peak_idx = bars.abs().idxmax()
+        <span class="cm"># 如果峰值出现在堆的前半部分, 后半部分持续缩小 -> 当堆背离</span>
+
+    <span class="cm"># 2. 邻堆背离: 相邻两个同色堆的最大柱子对比</span>
+    red_groups = [g <span class="kw">for</span> g <span class="kw">in</span> groups <span class="kw">if</span> g[<span class="st">'type'</span>] == <span class="st">'red'</span>]
+    <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nu">1</span>, len(red_groups)):
+        <span class="kw">if</span> max_bar(red_groups[i]) < max_bar(red_groups[i-<span class="nu">1</span>]) * <span class="nu">0.7</span>:
+            <span class="cm"># 邻堆背离 (如果两堆相邻) 或 隔堆背离 (如果中间隔了其他堆)</span>
+
+    <span class="cm"># 3. 隔堆背离 (最重要! 判断背驰的核心依据)</span></code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/macd_divergence.py</span>
+                    <span>彩柱线面积背离 & 金叉死叉分析</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_bar_area_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>):
+    <span class="st">"""柱堆面积(所有柱子绝对值之和)背离"""</span>
+    groups = identify_bar_groups(df[<span class="st">'MACD_BAR'</span>])
+    <span class="kw">for</span> g <span class="kw">in</span> groups:
+        g[<span class="st">'area'</span>] = df[<span class="st">'MACD_BAR'</span>].iloc[g[<span class="st">'start'</span>]:g[<span class="st">'end'</span>]+<span class="nu">1</span>].abs().sum()
+    <span class="cm"># 比较同色相邻/隔堆的面积变化</span>
+
+<span class="kw">def</span> <span class="fn">analyze_macd_crosses</span>(<span class="kw">self</span>):
+    <span class="st">"""金叉: DIF上穿DEA (买入信号)
+    死叉: DIF下穿DEA (卖出信号)
+    零轴上方金叉更强, 零轴下方死叉更弱"""</span>
+    crosses = find_macd_crosses(df[<span class="st">'DIF'</span>], df[<span class="st">'DEA'</span>])
+    <span class="kw">for</span> c <span class="kw">in</span> crosses:
+        c[<span class="st">'above_zero'</span>] = df[<span class="st">'DIF'</span>].iloc[c[<span class="st">'idx'</span>]] > <span class="nu">0</span>
+    <span class="kw">return</span> crosses</code></pre>
+            </div>
+{% endblock %}

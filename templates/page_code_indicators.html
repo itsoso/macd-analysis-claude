@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}code-indicators - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">技术指标计算</div>
+            <div class="page-subtitle">indicators.py · 所有分析的基础</div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">indicators.py</span>
+                    <span>MACD 计算</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">calc_macd</span>(close: pd.Series, fast=<span class="nu">12</span>, slow=<span class="nu">26</span>, signal=<span class="nu">9</span>) -> pd.DataFrame:
+    <span class="st">"""计算MACD指标: DIF, DEA, MACD_BAR"""</span>
+    ema_fast = close.ewm(span=fast, adjust=<span class="kw">False</span>).mean()
+    ema_slow = close.ewm(span=slow, adjust=<span class="kw">False</span>).mean()
+    dif = ema_fast - ema_slow                    <span class="cm"># 快线-慢线 = DIF(白线)</span>
+    dea = dif.ewm(span=signal, adjust=<span class="kw">False</span>).mean()  <span class="cm"># DIF的EMA = DEA(黄线)</span>
+    bar = <span class="nu">2</span> * (dif - dea)                       <span class="cm"># 红绿柱 = 2*(DIF-DEA)</span>
+    <span class="kw">return</span> pd.DataFrame({<span class="st">'DIF'</span>: dif, <span class="st">'DEA'</span>: dea, <span class="st">'MACD_BAR'</span>: bar})</code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">indicators.py</span>
+                    <span>KDJ / CCI / RSI</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">calc_kdj</span>(high, low, close, n=<span class="nu">9</span>, m1=<span class="nu">3</span>, m2=<span class="nu">3</span>):
+    <span class="st">"""KDJ随机指标: RSV -> K -> D -> J"""</span>
+    lowest = low.rolling(n).min()
+    highest = high.rolling(n).max()
+    rsv = (close - lowest) / (highest - lowest) * <span class="nu">100</span>
+    k = rsv.ewm(com=m1-<span class="nu">1</span>, adjust=<span class="kw">False</span>).mean()
+    d = k.ewm(com=m2-<span class="nu">1</span>, adjust=<span class="kw">False</span>).mean()
+    j = <span class="nu">3</span> * k - <span class="nu">2</span> * d
+    <span class="kw">return</span> pd.DataFrame({<span class="st">'K'</span>: k, <span class="st">'D'</span>: d, <span class="st">'J'</span>: j})
+
+<span class="kw">def</span> <span class="fn">calc_cci</span>(high, low, close, n=<span class="nu">14</span>):
+    <span class="st">"""CCI顺势指标: TP的偏离度/平均偏差"""</span>
+    tp = (high + low + close) / <span class="nu">3</span>
+    ma = tp.rolling(n).mean()
+    md = tp.rolling(n).apply(<span class="kw">lambda</span> x: np.abs(x - x.mean()).mean())
+    <span class="kw">return</span> (tp - ma) / (<span class="nu">0.015</span> * md)
+
+<span class="kw">def</span> <span class="fn">calc_rsi</span>(close, period=<span class="nu">6</span>):
+    <span class="st">"""RSI相对强弱指标: 涨幅均值/(涨幅均值+跌幅均值)*100"""</span>
+    delta = close.diff()
+    gain = delta.clip(lower=<span class="nu">0</span>).ewm(alpha=<span class="nu">1</span>/period, adjust=<span class="kw">False</span>).mean()
+    loss = (-delta.clip(upper=<span class="nu">0</span>)).ewm(alpha=<span class="nu">1</span>/period, adjust=<span class="kw">False</span>).mean()
+    <span class="kw">return</span> <span class="nu">100</span> - <span class="nu">100</span> / (<span class="nu">1</span> + gain / loss)</code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">indicators.py</span>
+                    <span>辅助函数: 波峰波谷 / 趋势分段 / MACD柱堆识别</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">find_swing_highs</span>(series, order=<span class="nu">5</span>):
+    <span class="st">"""寻找局部高点(波峰), order=前后各5根K线范围"""</span>
+    highs = []
+    <span class="kw">for</span> i <span class="kw">in</span> range(order, len(series) - order):
+        <span class="kw">if</span> all(series.iloc[i] >= series.iloc[i-j] <span class="kw">for</span> j <span class="kw">in</span> range(<span class="nu">1</span>, order+<span class="nu">1</span>)) \
+           <span class="kw">and</span> all(series.iloc[i] >= series.iloc[i+j] <span class="kw">for</span> j <span class="kw">in</span> range(<span class="nu">1</span>, order+<span class="nu">1</span>)):
+            highs.append(i)
+    <span class="kw">return</span> highs
+
+<span class="kw">def</span> <span class="fn">identify_bar_groups</span>(bar: pd.Series):
+    <span class="st">"""识别MACD柱堆: 连续红柱(>0)或绿柱(<0)为一堆"""</span>
+    groups = []
+    current_sign = <span class="kw">None</span>
+    start_idx = <span class="nu">0</span>
+    <span class="kw">for</span> i, v <span class="kw">in</span> enumerate(bar):
+        sign = <span class="st">'red'</span> <span class="kw">if</span> v >= <span class="nu">0</span> <span class="kw">else</span> <span class="st">'green'</span>
+        <span class="kw">if</span> sign != current_sign:
+            <span class="kw">if</span> current_sign <span class="kw">is not None</span>:
+                groups.append({<span class="st">'type'</span>: current_sign, <span class="st">'start'</span>: start_idx, <span class="st">'end'</span>: i-<span class="nu">1</span>})
+            current_sign = sign
+            start_idx = i
+    groups.append({<span class="st">'type'</span>: current_sign, <span class="st">'start'</span>: start_idx, <span class="st">'end'</span>: len(bar)-<span class="nu">1</span>})
+    <span class="kw">return</span> groups</code></pre>
+            </div>
+{% endblock %}

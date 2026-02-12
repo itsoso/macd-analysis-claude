@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}global-strategy - 技术分析平台{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+{% endblock %}
+
+{% block content %}
+            <div class="page-title">全局多周期融合策略</div>
+            <div class="page-subtitle">初始配置 100,000 USDT + 价值 100,000 USDT 的 ETH · 9个周期加权信号融合</div>
+
+            <div id="gs-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载全局策略数据...
+            </div>
+
+            <div id="gs-content" style="display:none;">
+                <!-- 摘要统计 -->
+                <div class="stats-grid" id="gs-stats"></div>
+
+                <!-- 策略说明 -->
+                <div class="card">
+                    <div class="card-title">策略说明</div>
+                    <div class="principle-grid">
+                        <div class="principle-card sell">
+                            <h3>卖出逻辑 (宁早勿晚)</h3>
+                            <p>
+                                • 多周期背驰卖出信号 → 卖出60%仓位<br>
+                                • 加权顶背离≥35 且仓位>30% → 卖出30~40%<br>
+                                • 强顶背离≥50 且仓位>20% → 卖出40~60%<br>
+                                • ETH浮亏超12% → 止损减仓50%
+                            </p>
+                        </div>
+                        <div class="principle-card buy">
+                            <h3>买入逻辑 (宁迟勿早)</h3>
+                            <p>
+                                • 多周期背驰买入信号 → 买入50%可用资金<br>
+                                • 加权底背离≥45 且仓位<50% → 买入30%<br>
+                                • 强底背离≥60 且仓位<60% → 买入50%<br>
+                                • 冷却期: 8小时
+                            </p>
+                        </div>
+                    </div>
+                    <div style="margin-top:16px;">
+                        <div class="card-title" style="font-size:14px;">各周期权重</div>
+                        <div id="gs-weights" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;"></div>
+                    </div>
+                </div>
+
+                <!-- 资产曲线 -->
+                <div class="chart-container">
+                    <div class="chart-toolbar">
+                        <h3>总资产曲线</h3>
+                        <span style="font-size:12px;color:var(--text-muted);">蓝线=策略总资产 | 灰虚线=买入持有</span>
+                    </div>
+                    <div id="gs-equity-chart" style="width:100%;height:350px;"></div>
+                </div>
+
+                <!-- 仓位变化 -->
+                <div class="chart-container">
+                    <div class="chart-toolbar">
+                        <h3>ETH仓位比例变化</h3>
+                        <span style="font-size:12px;color:var(--text-muted);">ETH占总资产的比例</span>
+                    </div>
+                    <div id="gs-ratio-chart" style="width:100%;height:200px;"></div>
+                </div>
+
+                <!-- 交易明细表 -->
+                <div class="card">
+                    <div class="card-title">全部交易明细 <span class="badge" id="gs-trade-count"></span></div>
+                    <div class="trade-table-wrap" style="max-height:600px;">
+                        <table id="gs-trades-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>时间</th>
+                                    <th>操作</th>
+                                    <th>类型</th>
+                                    <th>ETH价格</th>
+                                    <th>数量(ETH)</th>
+                                    <th>金额(USDT)</th>
+                                    <th>手续费</th>
+                                    <th>USDT余额</th>
+                                    <th>ETH持仓</th>
+                                    <th>总资产</th>
+                                    <th>原因</th>
+                                    <th>各周期信号</th>
+                                </tr>
+                            </thead>
+                            <tbody id="gs-trades-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const INTERVALS = ['10m','15m','30m','1h','2h','3h','4h','6h','8h','16h','24h','32h'];
+const INTERVAL_LABELS = {'10m':'10分钟','15m':'15分钟','30m':'30分钟','1h':'1小时','2h':'2小时','3h':'3小时','4h':'4小时','6h':'6小时','8h':'8小时','16h':'16小时','24h':'24小时','32h':'32小时'};
+const COLORS = ['#4a9eff','#ff4d6a','#00d68f','#ffaa00','#a855f7','#06b6d4','#f43f5e','#84cc16','#ec4899','#f97316','#8b5cf6','#14b8a6'];
+function fmtDate(d) { return d ? d.toString().substring(0,16) : ''; }
+
+    // ========================================
+    //   Global Strategy
+    // ========================================
+    let gsData = null;
+
+    async function loadGlobalStrategy() {
+        if (window._gsLoaded) return;
+        try {
+            const resp = await fetch('/api/global_strategy');
+            if (!resp.ok) throw new Error('No data');
+            gsData = await resp.json();
+            window._gsLoaded = true;
+            renderGS();
+            document.getElementById('gs-loading').style.display = 'none';
+            document.getElementById('gs-content').style.display = 'block';
+        } catch (e) {
+            document.getElementById('gs-loading').innerHTML =
+                '<span style="color:var(--accent-red)">未找到全局策略数据。请先运行: python global_strategy.py</span>';
+        }
+    }
+
+    function renderGS() {
+        const s = gsData.summary;
+        const trades = gsData.trades || [];
+
+        // Stats
+        document.getElementById('gs-stats').innerHTML = [
+            {label:'初始总资产', value:'$'+s.initial_total.toLocaleString(), cls:''},
+            {label:'最终总资产', value:'$'+s.final_total.toLocaleString(), cls: s.final_total >= s.initial_total ? 'positive' : 'negative'},
+            {label:'策略收益', value: s.strategy_return+'%', cls: s.strategy_return >= 0 ? 'positive' : 'negative'},
+            {label:'买入持有收益', value: s.buy_hold_return+'%', cls: s.buy_hold_return >= 0 ? 'positive' : 'negative'},
+            {label:'超额收益', value: (s.alpha >= 0 ? '+' : '') + s.alpha + '%', cls: s.alpha >= 0 ? 'positive' : 'negative'},
+            {label:'最大回撤', value: s.max_drawdown+'%', cls:'negative'},
+            {label:'ETH价格变化', value: s.eth_price_change+'%', cls: s.eth_price_change >= 0 ? 'positive' : 'negative'},
+            {label:'买入/卖出次数', value: s.total_buy_trades + '买 / ' + s.total_sell_trades + '卖', cls:''},
+            {label:'最终USDT', value: '$'+s.final_usdt.toLocaleString(), cls:''},
+            {label:'最终ETH持仓', value: s.final_eth_qty + ' ETH', cls:'', note: '$' + s.final_eth_value.toLocaleString()},
+        ].map(item => `
+            <div class="stat-card">
+                <div class="stat-label">${item.label}</div>
+                <div class="stat-value ${item.cls}" style="font-size:${item.value.length > 12 ? '18' : '24'}px;">${item.value}</div>
+                ${item.note ? '<div class="stat-note">' + item.note + '</div>' : ''}
+            </div>
+        `).join('');
+
+        // Weights
+        const weights = gsData.tf_weights || {};
+        document.getElementById('gs-weights').innerHTML = Object.entries(weights)
+            .sort((a,b) => b[1] - a[1])
+            .map(([tf, w]) => {
+                const pct = Math.round(w * 100);
+                const hue = pct > 70 ? 142 : pct > 50 ? 45 : 220;
+                return `<div style="padding:6px 12px;border-radius:8px;border:1px solid var(--border);font-size:12px;">
+                    <strong>${INTERVAL_LABELS[tf] || tf}</strong>
+                    <span style="color:hsl(${hue},70%,60%);margin-left:4px;">${pct}%</span>
+                    <div style="height:3px;margin-top:4px;border-radius:2px;background:var(--border);width:80px;">
+                        <div style="height:100%;width:${pct}%;background:hsl(${hue},70%,60%);border-radius:2px;"></div>
+                    </div>
+                </div>`;
+            }).join('');
+
+        // Trade count badge
+        document.getElementById('gs-trade-count').textContent = trades.length + '笔交易';
+
+        // Equity chart
+        renderGSEquity();
+
+        // Ratio chart
+        renderGSRatio();
+
+        // Trades table
+        renderGSTrades();
+    }
+
+    function renderGSEquity() {
+        const container = document.getElementById('gs-equity-chart');
+        const ph = gsData.portfolio_history || [];
+        if (!ph.length) return;
+
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth, height: 350,
+            layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            crosshair: { mode: 0 },
+            timeScale: { timeVisible: true, secondsVisible: false },
+        });
+
+        // Strategy total
+        const stLine = chart.addLineSeries({ color: '#4a9eff', lineWidth: 2, title: '策略总资产' });
+        stLine.setData(ph.map(p => ({
+            time: Math.floor(new Date(p.time).getTime() / 1000),
+            value: p.total,
+        })));
+
+        // Buy & hold baseline
+        const initTotal = gsData.summary.initial_total;
+        const firstEthP = ph[0].eth_price;
+        const bhLine = chart.addLineSeries({ color: '#5c6078', lineWidth: 1, lineStyle: 2, title: '买入持有' });
+        bhLine.setData(ph.map(p => ({
+            time: Math.floor(new Date(p.time).getTime() / 1000),
+            value: 100000 + (100000 / firstEthP) * p.eth_price,
+        })));
+
+        // Buy/sell markers on equity
+        const markers = (gsData.trades || []).map(t => ({
+            time: Math.floor(new Date(t.time).getTime() / 1000),
+            position: t.action === 'BUY' ? 'belowBar' : 'aboveBar',
+            color: t.action === 'BUY' ? '#00d68f' : '#ff4d6a',
+            shape: t.action === 'BUY' ? 'arrowUp' : 'arrowDown',
+            text: t.action === 'BUY' ? 'B' : 'S',
+        }));
+        stLine.setMarkers(markers);
+
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderGSRatio() {
+        const container = document.getElementById('gs-ratio-chart');
+        const ph = gsData.portfolio_history || [];
+        if (!ph.length) return;
+
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth, height: 200,
+            layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            crosshair: { mode: 0 },
+            timeScale: { timeVisible: true, secondsVisible: false },
+            rightPriceScale: { autoScale: true },
+        });
+
+        const areaS = chart.addAreaSeries({
+            topColor: 'rgba(74,158,255,0.3)',
+            bottomColor: 'rgba(74,158,255,0.02)',
+            lineColor: '#4a9eff',
+            lineWidth: 1,
+            title: 'ETH仓位%',
+        });
+        areaS.setData(ph.map(p => ({
+            time: Math.floor(new Date(p.time).getTime() / 1000),
+            value: p.eth_ratio,
+        })));
+
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderGSTrades() {
+        const trades = gsData.trades || [];
+        const tbody = document.getElementById('gs-trades-body');
+
+        tbody.innerHTML = trades.map((t, i) => {
+            const isBuy = t.action === 'BUY';
+            const actionCls = isBuy ? 'pnl-pos' : 'pnl-neg';
+            const typeBg = t.type === '止损减仓' ? 'background:rgba(255,77,106,0.08);' : '';
+            const dt = new Date(t.time);
+            const timeStr = `${dt.getMonth()+1}/${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+
+            return `<tr style="${typeBg}">
+                <td>${i+1}</td>
+                <td style="white-space:nowrap;">${timeStr}</td>
+                <td class="${actionCls}" style="font-weight:700;">${t.action}</td>
+                <td>${t.type}</td>
+                <td>$${t.price.toLocaleString()}</td>
+                <td>${t.quantity.toFixed(4)}</td>
+                <td>$${t.value.toLocaleString()}</td>
+                <td>$${t.fee.toFixed(2)}</td>
+                <td>$${t.usdt_after.toLocaleString()}</td>
+                <td>${t.eth_after.toFixed(4)}</td>
+                <td>$${t.total_assets.toLocaleString()}</td>
+                <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${t.reason}">${t.reason}</td>
+                <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--text-muted);" title="${t.signal_tf||''}">${t.signal_tf||'—'}</td>
+            </tr>`;
+        }).join('');
+    }
+
+
+// Auto-load on page ready
+document.addEventListener('DOMContentLoaded', function() {
+    loadGlobalStrategy();
+});
+</script>
+{% endblock %}

@@ -37,6 +37,13 @@ divergence_analysis.png
 # Environment
 .env
 *.log
+*.jsonl
 timeframe_test_result.json
 timeframe_analysis_result.json
 strategy_15m_result.json
+ma_strategy_result.json
+
+# Live trading
+logs/
+data/
+live_trading_config.json

@@ -1,0 +1,629 @@
+{% extends "base.html" %}
+{% block title %}实盘控制面板 - 技术分析平台{% endblock %}
+
+{% block content %}
+<style>
+    .control-header { margin-bottom: 32px; }
+    .control-header h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .control-header p { color: var(--text-secondary); font-size: 14px; }
+
+    .status-bar {
+        display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 28px;
+    }
+    .status-chip {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 16px; border-radius: 8px;
+        background: var(--bg-card); border: 1px solid var(--border);
+        font-size: 13px;
+    }
+    .status-dot {
+        width: 8px; height: 8px; border-radius: 50%;
+    }
+    .status-dot.green { background: var(--accent-green); box-shadow: 0 0 6px var(--accent-green); }
+    .status-dot.red { background: var(--accent-red); }
+    .status-dot.yellow { background: var(--accent-yellow); animation: pulse 2s infinite; }
+    .status-dot.gray { background: var(--text-muted); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+    .grid-1 { margin-bottom: 20px; }
+    @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+
+    .ctrl-card {
+        background: var(--bg-card); border: 1px solid var(--border);
+        border-radius: 12px; padding: 24px; position: relative;
+    }
+    .ctrl-card h3 {
+        font-size: 15px; font-weight: 600; margin-bottom: 6px;
+        display: flex; align-items: center; gap: 8px;
+    }
+    .ctrl-card .desc { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; }
+
+    .btn {
+        padding: 10px 20px; border: none; border-radius: 8px;
+        font-size: 14px; font-weight: 600; cursor: pointer;
+        transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: var(--accent-blue); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #3b82f6; box-shadow: 0 4px 16px rgba(74,158,255,0.3); }
+    .btn-success { background: var(--accent-green); color: #000; }
+    .btn-success:hover:not(:disabled) { box-shadow: 0 4px 16px rgba(0,214,143,0.3); }
+    .btn-danger { background: var(--accent-red); color: #fff; }
+    .btn-danger:hover:not(:disabled) { box-shadow: 0 4px 16px rgba(255,77,106,0.3); }
+    .btn-warn { background: var(--accent-yellow); color: #000; }
+    .btn-warn:hover:not(:disabled) { box-shadow: 0 4px 16px rgba(255,170,0,0.3); }
+    .btn-outline {
+        background: transparent; color: var(--text-primary);
+        border: 1px solid var(--border);
+    }
+    .btn-outline:hover:not(:disabled) { border-color: var(--accent-blue); color: var(--accent-blue); }
+    .btn-sm { padding: 6px 14px; font-size: 13px; }
+
+    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .output-box {
+        margin-top: 16px; background: #0d0f17; border: 1px solid var(--border);
+        border-radius: 8px; padding: 16px; font-family: 'JetBrains Mono', monospace;
+        font-size: 13px; line-height: 1.7; white-space: pre-wrap; word-break: break-all;
+        max-height: 400px; overflow-y: auto; color: var(--text-secondary);
+        display: none;
+    }
+    .output-box.visible { display: block; }
+    .output-box .line-ok { color: var(--accent-green); }
+    .output-box .line-err { color: var(--accent-red); }
+    .output-box .line-info { color: var(--accent-blue); }
+    .output-box .line-warn { color: var(--accent-yellow); }
+
+    .result-badge {
+        display: inline-block; padding: 3px 10px; border-radius: 6px;
+        font-size: 12px; font-weight: 600; margin-top: 12px;
+    }
+    .result-badge.success { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+    .result-badge.error { background: rgba(255,77,106,0.15); color: var(--accent-red); }
+
+    .spinner-sm {
+        display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3);
+        border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .config-editor {
+        width: 100%; min-height: 300px; background: #0d0f17; color: var(--text-primary);
+        border: 1px solid var(--border); border-radius: 8px; padding: 16px;
+        font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.6;
+        resize: vertical; outline: none;
+    }
+    .config-editor:focus { border-color: var(--accent-blue); }
+
+    select.phase-select {
+        padding: 8px 12px; background: var(--bg-secondary); color: var(--text-primary);
+        border: 1px solid var(--border); border-radius: 8px; font-size: 14px;
+        outline: none; cursor: pointer;
+    }
+    select.phase-select:focus { border-color: var(--accent-blue); }
+
+    .info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+    .info-item { background: var(--bg-secondary); border-radius: 8px; padding: 12px; }
+    .info-item .label { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; }
+    .info-item .value { font-size: 18px; font-weight: 700; }
+    .info-item .value.green { color: var(--accent-green); }
+    .info-item .value.red { color: var(--accent-red); }
+
+    .tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+    .tab-btn {
+        padding: 10px 20px; font-size: 14px; font-weight: 500;
+        color: var(--text-muted); background: none; border: none;
+        border-bottom: 2px solid transparent; cursor: pointer; transition: all 0.2s;
+    }
+    .tab-btn:hover { color: var(--text-primary); }
+    .tab-btn.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .kill-switch-btn {
+        padding: 16px 32px; font-size: 18px; font-weight: 700;
+        background: linear-gradient(135deg, #dc2626, #b91c1c);
+        color: #fff; border: 2px solid #ef4444; border-radius: 12px;
+        cursor: pointer; transition: all 0.2s; width: 100%;
+    }
+    .kill-switch-btn:hover:not(:disabled) {
+        box-shadow: 0 0 30px rgba(255,77,106,0.4);
+        transform: scale(1.01);
+    }
+    .kill-switch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+</style>
+
+<div class="control-header">
+    <h1>🎛️ 实盘控制面板</h1>
+    <p>六书融合策略 · 实时管理与监控</p>
+</div>
+
+<!-- 状态栏 -->
+<div class="status-bar" id="statusBar">
+    <div class="status-chip">
+        <span class="status-dot gray" id="engineDot"></span>
+        <span id="engineStatus">引擎: 未运行</span>
+    </div>
+    <div class="status-chip">
+        <span class="status-dot gray" id="riskDot"></span>
+        <span id="riskStatus">风控: --</span>
+    </div>
+    <div class="status-chip">
+        <span id="equityDisplay">权益: --</span>
+    </div>
+    <div class="status-chip">
+        <span id="positionDisplay">持仓: 无</span>
+    </div>
+</div>
+
+<!-- Tab 栏 -->
+<div class="tab-bar">
+    <button class="tab-btn active" data-tab="operations">操作</button>
+    <button class="tab-btn" data-tab="config">配置</button>
+    <button class="tab-btn" data-tab="status">状态监控</button>
+    <button class="tab-btn" data-tab="logs">日志</button>
+</div>
+
+<!-- Tab: 操作 -->
+<div class="tab-panel active" id="tab-operations">
+    <div class="grid-2">
+        <!-- 信号测试 -->
+        <div class="ctrl-card">
+            <h3>📡 测试信号计算</h3>
+            <p class="desc">获取最新K线数据，计算六维融合信号，展示推荐动作</p>
+            <div class="btn-group">
+                <select class="phase-select" id="signalTF">
+                    <option value="1h" selected>1h</option>
+                    <option value="15m">15m</option>
+                    <option value="30m">30m</option>
+                    <option value="4h">4h</option>
+                    <option value="8h">8h</option>
+                    <option value="1d">1d</option>
+                </select>
+                <button class="btn btn-primary" onclick="testSignal()">
+                    <span id="signalBtnText">运行测试</span>
+                </button>
+            </div>
+            <div class="output-box" id="signalOutput"></div>
+        </div>
+
+        <!-- API 连接测试 -->
+        <div class="ctrl-card">
+            <h3>🔗 测试 API 连接</h3>
+            <p class="desc">检测 Binance API 连接状态、余额和当前价格</p>
+            <button class="btn btn-primary" onclick="testConnection()">
+                <span id="connBtnText">测试连接</span>
+            </button>
+            <div class="output-box" id="connOutput"></div>
+        </div>
+
+        <!-- 启动引擎 -->
+        <div class="ctrl-card">
+            <h3>🚀 启动交易引擎</h3>
+            <p class="desc">选择阶段并启动后台交易引擎</p>
+            <div class="btn-group">
+                <select class="phase-select" id="enginePhase">
+                    <option value="paper" selected>Phase 1: 纸上交易</option>
+                    <option value="testnet">Phase 2: 测试网</option>
+                    <option value="small_live">Phase 3: 小资金实盘</option>
+                    <option value="scale_up">Phase 4: 逐步加仓</option>
+                </select>
+                <button class="btn btn-success" onclick="startEngine()">
+                    <span id="startBtnText">启动</span>
+                </button>
+                <button class="btn btn-outline" onclick="stopEngine()">停止</button>
+            </div>
+            <div class="output-box" id="engineOutput"></div>
+        </div>
+
+        <!-- 生成配置 -->
+        <div class="ctrl-card">
+            <h3>⚙️ 生成配置模板</h3>
+            <p class="desc">生成 live_trading_config.json 配置模板文件</p>
+            <button class="btn btn-primary" onclick="generateConfig()">
+                <span id="genBtnText">生成配置</span>
+            </button>
+            <div class="output-box" id="genOutput"></div>
+        </div>
+    </div>
+
+    <!-- Kill Switch -->
+    <div class="ctrl-card" style="border-color: rgba(255,77,106,0.3);">
+        <h3 style="color: var(--accent-red);">🚨 Kill Switch 紧急平仓</h3>
+        <p class="desc">立即平仓所有持仓、撤销所有挂单。此操作不可撤销！</p>
+        <button class="kill-switch-btn" id="killBtn" onclick="killSwitch()">
+            ⚠️ 紧急平仓 (Kill Switch)
+        </button>
+        <div class="output-box" id="killOutput"></div>
+    </div>
+</div>
+
+<!-- Tab: 配置 -->
+<div class="tab-panel" id="tab-config">
+    <div class="ctrl-card">
+        <h3>📝 配置文件编辑器</h3>
+        <p class="desc">编辑 live_trading_config.json — 修改 API Key、交易参数、风控设置</p>
+        <div class="btn-group" style="margin-bottom: 16px;">
+            <button class="btn btn-outline btn-sm" onclick="loadConfig()">加载配置</button>
+            <button class="btn btn-primary btn-sm" onclick="saveConfig()">保存配置</button>
+            <button class="btn btn-outline btn-sm" onclick="generateConfig()">重新生成模板</button>
+        </div>
+        <textarea class="config-editor" id="configEditor" spellcheck="false" placeholder='点击 "加载配置" 或 "重新生成模板" 开始...'></textarea>
+        <div id="configResult"></div>
+    </div>
+</div>
+
+<!-- Tab: 状态监控 -->
+<div class="tab-panel" id="tab-status">
+    <div class="ctrl-card" style="margin-bottom: 20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <h3>📊 引擎状态</h3>
+            <button class="btn btn-outline btn-sm" onclick="refreshStatus()">刷新</button>
+        </div>
+        <div class="info-grid" id="statusGrid">
+            <div class="info-item"><div class="label">进程状态</div><div class="value" id="s_proc">--</div></div>
+            <div class="info-item"><div class="label">运行阶段</div><div class="value" id="s_phase">--</div></div>
+            <div class="info-item"><div class="label">USDT 余额</div><div class="value" id="s_usdt">--</div></div>
+            <div class="info-item"><div class="label">冻结保证金</div><div class="value" id="s_frozen">--</div></div>
+            <div class="info-item"><div class="label">总K线</div><div class="value" id="s_bars">--</div></div>
+            <div class="info-item"><div class="label">持仓</div><div class="value" id="s_positions">--</div></div>
+        </div>
+    </div>
+    <div class="grid-2">
+        <div class="ctrl-card">
+            <h3>🛡️ 风控状态</h3>
+            <div class="info-grid" id="riskGrid">
+                <div class="info-item"><div class="label">暂停状态</div><div class="value" id="r_paused">--</div></div>
+                <div class="info-item"><div class="label">Kill Switch</div><div class="value" id="r_kill">--</div></div>
+                <div class="info-item"><div class="label">日盈亏</div><div class="value" id="r_daily">--</div></div>
+                <div class="info-item"><div class="label">连续亏损</div><div class="value" id="r_consec">--</div></div>
+                <div class="info-item"><div class="label">最大回撤</div><div class="value" id="r_dd">--</div></div>
+                <div class="info-item"><div class="label">总交易</div><div class="value" id="r_trades">--</div></div>
+            </div>
+        </div>
+        <div class="ctrl-card">
+            <h3>💰 绩效统计</h3>
+            <div class="info-grid" id="perfGrid">
+                <div class="info-item"><div class="label">总盈亏</div><div class="value" id="p_pnl">--</div></div>
+                <div class="info-item"><div class="label">胜率</div><div class="value" id="p_winrate">--</div></div>
+                <div class="info-item"><div class="label">总手续费</div><div class="value" id="p_fees">--</div></div>
+                <div class="info-item"><div class="label">峰值权益</div><div class="value" id="p_peak">--</div></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tab: 日志 -->
+<div class="tab-panel" id="tab-logs">
+    <div class="ctrl-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <h3>📋 实时日志</h3>
+            <div class="btn-group">
+                <button class="btn btn-outline btn-sm" onclick="refreshLogs()">刷新</button>
+                <button class="btn btn-outline btn-sm" onclick="autoRefreshLogs()">
+                    <span id="autoLogBtn">自动刷新: 关</span>
+                </button>
+            </div>
+        </div>
+        <div id="logFile" style="font-size:12px; color:var(--text-muted); margin-bottom:8px;"></div>
+        <div class="output-box visible" id="logOutput" style="max-height:600px; min-height:300px;">暂无日志</div>
+    </div>
+</div>
+
+<script>
+// ============================================================
+// Tab 切换
+// ============================================================
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+});
+
+// ============================================================
+// 通用工具
+// ============================================================
+function showOutput(id, text, type) {
+    const box = document.getElementById(id);
+    box.classList.add('visible');
+    // 着色处理
+    const colored = text
+        .replace(/^(.*✅.*|.*成功.*|.*PASSED.*|.*active.*)$/gm, '<span class="line-ok">$1</span>')
+        .replace(/^(.*❌.*|.*失败.*|.*ERROR.*|.*FAILED.*)$/gm, '<span class="line-err">$1</span>')
+        .replace(/^(.*⚠️.*|.*WARNING.*|.*WARN.*)$/gm, '<span class="line-warn">$1</span>')
+        .replace(/^(.*═══.*|.*---.*|.*INFO.*)$/gm, '<span class="line-info">$1</span>');
+    box.innerHTML = colored;
+    box.scrollTop = box.scrollHeight;
+}
+
+function setLoading(btnId, loading) {
+    const el = document.getElementById(btnId);
+    if (loading) {
+        el.dataset.origText = el.textContent;
+        el.innerHTML = '<span class="spinner-sm"></span> 执行中...';
+        el.closest('button')?.setAttribute('disabled', '');
+    } else {
+        el.textContent = el.dataset.origText || el.textContent;
+        el.closest('button')?.removeAttribute('disabled');
+    }
+}
+
+async function apiCall(url, options = {}) {
+    const resp = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options
+    });
+    return await resp.json();
+}
+
+// ============================================================
+// 操作函数
+// ============================================================
+async function testSignal() {
+    setLoading('signalBtnText', true);
+    try {
+        const tf = document.getElementById('signalTF').value;
+        const data = await apiCall('/api/live/test_signal', {
+            method: 'POST', body: JSON.stringify({ timeframe: tf })
+        });
+        showOutput('signalOutput', data.output || data.error || '无输出');
+    } catch(e) {
+        showOutput('signalOutput', '请求失败: ' + e.message);
+    }
+    setLoading('signalBtnText', false);
+}
+
+async function testConnection() {
+    setLoading('connBtnText', true);
+    try {
+        const data = await apiCall('/api/live/test_connection', { method: 'POST' });
+        showOutput('connOutput', data.output || data.error || '无输出');
+    } catch(e) {
+        showOutput('connOutput', '请求失败: ' + e.message);
+    }
+    setLoading('connBtnText', false);
+}
+
+async function startEngine() {
+    const phase = document.getElementById('enginePhase').value;
+    if (phase === 'small_live' || phase === 'scale_up') {
+        if (!confirm(`⚠️ 即将启动 ${phase} 模式，涉及真实资金，确认继续？`)) return;
+    }
+    setLoading('startBtnText', true);
+    try {
+        const data = await apiCall('/api/live/start', {
+            method: 'POST', body: JSON.stringify({ phase })
+        });
+        showOutput('engineOutput', data.success
+            ? '✅ ' + data.message
+            : '❌ ' + data.message);
+        refreshStatus();
+    } catch(e) {
+        showOutput('engineOutput', '请求失败: ' + e.message);
+    }
+    setLoading('startBtnText', false);
+}
+
+async function stopEngine() {
+    if (!confirm('确认停止交易引擎？')) return;
+    try {
+        const data = await apiCall('/api/live/stop', { method: 'POST' });
+        showOutput('engineOutput', data.success
+            ? '✅ ' + data.message
+            : '❌ ' + data.message);
+        refreshStatus();
+    } catch(e) {
+        showOutput('engineOutput', '请求失败: ' + e.message);
+    }
+}
+
+async function generateConfig() {
+    setLoading('genBtnText', true);
+    try {
+        const data = await apiCall('/api/live/generate_config', { method: 'POST' });
+        if (data.success && data.config) {
+            showOutput('genOutput', '✅ ' + data.message);
+            document.getElementById('configEditor').value = JSON.stringify(data.config, null, 2);
+        } else {
+            showOutput('genOutput', '❌ ' + (data.message || '生成失败'));
+        }
+    } catch(e) {
+        showOutput('genOutput', '请求失败: ' + e.message);
+    }
+    setLoading('genBtnText', false);
+}
+
+async function killSwitch() {
+    if (!confirm('⚠️ 确认执行紧急平仓？此操作将关闭所有持仓！')) return;
+    if (!confirm('⚠️ 再次确认：立即平仓所有持仓？')) return;
+    document.getElementById('killBtn').disabled = true;
+    try {
+        const data = await apiCall('/api/live/kill_switch', { method: 'POST' });
+        showOutput('killOutput', data.output || data.error || data.message);
+    } catch(e) {
+        showOutput('killOutput', '请求失败: ' + e.message);
+    }
+    document.getElementById('killBtn').disabled = false;
+}
+
+// ============================================================
+// 配置操作
+// ============================================================
+async function loadConfig() {
+    try {
+        const data = await apiCall('/api/live/load_config');
+        if (data.success) {
+            document.getElementById('configEditor').value = JSON.stringify(data.config, null, 2);
+            document.getElementById('configResult').innerHTML =
+                '<span class="result-badge success">✓ 配置已加载</span>';
+        } else {
+            document.getElementById('configResult').innerHTML =
+                '<span class="result-badge error">' + data.message + '</span>';
+        }
+    } catch(e) {
+        document.getElementById('configResult').innerHTML =
+            '<span class="result-badge error">加载失败: ' + e.message + '</span>';
+    }
+}
+
+async function saveConfig() {
+    const text = document.getElementById('configEditor').value;
+    try {
+        const config = JSON.parse(text);
+        const data = await apiCall('/api/live/save_config', {
+            method: 'POST', body: JSON.stringify(config)
+        });
+        document.getElementById('configResult').innerHTML = data.success
+            ? '<span class="result-badge success">✓ 配置已保存</span>'
+            : '<span class="result-badge error">' + data.message + '</span>';
+    } catch(e) {
+        document.getElementById('configResult').innerHTML =
+            '<span class="result-badge error">JSON 格式错误: ' + e.message + '</span>';
+    }
+}
+
+// ============================================================
+// 状态监控
+// ============================================================
+async function refreshStatus() {
+    try {
+        const data = await apiCall('/api/live/status');
+
+        // 进程状态
+        const proc = data.process || {};
+        const running = proc.running;
+        document.getElementById('s_proc').textContent = running ? '运行中' : '已停止';
+        document.getElementById('s_proc').className = 'value ' + (running ? 'green' : '');
+
+        // 引擎状态 (优先从 engine_state.json，fallback 到日志数据)
+        const eng = data.engine || {};
+        const phase = eng.phase || proc.phase || '--';
+        document.getElementById('s_phase').textContent = phase;
+
+        document.getElementById('engineDot').className = 'status-dot ' + (running ? 'green' : 'gray');
+        document.getElementById('engineStatus').textContent = running
+            ? '引擎: 运行中 (' + phase + ')'
+            : '引擎: 未运行';
+
+        // 余额 & 权益
+        const equity = eng.equity;
+        const usdt = eng.usdt;
+        document.getElementById('s_usdt').textContent = usdt != null ? '$' + Number(usdt).toFixed(2) : '--';
+        document.getElementById('s_frozen').textContent = eng.frozen_margin != null ? '$' + Number(eng.frozen_margin).toFixed(2) : '--';
+        document.getElementById('s_bars').textContent = eng.total_bars || '--';
+
+        // 持仓信息 - 兼容 dict (engine_state.json) 和 array (日志) 格式
+        let posDisplay = '无';
+        const positions = eng.positions;
+        if (positions) {
+            if (Array.isArray(positions)) {
+                // 日志来源: [{side, entry_price, qty, pnl}]
+                posDisplay = positions.length > 0
+                    ? positions.map(p => p.side + ' $' + Number(p.entry_price).toFixed(2)).join(', ')
+                    : '无';
+            } else {
+                // engine_state 来源: {symbol: {side, entry_price, ...}}
+                const posList = Object.keys(positions);
+                posDisplay = posList.length > 0 ? posList.join(', ') : '无';
+            }
+        }
+        document.getElementById('s_positions').textContent = posDisplay;
+        document.getElementById('positionDisplay').textContent = '持仓: ' + posDisplay;
+
+        // 权益显示 (状态栏)
+        if (equity != null) {
+            document.getElementById('equityDisplay').textContent = '权益: $' + Number(equity).toFixed(2);
+        } else if (usdt != null) {
+            document.getElementById('equityDisplay').textContent = '余额: $' + Number(usdt).toFixed(2);
+        }
+
+        // 风控
+        const risk = data.risk || {};
+        const paused = risk.is_paused;
+        if (Object.keys(risk).length > 0) {
+            document.getElementById('r_paused').textContent = paused ? '是' : '否';
+            document.getElementById('r_paused').className = 'value ' + (paused ? 'red' : 'green');
+            document.getElementById('r_kill').textContent = risk.kill_switch_active ? '激活' : '正常';
+            document.getElementById('r_kill').className = 'value ' + (risk.kill_switch_active ? 'red' : 'green');
+            document.getElementById('r_daily').textContent = risk.daily_pnl != null ? '$' + Number(risk.daily_pnl).toFixed(2) : '$0.00';
+            document.getElementById('r_daily').className = 'value ' + ((risk.daily_pnl||0) >= 0 ? 'green' : 'red');
+            document.getElementById('r_consec').textContent = risk.consecutive_losses || '0';
+            document.getElementById('r_dd').textContent = risk.max_drawdown != null ? (Number(risk.max_drawdown) * 100).toFixed(1) + '%' : '0.0%';
+            document.getElementById('r_trades').textContent = risk.total_trades || '0';
+
+            document.getElementById('riskDot').className = 'status-dot ' + (paused ? 'red' : risk.kill_switch_active ? 'red' : 'green');
+            document.getElementById('riskStatus').textContent = paused ? '风控: 已暂停' : '风控: 正常';
+        } else if (running) {
+            // 引擎运行但风控文件还没生成
+            document.getElementById('riskDot').className = 'status-dot green';
+            document.getElementById('riskStatus').textContent = '风控: 正常';
+        }
+
+        // 绩效 (从 risk state 和 performance 综合读取)
+        const perf = data.performance || {};
+        const totalPnl = risk.total_pnl ?? perf.total_pnl;
+        document.getElementById('p_pnl').textContent = totalPnl != null ? '$' + Number(totalPnl).toFixed(2) : '$0.00';
+        document.getElementById('p_pnl').className = 'value ' + ((totalPnl||0) >= 0 ? 'green' : 'red');
+        const totalTrades = risk.total_trades || perf.total_trades || 0;
+        const totalWins = risk.total_wins || perf.total_wins || 0;
+        const wr = totalTrades > 0 ? (totalWins / totalTrades * 100).toFixed(0) + '%' : '--';
+        document.getElementById('p_winrate').textContent = wr;
+        const fees = risk.total_fees ?? perf.total_fees;
+        document.getElementById('p_fees').textContent = fees != null ? '$' + Number(fees).toFixed(2) : '$0.00';
+        const peak = risk.peak_equity ?? perf.peak_equity;
+        document.getElementById('p_peak').textContent = peak != null ? '$' + Number(peak).toFixed(2) : '--';
+
+    } catch(e) {
+        console.error('Status refresh failed:', e);
+    }
+}
+
+// ============================================================
+// 日志
+// ============================================================
+let _autoLogInterval = null;
+
+async function refreshLogs() {
+    try {
+        const data = await apiCall('/api/live/logs?lines=150');
+        if (data.success) {
+            const el = document.getElementById('logOutput');
+            // 着色
+            let html = (data.logs || '暂无日志')
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/^(.*\[TRADE\].*)$/gm, '<span class="line-ok">$1</span>')
+                .replace(/^(.*\[RISK\].*)$/gm, '<span class="line-warn">$1</span>')
+                .replace(/^(.*\[ERROR\].*)$/gm, '<span class="line-err">$1</span>')
+                .replace(/^(.*\[SIGNAL\].*)$/gm, '<span class="line-info">$1</span>');
+            el.innerHTML = html;
+            el.scrollTop = el.scrollHeight;
+            document.getElementById('logFile').textContent = data.file
+                ? '日志文件: ' + data.file + ' (' + data.total_lines + ' 行)'
+                : '';
+        }
+    } catch(e) {
+        document.getElementById('logOutput').textContent = '加载失败: ' + e.message;
+    }
+}
+
+function autoRefreshLogs() {
+    if (_autoLogInterval) {
+        clearInterval(_autoLogInterval);
+        _autoLogInterval = null;
+        document.getElementById('autoLogBtn').textContent = '自动刷新: 关';
+    } else {
+        refreshLogs();
+        _autoLogInterval = setInterval(refreshLogs, 5000);
+        document.getElementById('autoLogBtn').textContent = '自动刷新: 开';
+    }
+}
+
+// 初始加载状态
+refreshStatus();
+setInterval(refreshStatus, 30000); // 每30秒刷新状态
+</script>
+{% endblock %}

@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+{% block title %}六书融合优化 — 超越α=+86.69%{% endblock %}
+{% block content %}
+<h1 class="page-title">六书融合多时间框架优化</h1>
+<p class="page-subtitle">12个时间周期 × 1400+参数变体 · 含KDJ第6维信号 · 目标: 超越五书最优 α=+86.69%</p>
+
+<div id="loading" class="loading">
+    <div class="spinner"></div> 加载六书优化结果...
+</div>
+
+<div id="content" style="display:none;">
+
+<!-- 核心对比 -->
+<div class="stats-grid" id="hero-stats"></div>
+
+<!-- 基线 vs 新最优 -->
+<div class="card" style="border-left: 4px solid #ff6b35;">
+    <div class="card-title">🆚 五书最优 vs 六书最优 对比</div>
+    <div id="vs-content"></div>
+</div>
+
+<!-- 各时间框架基准 -->
+<div class="card">
+    <div class="card-title">📊 12个时间框架基准性能(六书C6+四书否决)</div>
+    <div style="overflow-x: auto;">
+        <table class="data-table" id="tf-table">
+            <thead>
+                <tr>
+                    <th>时间框架</th>
+                    <th>Alpha (α)</th>
+                    <th>策略收益</th>
+                    <th>买持收益</th>
+                    <th>最大回撤</th>
+                    <th>交易次数</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 全局TOP30 -->
+<div class="card">
+    <div class="card-title">🏆 全局TOP30参数组合(跨时间框架 × 跨参数)</div>
+    <div style="overflow-x: auto;">
+        <table class="data-table" id="top-table">
+            <thead>
+                <tr>
+                    <th>排名</th>
+                    <th>时间框架</th>
+                    <th>参数标签</th>
+                    <th>Alpha (α)</th>
+                    <th>策略收益</th>
+                    <th>最大回撤</th>
+                    <th>交易次数</th>
+                    <th>手续费</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 最优策略详解 -->
+<div class="card" style="border-left: 4px solid gold;">
+    <div class="card-title">🏅 全局最优策略详细参数</div>
+    <div id="best-detail"></div>
+</div>
+
+<!-- 回测条件说明 -->
+<div class="card">
+    <div class="card-title">📋 回测真实条件</div>
+    <div class="arch-diagram">
+        <div class="arch-layer">
+            <div class="arch-box data">📈 真实数据<br><small>币安 ETH/USDT<br>最近30天K线</small></div>
+            <div class="arch-box analysis">💰 手续费<br><small>Taker 0.05%<br>Maker 0.02%</small></div>
+            <div class="arch-box core">⏰ 资金费率<br><small>每8小时 ±0.01%<br>永续合约</small></div>
+            <div class="arch-box signal">🔒 风控<br><small>逐仓模式<br>5%维持保证金强平</small></div>
+        </div>
+    </div>
+</div>
+
+</div>
+
+<style>
+.vs-grid {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 20px;
+    align-items: center;
+    margin: 20px 0;
+}
+.vs-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    border: 2px solid var(--border-subtle);
+}
+.vs-card.old { border-color: #666; }
+.vs-card.new { border-color: gold; box-shadow: 0 0 20px rgba(255,215,0,0.2); }
+.vs-arrow {
+    font-size: 2em;
+    color: var(--accent-green);
+    font-weight: bold;
+}
+.vs-label { font-size: 0.85em; color: var(--text-dim); margin-bottom: 8px; }
+.vs-alpha { font-size: 2.2em; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+.vs-alpha.positive { color: var(--accent-green); }
+.vs-detail { margin-top: 12px; font-size: 0.85em; color: var(--text-secondary); line-height: 1.8; }
+.improvement-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, #ff6b35, #ff4500);
+    color: white;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 1.1em;
+    margin-top: 8px;
+}
+.param-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+}
+.param-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--bg-hover);
+    border-radius: 8px;
+    font-size: 0.9em;
+}
+.param-label { color: var(--text-dim); }
+.param-value { font-weight: 600; color: var(--text-primary); font-family: 'JetBrains Mono', monospace; }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const resp = await fetch('/api/optimize_six_book');
+        if (!resp.ok) throw new Error('API error');
+        const data = await resp.json();
+        render(data);
+    } catch(e) {
+        document.getElementById('loading').innerHTML = '<p style="color:var(--accent-red)">加载失败: ' + e.message + '</p>';
+    }
+});
+
+function render(data) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+
+    const best = data.global_best || {};
+    const prevAlpha = data.previous_best_alpha || 86.69;
+    const improvement = (best.alpha || 0) - prevAlpha;
+    const beatPrev = improvement > 0;
+
+    // Hero stats
+    const heroHtml = `
+        <div class="stat-card ${beatPrev ? 'positive' : ''}">
+            <div class="stat-label">🏆 六书全局最优 Alpha</div>
+            <div class="stat-value" style="color: var(--accent-green); font-size: 1.8em;">+${(best.alpha||0).toFixed(2)}%</div>
+        </div>
+        <div class="stat-card ${beatPrev ? 'positive' : 'negative'}">
+            <div class="stat-label">vs 五书最优 (+86.69%)</div>
+            <div class="stat-value" style="color: ${beatPrev ? 'var(--accent-green)' : 'var(--accent-red)'};">
+                ${improvement >= 0 ? '+' : ''}${improvement.toFixed(2)}% ${beatPrev ? '✓ 超越!' : ''}
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">📐 最优时间框架</div>
+            <div class="stat-value">${best.tf || '-'}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">🔬 测试变体总数</div>
+            <div class="stat-value">${(data.total_variants_tested||0).toLocaleString()}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">📈 策略收益</div>
+            <div class="stat-value" style="color: var(--accent-green);">+${(best.strategy_return||0).toFixed(2)}%</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">📉 最大回撤</div>
+            <div class="stat-value" style="color: var(--accent-red);">${(best.max_drawdown||0).toFixed(2)}%</div>
+        </div>
+    `;
+    document.getElementById('hero-stats').innerHTML = heroHtml;
+
+    // VS comparison
+    const cfg = best.config || {};
+    const vsHtml = `
+        <div class="vs-grid">
+            <div class="vs-card old">
+                <div class="vs-label">五书最优 (精选分段TP@20%平30% + 最佳SL/TP)</div>
+                <div class="vs-alpha positive">+86.69%</div>
+                <div class="vs-detail">
+                    时间框架: 1h<br>
+                    融合模式: C6+三书否决<br>
+                    分段止盈: @20%平30%<br>
+                    空SL/TP: -25%/+60%<br>
+                    多SL/TP: -8%/+30%
+                </div>
+            </div>
+            <div class="vs-arrow">→</div>
+            <div class="vs-card new">
+                <div class="vs-label">六书全局最优</div>
+                <div class="vs-alpha positive">+${(best.alpha||0).toFixed(2)}%</div>
+                <div class="vs-detail">
+                    时间框架: ${best.tf || '-'}<br>
+                    融合模式: ${cfg.fusion_mode || '-'}<br>
+                    参数: ${best.tag || '-'}<br>
+                    空SL/TP: ${((cfg.short_sl||0)*100).toFixed(0)}%/${((cfg.short_tp||0)*100).toFixed(0)}%<br>
+                    多SL/TP: ${((cfg.long_sl||0)*100).toFixed(0)}%/${((cfg.long_tp||0)*100).toFixed(0)}%
+                </div>
+                <div class="improvement-badge">提升 ${improvement >= 0 ? '+' : ''}${improvement.toFixed(2)}%</div>
+            </div>
+        </div>
+    `;
+    document.getElementById('vs-content').innerHTML = vsHtml;
+
+    // Timeframe baselines
+    const tfBody = document.querySelector('#tf-table tbody');
+    const baselines = data.baseline_by_tf || [];
+    const topTfs = data.top_timeframes || [];
+    baselines.sort((a, b) => b.alpha - a.alpha);
+    baselines.forEach(b => {
+        const isTop = topTfs.includes(b.tf);
+        const tr = document.createElement('tr');
+        if (isTop) tr.style.background = 'rgba(255,215,0,0.05)';
+        tr.innerHTML = `
+            <td>${isTop ? '⭐ ' : ''}${b.tf}</td>
+            <td style="color: ${b.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight: 600;">
+                ${b.alpha >= 0 ? '+' : ''}${b.alpha.toFixed(2)}%
+            </td>
+            <td>${b.strategy_return >= 0 ? '+' : ''}${b.strategy_return.toFixed(2)}%</td>
+            <td>${b.buy_hold_return >= 0 ? '+' : ''}${b.buy_hold_return.toFixed(2)}%</td>
+            <td style="color: var(--accent-red);">${b.max_drawdown.toFixed(2)}%</td>
+            <td>${b.total_trades}</td>
+        `;
+        tfBody.appendChild(tr);
+    });
+
+    // Global top30
+    const topBody = document.querySelector('#top-table tbody');
+    const top30 = data.global_top30 || [];
+    top30.forEach(r => {
+        const tr = document.createElement('tr');
+        const isBest = r.rank <= 3;
+        if (isBest) tr.style.background = 'rgba(255,215,0,0.08)';
+        const star = r.rank === 1 ? ' 🏆' : r.rank <= 3 ? ' ⭐' : '';
+        const beatStr = r.alpha > prevAlpha ? ' <span style="color:gold;font-weight:700;">✓超越</span>' : '';
+        tr.innerHTML = `
+            <td style="font-weight:700;">#${r.rank}${star}</td>
+            <td>${r.tf}</td>
+            <td style="max-width:280px;">${r.tag}</td>
+            <td style="color: var(--accent-green); font-weight: 700;">+${r.alpha.toFixed(2)}%${beatStr}</td>
+            <td>${r.strategy_return >= 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</td>
+            <td style="color: var(--accent-red);">${r.max_drawdown.toFixed(2)}%</td>
+            <td>${r.total_trades}</td>
+            <td>$${(r.fees||0).toLocaleString()}</td>
+        `;
+        topBody.appendChild(tr);
+    });
+
+    // Best detail
+    const paramItems = [
+        ['融合模式', cfg.fusion_mode || 'c6_veto_4'],
+        ['空头止损', `${((cfg.short_sl||0)*100).toFixed(0)}%`],
+        ['空头止盈', `${((cfg.short_tp||0)*100).toFixed(0)}%`],
+        ['多头止损', `${((cfg.long_sl||0)*100).toFixed(0)}%`],
+        ['多头止盈', `${((cfg.long_tp||0)*100).toFixed(0)}%`],
+        ['追踪止盈', `${((cfg.short_trail||0)*100).toFixed(0)}%`],
+        ['回撤比例', `${((cfg.trail_pullback||0)*100).toFixed(0)}%`],
+        ['最大持仓', `${cfg.short_max_hold||72} bars`],
+        ['冷却期', `${cfg.cooldown||4} bars`],
+        ['分段止盈', cfg.use_partial_tp ? `@${((cfg.partial_tp_1||0)*100).toFixed(0)}% 平${((cfg.partial_tp_1_pct||0)*100).toFixed(0)}%` : '关闭'],
+        ['杠杆', `${cfg.lev||5}x`],
+        ['仓位比例', `${((cfg.margin_use||0.7)*100).toFixed(0)}%`],
+    ];
+    if (cfg.use_atr_sl) paramItems.push(['ATR止损', `${cfg.atr_sl_mult||3.0}x`]);
+    if (cfg.kdj_bonus) paramItems.push(['KDJ奖励', `${((cfg.kdj_bonus||0)*100).toFixed(0)}%`]);
+    if (cfg.veto_threshold) paramItems.push(['否决阈值', cfg.veto_threshold]);
+
+    const detailHtml = `
+        <div style="margin-bottom: 16px;">
+            <span style="font-size: 1.2em; font-weight: 700;">
+                ${best.tag || '-'}
+            </span>
+            <span style="margin-left: 12px; color: var(--text-dim);">
+                时间框架: ${best.tf || '-'} · 交易${best.total_trades||0}次 · 回撤${(best.max_drawdown||0).toFixed(2)}% · 手续费$${(best.fees||0).toLocaleString()}
+            </span>
+        </div>
+        <div class="param-grid">
+            ${paramItems.map(([label, value]) =>
+                `<div class="param-item"><span class="param-label">${label}</span><span class="param-value">${value}</span></div>`
+            ).join('')}
+        </div>
+    `;
+    document.getElementById('best-detail').innerHTML = detailHtml;
+}
+</script>
+{% endblock %}

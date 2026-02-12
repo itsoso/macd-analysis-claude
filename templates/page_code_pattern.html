@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}code-pattern - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">第二章 · 几何形态背离</div>
+            <div class="page-subtitle">pattern_divergence.py · 5种形态背离检测</div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/pattern_divergence.py</span>
+                    <span>趋势K线背离</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_kline_divergence</span>(<span class="kw">self</span>, lookback=<span class="nu">20</span>, body_ratio=<span class="nu">0.02</span>):
+    <span class="st">"""检测趋势中出现的反向大K线
+    上涨趋势中的大阴线(实体>=2%), 或下跌趋势中的大阳线"""</span>
+    signals = []
+    <span class="kw">for</span> i <span class="kw">in</span> range(lookback, len(df)):
+        body = abs(df[<span class="st">'close'</span>].iloc[i] - df[<span class="st">'open'</span>].iloc[i])
+        body_pct = body / df[<span class="st">'open'</span>].iloc[i]
+        <span class="kw">if</span> body_pct < body_ratio:
+            <span class="kw">continue</span>
+        <span class="cm"># 判断近期趋势方向 (用MA斜率)</span>
+        trend = df[<span class="st">'close'</span>].iloc[i-lookback:i].mean() - df[<span class="st">'close'</span>].iloc[i-lookback]
+        is_bearish = df[<span class="st">'close'</span>].iloc[i] < df[<span class="st">'open'</span>].iloc[i]
+        <span class="kw">if</span> trend > <span class="nu">0</span> <span class="kw">and</span> is_bearish:   <span class="cm"># 上涨中大阴线</span>
+            signals.append({<span class="st">'type'</span>: <span class="st">'top'</span>, <span class="st">'idx'</span>: i, <span class="st">'severity'</span>: body_pct})
+        <span class="kw">elif</span> trend < <span class="nu">0</span> <span class="kw">and not</span> is_bearish:  <span class="cm"># 下跌中大阳线</span>
+            signals.append({<span class="st">'type'</span>: <span class="st">'bottom'</span>, <span class="st">'idx'</span>: i})
+    <span class="kw">return</span> signals</code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/pattern_divergence.py</span>
+                    <span>趋势幅度 & 时间度背离</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_amplitude_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>, shrink_ratio=<span class="nu">0.7</span>):
+    <span class="st">"""检测趋势幅度衰减: 后一段涨/跌幅 < 前一段 × shrink_ratio"""</span>
+    up_segs, down_segs = identify_trend_segments(df, order)
+    signals = []
+    <span class="kw">for</span> i <span class="kw">in</span> range(<span class="nu">1</span>, len(up_segs)):
+        prev_amp = up_segs[i-<span class="nu">1</span>][<span class="st">'amplitude'</span>]
+        curr_amp = up_segs[i][<span class="st">'amplitude'</span>]
+        <span class="kw">if</span> curr_amp < prev_amp * shrink_ratio:
+            signals.append({<span class="st">'type'</span>: <span class="st">'top'</span>, <span class="st">'ratio'</span>: curr_amp/prev_amp})
+    <span class="kw">return</span> signals
+
+<span class="kw">def</span> <span class="fn">detect_time_divergence</span>(<span class="kw">self</span>, order=<span class="nu">5</span>, shrink_ratio=<span class="nu">0.7</span>):
+    <span class="st">"""检测时间度衰减: 后一段持续K线数 < 前一段 × shrink_ratio"""</span>
+    <span class="cm"># 逻辑类似幅度背离, 比较 segment['duration'] 即K线数</span></code></pre>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/pattern_divergence.py</span>
+                    <span>均线相交面积背离</span>
+                </div>
+                <pre><code><span class="kw">def</span> <span class="fn">detect_ma_area_divergence</span>(<span class="kw">self</span>, short_period=<span class="nu">5</span>, long_period=<span class="nu">30</span>):
+    <span class="st">"""短期均线与长期均线之间的面积逐渐缩小 -> 趋势减弱"""</span>
+    ma_short = df[<span class="st">'close'</span>].rolling(short_period).mean()
+    ma_long  = df[<span class="st">'close'</span>].rolling(long_period).mean()
+    diff = ma_short - ma_long           <span class="cm"># MA差值序列</span>
+    <span class="cm"># 将连续正值/负值区间识别为一个"面积段"</span>
+    <span class="cm"># 比较相邻同向面积段: 后段面积 < 前段面积 × shrink_ratio</span></code></pre>
+            </div>
+{% endblock %}

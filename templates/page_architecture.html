@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}architecture - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">项目架构</div>
+            <div class="page-subtitle">基于 Python 实现的完整背离分析系统</div>
+
+            <div class="card">
+                <div class="card-title">系统架构图</div>
+                <div class="arch-diagram">
+                    <div class="arch-layer">
+                        <div class="arch-box entry">main.py<br><small>命令行入口</small></div>
+                        <div class="arch-box entry">app.py<br><small>Web 展示</small></div>
+                        <div class="arch-box entry">backtest.py<br><small>回测引擎</small></div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-layer">
+                        <div class="arch-box analysis">ComprehensiveAnalyzer<br><small>综合分析器</small></div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-layer">
+                        <div class="arch-box core">PatternDiv<br><small>形态背离</small></div>
+                        <div class="arch-box core">MACDDiv<br><small>MACD背离</small></div>
+                        <div class="arch-box core">Exhaustion<br><small>背驰分析</small></div>
+                        <div class="arch-box core">KDJ/CCI/RSI<br><small>指标背离</small></div>
+                        <div class="arch-box core">VolPrice<br><small>量价背离</small></div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-layer">
+                        <div class="arch-box data">indicators.py<br><small>技术指标计算</small></div>
+                        <div class="arch-box data">config.py<br><small>参数配置</small></div>
+                    </div>
+                    <div class="arch-arrow">↓</div>
+                    <div class="arch-layer">
+                        <div class="arch-box out">binance_fetcher.py<br><small>币安数据获取</small></div>
+                        <div class="arch-box out">data_fetcher.py<br><small>A股/CSV数据</small></div>
+                        <div class="arch-box out">visualization.py<br><small>图表可视化</small></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">文件结构</div>
+                <pre><code><span class="st">macd-analysis-claude/</span>
+├── <span class="fn">config.py</span>             <span class="cm"># 全局参数配置 (MACD/KDJ/CCI/RSI参数, 背离阈值)</span>
+├── <span class="fn">indicators.py</span>         <span class="cm"># 技术指标: SMA, EMA, MACD, KDJ, CCI, RSI</span>
+├── <span class="fn">binance_fetcher.py</span>    <span class="cm"># 币安API数据获取 (10分钟K线)</span>
+├── <span class="fn">data_fetcher.py</span>       <span class="cm"># A股/CSV/模拟数据获取</span>
+├── <span class="fn">backtest.py</span>           <span class="cm"># 回测引擎 (止损止盈/冷却期/信号过滤)</span>
+├── <span class="fn">visualization.py</span>      <span class="cm"># Matplotlib 多面板图表</span>
+├── <span class="fn">main.py</span>               <span class="cm"># 命令行主程序</span>
+├── <span class="fn">app.py</span>                <span class="cm"># Flask Web 应用</span>
+├── <span class="st">divergence/</span>           <span class="cm"># 背离检测模块包</span>
+│   ├── __init__.py
+│   ├── <span class="fn">pattern_divergence.py</span>    <span class="cm"># 第二章: 几何形态背离</span>
+│   ├── <span class="fn">macd_divergence.py</span>       <span class="cm"># 第三章: MACD背离</span>
+│   ├── <span class="fn">exhaustion.py</span>            <span class="cm"># 第四章: 背离与背驰</span>
+│   ├── <span class="fn">kdj_divergence.py</span>        <span class="cm"># 第五章: KDJ背离</span>
+│   ├── <span class="fn">cci_divergence.py</span>        <span class="cm"># 第五章: CCI背离</span>
+│   ├── <span class="fn">rsi_divergence.py</span>        <span class="cm"># 第五章: RSI背离</span>
+│   ├── <span class="fn">volume_price_divergence.py</span>  <span class="cm"># 第五章: 量价背离</span>
+│   └── <span class="fn">comprehensive.py</span>         <span class="cm"># 综合分析 & 评分</span>
+└── <span class="st">templates/</span>
+    └── index.html        <span class="cm"># Web 展示页面</span></code></pre>
+            </div>
+{% endblock %}

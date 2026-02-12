@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}量价分析策略 - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">量价分析策略</div>
+            <div class="page-subtitle">利弗莫尔/威科夫量价理论 · OBV/VWAP/MFI/量价背离/高潮量 · ETH/USDT回测</div>
+
+            <div id="vp-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载量价分析数据...
+            </div>
+
+            <div id="vp-content" style="display:none;">
+                <!-- 信号统计 -->
+                <div class="card">
+                    <div class="card-title">量价信号统计
+                        <span class="badge green">VOLUME-PRICE</span>
+                    </div>
+                    <div id="vp-signal-stats"></div>
+                </div>
+
+                <!-- 策略卡片 -->
+                <div class="card">
+                    <div class="card-title" id="vp-strat-title">量价策略对比</div>
+                    <div style="background:rgba(0,214,143,0.06);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid #00d68f;">
+                        <div style="font-weight:600;color:#00d68f;margin-bottom:6px;">策略说明</div>
+                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;" id="vp-desc">
+                            基于利弗莫尔/威科夫经典量价理论。核心指标: OBV(能量潮)、VWAP(量加权均价)、成交量比率、A/D线、MFI(资金流量指数)。<br>
+                            信号: 量价背离(价涨量缩/价跌量缩)、高潮量(极端成交量反转)、量能突破(放量突破关键位)。
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px;" id="vp-cards"></div>
+                </div>
+
+                <!-- Alpha对比图 -->
+                <div class="card">
+                    <div class="card-title">策略Alpha对比</div>
+                    <div id="vp-alpha-chart" style="height:300px;"></div>
+                </div>
+
+                <!-- 策略详情表格 -->
+                <div class="card">
+                    <div class="card-title">策略详细对比</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="vp-table">
+                            <thead><tr>
+                                <th>排名</th><th>策略</th><th>&alpha;%</th>
+                                <th>策略收益</th><th>BH收益</th><th>最大回撤</th>
+                                <th>交易数</th><th>强平</th><th>总费用</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 最佳策略交易明细 -->
+                <div class="card">
+                    <div class="card-title" id="vp-best-title">最佳策略交易明细</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="vp-trades-table">
+                            <thead><tr>
+                                <th>时间</th><th>操作</th><th>方向</th>
+                                <th>价格</th><th>杠杆</th><th>总资产</th><th>原因</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="vp-conclusion"></div>
+            </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadVolumePrice() {
+        try {
+            const res = await fetch('/api/volume_price');
+            if (res.ok) {
+                renderVolumePrice(await res.json());
+            } else {
+                document.getElementById('vp-loading').innerHTML = '<p style="color:var(--accent-red);">量价策略数据未找到, 请先运行 python volume_price_strategy.py</p>';
+            }
+        } catch(e) {
+            document.getElementById('vp-loading').innerHTML = `<p style="color:var(--accent-red);">加载失败: ${e.message}</p>`;
+        }
+    }
+
+    function renderVolumePrice(data) {
+        document.getElementById('vp-loading').style.display = 'none';
+        document.getElementById('vp-content').style.display = 'block';
+
+        const results = data.results || [];
+        const ranked = [...results].sort((a, b) => b.alpha - a.alpha);
+        const best = ranked[0] || {};
+
+        document.getElementById('vp-strat-title').textContent = `${results.length}种量价策略对比 · ${data.trade_days || 30}天`;
+
+        // 信号统计
+        const sigEl = document.getElementById('vp-signal-stats');
+        if (sigEl) {
+            sigEl.innerHTML = `
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+                    <div style="background:rgba(239,68,68,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">高潮量 (Climax Volume)</div>
+                        <div style="font-size:24px;font-weight:700;color:#ef4444;">${data.climax_count || 0}</div>
+                        <div style="font-size:11px;color:var(--text-muted);">极端成交量 &rarr; 可能反转</div>
+                    </div>
+                    <div style="background:rgba(168,85,247,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">量价背离 (Divergence)</div>
+                        <div style="font-size:24px;font-weight:700;color:#a855f7;">${data.divergence_count || 0}</div>
+                        <div style="font-size:11px;color:var(--text-muted);">价涨量缩/价跌量缩 &rarr; 趋势衰竭</div>
+                    </div>
+                    <div style="background:rgba(34,197,94,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">量能突破 (Volume Breakout)</div>
+                        <div style="font-size:24px;font-weight:700;color:#22c55e;">${data.breakout_count || 0}</div>
+                        <div style="font-size:11px;color:var(--text-muted);">放量突破关键位 &rarr; 趋势延续</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 策略卡片
+        const cardsEl = document.getElementById('vp-cards');
+        if (cardsEl) {
+            const colors = ['#22c55e', '#ef4444', '#a855f7', '#6b7280'];
+            cardsEl.innerHTML = ranked.map((r, i) => {
+                const isBest = i === 0;
+                const c = colors[i % colors.length];
+                return `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;${isBest ? 'border:1.5px solid #22c55e;' : ''}">
+                    <div style="font-weight:700;font-size:14px;color:${c};margin-bottom:4px;">${r.name}${isBest ? ' ★' : ''}</div>
+                    <div style="display:flex;gap:12px;font-size:13px;flex-wrap:wrap;">
+                        <span style="color:${r.alpha > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}% &alpha;</span>
+                        <span style="color:var(--text-muted);">${r.max_drawdown.toFixed(1)}% DD</span>
+                        <span style="color:var(--text-muted);">${r.total_trades}笔</span>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // Alpha柱状图
+        const chartEl = document.getElementById('vp-alpha-chart');
+        if (chartEl && ranked.length > 0) {
+            const maxAlpha = Math.max(...ranked.map(r => Math.abs(r.alpha)), 1);
+            chartEl.innerHTML = `<div style="display:flex;align-items:flex-end;gap:16px;height:260px;padding:20px;">
+                ${ranked.map((r, i) => {
+                    const h = Math.max(Math.abs(r.alpha) / maxAlpha * 200, 8);
+                    const isPos = r.alpha >= 0;
+                    const c = isPos ? '#22c55e' : '#ef4444';
+                    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;">
+                        <div style="font-size:11px;color:${c};font-weight:700;margin-bottom:4px;">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</div>
+                        <div style="width:100%;max-width:80px;height:${h}px;background:${c}30;border:1px solid ${c};border-radius:4px 4px 0 0;"></div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;text-align:center;">${r.name}</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+        }
+
+        // 策略表格
+        const tableBody = document.querySelector('#vp-table tbody');
+        if (tableBody) {
+            tableBody.innerHTML = ranked.map((r, i) => {
+                const fees = r.fees || {};
+                return `<tr ${i === 0 ? 'style="background:rgba(34,197,94,0.06);"' : ''}>
+                    <td>#${i + 1}${i === 0 ? ' ★' : ''}</td>
+                    <td><b>${r.name}</b></td>
+                    <td style="color:${r.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</td>
+                    <td>${r.strategy_return > 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</td>
+                    <td>${r.buy_hold_return > 0 ? '+' : ''}${r.buy_hold_return.toFixed(2)}%</td>
+                    <td>${r.max_drawdown.toFixed(2)}%</td>
+                    <td>${r.total_trades}</td>
+                    <td>${r.liquidations || 0}</td>
+                    <td>$${(fees.total_costs || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 交易明细
+        document.getElementById('vp-best-title').textContent = `最佳策略: ${best.name} · 交易明细`;
+        const tradesBody = document.querySelector('#vp-trades-table tbody');
+        if (tradesBody && best.trades) {
+            tradesBody.innerHTML = best.trades.slice(0, 50).map(t => {
+                const isSell = t.action?.includes('SELL') || t.action?.includes('SHORT');
+                const color = isSell ? 'var(--accent-red)' : 'var(--accent-green)';
+                return `<tr>
+                    <td style="font-size:12px;">${String(t.time).substring(0, 16)}</td>
+                    <td style="color:${color};font-weight:600;">${t.action || ''}</td>
+                    <td>${t.direction || ''}</td>
+                    <td>$${(t.price || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td>${t.leverage || 1}x</td>
+                    <td>$${(t.total || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;">${(t.reason || '').substring(0, 80)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 结论
+        const conclusionEl = document.getElementById('vp-conclusion');
+        if (conclusionEl) {
+            conclusionEl.innerHTML = `
+                <div class="card-title">回测结论</div>
+                <div style="background:rgba(0,214,143,0.06);border-radius:8px;padding:16px;border-left:3px solid #00d68f;">
+                    <div style="font-weight:700;color:#00d68f;margin-bottom:8px;">
+                        最佳策略: ${best.name} · &alpha; = ${best.alpha > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%
+                    </div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                        基于利弗莫尔/威科夫量价理论, 在ETH/USDT ${data.trade_days || 30}天回测中:<br>
+                        &middot; 买入持有收益: ${(best.buy_hold_return || 0).toFixed(2)}%<br>
+                        &middot; 最佳策略收益: ${(best.strategy_return || 0).toFixed(2)}%, 超额&alpha; = ${best.alpha > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%<br>
+                        &middot; 交易${best.total_trades || 0}笔, 最大回撤${(best.max_drawdown || 0).toFixed(2)}%<br>
+                        &middot; 高潮量: ${data.climax_count || 0}次 | 量价背离: ${data.divergence_count || 0}次 | 量能突破: ${data.breakout_count || 0}次<br>
+                        &middot; 核心信号: OBV趋势/VWAP偏离/MFI超买超卖/成交量比率/量价背离/高潮量反转/放量突破
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadVolumePrice();
+});
+</script>
+{% endblock %}

@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+{% block title %}《布林线》书籍大纲 - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">《布林线》书籍大纲</div>
+            <div class="page-subtitle">John Bollinger 著 · 布林带指标的发明者本人亲笔 · 波动率分析经典 · 珍藏版</div>
+
+            <!-- 书籍概述 -->
+            <div class="card" style="border-left: 3px solid var(--accent-red);">
+                <div class="card-title">
+                    <span style="color:var(--accent-red);">📉</span> 全书核心思想
+                </div>
+                <div style="font-size:14px;color:var(--text-secondary);line-height:1.8;">
+                    布林带由John Bollinger在1980年代发明，是唯一一个<b>由发明者本人撰写完整著作</b>的技术指标。<br>
+                    核心理念：<span style="color:var(--accent-red);font-weight:600;">价格的高低是相对的</span>，
+                    布林带通过统计学方法(标准差)定义了价格的"合理波动范围"。<br>
+                    上轨=高价区, 下轨=低价区, 但<b>"触及上轨不一定是卖点, 触及下轨不一定是买点"</b>——这是本书最颠覆性的观点。
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">一</div>
+                    <div class="chapter-title">第一~三章 · 布林带基础与构造</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>理解布林带的<span class="key-concept">数学原理</span>是正确使用它的前提。</p>
+                    <ul>
+                        <li><span class="key-concept">三条线的构成</span>：
+                            <ul>
+                                <li><b>中轨</b> = 20周期简单移动平均线(SMA20)</li>
+                                <li><b>上轨</b> = 中轨 + 2倍标准差(σ)</li>
+                                <li><b>下轨</b> = 中轨 - 2倍标准差(σ)</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">标准差的意义</span> — 衡量价格波动的剧烈程度。标准差大=波动剧烈=带宽大，标准差小=波动平缓=带宽窄</li>
+                        <li><span class="key-concept">自适应特性</span> — 这是布林带最大的优势：带宽会随市场波动率自动调整，不需要手动修改参数</li>
+                        <li><b>参数选择</b>：Bollinger推荐<b>20周期+2倍标准差</b>作为默认设置，但不同市场可微调
+                            <ul>
+                                <li>若用10周期，标准差用1.5倍</li>
+                                <li>若用50周期，标准差用2.5倍</li>
+                            </ul>
+                        </li>
+                        <li><b>统计意义</b>：2倍标准差理论上包含约95%的价格数据</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch2">二</div>
+                    <div class="chapter-title">第四~六章 · %B指标与带宽 (核心章节)</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>%B和带宽(BandWidth)是布林带衍生的<span class="key-concept">两个关键量化指标</span>。</p>
+                    <ul>
+                        <li><span class="key-concept">%B = (价格 - 下轨) / (上轨 - 下轨)</span>
+                            <ul>
+                                <li>%B > 1.0 → 价格在上轨之上(超强势)</li>
+                                <li>%B = 0.5 → 价格在中轨(均衡位)</li>
+                                <li>%B < 0.0 → 价格在下轨之下(超弱势)</li>
+                                <li><b>Bollinger关键观点</b>：%B高不一定要卖，%B低不一定要买——要看趋势！</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">BandWidth(带宽) = (上轨 - 下轨) / 中轨</span>
+                            <ul>
+                                <li>带宽扩大 → 波动性增加，趋势正在展开</li>
+                                <li>带宽缩小 → 波动性降低，正在积蓄能量</li>
+                                <li>带宽达到极低值 → <b>Squeeze(挤压)</b>，即将爆发大行情</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">Squeeze(挤压)</span> — <b>本书最核心的概念之一</b>
+                            <ul>
+                                <li>当带宽收缩到近6个月最低值时，触发"挤压"信号</li>
+                                <li>挤压不预测方向，只预测"波动率即将大幅增加"</li>
+                                <li>需要配合其他指标(如动量)判断突破方向</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch3">三</div>
+                    <div class="chapter-title">第七~九章 · 形态识别与交易信号</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>Bollinger定义了几种基于布林带的<span class="key-concept">经典交易形态</span>。</p>
+                    <ul>
+                        <li><span class="key-concept">W底(双重底)</span> — Bollinger最推崇的买入形态
+                            <ul>
+                                <li>第一次触底在下轨之下(%B<0)，反弹到中轨附近</li>
+                                <li>第二次回落，低点在下轨之上(%B>0)——虽然绝对价格可能更低</li>
+                                <li>确认：价格突破中轨（第一次反弹的高点），W底成立</li>
+                                <li><b>"第二个低点不必比第一个低"</b>——这是布林带W底的精髓</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">M顶(双重顶)</span> — W底的镜像卖出形态
+                            <ul>
+                                <li>第一次冲顶在上轨之上(%B>1)，回调到中轨</li>
+                                <li>第二次冲高，高点在上轨之下(%B<1)——虽然绝对价格可能更高</li>
+                                <li>确认：价格跌破中轨，M顶成立</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">Walking the Bands(沿轨运行)</span> — 在强趋势中，价格会持续沿上轨(上升)或下轨(下降)运行
+                            <ul>
+                                <li>这就是为什么"触及上轨就卖"是错误的——强势行情中价格可以一直沿着上轨走</li>
+                                <li>判断方法：%B持续>0.8且带宽扩大=趋势走势，不宜逆势</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">头部假突破</span> — 价格短暂突破上轨后迅速缩回轨内，成交量萎缩。这是看跌信号</li>
+                        <li><span class="key-concept">底部假跌破</span> — 价格短暂跌破下轨后迅速回到轨内，成交量萎缩。这是看涨信号</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch4">四</div>
+                    <div class="chapter-title">第十~十二章 · 指标组合与确认系统</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>Bollinger强调布林带<span class="key-concept">不应单独使用</span>，需要配合确认指标。</p>
+                    <ul>
+                        <li><span class="key-concept">布林带+RSI</span> — Bollinger推荐的核心组合
+                            <ul>
+                                <li>%B低+RSI低(但RSI高于第一次低点)=看涨背离=买入</li>
+                                <li>%B高+RSI高(但RSI低于第一次高点)=看跌背离=卖出</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">布林带+MFI(资金流量指标)</span> — Bollinger特别推荐
+                            <ul>
+                                <li>MFI衡量资金流入/流出强度，与%B结合判断真假突破</li>
+                                <li>价格触下轨+MFI>80=假跌破(资金在流入)=买入机会</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">布林带+成交量</span> — 带宽扩大+放量=真突破，带宽扩大+缩量=假突破</li>
+                        <li><span class="key-concept">布林带+MACD</span> — MACD确认方向，布林带确认位置和波动率状态</li>
+                        <li><b>Bollinger的"三步确认法"</b>：
+                            <ol style="padding-left:18px;">
+                                <li>布林带确认位置(%B)和环境(带宽)</li>
+                                <li>确认指标验证信号(RSI/MFI背离)</li>
+                                <li>成交量最终确认</li>
+                            </ol>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch5">五</div>
+                    <div class="chapter-title">第十三~十五章 · 波动率循环与实战系统</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>波动率具有<span class="key-concept">均值回归</span>特性，这是布林带策略的理论基石。</p>
+                    <ul>
+                        <li><span class="key-concept">波动率循环</span> — 低波动→高波动→低波动的无限循环
+                            <ul>
+                                <li>低波动期(带宽收窄)是<b>建仓</b>的好时机</li>
+                                <li>高波动期(带宽扩大)是<b>获利</b>的时期</li>
+                                <li>极端高波动后必然回归→带宽开始收缩→考虑平仓</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">趋势系统(Method I)</span> — Squeeze突破策略
+                            <ul>
+                                <li>等待Squeeze信号(带宽极低)</li>
+                                <li>价格突破上轨=做多，跌破下轨=做空</li>
+                                <li>止损设在中轨</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">反转系统(Method II)</span> — W底/M顶策略
+                            <ul>
+                                <li>识别W底或M顶形态</li>
+                                <li>用%B和确认指标确认</li>
+                                <li>突破中轨确认入场</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">追势系统(Method III)</span> — %B+MFI确认
+                            <ul>
+                                <li>%B>0.8且MFI>80=强势确认，持有</li>
+                                <li>%B<0.2且MFI<20=弱势确认，离场</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">六</div>
+                    <div class="chapter-title">第十六~十八章 · 布林带哲学与总结</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>Bollinger总结的<span class="key-concept">22条布林带使用规则</span>中的精华。</p>
+                    <ul>
+                        <li><span class="key-concept">规则1</span>：布林带为价格提供了一个<b>相对的</b>高低定义</li>
+                        <li><span class="key-concept">规则2</span>：这个相对定义可以用来比较价格走势和指标运动，产生严格的买卖决策</li>
+                        <li><span class="key-concept">规则3</span>：适合的确认指标可以从动量、成交量、情绪、持仓量等中选取</li>
+                        <li><span class="key-concept">规则4</span>：波动性和趋势已经内含在布林带中，不需要用来确认价格</li>
+                        <li><span class="key-concept">规则5</span>：%B可以量化价格在布林带中的相对位置</li>
+                        <li><span class="key-concept">规则6</span>：带宽指标告诉你布林带有多宽(波动率的量化)</li>
+                        <li><span class="key-concept">规则7</span>：<b>标签不是信号</b>——触及上轨不自动是卖出信号，触及下轨不自动是买入信号</li>
+                        <li><span class="key-concept">规则8</span>：在趋势行情中，价格可以且经常沿着布林带上轨(或下轨)运行</li>
+                        <li><span class="key-concept">规则9</span>：布林带外的收盘是<b>持续信号</b>而非反转信号</li>
+                        <li><span class="key-concept">规则10</span>：均线交叉仅用于确认，不用于择时</li>
+                        <li><b>核心哲学</b>：<span style="color:var(--accent-red);font-weight:600;">市场中唯一确定的就是不确定性，布林带帮你管理这种不确定性</span></li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 代码实现说明 -->
+            <div class="card" style="border-left: 3px solid var(--accent-blue);">
+                <div class="card-title">
+                    <span style="color:var(--accent-blue);">💻</span> 代码实现
+                </div>
+                <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                    <code>bollinger_strategy.py</code> — 布林带三线计算 + %B/%BW量化 + Squeeze检测 + W底/M顶形态识别 +
+                    沿轨运行判断 + 假突破/假跌破检测 + 4种策略变体回测
+                </div>
+            </div>
+{% endblock %}

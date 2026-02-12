@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+{% block title %}KDJ波段操作 · 书籍大纲{% endblock %}
+{% block content %}
+<h1 class="page-title">《随机指标KDJ：波段操作精解》</h1>
+<p class="page-subtitle">凌波 著 · 北京联合出版公司 · 2019 — KDJ指标 × 波段操作 × 9章系统解读</p>
+
+<!-- 核心理念 -->
+<div class="card" style="border-left: 3px solid var(--accent-blue);">
+    <div class="card-title">📌 核心理念</div>
+    <p style="color: var(--text-secondary); line-height: 1.8;">
+        KDJ随机振荡指标是<span class="key-concept">短线操作的利器</span>，在指示行情转折点方面具有明显的优势。
+        本书围绕"KDJ指标"和"波段操作"两个关键词，从指标构成、应用原则到交易系统，系统讲解了KDJ的全部用法。
+        书中首次引入<span class="key-concept">KD-MACD柱状线</span>概念，将MACD的柱线分析方法移植到KDJ系统中，
+        并总结了<span class="key-concept">四撞顶(底)</span>等独创形态。
+        <br><br>
+        <strong>关键词:</strong> 精通一个指标 → 万法同理 → 波段为王 → 顺势操作 → 严格执行
+    </p>
+</div>
+
+<!-- 第一章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch1">1</div>
+        <div class="chapter-title">指标应用基础</div>
+        <span class="badge">6节</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>核心要点:</strong> 技术分析指标分为<span class="key-concept">趋势指标</span>(MA/BOLL/DMI)和<span class="key-concept">振荡指标</span>(MACD/KDJ/RSI)两大类。</p>
+        <ul>
+            <li><strong>区间振荡指标:</strong> 数值在0-100区间波动(如KDJ)，>80超买，<20超卖</li>
+            <li><strong>中心振荡指标:</strong> 围绕0轴波动(如MACD)，多空分界线=0轴</li>
+            <li><strong>多空分界线:</strong> KDJ的50线 / MACD的0轴 — 简单但实战意义重大</li>
+            <li><strong>指标高位与低位:</strong> 超买=买过头了(短期看多) → 超卖=卖过头了(短期看空)</li>
+            <li><strong>指标的趋势:</strong> 波峰波谷逐波提高=上升趋势，逐波降低=下降趋势</li>
+            <li><strong>指标的形态:</strong> 头肩顶(底)、双重顶(底)、三重顶(底) — 形态与价格互相验证</li>
+            <li><span class="key-concept">指标的交叉:</span> 金叉=快线自下而上穿慢线(买入)，死叉=反之(卖出)</li>
+            <li><span class="key-concept">指标的背离:</span> 最好用的应用 — 价格创新高(低)但指标不创新高(低)</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第二章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch2">2</div>
+        <div class="chapter-title">KDJ指标构成</div>
+        <span class="badge green">7节 · 核心</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>由乔治·兰恩(George Lane)博士于20世纪50年代末发明</strong></p>
+        <div class="principle-grid">
+            <div class="principle-card buy" style="background: var(--bg-secondary);">
+                <h3>📐 计算公式</h3>
+                <p>
+                    <code>RSV = (Close - Low_N) / (High_N - Low_N) × 100</code><br>
+                    <code>K = 2/3 × K_prev + 1/3 × RSV</code> (RSV的3日SMA)<br>
+                    <code>D = 2/3 × D_prev + 1/3 × K</code> (K的3日SMA)<br>
+                    <code>J = 3K - 2D</code> (放大K与D的差距)<br>
+                    <code>KD-MACD = 2×(K-D)</code> ★首创★
+                </p>
+            </div>
+            <div class="principle-card sell" style="background: var(--bg-secondary);">
+                <h3>📊 四条线的特点</h3>
+                <p>
+                    <strong>RSV:</strong> 未成熟随机值，波动最剧烈<br>
+                    <strong>K快线:</strong> RSV平滑后，灵敏但有效<br>
+                    <strong>D慢线:</strong> K的平滑，更可靠但滞后<br>
+                    <strong>J线:</strong> J>100超买，J<0超卖，最领先
+                </p>
+            </div>
+        </div>
+        <ul>
+            <li><strong>RSV(未成熟随机值):</strong> 收盘价在N日价格通道中的百分比位置(0-100)</li>
+            <li><strong>K快线:</strong> RSV的3日移动平均，灵敏反映收盘价在通道中的相对位置</li>
+            <li><strong>D慢线:</strong> K的3日移动平均，D慢线的转向信号通常发出在价格底部/顶部形成之前</li>
+            <li><strong>J线:</strong> J=3K-2D，可大于100和小于0，起到领先指标的作用</li>
+            <li><strong>KD-MACD柱线:</strong> 2×(K-D)，用MACD柱线方式表示K与D的差距 ★书中首创★</li>
+            <li><span class="key-concept">兰恩建议:</span> 配合涨跌周期、波浪理论、斐波那契回撤判断时机</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第三章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch3">3</div>
+        <div class="chapter-title">K快线波段操作</div>
+        <span class="badge red">6节 · 实战核心</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>K快线是KDJ中最灵敏的操作线，6种波段操作方法:</strong></p>
+        <div class="principle-grid">
+            <div class="principle-card buy" style="background: var(--bg-secondary);">
+                <h3>🟢 买点</h3>
+                <p>
+                    <strong>第一买点:</strong> K快线从超卖区向上突破50线<br>
+                    <strong>第二买点:</strong> 回落后再次突破50线(通常=主升浪起点)<br>
+                    <strong>超卖突破买点:</strong> K快线向上突破20线<br>
+                    <strong>背离第一买点:</strong> 底背离后K快线拐头向上<br>
+                    <strong>背离第二买点:</strong> 底背离后突破前期高点(更可靠)
+                </p>
+            </div>
+            <div class="principle-card sell" style="background: var(--bg-secondary);">
+                <h3>🔴 卖点</h3>
+                <p>
+                    <strong>第一卖点:</strong> K快线从超买区向下跌破50线<br>
+                    <strong>第二卖点:</strong> 反弹后再次跌破50线(=主跌浪开始)<br>
+                    <strong>超买跌破卖点:</strong> K快线向下跌破80线<br>
+                    <strong>背离第一卖点:</strong> 顶背离后K快线拐头向下<br>
+                    <strong>背离第二卖点:</strong> 顶背离后跌破前期低点
+                </p>
+            </div>
+        </div>
+        <ul>
+            <li><strong>趋势线运用:</strong> K快线突破下降趋势线=买点(比突破50线更提前)</li>
+            <li><strong>指标形态:</strong> 头肩顶/底、双重顶/底、三重顶/底 → 在超买/超卖区出现更可靠</li>
+            <li><span class="key-concept">指标钝化:</span> 极端行情中K快线在超买/超卖区反复振荡，失去指导意义</li>
+            <li><strong>应对钝化4策:</strong> ①扩大周期 ②配合中长线指标 ③等待反向极限位 ④K线形态+量价确认</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第四章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch4">4</div>
+        <div class="chapter-title">K快线与D慢线波段操作</div>
+        <span class="badge yellow">5节 · 核心</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>KD线的聚散交叉是KDJ研究的重点:</strong></p>
+        <ul>
+            <li><span class="key-concept">黄金交叉(金叉):</span>
+                <ul>
+                    <li>20线以下金叉: <strong>最强买入信号</strong> — 超卖区的反转</li>
+                    <li>50线以下金叉: 上涨趋势中的加仓点(通常=第3浪起点)</li>
+                    <li>80线以下金叉: 最后一浪上涨(第5浪), 谨慎加仓</li>
+                    <li>80线以上金叉: 延长浪, 宜观望</li>
+                </ul>
+            </li>
+            <li><span class="key-concept">死亡交叉(死叉):</span>
+                <ul>
+                    <li>80线以上死叉: <strong>最强卖出信号</strong> — 超买区的反转</li>
+                    <li>80线以下死叉: 波段高位的短线卖点</li>
+                    <li>50线以下死叉: 下跌趋势中的出逃机会</li>
+                    <li>20线以下死叉: 弱势反弹失败, 继续看空</li>
+                </ul>
+            </li>
+            <li><span class="key-concept">二次交叉:</span> 同一区域发生两次金叉/死叉 → 第二次更可靠</li>
+            <li><span class="key-concept">回测不破:</span> K回调到D线附近但不死叉 → 强势延续(买入)</li>
+            <li><span class="key-concept">穿越不过:</span> K反弹到D线附近但不金叉 → 弱势延续(卖出)</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第五章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch5">5</div>
+        <div class="chapter-title">KD-MACD柱状线 ★首创★</div>
+        <span class="badge purple">7节 · 创新</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>将MACD柱线分析方法引入KDJ, 形成KD-MACD = 2×(K-D):</strong></p>
+        <ul>
+            <li><strong>柱线破解:</strong> 红柱(K>D)=多头主导, 绿柱(K<D)=空头主导</li>
+            <li><span class="key-concept">缩头:</span> 红柱从增长转为缩短 → <strong>看跌信号</strong>(多头力量减弱)</li>
+            <li><span class="key-concept">抽脚:</span> 绿柱从增长转为缩短 → <strong>看涨信号</strong>(空头力量减弱)</li>
+            <li><strong>杀多棒:</strong> 红柱突然大幅缩短 → 空头突袭, 多头被杀</li>
+            <li><strong>逼空棒:</strong> 绿柱突然大幅缩短 → 多头反击, 空头被逼</li>
+            <li><strong>单峰(谷)形态:</strong> 柱线只形成一个峰/谷 → 快速反转信号</li>
+            <li><strong>双重峰(谷)形态:</strong> 柱线形成两个峰/谷 → 第二个更可靠</li>
+            <li><strong>三重峰(谷)形态:</strong> 三个峰/谷 → 强势钝化后的反转</li>
+            <li><strong>柱线背离:</strong> 价格创新高/低但柱线峰值降低 → 反转预警</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第六章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch1">6</div>
+        <div class="chapter-title">KDJ指标的综合应用</div>
+        <span class="badge">4节</span>
+    </div>
+    <div class="chapter-content">
+        <ul>
+            <li><span class="key-concept">四撞顶(底): ★独创★</span> KDJ在超买(超卖)区间反复触碰4次以上 → 极强反转信号
+                <ul>
+                    <li>四撞顶: K线4次进入>80区间后向下拐头 → 顶部确认</li>
+                    <li>四撞底: K线4次进入<20区间后向上拐头 → 底部确认</li>
+                </ul>
+            </li>
+            <li><strong>KDJ顶(底)背离:</strong>
+                <ul>
+                    <li>80以上的背离可能是假背离(强势延长浪中)</li>
+                    <li>20-50之间的背离最可能是真背离</li>
+                    <li>D值跌破50后的背离卖点更可靠</li>
+                </ul>
+            </li>
+            <li><span class="key-concept">多周期共振:</span> 日线+周线KDJ同时发出信号 → 大幅提高成功率</li>
+            <li><strong>波浪理论买点:</strong> 在第2浪回调结束时的KDJ低位金叉 = 主升浪(第3浪)入场点</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第七章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch2">7</div>
+        <div class="chapter-title">KDJ与其他指标</div>
+        <span class="badge green">6节</span>
+    </div>
+    <div class="chapter-content">
+        <ul>
+            <li><strong>KDJ与K线形态:</strong> KDJ金叉+看涨K线形态(锤头线/吞没) → 双重确认</li>
+            <li><strong>KDJ与均线:</strong> KDJ金叉+价格站上MA10 → 买入成功率大增</li>
+            <li><strong>KDJ与成交量:</strong> KDJ金叉+放量 → 确认反转; 缩量金叉 → 可能假信号</li>
+            <li><span class="key-concept">KDJ与MACD:</span> KDJ低位金叉+MACD的DIF>0 → 顺势操作, 高胜率</li>
+            <li><strong>KDJ与布林线:</strong> K线触及布林下轨+KDJ超卖 → 强力买入; 触及上轨+KDJ超买 → 强力卖出</li>
+            <li><strong>KDJ神奇变形:</strong> 调整参数(如19,3,3或5,3,3)适应不同周期行情</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第八章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch3">8</div>
+        <div class="chapter-title">市场研判</div>
+        <span class="badge red">5节</span>
+    </div>
+    <div class="chapter-content">
+        <ul>
+            <li><strong>多空分界:</strong> KD值>50=多头市场(做多有利), KD值<50=空头市场(做空有利)</li>
+            <li><strong>长期vs短期:</strong> 周线KDJ判断大趋势, 日线KDJ精确入场出场</li>
+            <li><span class="key-concept">多空转折点:</span>
+                <ul>
+                    <li>K线从超卖区突破50线 = 空转多(第一次最有效)</li>
+                    <li>K线从超买区跌破50线 = 多转空(第一次最有效)</li>
+                </ul>
+            </li>
+            <li><strong>市场强弱:</strong> 强势市场K快线在50-80游走, 弱势市场在20-50游走</li>
+            <li><strong>左侧vs右侧交易:</strong> KD-MACD提供左侧预警(柱线缩头/抽脚), KD交叉提供右侧确认</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第九章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch4">9</div>
+        <div class="chapter-title">KDJ交易系统</div>
+        <span class="badge yellow">4节 · 系统化</span>
+    </div>
+    <div class="chapter-content">
+        <ul>
+            <li><strong>KDJ超买系统:</strong>
+                <ul>
+                    <li>入场: K快线在超卖区(K<20)向上突破20线</li>
+                    <li>出场: K快线在超买区(K>80)向下跌破80线</li>
+                    <li>适用: 震荡行情, 波段操作</li>
+                </ul>
+            </li>
+            <li><span class="key-concept">KD-MACD系统:</span>
+                <ul>
+                    <li>入场: KD-MACD柱线由绿转红(零轴上穿)</li>
+                    <li>出场: KD-MACD柱线由红转绿(零轴下穿)</li>
+                    <li>辅助: 缩头=减仓预警, 抽脚=加仓信号</li>
+                </ul>
+            </li>
+            <li><strong>操盘高手经验:</strong>
+                <ul>
+                    <li>万法同理 — 精通一个指标, 其他指标极易上手</li>
+                    <li>顺势操作 — 不与趋势作对</li>
+                    <li>概率思维 — 技术分析有效性以概率形式出现</li>
+                    <li>严格执行 — 按信号操作, 不被情绪左右</li>
+                </ul>
+            </li>
+        </ul>
+    </div>
+</div>
+
+<!-- 代码实现 -->
+<div class="card" style="border-left: 3px solid var(--accent-green);">
+    <div class="card-title">💻 代码实现</div>
+    <p style="color: var(--text-secondary); line-height: 1.8;">
+        核心代码文件: <code>kdj_strategy.py</code><br>
+        实现了书中9章所有核心理论:
+    </p>
+    <ul style="color: var(--text-secondary); line-height: 2; padding-left: 20px;">
+        <li>✅ KDJ指标计算(RSV→K→D→J + KD-MACD柱线)</li>
+        <li>✅ 金叉/死叉检测(4个位置区间不同权重)</li>
+        <li>✅ 超买超卖区间(K>80/K<20 + J>100/J<0)</li>
+        <li>✅ 50线穿越(多空分界线)</li>
+        <li>✅ 顶/底背离检测(30根K线回溯)</li>
+        <li>✅ KD-MACD柱线信号(缩头/抽脚/杀多棒/逼空棒)</li>
+        <li>✅ 二次交叉检测(20根回溯)</li>
+        <li>✅ 四撞顶/底形态(40根回溯)</li>
+        <li>✅ 回测不破/穿越不过(K-D差距变化)</li>
+        <li>✅ J线极值强化(J>110拐头/J<-10拐头)</li>
+        <li>✅ 多来源可靠性乘数(≥3个信号源 → ×1.15)</li>
+    </ul>
+    <p style="color: var(--text-muted); margin-top: 12px;">
+        融合文件: <code>six_book_fusion.py</code> — KDJ作为第6维信号融入"C6+四书否决"体系
+    </p>
+</div>
+
+{% endblock %}

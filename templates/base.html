@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}技术分析平台{% endblock %}</title>
+    {% block head_extra %}{% endblock %}
+    <style>
+        :root {
+            --bg-primary: #0f1117;
+            --bg-secondary: #1a1d29;
+            --bg-card: #1e2130;
+            --bg-hover: #262a3d;
+            --text-primary: #e1e4ea;
+            --text-secondary: #8b8fa3;
+            --text-muted: #5c6078;
+            --accent-blue: #4a9eff;
+            --accent-green: #00d68f;
+            --accent-red: #ff4d6a;
+            --accent-yellow: #ffaa00;
+            --accent-purple: #a855f7;
+            --border: #2a2d3e;
+            --sidebar-w: 280px;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+            background: var(--bg-primary); color: var(--text-primary);
+            display: flex; height: 100vh; overflow: hidden;
+        }
+        .sidebar {
+            width: var(--sidebar-w); min-width: var(--sidebar-w);
+            background: var(--bg-secondary); border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; overflow-y: auto;
+        }
+        .sidebar-header { padding: 24px 20px 16px; border-bottom: 1px solid var(--border); }
+        .sidebar-header h1 {
+            font-size: 18px; font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 4px;
+        }
+        .sidebar-header p { font-size: 12px; color: var(--text-muted); }
+        .sidebar-footer {
+            margin-top: auto; padding: 12px 16px;
+            border-top: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between;
+            flex-shrink: 0;
+        }
+        .user-info { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+        .user-avatar { font-size: 16px; }
+        .user-name { font-weight: 500; }
+        .logout-btn {
+            font-size: 12px; color: var(--text-muted); text-decoration: none;
+            padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+            transition: all 0.2s;
+        }
+        .logout-btn:hover { color: var(--accent-red); border-color: var(--accent-red); background: rgba(255,77,106,0.08); }
+        .nav-section { padding: 12px 0; border-bottom: 1px solid var(--border); }
+        .nav-section-title {
+            font-size: 11px; font-weight: 600; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: 0.5px; padding: 0 20px; margin-bottom: 4px;
+        }
+        a.nav-item {
+            display: flex; align-items: center; padding: 8px 20px; cursor: pointer;
+            font-size: 13px; color: var(--text-secondary); transition: all 0.15s;
+            gap: 10px; text-decoration: none;
+        }
+        a.nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+        a.nav-item.active {
+            background: rgba(74, 158, 255, 0.1); color: var(--accent-blue);
+            border-left: 2px solid var(--accent-blue);
+        }
+        .nav-icon { width: 18px; text-align: center; font-size: 14px; }
+        .main-content { flex: 1; overflow-y: auto; padding: 32px 40px; max-width: 1200px; }
+        .page-title { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+        .page-subtitle { font-size: 14px; color: var(--text-secondary); margin-bottom: 32px; }
+        .card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 12px; padding: 24px; margin-bottom: 20px;
+        }
+        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .card-header h3 { font-size: 16px; font-weight: 600; }
+        .card-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+        .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+        .badge.green { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+        .badge.red { background: rgba(255,77,106,0.15); color: var(--accent-red); }
+        .badge.yellow { background: rgba(255,170,0,0.15); color: var(--accent-yellow); }
+        .badge.purple { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+        .stat-label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+        .stat-value { font-size: 24px; font-weight: 700; }
+        .stat-value.positive { color: var(--accent-green); }
+        .stat-value.negative { color: var(--accent-red); }
+        .stat-note { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+        .code-section { margin-bottom: 24px; }
+        .code-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 16px; background: #161822; border: 1px solid var(--border);
+            border-bottom: none; border-radius: 8px 8px 0 0; font-size: 13px; color: var(--text-muted);
+        }
+        .code-file { color: var(--accent-blue); font-weight: 500; }
+        pre {
+            background: #0d0f17; border: 1px solid var(--border); border-radius: 0 0 8px 8px;
+            padding: 16px; overflow-x: auto; font-size: 13px; line-height: 1.6;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+        }
+        code { font-family: inherit; }
+        .kw { color: #c678dd; } .fn { color: #61afef; } .st { color: #98c379; }
+        .cm { color: #5c6370; font-style: italic; } .nu { color: #d19a66; }
+        .op { color: #56b6c2; } .cl { color: #e5c07b; }
+        .loading { display: flex; align-items: center; justify-content: center; padding: 60px; color: var(--text-muted); }
+        .spinner { width: 24px; height: 24px; border: 3px solid var(--border); border-top-color: var(--accent-blue); border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 12px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .data-table th { text-align: left; padding: 10px 12px; background: var(--bg-secondary); color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; position: sticky; top: 0; z-index: 1; }
+        .data-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+        .data-table tr:hover td { background: var(--bg-hover); }
+        .pnl-pos { color: var(--accent-green); font-weight: 600; }
+        .pnl-neg { color: var(--accent-red); font-weight: 600; }
+        .chapter { margin-bottom: 24px; }
+        .chapter-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; cursor: pointer; }
+        .chapter-num { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; flex-shrink: 0; }
+        .chapter-num.ch1 { background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+        .chapter-num.ch2 { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+        .chapter-num.ch3 { background: rgba(255,77,106,0.15); color: var(--accent-red); }
+        .chapter-num.ch4 { background: rgba(255,170,0,0.15); color: var(--accent-yellow); }
+        .chapter-num.ch5 { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+        .chapter-title { font-size: 16px; font-weight: 600; }
+        .chapter-content { padding-left: 48px; color: var(--text-secondary); font-size: 14px; line-height: 1.8; }
+        .chapter-content ul { padding-left: 18px; }
+        .chapter-content li { margin-bottom: 4px; }
+        .chapter-content .key-concept { color: var(--accent-blue); font-weight: 500; }
+        .principle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+        .principle-card { border: 1px solid var(--border); border-radius: 12px; padding: 24px; position: relative; overflow: hidden; }
+        .principle-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+        .principle-card.sell::before { background: var(--accent-red); }
+        .principle-card.buy::before { background: var(--accent-green); }
+        .principle-card h3 { font-size: 16px; margin-bottom: 12px; }
+        .principle-card p { color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
+        .arch-diagram { display: flex; flex-direction: column; gap: 12px; align-items: center; padding: 24px; }
+        .arch-layer { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+        .arch-box { padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; text-align: center; border: 1px solid var(--border); }
+        .arch-box.entry { background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+        .arch-box.data { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+        .arch-box.core { background: rgba(255,77,106,0.15); color: var(--accent-red); }
+        .arch-box.analysis { background: rgba(255,170,0,0.15); color: var(--accent-yellow); }
+        .arch-box.out { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+        .arch-arrow { color: var(--text-muted); font-size: 20px; }
+        .bar-chart-container { display: flex; align-items: flex-end; justify-content: center; gap: 8px; height: 260px; padding: 20px 10px 0; }
+        .bar-col { display: flex; flex-direction: column; align-items: center; flex: 1; max-width: 72px; }
+        .bar-value { font-size: 11px; font-weight: 600; margin-bottom: 4px; white-space: nowrap; }
+        .bar-rect { width: 100%; border-radius: 4px 4px 0 0; min-height: 2px; transition: all 0.3s ease; position: relative; }
+        .bar-rect:hover { opacity: 0.8; transform: scaleX(1.1); }
+        .bar-label { font-size: 11px; color: var(--text-muted); margin-top: 8px; text-align: center; }
+        .rank-badge { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; font-size: 11px; font-weight: 700; margin-right: 4px; }
+        .rank-1 { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #000; }
+        .rank-2 { background: linear-gradient(135deg, #c0c0c0, #a0a0a0); color: #000; }
+        .rank-3 { background: linear-gradient(135deg, #cd7f32, #a0622a); color: #fff; }
+        @media (max-width: 900px) {
+            .sidebar { width: 220px; min-width: 220px; }
+            .main-content { padding: 24px 20px; }
+            .principle-grid { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        {% block extra_styles %}{% endblock %}
+    </style>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h1>技术分析平台</h1>
+            <p>六书融合 · ETH/USDT 回测</p>
+        </div>
+        <div class="nav-section">
+            <div class="nav-section-title">书籍大纲</div>
+            <a class="nav-item {% if active_page == 'overview' %}active{% endif %}" href="/">
+                <span class="nav-icon">📖</span> 背离技术分析
+            </a>
+            <a class="nav-item {% if active_page == 'book-ma' %}active{% endif %}" href="/book/ma">
+                <span class="nav-icon">📈</span> 均线技术分析
+            </a>
+            <a class="nav-item {% if active_page == 'book-candlestick' %}active{% endif %}" href="/book/candlestick">
+                <span class="nav-icon">🕯️</span> 日本蜡烛图技术
+            </a>
+            <a class="nav-item {% if active_page == 'book-bollinger' %}active{% endif %}" href="/book/bollinger">
+                <span class="nav-icon">📉</span> 布林线
+            </a>
+            <a class="nav-item {% if active_page == 'book-volume-price' %}active{% endif %}" href="/book/volume-price">
+                <span class="nav-icon">📊</span> 量价分析
+            </a>
+            <a class="nav-item {% if active_page == 'book-kdj' %}active{% endif %}" href="/book/kdj">
+                <span class="nav-icon">📈</span> KDJ波段操作
+            </a>
+            <a class="nav-item {% if active_page == 'architecture' %}active{% endif %}" href="/architecture">
+                <span class="nav-icon">🏗️</span> 项目架构
+            </a>
+        </div>
+        <div class="nav-section">
+            <div class="nav-section-title">代码实现</div>
+            <a class="nav-item {% if active_page == 'code-indicators' %}active{% endif %}" href="/code/indicators">
+                <span class="nav-icon">📊</span> 技术指标计算
+            </a>
+            <a class="nav-item {% if active_page == 'code-pattern' %}active{% endif %}" href="/code/pattern">
+                <span class="nav-icon">📐</span> 几何形态背离
+            </a>
+            <a class="nav-item {% if active_page == 'code-macd' %}active{% endif %}" href="/code/macd">
+                <span class="nav-icon">📈</span> MACD背离
+            </a>
+            <a class="nav-item {% if active_page == 'code-exhaustion' %}active{% endif %}" href="/code/exhaustion">
+                <span class="nav-icon">⚡</span> 背离与背驰
+            </a>
+            <a class="nav-item {% if active_page == 'code-other' %}active{% endif %}" href="/code/other">
+                <span class="nav-icon">🔬</span> 其他指标背离
+            </a>
+        </div>
+        <div class="nav-section">
+            <div class="nav-section-title">ETH/USDT 回测</div>
+            <a class="nav-item {% if active_page == 'global-strategy' %}active{% endif %}" href="/strategy/global">
+                <span class="nav-icon">🏆</span> 全局最优策略
+            </a>
+            <a class="nav-item {% if active_page == 'strategy-compare' %}active{% endif %}" href="/strategy/compare">
+                <span class="nav-icon">🔬</span> 策略优化对比
+            </a>
+            <a class="nav-item {% if active_page == 'strategy-futures' %}active{% endif %}" href="/strategy/futures">
+                <span class="nav-icon">📊</span> 合约做空策略
+            </a>
+            <a class="nav-item {% if active_page == 'ma-strategy' %}active{% endif %}" href="/strategy/ma">
+                <span class="nav-icon">📈</span> 均线技术分析
+            </a>
+            <a class="nav-item {% if active_page == 'combined-strategy' %}active{% endif %}" href="/strategy/combined">
+                <span class="nav-icon">🔗</span> 双书融合策略
+            </a>
+            <a class="nav-item {% if active_page == 'c6-detail' %}active{% endif %}" href="/strategy/c6-detail">
+                <span class="nav-icon">🔥</span> C6策略代码详解
+            </a>
+        </div>
+        <div class="nav-section">
+            <div class="nav-section-title">新书策略 (三书)</div>
+            <a class="nav-item {% if active_page == 'candlestick' %}active{% endif %}" href="/strategy/candlestick">
+                <span class="nav-icon">🕯️</span> 蜡烛图形态
+            </a>
+            <a class="nav-item {% if active_page == 'bollinger' %}active{% endif %}" href="/strategy/bollinger">
+                <span class="nav-icon">📉</span> 布林带策略
+            </a>
+            <a class="nav-item {% if active_page == 'volume-price' %}active{% endif %}" href="/strategy/volume-price">
+                <span class="nav-icon">📊</span> 量价分析
+            </a>
+            <a class="nav-item {% if active_page == 'five-book' %}active{% endif %}" href="/strategy/five-book">
+                <span class="nav-icon">⭐</span> 五书融合策略
+            </a>
+            <a class="nav-item {% if active_page == 'best-strategy' %}active{% endif %}" href="/strategy/best">
+                <span class="nav-icon">🏆</span> 最佳策略详解
+            </a>
+            <a class="nav-item {% if active_page == 'optimize-sl-tp' %}active{% endif %}" href="/strategy/optimize-sl-tp">
+                <span class="nav-icon">🔧</span> 止盈止损优化
+            </a>
+            <a class="nav-item {% if active_page == 'optimal-strategy' %}active{% endif %}" href="/strategy/optimal">
+                <span class="nav-icon">💎</span> 最优策略详解
+            </a>
+            <a class="nav-item {% if active_page == 'six-book' %}active{% endif %}" href="/strategy/six-book">
+                <span class="nav-icon">⭐</span> 六书融合策略
+            </a>
+            <a class="nav-item {% if active_page == 'optimize-six-book' %}active{% endif %}" href="/strategy/optimize-six-book">
+                <span class="nav-icon">🚀</span> 六书优化(超越86.69%)
+            </a>
+            <a class="nav-item {% if active_page == 'six-book-deep-dive' %}active{% endif %}" href="/strategy/six-book-deep-dive">
+                <span class="nav-icon">📖</span> 六书优化 · 代码详解
+            </a>
+            <a class="nav-item {% if active_page == 'backtest-30d-7d' %}active{% endif %}" href="/strategy/backtest-30d-7d">
+                <span class="nav-icon">📊</span> 30天 vs 7天回测
+            </a>
+            <a class="nav-item {% if active_page == 'live-trading-guide' %}active{% endif %}" href="/strategy/live-trading-guide">
+                <span class="nav-icon">🔒</span> 实盘验证指南
+            </a>
+            <a class="nav-item {% if active_page == 'live-control' %}active{% endif %}" href="/strategy/live-control">
+                <span class="nav-icon">🎛️</span> 实盘控制面板
+            </a>
+        </div>
+        <div class="nav-section">
+            <div class="nav-section-title">其他回测</div>
+            <a class="nav-item {% if active_page == 'multi-compare' %}active{% endif %}" href="/strategy/multi">
+                <span class="nav-icon">📊</span> 多周期对比
+            </a>
+            <a class="nav-item {% if active_page == 'backtest' %}active{% endif %}" href="/strategy/backtest">
+                <span class="nav-icon">💰</span> 单周期回测
+            </a>
+        </div>
+        <div class="sidebar-footer">
+            <div class="user-info">
+                <span class="user-avatar">👤</span>
+                <span class="user-name">{{ session.get('username', 'guest') }}</span>
+            </div>
+            <a class="logout-btn" href="/logout" title="登出">退出</a>
+        </div>
+    </nav>
+    <div class="main-content">
+        {% block content %}{% endblock %}
+    </div>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

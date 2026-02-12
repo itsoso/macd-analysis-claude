@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}《均线技术分析》书籍大纲 - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">《均线技术分析》书籍大纲</div>
+            <div class="page-subtitle">邱立波 著 · 理财学院系列 · 均线系统从入门到精通 · 葛南维八法 + 排列理论 + 实战体系</div>
+
+            <!-- 书籍概述 -->
+            <div class="card" style="border-left: 3px solid var(--accent-green);">
+                <div class="card-title">
+                    <span style="color:var(--accent-green);">📈</span> 全书核心思想
+                </div>
+                <div style="font-size:14px;color:var(--text-secondary);line-height:1.8;">
+                    均线是市场平均成本的直观体现。价格围绕均线波动，偏离必回归。<br>
+                    本书从<b>单均线</b>→<b>双均线</b>→<b>多均线系统</b>层层递进，构建完整的均线分析框架。<br>
+                    核心武器：<span style="color:var(--accent-green);font-weight:600;">葛南维八大法则</span> +
+                    <span style="color:var(--accent-green);font-weight:600;">均线排列理论</span> +
+                    <span style="color:var(--accent-green);font-weight:600;">特殊形态识别</span>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">一</div>
+                    <div class="chapter-title">第一章 · 均线基础与本质</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>均线是特定周期内收盘价的算术平均值，反映市场的<span class="key-concept">平均持仓成本</span>。</p>
+                    <ul>
+                        <li><span class="key-concept">SMA(简单移动平均线)</span> — 等权重平均，稳定但滞后。常用周期：5/10/20/60/120/250</li>
+                        <li><span class="key-concept">EMA(指数移动平均线)</span> — 近期权重更大，响应更快。短线交易首选</li>
+                        <li><span class="key-concept">WMA(加权移动平均线)</span> — 线性递增权重，介于SMA和EMA之间</li>
+                        <li>均线的<b>本质意义</b>：MA20代表20个周期内所有参与者的平均成本，价格高于MA20说明多数人盈利</li>
+                        <li><span class="key-concept">均线的方向</span>是关键：上升均线=多头趋势，下降均线=空头趋势，水平均线=盘整</li>
+                        <li><b>短期均线</b>(5/10)反映短期情绪，<b>中期均线</b>(20/60)反映中期趋势，<b>长期均线</b>(120/250)反映长期方向</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch2">二</div>
+                    <div class="chapter-title">第二章 · 葛南维八大法则 (核心章节)</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>由美国投资专家葛南维(Joseph Granville)提出，是均线交易的<span class="key-concept">黄金法则</span>。</p>
+                    <div class="principle-grid" style="padding-left:0; margin-top:12px;">
+                        <div class="principle-card buy">
+                            <h3>四大买入法则</h3>
+                            <p>
+                                <b>买入法则1(穿越买入)：</b>均线由下降转为走平或上升，价格从下方向上突破均线<br>
+                                <b>买入法则2(回踩买入)：</b>价格虽跌破上升中的均线，但随后快速回到均线上方<br>
+                                <b>买入法则3(靠近买入)：</b>价格在均线上方运行回调，接近均线但未跌破，然后继续上涨<br>
+                                <b>买入法则4(乖离买入)：</b>价格急跌远离下降中的均线，短期有向均线回归的反弹
+                            </p>
+                        </div>
+                        <div class="principle-card sell">
+                            <h3>四大卖出法则</h3>
+                            <p>
+                                <b>卖出法则1(穿越卖出)：</b>均线由上升转为走平或下降，价格从上方向下跌破均线<br>
+                                <b>卖出法则2(反弹卖出)：</b>价格虽突破下降中的均线，但随后快速回到均线下方<br>
+                                <b>卖出法则3(靠近卖出)：</b>价格在均线下方运行反弹，接近均线但未突破，然后继续下跌<br>
+                                <b>卖出法则4(乖离卖出)：</b>价格急涨远离上升中的均线，短期有向均线回归的回调
+                            </p>
+                        </div>
+                    </div>
+                    <ul>
+                        <li><span class="key-concept">法则1和法则4</span>的信号最强、最可靠</li>
+                        <li>法则2和法则3需要趋势配合确认，单独使用容易被"骗线"</li>
+                        <li>实战中，<b>均线方向</b>比价格位置更重要——均线上升时偏向买入，均线下降时偏向卖出</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch3">三</div>
+                    <div class="chapter-title">第三章 · 均线交叉系统</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>双均线交叉是最经典的趋势交易信号，<span class="key-concept">金叉买入、死叉卖出</span>。</p>
+                    <ul>
+                        <li><span class="key-concept">金叉(Golden Cross)</span> — 短期均线从下方向上穿越长期均线，产生买入信号
+                            <ul>
+                                <li><b>强金叉</b>：两条均线都在上升时交叉，信号最强</li>
+                                <li><b>弱金叉</b>：长期均线仍在下降时交叉，可能是反弹而非反转</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">死叉(Death Cross)</span> — 短期均线从上方向下穿越长期均线，产生卖出信号
+                            <ul>
+                                <li><b>强死叉</b>：两条均线都在下降时交叉，信号最强</li>
+                                <li><b>弱死叉</b>：长期均线仍在上升时交叉，可能只是回调</li>
+                            </ul>
+                        </li>
+                        <li>常用组合：<b>MA5/MA10</b>(短线)、<b>MA10/MA20</b>(中短线)、<b>MA20/MA60</b>(中线)、<b>MA60/MA120</b>(中长线)</li>
+                        <li><span class="key-concept">交叉角度</span>越大，信号越强；平缓交叉往往是假信号</li>
+                        <li><b>避免震荡市中的频繁交叉</b>——加入过滤条件(如价格确认、成交量)减少假信号</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch4">四</div>
+                    <div class="chapter-title">第四章 · 均线排列理论 (实战核心)</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>多条均线的排列方式直接反映市场<span class="key-concept">趋势强度</span>和<span class="key-concept">运行阶段</span>。</p>
+                    <div class="principle-grid" style="padding-left:0; margin-top:12px;">
+                        <div class="principle-card buy">
+                            <h3>多头排列</h3>
+                            <p>
+                                <b>定义：</b>短期 > 中期 > 长期均线，呈<span style="color:var(--accent-green);">向上发散</span>排列<br>
+                                MA5 > MA10 > MA20 > MA60 > MA120<br>
+                                <b>含义：</b>各周期持仓者均盈利，市场做多力量强劲<br>
+                                <b>操作：</b>持股待涨，回调到中期均线附近加仓
+                            </p>
+                        </div>
+                        <div class="principle-card sell">
+                            <h3>空头排列</h3>
+                            <p>
+                                <b>定义：</b>短期 < 中期 < 长期均线，呈<span style="color:var(--accent-red);">向下发散</span>排列<br>
+                                MA5 < MA10 < MA20 < MA60 < MA120<br>
+                                <b>含义：</b>各周期持仓者均亏损，市场做空力量强劲<br>
+                                <b>操作：</b>空仓或做空，反弹到中期均线附近减仓
+                            </p>
+                        </div>
+                    </div>
+                    <ul>
+                        <li><span class="key-concept">排列转换过程</span>：空头排列→均线粘合→金叉→多头排列(反之亦然)</li>
+                        <li><span class="key-concept">均线粘合</span>是变盘信号——多条均线聚拢到极窄区间后将选择方向突破</li>
+                        <li><b>多头排列初期</b>是最佳买点，<b>空头排列初期</b>是最佳卖点</li>
+                        <li>排列越整齐、发散角度越大，趋势越强</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch5">五</div>
+                    <div class="chapter-title">第五章 · 特殊均线形态</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>均线在运行中形成的<span class="key-concept">特殊几何形态</span>，往往预示着重要的趋势变化。</p>
+                    <ul>
+                        <li><span class="key-concept">银山谷</span> — 短中长期均线首次金叉形成的封闭三角形区域(第一次买入信号，可能不可靠)</li>
+                        <li><span class="key-concept">金山谷</span> — 银山谷之后第二次形成的三角形区域，位置高于银山谷(确认买入信号)</li>
+                        <li><span class="key-concept">死亡谷</span> — 短中长期均线形成向下的三角形区域(强烈卖出信号)</li>
+                        <li><span class="key-concept">蛟龙出海</span> — 一根大阳线同时突破所有均线(极强的看涨信号)</li>
+                        <li><span class="key-concept">断头铡刀</span> — 一根大阴线同时跌破所有均线(极强的看跌信号)</li>
+                        <li><span class="key-concept">乌云密布</span> — 价格在所有均线下方运行，均线形成压力网(持续看跌)</li>
+                        <li><span class="key-concept">烘云托月</span> — 价格在所有均线上方运行，均线形成支撑网(持续看涨)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">六</div>
+                    <div class="chapter-title">第六章 · 均线与其他指标配合</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>均线单独使用有<span class="key-concept">滞后性</span>缺陷，需要与其他分析工具配合才能提高准确率。</p>
+                    <ul>
+                        <li><span class="key-concept">均线+MACD</span> — 均线判趋势方向，MACD判趋势强弱。金叉+MACD柱放大=强势买入</li>
+                        <li><span class="key-concept">均线+成交量</span> — 放量突破均线=有效突破，缩量突破=假突破概率高</li>
+                        <li><span class="key-concept">均线+K线形态</span> — 均线支撑位出现锤子线/吞没=买入信号增强</li>
+                        <li><span class="key-concept">均线+乖离率</span> — 价格偏离均线过远时，乖离率过大预示回归。乖离率是均线的"弹簧"</li>
+                        <li><b>多周期均线确认</b>：日线、4h、1h均线方向一致时，信号可靠性大幅提升</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch2">七</div>
+                    <div class="chapter-title">第七章 · 均线实战策略体系</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>将前六章的理论整合为<span class="key-concept">可执行的交易系统</span>。</p>
+                    <ul>
+                        <li><span class="key-concept">趋势跟踪策略</span> — 多头排列持有，空头排列做空/空仓。核心是"不逆势操作"</li>
+                        <li><span class="key-concept">回调买入策略</span> — 上升趋势中，价格回调到MA20附近(不跌破)是买入良机</li>
+                        <li><span class="key-concept">突破策略</span> — 均线粘合后放量突破方向明确后跟随</li>
+                        <li><span class="key-concept">止损原则</span> — 以关键均线作为止损位(如跌破MA20止损)，简单有效</li>
+                        <li><b>书中总结的核心操作纪律</b>：
+                            <ul>
+                                <li>顺均线方向操作(均线上升只做多,均线下降只做空)</li>
+                                <li>以均线粘合作为变盘预警，提前做好两手准备</li>
+                                <li>短期均线做进出场，中期均线做方向判断，长期均线做趋势过滤</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 代码实现说明 -->
+            <div class="card" style="border-left: 3px solid var(--accent-blue);">
+                <div class="card-title">
+                    <span style="color:var(--accent-blue);">💻</span> 代码实现
+                </div>
+                <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                    <code>ma_indicators.py</code> — 三类均线计算(SMA/EMA/WMA) + 葛南维八法信号检测 + 金叉/死叉 + 排列识别 + 特殊形态<br>
+                    <code>ma_strategy.py</code> — 均线策略回测引擎，4种策略变体(标准/激进/保守/快速)
+                </div>
+            </div>
+{% endblock %}

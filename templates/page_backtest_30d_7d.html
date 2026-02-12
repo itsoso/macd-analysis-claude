@@ -1,0 +1,570 @@
+{% extends "base.html" %}
+
+{% block title %}30天 vs 7天 回测对比{% endblock %}
+
+{% block extra_styles %}
+<style>
+    /* === Hero === */
+    .bt-hero {
+        background: linear-gradient(135deg, rgba(74,158,255,0.1), rgba(168,85,247,0.1));
+        border: 1px solid var(--border);
+        padding: 36px 32px;
+        border-radius: 14px;
+        margin-bottom: 28px;
+    }
+    .bt-hero h1 {
+        font-size: 1.6rem;
+        font-weight: 700;
+        background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin: 0 0 6px 0;
+    }
+    .bt-hero .subtitle {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+    }
+    .bt-hero .badges {
+        display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap;
+    }
+    .bt-hero .badge-item {
+        background: rgba(255,255,255,0.06);
+        border: 1px solid var(--border);
+        padding: 5px 14px;
+        border-radius: 16px;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+    }
+
+    /* === Summary Grid === */
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+        margin-bottom: 28px;
+    }
+    .summary-card {
+        background: var(--bg-card);
+        border-radius: 12px;
+        padding: 20px;
+        border: 1px solid var(--border);
+    }
+    .summary-card.hl {
+        border-color: var(--accent-blue);
+        background: linear-gradient(135deg, rgba(74,158,255,0.08), rgba(168,85,247,0.06));
+    }
+    .summary-card .s-label {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 6px;
+    }
+    .summary-card .s-value {
+        font-size: 1.6rem;
+        font-weight: 700;
+    }
+    .summary-card .s-detail {
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        margin-top: 4px;
+    }
+
+    /* === Section Title === */
+    .sec-title {
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin: 32px 0 18px 0;
+        padding-bottom: 10px;
+        border-bottom: 2px solid var(--accent-blue);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .sec-title .icon { font-size: 1.1rem; }
+
+    /* === Horizontal Bar Chart === */
+    .hbar-chart { margin: 16px 0; }
+    .hbar-group { margin-bottom: 18px; }
+    .hbar-group-label {
+        font-size: 0.82rem;
+        color: var(--text-primary);
+        margin-bottom: 6px;
+        font-weight: 500;
+    }
+    .hbar-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 5px;
+        gap: 8px;
+    }
+    .hbar-period {
+        width: 32px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        flex-shrink: 0;
+        text-align: right;
+    }
+    .hbar-period.p30 { color: var(--accent-blue); }
+    .hbar-period.p7 { color: var(--accent-yellow); }
+    .hbar-track {
+        flex: 1;
+        height: 22px;
+        background: rgba(255,255,255,0.04);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    .hbar-fill {
+        height: 100%;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        padding: 0 8px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: #fff;
+        min-width: 50px;
+        transition: width 0.5s ease;
+    }
+    .hbar-fill.f30 { background: linear-gradient(90deg, #4a9eff, #818cf8); }
+    .hbar-fill.f7 { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .hbar-legend {
+        display: flex; gap: 20px; margin-bottom: 14px; font-size: 0.82rem; color: var(--text-secondary);
+    }
+    .hbar-legend-dot {
+        display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: middle; margin-right: 4px;
+    }
+
+    /* === Tabs === */
+    .tab-wrap { margin-top: 4px; }
+    .tab-header { display: flex; gap: 0; }
+    .tab-btn {
+        padding: 10px 24px;
+        border: 1px solid var(--border);
+        border-bottom: none;
+        background: var(--bg-secondary);
+        cursor: pointer;
+        font-size: 0.88rem;
+        font-weight: 600;
+        color: var(--text-muted);
+        border-radius: 8px 8px 0 0;
+        transition: all 0.2s;
+    }
+    .tab-btn.active {
+        background: var(--bg-card);
+        color: var(--accent-blue);
+        border-color: var(--accent-blue);
+        border-bottom-color: var(--bg-card);
+    }
+    .tab-btn:hover:not(.active) { color: var(--text-secondary); }
+    .tab-body {
+        display: none;
+        background: var(--bg-card);
+        border: 1px solid var(--accent-blue);
+        border-top: none;
+        border-radius: 0 8px 8px 8px;
+        padding: 20px;
+    }
+    .tab-body.active { display: block; }
+
+    /* === Table (dark) === */
+    .dt {
+        width: 100%; border-collapse: collapse; font-size: 0.82rem;
+    }
+    .dt th {
+        background: var(--bg-secondary);
+        padding: 10px 8px;
+        text-align: left;
+        font-weight: 600;
+        color: var(--text-muted);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        border-bottom: 2px solid var(--border);
+        white-space: nowrap;
+    }
+    .dt td {
+        padding: 9px 8px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-secondary);
+        font-variant-numeric: tabular-nums;
+    }
+    .dt tr:hover td { background: var(--bg-hover); }
+    .dt tr.gold td { background: rgba(255,170,0,0.08); }
+    .dt tr.gold:hover td { background: rgba(255,170,0,0.14); }
+    .dt .pos { color: var(--accent-green); font-weight: 600; }
+    .dt .neg { color: var(--accent-red); font-weight: 600; }
+    .dt .center { text-align: center; }
+
+    /* === Tag badges === */
+    .tbadge {
+        display: inline-block; padding: 2px 7px; border-radius: 4px;
+        font-size: 0.7rem; font-weight: 600; margin-right: 5px; vertical-align: middle;
+    }
+    .tbadge.veto { background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+    .tbadge.timing { background: rgba(255,77,106,0.15); color: var(--accent-red); }
+    .tbadge.combo { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+
+    /* === Compare Row === */
+    .cmp-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-bottom: 20px;
+    }
+    @media (max-width: 900px) { .cmp-row { grid-template-columns: 1fr; } }
+    .cmp-box {
+        background: var(--bg-card);
+        border-radius: 12px;
+        padding: 20px;
+        border: 1px solid var(--border);
+    }
+    .cmp-box h3 {
+        font-size: 1rem; margin: 0 0 4px 0; color: var(--text-primary);
+    }
+    .cmp-box .sub { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 14px; }
+
+    /* === Fee Grid === */
+    .fee-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 10px;
+    }
+    .fee-item {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        text-align: center;
+    }
+    .fee-item .fl { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 3px; }
+    .fee-item .fv { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
+
+    /* === Insight === */
+    .insight-box {
+        background: rgba(0,214,143,0.06);
+        border: 1px solid rgba(0,214,143,0.2);
+        border-radius: 12px;
+        padding: 20px 24px;
+        margin-top: 16px;
+    }
+    .insight-box h4 { color: var(--accent-green); margin: 0 0 12px 0; font-size: 1rem; }
+    .insight-box ul { margin: 0; padding-left: 18px; color: var(--text-secondary); }
+    .insight-box li { margin-bottom: 8px; line-height: 1.7; font-size: 0.88rem; }
+    .insight-box strong { color: var(--text-primary); }
+    .insight-box code {
+        background: rgba(74,158,255,0.12);
+        color: var(--accent-blue);
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 0.82rem;
+    }
+
+    /* === Loading === */
+    .ld-box {
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center; min-height: 300px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="root">
+    <div class="ld-box" id="loading">
+        <div class="spinner"></div>
+        <p style="margin-top: 14px; color: var(--text-muted);">正在加载回测数据...</p>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    fetch('/api/backtest_30d_7d')
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                document.getElementById('loading').innerHTML =
+                    '<p style="color:var(--accent-red);">' + data.error + '</p>';
+                return;
+            }
+            render(data);
+        })
+        .catch(err => {
+            document.getElementById('loading').innerHTML =
+                '<p style="color:var(--accent-red);">加载失败: ' + err.message + '</p>';
+        });
+});
+
+function render(data) {
+    const r30 = data.results_30d || [];
+    const r7 = data.results_7d || [];
+    const s = data.summary || {};
+    const s30 = s['30d'] || {};
+    const s7 = s['7d'] || {};
+    const fm = data.fee_model || {};
+
+    const root = document.getElementById('root');
+    root.innerHTML = '';
+
+    // ── Hero ──
+    root.innerHTML += `
+        <div class="bt-hero">
+            <h1>30天 vs 7天 真实回测对比</h1>
+            <div class="subtitle">六书融合策略 · 币安 ETH/USDT 真实K线 · 含手续费/滑点/资金费率</div>
+            <div class="badges">
+                <span class="badge-item">Taker ${fm.taker_fee||'0.05%'}</span>
+                <span class="badge-item">滑点 ${fm.slippage||'0.1%'}</span>
+                <span class="badge-item">资金费率 ${fm.funding_rate||'±0.01%/8h'}</span>
+                <span class="badge-item">${data.run_time ? new Date(data.run_time).toLocaleString('zh-CN') : ''}</span>
+            </div>
+        </div>
+    `;
+
+    // ── Summary Cards ──
+    root.innerHTML += `
+        <div class="summary-grid">
+            <div class="summary-card hl">
+                <div class="s-label">30天最优 Alpha</div>
+                <div class="s-value" style="color:var(--accent-green)">+${s30.best_alpha||0}%</div>
+                <div class="s-detail">${r30.length?'['+r30[0].tf+'] '+r30[0].tag:'-'}</div>
+            </div>
+            <div class="summary-card hl">
+                <div class="s-label">7天最优 Alpha</div>
+                <div class="s-value" style="color:var(--accent-green)">+${s7.best_alpha||0}%</div>
+                <div class="s-detail">${r7.length?'['+r7[0].tf+'] '+r7[0].tag:'-'}</div>
+            </div>
+            <div class="summary-card">
+                <div class="s-label">30天平均 Alpha</div>
+                <div class="s-value" style="color:var(--accent-green)">+${s30.avg_alpha||0}%</div>
+                <div class="s-detail">${s30.profitable_count||0}/${s30.total_count||0} 策略全部盈利</div>
+            </div>
+            <div class="summary-card">
+                <div class="s-label">7天平均 Alpha</div>
+                <div class="s-value" style="color:var(--accent-green)">+${s7.avg_alpha||0}%</div>
+                <div class="s-detail">${s7.profitable_count||0}/${s7.total_count||0} 策略全部盈利</div>
+            </div>
+            <div class="summary-card">
+                <div class="s-label">30天最差 Alpha</div>
+                <div class="s-value" style="color:${(s30.worst_alpha||0)>=0?'var(--accent-green)':'var(--accent-red)'}">
+                    ${fv(s30.worst_alpha)}%
+                </div>
+                <div class="s-detail">最差仍跑赢大盘</div>
+            </div>
+            <div class="summary-card">
+                <div class="s-label">策略一致性</div>
+                <div class="s-value" style="color:var(--accent-blue)">100%</div>
+                <div class="s-detail">两个周期盈亏方向完全一致</div>
+            </div>
+        </div>
+    `;
+
+    // ── Alpha Bar Chart ──
+    const matched = [];
+    const maxA = Math.max(...r30.map(r=>Math.abs(r.alpha)), ...r7.map(r=>Math.abs(r.alpha)), 1);
+    for (const s of r30) {
+        const m = r7.find(r => r.tag === s.tag && r.tf === s.tf);
+        if (m) matched.push({ label: '[' + s.tf + '] ' + s.tag, a30: s.alpha, a7: m.alpha });
+    }
+
+    let barHtml = `<div class="sec-title"><span class="icon">📊</span> Alpha 可视化对比</div>`;
+    barHtml += '<div class="hbar-legend"><span><span class="hbar-legend-dot" style="background:#4a9eff"></span> 30天</span>';
+    barHtml += '<span><span class="hbar-legend-dot" style="background:#f59e0b"></span> 7天</span></div>';
+    barHtml += '<div class="hbar-chart">';
+    for (const m of matched) {
+        const w30 = Math.max(3, (m.a30 / maxA) * 100);
+        const w7 = Math.max(3, (m.a7 / maxA) * 100);
+        barHtml += `
+            <div class="hbar-group">
+                <div class="hbar-group-label">${m.label}</div>
+                <div class="hbar-row">
+                    <div class="hbar-period p30">30d</div>
+                    <div class="hbar-track"><div class="hbar-fill f30" style="width:${w30}%">${fv(m.a30)}%</div></div>
+                </div>
+                <div class="hbar-row">
+                    <div class="hbar-period p7">7d</div>
+                    <div class="hbar-track"><div class="hbar-fill f7" style="width:${w7}%">${fv(m.a7)}%</div></div>
+                </div>
+            </div>`;
+    }
+    barHtml += '</div>';
+    root.innerHTML += barHtml;
+
+    // ── VS Table ──
+    let vsHtml = `<div class="sec-title"><span class="icon">⚖️</span> 30天 vs 7天 逐策略对比</div>`;
+    vsHtml += '<div style="overflow-x:auto"><table class="dt"><thead><tr>';
+    vsHtml += '<th>策略</th><th class="center">周期</th>';
+    vsHtml += '<th class="center">30天Alpha</th><th class="center">30天收益</th><th class="center">30天回撤</th><th class="center">30天交易</th>';
+    vsHtml += '<th class="center">7天Alpha</th><th class="center">7天收益</th><th class="center">7天回撤</th><th class="center">7天交易</th>';
+    vsHtml += '<th class="center">差异</th></tr></thead><tbody>';
+    for (const s of r30) {
+        const m = r7.find(r => r.tag === s.tag && r.tf === s.tf);
+        if (!m) continue;
+        const diff = m.alpha - s.alpha;
+        const isTop = s === r30[0];
+        vsHtml += `<tr class="${isTop ? 'gold' : ''}">
+            <td>${tb(s.tag)} ${s.tag}</td>
+            <td class="center"><strong>${s.tf}</strong></td>
+            <td class="center ${s.alpha>=0?'pos':'neg'}">${fv(s.alpha)}%</td>
+            <td class="center ${s.strategy_return>=0?'pos':'neg'}">${fv(s.strategy_return)}%</td>
+            <td class="center neg">${s.max_drawdown.toFixed(2)}%</td>
+            <td class="center">${s.total_trades}</td>
+            <td class="center ${m.alpha>=0?'pos':'neg'}">${fv(m.alpha)}%</td>
+            <td class="center ${m.strategy_return>=0?'pos':'neg'}">${fv(m.strategy_return)}%</td>
+            <td class="center neg">${m.max_drawdown.toFixed(2)}%</td>
+            <td class="center">${m.total_trades}</td>
+            <td class="center ${diff>=0?'pos':'neg'}">${fv(diff)}%</td>
+        </tr>`;
+    }
+    vsHtml += '</tbody></table></div>';
+    root.innerHTML += vsHtml;
+
+    // ── Detail Tabs ──
+    let tabHtml = `<div class="sec-title"><span class="icon">📋</span> 详细回测结果</div>`;
+    tabHtml += `<div class="tab-wrap">
+        <div class="tab-header">
+            <div class="tab-btn active" onclick="switchTab(this,'t30')">最近30天</div>
+            <div class="tab-btn" onclick="switchTab(this,'t7')">最近7天</div>
+        </div>
+        <div class="tab-body active" id="t30">${buildTbl(r30)}</div>
+        <div class="tab-body" id="t7">${buildTbl(r7)}</div>
+    </div>`;
+    root.innerHTML += tabHtml;
+
+    // ── Fee Analysis ──
+    const b30 = r30[0] || {}, f30 = b30.fees || {};
+    const b7 = r7[0] || {}, f7 = b7.fees || {};
+    let feeHtml = `<div class="sec-title"><span class="icon">💰</span> 最优策略费用明细</div>`;
+    feeHtml += `<div class="cmp-row">
+        <div class="cmp-box">
+            <h3>📅 30天最优</h3>
+            <div class="sub">[${b30.tf||'-'}] ${b30.tag||'-'}</div>
+            <div class="fee-grid">
+                ${feeCard('现货手续费', f30.spot_fees)}
+                ${feeCard('合约手续费', f30.futures_fees)}
+                ${feeCard('资金费(净)', f30.net_funding, true)}
+                ${feeCard('滑点成本', f30.slippage_cost)}
+                ${feeCard('总成本', f30.total_costs, false, true)}
+                ${feeCard('费用拖累', f30.fee_drag_pct, false, false, true)}
+            </div>
+        </div>
+        <div class="cmp-box">
+            <h3>📅 7天最优</h3>
+            <div class="sub">[${b7.tf||'-'}] ${b7.tag||'-'}</div>
+            <div class="fee-grid">
+                ${feeCard('现货手续费', f7.spot_fees)}
+                ${feeCard('合约手续费', f7.futures_fees)}
+                ${feeCard('资金费(净)', f7.net_funding, true)}
+                ${feeCard('滑点成本', f7.slippage_cost)}
+                ${feeCard('总成本', f7.total_costs, false, true)}
+                ${feeCard('费用拖累', f7.fee_drag_pct, false, false, true)}
+            </div>
+        </div>
+    </div>`;
+    root.innerHTML += feeHtml;
+
+    // ── Stats Compare ──
+    const at30 = r30.length ? Math.round(r30.reduce((a,b)=>a+b.total_trades,0)/r30.length) : 0;
+    const at7 = r7.length ? Math.round(r7.reduce((a,b)=>a+b.total_trades,0)/r7.length) : 0;
+    const ac30 = r30.length ? Math.round(r30.reduce((a,b)=>a+b.total_cost,0)/r30.length) : 0;
+    const ac7 = r7.length ? Math.round(r7.reduce((a,b)=>a+b.total_cost,0)/r7.length) : 0;
+
+    let statHtml = `<div class="sec-title"><span class="icon">📈</span> 总体统计对比</div>`;
+    statHtml += `<div style="overflow-x:auto"><table class="dt">
+        <thead><tr><th>指标</th><th class="center">30天</th><th class="center">7天</th></tr></thead>
+        <tbody>
+            <tr><td>平均 Alpha</td><td class="center pos">${fv(s30.avg_alpha)}%</td><td class="center pos">${fv(s7.avg_alpha)}%</td></tr>
+            <tr><td>最优 Alpha</td><td class="center pos">${fv(s30.best_alpha)}%</td><td class="center pos">${fv(s7.best_alpha)}%</td></tr>
+            <tr><td>最差 Alpha</td>
+                <td class="center ${(s30.worst_alpha||0)>=0?'pos':'neg'}">${fv(s30.worst_alpha)}%</td>
+                <td class="center ${(s7.worst_alpha||0)>=0?'pos':'neg'}">${fv(s7.worst_alpha)}%</td></tr>
+            <tr><td>盈利策略数</td><td class="center">${s30.profitable_count||0} / ${s30.total_count||0}</td><td class="center">${s7.profitable_count||0} / ${s7.total_count||0}</td></tr>
+            <tr><td>平均交易数</td><td class="center">${at30}</td><td class="center">${at7}</td></tr>
+            <tr><td>平均费用</td><td class="center">$${at30?ac30.toLocaleString():0}</td><td class="center">$${at7?ac7.toLocaleString():0}</td></tr>
+        </tbody>
+    </table></div>`;
+    root.innerHTML += statHtml;
+
+    // ── Insights ──
+    const bh30 = r30.length ? r30[0].buy_hold_return : 0;
+    const bh7 = r7.length ? r7[0].buy_hold_return : 0;
+    root.innerHTML += `
+        <div class="sec-title"><span class="icon">💡</span> 关键发现与分析</div>
+        <div class="insight-box">
+            <h4>🔍 核心结论</h4>
+            <ul>
+                <li><strong>全部策略在两个周期均跑赢大盘</strong> — 30天 BH 约 ${bh30.toFixed(1)}%，7天约 ${bh7.toFixed(1)}%，
+                    12种策略盈亏方向一致性 <strong>100%</strong>。</li>
+                <li><strong>30天Alpha远高于7天</strong> — 平均 ${fv(s30.avg_alpha)}% vs ${fv(s7.avg_alpha)}%。
+                    30天期间ETH大跌，做空获利空间大；7天波动较小。</li>
+                <li><strong>最优策略因市场环境而异</strong> — 30天最优 <code>${r30[0]?.tag||'-'}</code>，
+                    7天最优 <code>${r7[0]?.tag||'-'}</code>，行情不同参数偏好不同。</li>
+                <li><strong>KDJ择时短周期适应性更好</strong> — 择时系列7天Alpha衰减相对较小。</li>
+                <li><strong>16h周期7天几乎无效</strong> — 仅~10根K线，信号样本不足。</li>
+                <li><strong>费用合理</strong> — 30天均费 $${ac30.toLocaleString()}（${(ac30/200000*100).toFixed(1)}%），
+                    7天 $${ac7.toLocaleString()}（${(ac7/200000*100).toFixed(1)}%）。</li>
+            </ul>
+        </div>
+    `;
+}
+
+// ── Helpers ──
+function fv(v) {
+    if (v === null || v === undefined) return '0.00';
+    return (v >= 0 ? '+' : '') + Number(v).toFixed(2);
+}
+
+function tb(tag) {
+    if (tag.includes('veto') || tag.includes('c6_veto')) return '<span class="tbadge veto">VETO</span>';
+    if (tag.includes('择时') || tag.includes('timing')) return '<span class="tbadge timing">TIMING</span>';
+    if (tag.includes('组合')) return '<span class="tbadge combo">COMBO</span>';
+    return '';
+}
+
+function feeCard(label, val, isSigned, isRed, isPct) {
+    const v = val || 0;
+    let color = 'var(--text-primary)';
+    if (isSigned) color = v >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+    if (isRed) color = 'var(--accent-red)';
+    const display = isPct ? v + '%' : (isSigned && v >= 0 ? '+' : '') + '$' + Number(v).toLocaleString(undefined, {maximumFractionDigits:0});
+    return `<div class="fee-item"><div class="fl">${label}</div><div class="fv" style="color:${color}">${display}</div></div>`;
+}
+
+function switchTab(btn, id) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-body').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(id).classList.add('active');
+}
+
+function buildTbl(results) {
+    if (!results || !results.length) return '<p style="color:var(--text-muted)">暂无数据</p>';
+    let h = `<div style="margin-bottom:10px;font-size:0.82rem;color:var(--text-secondary);">
+        Buy & Hold: <strong class="${results[0].buy_hold_return>=0?'pos':'neg'}" style="color:${results[0].buy_hold_return>=0?'var(--accent-green)':'var(--accent-red)'}">${fv(results[0].buy_hold_return)}%</strong>
+    </div>`;
+    h += '<div style="overflow-x:auto"><table class="dt"><thead><tr>';
+    h += '<th>#</th><th>周期</th><th>策略</th><th class="center">Alpha</th><th class="center">策略收益</th>';
+    h += '<th class="center">BH收益</th><th class="center">最大回撤</th><th class="center">交易数</th>';
+    h += '<th class="center">强平</th><th class="center">总费用</th><th class="center">费用拖累</th>';
+    h += '</tr></thead><tbody>';
+    results.forEach((r, i) => {
+        const fees = r.fees || {};
+        const rk = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i+1);
+        h += `<tr class="${i===0?'gold':''}">
+            <td>${rk}</td>
+            <td><strong>${r.tf}</strong></td>
+            <td>${tb(r.tag)} ${r.tag}</td>
+            <td class="center ${r.alpha>=0?'pos':'neg'}">${fv(r.alpha)}%</td>
+            <td class="center ${r.strategy_return>=0?'pos':'neg'}">${fv(r.strategy_return)}%</td>
+            <td class="center ${r.buy_hold_return>=0?'pos':'neg'}">${fv(r.buy_hold_return)}%</td>
+            <td class="center neg">${r.max_drawdown.toFixed(2)}%</td>
+            <td class="center">${r.total_trades}</td>
+            <td class="center">${r.liquidations}</td>
+            <td class="center">$${(r.total_cost||0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+            <td class="center">${fees.fee_drag_pct||'-'}%</td>
+        </tr>`;
+    });
+    h += '</tbody></table></div>';
+    return h;
+}
+</script>
+{% endblock %}

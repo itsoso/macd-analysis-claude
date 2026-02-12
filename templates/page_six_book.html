@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block title %}六书融合策略{% endblock %}
+{% block content %}
+<h1 class="page-title">六书融合策略</h1>
+<p class="page-subtitle">背离 × 均线 × 蜡烛图 × 布林带 × 量价 × KDJ — 六维信号融合 · ETH/USDT 30天回测</p>
+
+<div id="loading" class="loading">
+    <div class="spinner"></div> 加载六书融合策略数据...
+</div>
+
+<div id="content" style="display:none;">
+
+<!-- 概览 -->
+<div class="stats-grid" id="overview-stats"></div>
+
+<!-- 五书 vs 六书对比 -->
+<div class="card" id="compare-card" style="border-left: 3px solid var(--accent-blue);">
+    <div class="card-title">📊 五书 vs 六书对比</div>
+    <div id="compare-content"></div>
+</div>
+
+<!-- 策略排名 -->
+<div class="card">
+    <div class="card-title">🏆 八种融合变体排名</div>
+    <div style="overflow-x: auto;">
+        <table class="data-table" id="rank-table">
+            <thead>
+                <tr>
+                    <th>排名</th>
+                    <th>策略名称</th>
+                    <th>Alpha (α)</th>
+                    <th>策略收益</th>
+                    <th>买持收益</th>
+                    <th>最大回撤</th>
+                    <th>交易次数</th>
+                    <th>总费用</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 融合架构 -->
+<div class="card">
+    <div class="card-title">🏗️ 六书融合架构</div>
+    <div class="arch-diagram">
+        <div class="arch-layer">
+            <div class="arch-box data">📖 背离分析<br><small>MACD/KDJ/CCI/RSI</small></div>
+            <div class="arch-box data">📈 均线分析<br><small>葛南维/交叉/排列</small></div>
+        </div>
+        <div class="arch-arrow">▼ C6底座(背离70% + 均线30%)</div>
+        <div class="arch-layer">
+            <div class="arch-box analysis">🕯️ 蜡烛图<br><small>30+形态</small></div>
+            <div class="arch-box analysis">📉 布林带<br><small>%B/Squeeze</small></div>
+            <div class="arch-box analysis">📊 量价分析<br><small>OBV/MFI/VWAP</small></div>
+            <div class="arch-box core">📈 KDJ波段 ★新★<br><small>金叉死叉/背离/四撞</small></div>
+        </div>
+        <div class="arch-arrow">▼ 四书否决/确认(升级: 3→4维)</div>
+        <div class="arch-layer">
+            <div class="arch-box out">🎯 最终信号 → 执行交易</div>
+        </div>
+    </div>
+</div>
+
+<!-- KDJ新增信号 -->
+<div class="card" style="border-left: 3px solid var(--accent-purple);">
+    <div class="card-title">📈 KDJ波段信号(第6维)</div>
+    <div class="principle-grid">
+        <div class="principle-card buy" style="background: var(--bg-secondary);">
+            <h3>🟢 买入信号(权重0.09确认)</h3>
+            <p>
+                <strong>超卖区金叉(+30):</strong> K<20 且 D<25 时金叉<br>
+                <strong>50下金叉(+20):</strong> K<50时金叉<br>
+                <strong>底背离(+40max):</strong> 价格创新低但K线不创新低<br>
+                <strong>KD-MACD抽脚(+15):</strong> 绿柱缩短<br>
+                <strong>四撞底(+35max):</strong> K线4次进入超卖区<br>
+                <strong>二次金叉(+25max):</strong> 同区域两次金叉<br>
+                <strong>J极超卖拐头(+8):</strong> J<-10时拐头向上
+            </p>
+        </div>
+        <div class="principle-card sell" style="background: var(--bg-secondary);">
+            <h3>🔴 卖出信号(权重0.09确认)</h3>
+            <p>
+                <strong>超买区死叉(+30):</strong> K>80 且 D>75 时死叉<br>
+                <strong>50上死叉(+20):</strong> K>50时死叉<br>
+                <strong>顶背离(+40max):</strong> 价格创新高但K线不创新高<br>
+                <strong>KD-MACD缩头(+15):</strong> 红柱缩短<br>
+                <strong>四撞顶(+35max):</strong> K线4次进入超买区<br>
+                <strong>二次死叉(+25max):</strong> 同区域两次死叉<br>
+                <strong>J极超买拐头(+8):</strong> J>110时拐头向下
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- 策略变体说明 -->
+<div class="card">
+    <div class="card-title">📋 八种融合变体说明</div>
+    <div style="color: var(--text-secondary); line-height: 1.8; font-size: 14px;">
+        <p><strong>S1: 五书基准</strong> — 原五书C6+三书否决(不含KDJ), 作为对照组</p>
+        <p><strong>S2: 六书C6+四书否决</strong> — 核心升级: KDJ加入否决/确认体系</p>
+        <p><strong>S3: 六书(低否决阈值)</strong> — veto_threshold从25降至20, 更敏感的否决</p>
+        <p><strong>S4: KDJ加权</strong> — KDJ进入基础分权重(背离55%+均线25%+KDJ20%)</p>
+        <p><strong>S5: KDJ择时</strong> — KDJ作为C6的择时乘数(强卖×1.25/反向×0.7)</p>
+        <p><strong>S6: 六书否决(无分段TP)</strong> — 消融测试: 关闭分段止盈</p>
+        <p><strong>S7: 六书否决(高阈值)</strong> — 保守模式: 提高所有信号阈值, 减少噪音</p>
+        <p><strong>S8: 六书否决(激进做空)</strong> — 降低做空门槛, 提高保证金使用率</p>
+    </div>
+</div>
+
+</div>
+
+<script>
+fetch('/api/six_book')
+    .then(r => r.json())
+    .then(data => {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('content').style.display = 'block';
+
+        if (data.error) {
+            document.getElementById('content').innerHTML = '<div class="card"><p style="color:var(--accent-red);">'+data.error+'</p></div>';
+            return;
+        }
+
+        const strats = data.strategies || [];
+        const best = strats[0] || {};
+        const fiveAlpha = data.five_book_alpha || 0;
+        const sixAlpha = data.six_book_alpha || 0;
+        const improvement = data.improvement || 0;
+
+        // Overview cards
+        const statsHtml = `
+            <div class="stat-card">
+                <div class="stat-label">六书最佳Alpha</div>
+                <div class="stat-value ${sixAlpha >= 0 ? 'positive' : 'negative'}">${sixAlpha >= 0 ? '+' : ''}${sixAlpha.toFixed(2)}%</div>
+                <div class="stat-note">${best.name || ''}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">五书基准Alpha</div>
+                <div class="stat-value ${fiveAlpha >= 0 ? 'positive' : 'negative'}">${fiveAlpha >= 0 ? '+' : ''}${fiveAlpha.toFixed(2)}%</div>
+                <div class="stat-note">C6+三书否决(对照组)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">KDJ融合提升</div>
+                <div class="stat-value ${improvement >= 0 ? 'positive' : 'negative'}">${improvement >= 0 ? '+' : ''}${improvement.toFixed(2)}%</div>
+                <div class="stat-note">六书 vs 五书差值</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">策略数量</div>
+                <div class="stat-value">${strats.length}</div>
+                <div class="stat-note">变体对比</div>
+            </div>
+        `;
+        document.getElementById('overview-stats').innerHTML = statsHtml;
+
+        // Compare card
+        const compareHtml = `
+            <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-top: 12px;">
+                <div style="flex: 1; min-width: 200px; padding: 16px; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border);">
+                    <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">📖 五书基准(S1)</div>
+                    <div style="font-size: 28px; font-weight: 700; color: ${fiveAlpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">α = ${fiveAlpha >= 0 ? '+' : ''}${fiveAlpha.toFixed(2)}%</div>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">背离×均线×蜡烛图×布林带×量价</div>
+                </div>
+                <div style="display: flex; align-items: center; font-size: 24px; color: var(--accent-blue);">→</div>
+                <div style="flex: 1; min-width: 200px; padding: 16px; border-radius: 8px; background: rgba(74,158,255,0.05); border: 2px solid var(--accent-blue);">
+                    <div style="font-size: 12px; color: var(--accent-blue); margin-bottom: 8px;">⭐ 六书最佳(${best.name || ''})</div>
+                    <div style="font-size: 28px; font-weight: 700; color: ${sixAlpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">α = ${sixAlpha >= 0 ? '+' : ''}${sixAlpha.toFixed(2)}%</div>
+                    <div style="font-size: 12px; color: var(--accent-green); margin-top: 4px;">+KDJ波段 → 提升 ${improvement >= 0 ? '+' : ''}${improvement.toFixed(2)}%</div>
+                </div>
+            </div>
+        `;
+        document.getElementById('compare-content').innerHTML = compareHtml;
+
+        // Rank table
+        const tbody = document.querySelector('#rank-table tbody');
+        strats.forEach((s, idx) => {
+            const alpha = s.alpha || 0;
+            const ret = s.strategy_return || 0;
+            const bh = s.buy_hold_return || 0;
+            const dd = s.max_drawdown || 0;
+            const trades = s.total_trades || 0;
+            const fees = (s.fees && s.fees.total_costs) ? s.fees.total_costs : 0;
+            const isKDJ = (s.name || '').includes('六书') || (s.name || '').includes('KDJ');
+
+            let rankBadge = `<span style="color: var(--text-muted);">#${idx+1}</span>`;
+            if (idx === 0) rankBadge = '<span class="rank-badge rank-1">1</span>';
+            else if (idx === 1) rankBadge = '<span class="rank-badge rank-2">2</span>';
+            else if (idx === 2) rankBadge = '<span class="rank-badge rank-3">3</span>';
+
+            const row = document.createElement('tr');
+            if (isKDJ && idx === 0) row.style.background = 'rgba(74,158,255,0.05)';
+            row.innerHTML = `
+                <td>${rankBadge}</td>
+                <td style="font-weight: ${idx < 3 ? '600' : '400'};">${s.name || ''} ${isKDJ ? '★' : ''}</td>
+                <td class="${alpha >= 0 ? 'pnl-pos' : 'pnl-neg'}">${alpha >= 0 ? '+' : ''}${alpha.toFixed(2)}%</td>
+                <td class="${ret >= 0 ? 'pnl-pos' : 'pnl-neg'}">${ret >= 0 ? '+' : ''}${ret.toFixed(2)}%</td>
+                <td>${bh.toFixed(2)}%</td>
+                <td class="pnl-neg">${dd.toFixed(2)}%</td>
+                <td>${trades}</td>
+                <td>$${fees.toFixed(0)}</td>
+            `;
+            tbody.appendChild(row);
+        });
+    })
+    .catch(err => {
+        document.getElementById('loading').innerHTML = '<p style="color:var(--accent-red);">加载失败: ' + err.message + '</p>';
+    });
+</script>
+{% endblock %}

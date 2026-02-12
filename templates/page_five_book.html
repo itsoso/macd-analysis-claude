@@ -1,0 +1,351 @@
+{% extends "base.html" %}
+{% block title %}五书融合策略 - 技术分析平台{% endblock %}
+
+{% block extra_styles %}
+    .fusion-hero {
+        background: linear-gradient(135deg, rgba(74,158,255,0.12), rgba(168,85,247,0.12));
+        border: 1px solid rgba(74,158,255,0.3);
+        border-radius: 16px;
+        padding: 28px;
+        margin-bottom: 24px;
+        position: relative;
+        overflow: hidden;
+    }
+    .fusion-hero::before {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #4a9eff, #a855f7, #00d68f, #ffaa00, #ff4d6a);
+    }
+    .fusion-hero h2 {
+        font-size: 22px;
+        background: linear-gradient(135deg, #4a9eff, #a855f7);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 12px;
+    }
+    .book-tags {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+    }
+    .book-tag {
+        font-size: 12px;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-weight: 600;
+    }
+    .book-tag.b1 { background: rgba(74,158,255,0.15); color: #4a9eff; }
+    .book-tag.b2 { background: rgba(34,197,94,0.15); color: #22c55e; }
+    .book-tag.b3 { background: rgba(255,170,0,0.15); color: #ffaa00; }
+    .book-tag.b4 { background: rgba(168,85,247,0.15); color: #a855f7; }
+    .book-tag.b5 { background: rgba(255,77,106,0.15); color: #ff4d6a; }
+    .fusion-mode-card {
+        background: var(--bg-hover);
+        border-radius: 10px;
+        padding: 16px;
+        border: 1px solid var(--border);
+        transition: all 0.2s;
+    }
+    .fusion-mode-card:hover {
+        border-color: var(--accent-blue);
+        transform: translateY(-2px);
+    }
+    .fusion-mode-card.best {
+        border: 1.5px solid var(--accent-green);
+        background: rgba(34,197,94,0.04);
+    }
+{% endblock %}
+
+{% block content %}
+            <div class="page-title">五书融合策略</div>
+            <div class="page-subtitle">背离 &times; 均线 &times; 蜡烛图 &times; 布林带 &times; 量价 &middot; 五维信号融合 &middot; ETH/USDT回测</div>
+
+            <div id="fb-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载五书融合策略数据...
+            </div>
+
+            <div id="fb-content" style="display:none;">
+                <!-- Hero区域 -->
+                <div class="fusion-hero" id="fb-hero">
+                    <h2>五书融合: 技术分析的终极整合</h2>
+                    <div class="book-tags">
+                        <span class="book-tag b1">背离技术分析</span>
+                        <span class="book-tag b2">均线技术分析</span>
+                        <span class="book-tag b3">日本蜡烛图技术</span>
+                        <span class="book-tag b4">布林线</span>
+                        <span class="book-tag b5">利弗莫尔量价</span>
+                    </div>
+                    <div id="fb-hero-stats" style="font-size:14px;color:var(--text-secondary);line-height:1.8;"></div>
+                </div>
+
+                <!-- 融合模式说明 -->
+                <div class="card">
+                    <div class="card-title">融合模式
+                        <span class="badge purple">FUSION MODES</span>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;" id="fb-modes">
+                        <div style="background:var(--bg-hover);border-radius:8px;padding:14px;border-left:3px solid #4a9eff;">
+                            <div style="font-weight:700;color:#4a9eff;font-size:14px;">加权融合 (Weighted)</div>
+                            <div style="font-size:12px;color:var(--text-secondary);margin-top:6px;">五维信号按权重(背离30%/均线20%/K线15%/布林20%/量价15%)加权求和</div>
+                        </div>
+                        <div style="background:var(--bg-hover);border-radius:8px;padding:14px;border-left:3px solid #22c55e;">
+                            <div style="font-weight:700;color:#22c55e;font-size:14px;">多数投票 (Vote)</div>
+                            <div style="font-size:12px;color:var(--text-secondary);margin-top:6px;">至少3个系统方向一致才触发, 民主共识决策</div>
+                        </div>
+                        <div style="background:var(--bg-hover);border-radius:8px;padding:14px;border-left:3px solid #ffaa00;">
+                            <div style="font-weight:700;color:#ffaa00;font-size:14px;">层级过滤 (Layered)</div>
+                            <div style="font-size:12px;color:var(--text-secondary);margin-top:6px;">布林环境&rarr;均线趋势&rarr;背离/K线触发&rarr;量价确认, 逐层递进</div>
+                        </div>
+                        <div style="background:var(--bg-hover);border-radius:8px;padding:14px;border-left:3px solid #a855f7;">
+                            <div style="font-weight:700;color:#a855f7;font-size:14px;">最强+验证 (Strongest)</div>
+                            <div style="font-size:12px;color:var(--text-secondary);margin-top:6px;">取最强单个信号, 但需至少1个其他系统确认</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 策略卡片 -->
+                <div class="card">
+                    <div class="card-title" id="fb-strat-title">8种融合策略对比</div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-bottom:16px;" id="fb-cards"></div>
+                </div>
+
+                <!-- Alpha对比图 -->
+                <div class="card">
+                    <div class="card-title">策略Alpha对比
+                        <span class="badge green">越高越好</span>
+                    </div>
+                    <div id="fb-alpha-chart" style="height:320px;"></div>
+                </div>
+
+                <!-- 跨书对比 -->
+                <div class="card">
+                    <div class="card-title">跨书策略对比: 各书最佳 vs 融合最佳
+                        <span class="badge">CROSS-BOOK</span>
+                    </div>
+                    <div id="fb-crossbook" style="margin-top:12px;"></div>
+                </div>
+
+                <!-- 策略详情表格 -->
+                <div class="card">
+                    <div class="card-title">策略详细对比</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="fb-table">
+                            <thead><tr>
+                                <th>排名</th><th>策略</th><th>&alpha;%</th>
+                                <th>策略收益</th><th>BH收益</th><th>最大回撤</th>
+                                <th>交易数</th><th>强平</th><th>总费用</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 最佳策略交易明细 -->
+                <div class="card">
+                    <div class="card-title" id="fb-best-title">最佳策略交易明细</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="fb-trades-table">
+                            <thead><tr>
+                                <th>时间</th><th>操作</th><th>方向</th>
+                                <th>价格</th><th>杠杆</th><th>总资产</th><th>原因</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="fb-conclusion"></div>
+            </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadFiveBook() {
+        try {
+            const res = await fetch('/api/five_book');
+            if (res.ok) {
+                renderFiveBook(await res.json());
+            } else {
+                document.getElementById('fb-loading').innerHTML = '<p style="color:var(--accent-red);">五书融合数据未找到, 请先运行 python five_book_fusion.py</p>';
+            }
+        } catch(e) {
+            document.getElementById('fb-loading').innerHTML = `<p style="color:var(--accent-red);">加载失败: ${e.message}</p>`;
+        }
+    }
+
+    function renderFiveBook(data) {
+        document.getElementById('fb-loading').style.display = 'none';
+        document.getElementById('fb-content').style.display = 'block';
+
+        const results = data.results || [];
+        const ranked = [...results].sort((a, b) => b.alpha - a.alpha);
+        const best = ranked[0] || {};
+        const bestMeta = data.best_strategy || {};
+
+        // Hero统计
+        const heroStats = document.getElementById('fb-hero-stats');
+        if (heroStats) {
+            heroStats.innerHTML = `
+                数据: ${data.total_bars || '?'}根1h K线 · 交易区间: ${data.trade_range || ''}<br>
+                融合8种策略变体, 最佳策略 <b style="color:var(--accent-green);">${best.name}</b>
+                &alpha; = <b style="color:var(--accent-green);">${best.alpha > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%</b>,
+                策略收益 ${(best.strategy_return || 0).toFixed(2)}%, 最大回撤 ${(best.max_drawdown || 0).toFixed(2)}%
+            `;
+        }
+
+        // 标题
+        document.getElementById('fb-strat-title').textContent = `${results.length}种融合策略对比 · ${data.trade_days || 30}天`;
+
+        // 策略卡片
+        const cardsEl = document.getElementById('fb-cards');
+        if (cardsEl) {
+            const colors = ['#4a9eff', '#22c55e', '#ffaa00', '#a855f7', '#06b6d4', '#ef4444', '#ec4899', '#6b7280'];
+            cardsEl.innerHTML = ranked.map((r, i) => {
+                const isBest = i === 0;
+                const c = colors[i % colors.length];
+                return `<div class="fusion-mode-card ${isBest ? 'best' : ''}">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <div style="font-weight:700;font-size:14px;color:${c};">${r.name}</div>
+                        ${isBest ? '<span class="badge green">BEST</span>' : `<span style="color:var(--text-muted);font-size:12px;">#${i+1}</span>`}
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;">
+                        <div>
+                            <span style="color:var(--text-muted);">Alpha: </span>
+                            <span style="color:${r.alpha > 0 ? 'var(--accent-green)' : 'var(--accent-red)'}; font-weight:700;">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</span>
+                        </div>
+                        <div>
+                            <span style="color:var(--text-muted);">收益: </span>
+                            <span style="color:${r.strategy_return > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.strategy_return > 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</span>
+                        </div>
+                        <div>
+                            <span style="color:var(--text-muted);">回撤: </span>
+                            <span>${r.max_drawdown.toFixed(1)}%</span>
+                        </div>
+                        <div>
+                            <span style="color:var(--text-muted);">交易: </span>
+                            <span>${r.total_trades}笔</span>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // Alpha柱状图
+        const chartEl = document.getElementById('fb-alpha-chart');
+        if (chartEl && ranked.length > 0) {
+            const maxAlpha = Math.max(...ranked.map(r => Math.abs(r.alpha)), 1);
+            const colors = ['#4a9eff', '#22c55e', '#ffaa00', '#a855f7', '#06b6d4', '#ef4444', '#ec4899', '#6b7280'];
+            chartEl.innerHTML = `<div style="display:flex;align-items:flex-end;gap:10px;height:280px;padding:20px;">
+                ${ranked.map((r, i) => {
+                    const h = Math.max(Math.abs(r.alpha) / maxAlpha * 220, 8);
+                    const isPos = r.alpha >= 0;
+                    const c = isPos ? colors[i % colors.length] : '#ef4444';
+                    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;">
+                        <div style="font-size:11px;color:${c};font-weight:700;margin-bottom:4px;">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</div>
+                        <div style="width:100%;max-width:60px;height:${h}px;background:${c}30;border:1px solid ${c};border-radius:4px 4px 0 0;"></div>
+                        <div style="font-size:10px;color:var(--text-muted);margin-top:6px;text-align:center;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.name}</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+        }
+
+        // 跨书对比
+        const crossEl = document.getElementById('fb-crossbook');
+        if (crossEl) {
+            const crossData = [
+                { book: '蜡烛图', best: 'K2: 激进做空', alpha: -2.73, color: '#ffaa00' },
+                { book: '布林带', best: 'B2: 激进做空', alpha: 17.72, color: '#a855f7' },
+                { book: '量价', best: 'V2: 激进做空', alpha: 10.11, color: '#00d68f' },
+                { book: '五书融合', best: best.name, alpha: best.alpha || 0, color: '#4a9eff' },
+            ];
+            const maxA = Math.max(...crossData.map(d => Math.abs(d.alpha)), 1);
+            crossEl.innerHTML = `
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                    ${crossData.map(d => {
+                        const w = Math.max(Math.abs(d.alpha) / maxA * 100, 3);
+                        const isPos = d.alpha >= 0;
+                        return `<div style="display:flex;align-items:center;gap:12px;">
+                            <div style="width:80px;font-size:13px;color:${d.color};font-weight:600;text-align:right;">${d.book}</div>
+                            <div style="flex:1;background:var(--bg-secondary);border-radius:6px;height:32px;position:relative;overflow:hidden;">
+                                <div style="width:${w}%;height:100%;background:${isPos ? d.color+'30' : '#ef444430'};border-right:2px solid ${isPos ? d.color : '#ef4444'};display:flex;align-items:center;padding-left:8px;">
+                                    <span style="font-size:12px;font-weight:700;color:${isPos ? d.color : '#ef4444'};">${isPos ? '+' : ''}${d.alpha.toFixed(2)}%</span>
+                                </div>
+                            </div>
+                            <div style="width:140px;font-size:12px;color:var(--text-muted);text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${d.best}</div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        // 策略表格
+        const tableBody = document.querySelector('#fb-table tbody');
+        if (tableBody) {
+            tableBody.innerHTML = ranked.map((r, i) => {
+                const fees = r.fees || {};
+                return `<tr ${i === 0 ? 'style="background:rgba(34,197,94,0.06);"' : ''}>
+                    <td>#${i + 1}${i === 0 ? ' ★' : ''}</td>
+                    <td><b>${r.name}</b></td>
+                    <td style="color:${r.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</td>
+                    <td>${r.strategy_return > 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</td>
+                    <td>${r.buy_hold_return > 0 ? '+' : ''}${r.buy_hold_return.toFixed(2)}%</td>
+                    <td>${r.max_drawdown.toFixed(2)}%</td>
+                    <td>${r.total_trades}</td>
+                    <td>${r.liquidations || 0}</td>
+                    <td>$${(fees.total_costs || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 交易明细
+        document.getElementById('fb-best-title').textContent = `最佳策略: ${best.name} · 前50笔交易`;
+        const tradesBody = document.querySelector('#fb-trades-table tbody');
+        if (tradesBody && best.trades) {
+            tradesBody.innerHTML = best.trades.slice(0, 50).map(t => {
+                const isSell = t.action?.includes('SELL') || t.action?.includes('SHORT');
+                const color = isSell ? 'var(--accent-red)' : 'var(--accent-green)';
+                return `<tr>
+                    <td style="font-size:12px;">${String(t.time).substring(0, 16)}</td>
+                    <td style="color:${color};font-weight:600;">${t.action || ''}</td>
+                    <td>${t.direction || ''}</td>
+                    <td>$${(t.price || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td>${t.leverage || 1}x</td>
+                    <td>$${(t.total || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td style="font-size:12px;max-width:350px;overflow:hidden;text-overflow:ellipsis;">${(t.reason || '').substring(0, 100)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 结论
+        const conclusionEl = document.getElementById('fb-conclusion');
+        if (conclusionEl) {
+            conclusionEl.innerHTML = `
+                <div class="card-title">五书融合回测结论</div>
+                <div style="background:linear-gradient(135deg, rgba(74,158,255,0.06), rgba(168,85,247,0.06));border-radius:8px;padding:20px;border-left:4px solid;border-image:linear-gradient(to bottom, #4a9eff, #a855f7) 1;">
+                    <div style="font-weight:700;font-size:16px;margin-bottom:12px;">
+                        <span style="background:linear-gradient(135deg, #4a9eff, #a855f7);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">
+                            最佳策略: ${best.name} &middot; &alpha; = ${best.alpha > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%
+                        </span>
+                    </div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:2;">
+                        &middot; 买入持有收益: ${(best.buy_hold_return || 0).toFixed(2)}%<br>
+                        &middot; 最佳策略收益: <b style="color:var(--accent-green);">${(best.strategy_return || 0).toFixed(2)}%</b>, 超额&alpha; = <b style="color:var(--accent-green);">${best.alpha > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%</b><br>
+                        &middot; 交易${best.total_trades || 0}笔, 最大回撤${(best.max_drawdown || 0).toFixed(2)}%<br>
+                        &middot; 五维信号源: 背离(MACD/几何/多周期) + 均线(葛南维/排列/交叉) + K线形态(20+种) + 布林带(%B/Squeeze/W底M顶) + 量价(OBV/VWAP/MFI)<br>
+                        &middot; <b>融合效果</b>: 五书融合 &alpha;=${(best.alpha||0).toFixed(2)}% 远超单书最佳(布林带 +17.72%), 证明多维度融合能显著提升策略稳定性和收益
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadFiveBook();
+});
+</script>
+{% endblock %}

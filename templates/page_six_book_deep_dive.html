@@ -1,0 +1,454 @@
+{% extends "base.html" %}
+{% block title %}六书优化 · 代码与策略深度解读{% endblock %}
+{% block content %}
+<h1 class="page-title">六书融合优化 · 代码与策略深度解读</h1>
+<p class="page-subtitle">从KDJ信号算法 → 五种融合模式 → 16维参数搜索 → 回测引擎 → 精细交叉组合，完整拆解超越α=+86.69%的全过程</p>
+
+<style>
+.deep-toc { background: var(--bg-secondary); border-radius: 12px; padding: 24px; margin-bottom: 32px; }
+.deep-toc h3 { margin: 0 0 16px; color: var(--accent-yellow); }
+.deep-toc ol { margin: 0; padding-left: 20px; }
+.deep-toc li { margin: 6px 0; }
+.deep-toc a { color: var(--accent-blue); text-decoration: none; }
+.deep-toc a:hover { text-decoration: underline; }
+
+.section-title { font-size: 1.4em; font-weight: 700; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid var(--accent-blue); color: var(--text-primary); }
+.section-title .num { color: var(--accent-yellow); margin-right: 8px; }
+.subsection-title { font-size: 1.1em; font-weight: 600; color: var(--accent-blue); margin: 24px 0 12px; }
+
+.code-block { background: #1a1b26; border-radius: 10px; padding: 20px; margin: 16px 0; overflow-x: auto; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.85em; line-height: 1.6; color: #c0caf5; border: 1px solid #2a2b3d; }
+.code-block .comment { color: #565f89; }
+.code-block .keyword { color: #bb9af7; }
+.code-block .string { color: #9ece6a; }
+.code-block .number { color: #ff9e64; }
+.code-block .func { color: #7aa2f7; }
+.code-block .var { color: #73daca; }
+.code-block .op { color: #89ddff; }
+.code-block .highlight-line { background: rgba(74, 158, 255, 0.1); display: block; margin: 0 -20px; padding: 0 20px; border-left: 3px solid var(--accent-blue); }
+.code-filename { background: #2a2b3d; display: inline-block; padding: 4px 14px; border-radius: 8px 8px 0 0; font-family: 'JetBrains Mono', monospace; font-size: 0.8em; color: #7aa2f7; margin-bottom: -1px; }
+
+.explain-box { background: var(--bg-card); border-radius: 10px; padding: 20px; margin: 16px 0; border-left: 4px solid var(--accent-blue); }
+.explain-box.warn { border-left-color: var(--accent-yellow); }
+.explain-box.key { border-left-color: var(--accent-green); }
+.explain-box.red { border-left-color: var(--accent-red); }
+.explain-box h4 { margin: 0 0 8px; color: var(--text-primary); }
+.explain-box p { margin: 4px 0; color: var(--text-secondary); line-height: 1.7; }
+
+.flow-diagram { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: center; margin: 20px 0; }
+.flow-box { background: var(--bg-card); border: 2px solid var(--border-subtle); border-radius: 10px; padding: 14px 18px; text-align: center; min-width: 130px; }
+.flow-box.primary { border-color: var(--accent-blue); background: rgba(74,158,255,0.08); }
+.flow-box.secondary { border-color: var(--accent-green); background: rgba(0,214,143,0.08); }
+.flow-box.danger { border-color: var(--accent-red); background: rgba(255,77,106,0.08); }
+.flow-box.gold { border-color: gold; background: rgba(255,215,0,0.08); }
+.flow-box .label { font-size: 0.8em; color: var(--text-dim); }
+.flow-box .value { font-weight: 700; font-size: 1.1em; margin-top: 4px; }
+.flow-arrow { font-size: 1.5em; color: var(--text-dim); }
+
+.param-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9em; }
+.param-table th, .param-table td { padding: 10px 14px; border: 1px solid var(--border-subtle); text-align: left; }
+.param-table th { background: var(--bg-secondary); color: var(--text-primary); font-weight: 600; }
+.param-table td { color: var(--text-secondary); }
+.param-table tr:hover { background: var(--bg-hover); }
+.param-table code { background: rgba(74,158,255,0.1); padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.9em; color: var(--accent-blue); }
+
+.mode-card { background: var(--bg-card); border-radius: 12px; padding: 20px; margin: 12px 0; border: 1px solid var(--border-subtle); }
+.mode-card h4 { margin: 0 0 8px; color: var(--accent-blue); }
+.mode-card .formula { background: #1a1b26; padding: 12px 16px; border-radius: 8px; font-family: 'JetBrains Mono', monospace; font-size: 0.85em; color: #73daca; margin: 8px 0; }
+.mode-card p { color: var(--text-secondary); line-height: 1.7; }
+</style>
+
+<!-- 目录 -->
+<div class="deep-toc">
+    <h3>目录</h3>
+    <ol>
+        <li><a href="#s1">整体架构: 从六书信号到交易执行</a></li>
+        <li><a href="#s2">KDJ指标计算 (kdj_strategy.py) — 书中9章核心算法</a></li>
+        <li><a href="#s3">KDJ综合评分系统 — 11类信号源的量化打分</a></li>
+        <li><a href="#s4">五种融合模式详解 — KDJ如何与C6底座协作</a></li>
+        <li><a href="#s5">回测引擎核心逻辑 — 合约做多做空+分段止盈</a></li>
+        <li><a href="#s6">16维参数搜索空间 — 366种变体×4时间框架</a></li>
+        <li><a href="#s7">四阶段优化流程 — 从基线到精细交叉组合</a></li>
+        <li><a href="#s8">实战分析: 为什么最优策略胜出</a></li>
+    </ol>
+</div>
+
+<!-- ==================== 1. 整体架构 ==================== -->
+<div id="s1" class="section-title"><span class="num">1</span>整体架构: 从六书信号到交易执行</div>
+
+<div class="explain-box key">
+    <h4>核心思想</h4>
+    <p>六书融合系统将6个独立的技术分析维度(背离、均线、蜡烛图、布林带、量价、KDJ)各自独立打分，再通过<strong>融合评分函数</strong>合成一个卖出分(sell_score)和买入分(buy_score)，最终由<strong>回测引擎</strong>根据分数决定开仓/平仓/止盈止损。</p>
+</div>
+
+<div class="flow-diagram">
+    <div class="flow-box primary"><div class="label">数据层</div><div class="value">币安K线</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box primary"><div class="label">指标层</div><div class="value">6维信号</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box gold"><div class="label">融合层</div><div class="value">评分函数</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box secondary"><div class="label">决策层</div><div class="value">开仓/平仓</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box danger"><div class="label">风控层</div><div class="value">止盈止损</div></div>
+</div>
+
+<div class="code-filename">optimize_six_book.py · compute_signals_six()</div>
+<div class="code-block">
+<span class="keyword">def</span> <span class="func">compute_signals_six</span>(df, tf, data_all):
+    <span class="string">"""为指定时间框架计算六维信号(含KDJ)"""</span>
+    signals = {}
+
+    <span class="comment"># 1. 背离信号(MACD顶底背离 + 8h辅助)</span>
+    div_signals = <span class="func">analyze_signals_enhanced</span>(df, lookback)
+    signals[<span class="string">'div'</span>] = div_signals
+
+    <span class="comment"># 2. 均线信号(葛南维法则/交叉/排列)</span>
+    signals[<span class="string">'ma'</span>] = <span class="func">compute_ma_signals</span>(df, timeframe=tf)
+
+    <span class="comment"># 3. 蜡烛图(30+K线形态识别)</span>
+    cs_sell, cs_buy, _ = <span class="func">compute_candlestick_scores</span>(df)
+
+    <span class="comment"># 4. 布林带(%B/Squeeze/带宽)</span>
+    bb_sell, bb_buy, _ = <span class="func">compute_bollinger_scores</span>(df)
+
+    <span class="comment"># 5. 量价(OBV/MFI/VWAP)</span>
+    vp_sell, vp_buy, _ = <span class="func">compute_volume_price_scores</span>(df)
+
+<span class="highlight-line">    <span class="comment"># 6. KDJ ★新增第6维★</span></span>
+<span class="highlight-line">    kdj_sell, kdj_buy, _ = <span class="func">compute_kdj_scores</span>(df)</span>
+    <span class="keyword">return</span> signals
+</div>
+
+<!-- ==================== 2. KDJ计算 ==================== -->
+<div id="s2" class="section-title"><span class="num">2</span>KDJ指标计算 — 书中第2章公式的精确实现</div>
+
+<div class="explain-box">
+    <h4>KDJ四线计算公式 (《随机指标KDJ》第2章)</h4>
+    <p><strong>RSV</strong> = (收盘价 - N日最低价) / (N日最高价 - N日最低价) × 100</p>
+    <p><strong>K线</strong> = 2/3 × K<sub>前值</sub> + 1/3 × RSV (快线, 3日SMA平滑)</p>
+    <p><strong>D线</strong> = 2/3 × D<sub>前值</sub> + 1/3 × K (慢线, 3日SMA平滑)</p>
+    <p><strong>J线</strong> = 3K - 2D (超前指标, 可超出0-100范围)</p>
+    <p><strong>KD-MACD</strong> = 2 × (K - D) (书中第5章创新: 类MACD柱状图)</p>
+</div>
+
+<div class="code-filename">kdj_strategy.py · compute_kdj()</div>
+<div class="code-block">
+<span class="keyword">def</span> <span class="func">compute_kdj</span>(df, n=<span class="number">9</span>, m1=<span class="number">3</span>, m2=<span class="number">3</span>):
+    <span class="comment"># RSV: 收盘价在N日价格通道中的相对位置</span>
+    high_n = df[<span class="string">'high'</span>].rolling(n).max()
+    low_n  = df[<span class="string">'low'</span>].rolling(n).min()
+    rsv = (df[<span class="string">'close'</span>] - low_n) / (high_n - low_n) * <span class="number">100</span>
+
+    <span class="comment"># K/D递推计算 (非简单SMA, 是权重递推!)</span>
+    alpha = <span class="number">1.0</span> / m1   <span class="comment"># = 1/3</span>
+    <span class="keyword">for</span> i <span class="keyword">in</span> range(n, len(df)):
+<span class="highlight-line">        k_values[i] = (<span class="number">1</span> - alpha) * k_values[i-<span class="number">1</span>] + alpha * rsv[i]  <span class="comment"># K = 2/3*K_prev + 1/3*RSV</span></span>
+<span class="highlight-line">        d_values[i] = (<span class="number">1</span> - alpha) * d_values[i-<span class="number">1</span>] + alpha * k_values[i]  <span class="comment"># D = 2/3*D_prev + 1/3*K</span></span>
+
+    df[<span class="string">'kdj_j'</span>] = <span class="number">3</span> * df[<span class="string">'kdj_k'</span>] - <span class="number">2</span> * df[<span class="string">'kdj_d'</span>]    <span class="comment"># J = 3K - 2D</span>
+    df[<span class="string">'kd_macd'</span>] = <span class="number">2</span> * (df[<span class="string">'kdj_k'</span>] - df[<span class="string">'kdj_d'</span>])  <span class="comment"># KD-MACD柱线(第5章)</span>
+</div>
+
+<div class="explain-box warn">
+    <h4>为什么用递推而非简单SMA?</h4>
+    <p>书中的K/D计算不是简单的3日均值，而是<strong>指数加权递推</strong>: K<sub>t</sub> = 2/3 × K<sub>t-1</sub> + 1/3 × RSV<sub>t</sub>。这让K/D线有"记忆效应"，不会因为一根K线就大幅跳动，对趋势的响应更加平滑。初始值均设为50(中性)。</p>
+</div>
+
+<!-- ==================== 3. KDJ评分系统 ==================== -->
+<div id="s3" class="section-title"><span class="num">3</span>KDJ综合评分系统 — 11类信号源的量化打分</div>
+
+<p style="color: var(--text-secondary); margin: 16px 0;">每根K线遍历11类KDJ信号源，按信号强度累加分数(0~100)。多信号共振时有1.15倍可靠性乘数。</p>
+
+<table class="param-table">
+    <thead><tr><th>序号</th><th>信号类型</th><th>书中章节</th><th>卖出分</th><th>买入分</th><th>核心逻辑</th></tr></thead>
+    <tbody>
+        <tr><td>1</td><td>超买超卖</td><td>第1章+第3章</td><td>K>80且D>75: +10<br>J>100: +5</td><td>K&lt;20且D&lt;25: +10<br>J&lt;0: +5</td><td>经典区间识别</td></tr>
+        <tr><td>2</td><td>金叉/死叉</td><td>第4章2-3节</td><td>高位死叉: +30<br>50上死叉: +20</td><td>低位金叉: +30<br>50下金叉: +20</td><td><strong>核心信号!</strong> 按区间分级加权</td></tr>
+        <tr><td>3</td><td>50线穿越</td><td>第3章1节</td><td>K跌破50: +8</td><td>K突破50: +8</td><td>多空分界线</td></tr>
+        <tr><td>4</td><td>KDJ背离</td><td>第3章5节+第6章2节</td><td>顶背离: 最高+40</td><td>底背离: 最高+40</td><td>价格vs K线的divergence</td></tr>
+        <tr><td>5</td><td>KD-MACD柱线</td><td>第5章</td><td>缩头+杀多棒+红转绿</td><td>抽脚+逼空棒+绿转红</td><td>柱状图动量变化</td></tr>
+        <tr><td>6</td><td>二次交叉</td><td>第4章4节</td><td>二次死叉: 最高+25</td><td>二次金叉: 最高+25</td><td>同区域重复交叉更可靠</td></tr>
+        <tr><td>7</td><td>四撞顶/底</td><td>第6章1节</td><td>四撞顶: 最高+35</td><td>四撞底: 最高+35</td><td>反复触碰超买/超卖区</td></tr>
+        <tr><td>8</td><td>回测不破/穿越不过</td><td>第4章5节</td><td>穿越不过: +8~15</td><td>回测不破: +8~15</td><td>KD差距缩小后不穿越</td></tr>
+        <tr><td>9</td><td>K线斜率</td><td>第3章1节</td><td>高位快速下降: +5</td><td>低位快速上升: +5</td><td>动量变化</td></tr>
+        <tr><td>10</td><td>J线极值</td><td>——</td><td>J>110且K拐头: +8</td><td>J&lt;-10且K拐头: +8</td><td>J线领先信号</td></tr>
+        <tr><td>11</td><td>多空分界方向</td><td>第8章1节</td><td>K/D都&lt;50且下降: +3</td><td>K/D都>50且上升: +3</td><td>趋势确认</td></tr>
+    </tbody>
+</table>
+
+<div class="code-filename">kdj_strategy.py · 金叉/死叉分级加权(核心)</div>
+<div class="code-block">
+<span class="comment"># 金叉按KDJ所在区间分4个等级</span>
+<span class="keyword">if</span> is_golden:
+    <span class="keyword">if</span> k &lt; <span class="number">20</span> <span class="keyword">and</span> d &lt; <span class="number">25</span>:
+<span class="highlight-line">        bs += <span class="number">30</span>    <span class="comment"># 超卖区金叉 — 最强买入信号!</span></span>
+    <span class="keyword">elif</span> k &lt; <span class="number">50</span>:
+        bs += <span class="number">20</span>    <span class="comment"># 50下金叉 — 较强</span>
+    <span class="keyword">elif</span> k &lt; <span class="number">80</span>:
+        bs += <span class="number">10</span>    <span class="comment"># 高位金叉 — 中等</span>
+    <span class="keyword">else</span>:
+        bs += <span class="number">5</span>     <span class="comment"># 极高位金叉 — 弱(可能是假信号)</span>
+
+<span class="comment"># 多信号共振时可靠性乘数</span>
+<span class="keyword">if</span> len(reasons) >= <span class="number">3</span>:
+    ss *= <span class="number">1.15</span>; bs *= <span class="number">1.15</span>  <span class="comment"># 3个以上信号源 → 增强15%</span>
+</div>
+
+<div class="explain-box key">
+    <h4>四撞顶/底检测算法 (第6章独创)</h4>
+    <p>在40根K线回溯窗口内，统计KDJ进入超买区(>80)或超卖区(&lt;20)的次数。每次需要先退回到中性区(70/30)才算一次新的"撞击"。当触碰>=4次且当前已离开该区间时，认为反转信号成立。这是书中最独特的形态之一。</p>
+</div>
+
+<div class="code-filename">kdj_strategy.py · detect_four_touch()</div>
+<div class="code-block">
+<span class="keyword">def</span> <span class="func">detect_four_touch</span>(df, i, lookback=<span class="number">40</span>, zone=<span class="string">'top'</span>):
+    k_vals = df[<span class="string">'kdj_k'</span>].iloc[i-lookback:i+<span class="number">1</span>]
+    touches = <span class="number">0</span>; in_zone = <span class="keyword">False</span>
+
+    <span class="keyword">for</span> kv <span class="keyword">in</span> k_vals:
+        <span class="keyword">if</span> kv > <span class="number">80</span> <span class="keyword">and not</span> in_zone:   <span class="comment"># 新进入超买区</span>
+<span class="highlight-line">            touches += <span class="number">1</span>; in_zone = <span class="keyword">True</span></span>
+        <span class="keyword">elif</span> kv &lt; <span class="number">70</span>:                   <span class="comment"># 退回中性区</span>
+            in_zone = <span class="keyword">False</span>
+
+    <span class="comment"># 4次以上触碰 + 当前已离开 = 反转!</span>
+    <span class="keyword">if</span> touches >= <span class="number">4</span> <span class="keyword">and</span> k_vals.iloc[-<span class="number">1</span>] &lt; <span class="number">80</span>:
+        <span class="keyword">return</span> min(<span class="number">35</span>, touches * <span class="number">8</span>)   <span class="comment"># 分数: 32~35</span>
+</div>
+
+<!-- ==================== 4. 五种融合模式 ==================== -->
+<div id="s4" class="section-title"><span class="num">4</span>五种融合模式详解 — KDJ如何与C6底座协作</div>
+
+<p style="color: var(--text-secondary); margin: 16px 0;">优化器测试了5种不同的融合方式，每种对KDJ的使用策略完全不同:</p>
+
+<div class="mode-card" style="border-left: 4px solid var(--accent-blue);">
+    <h4>模式1: c6_veto (五书兼容 — 对照基线)</h4>
+    <div class="formula">base = 背离×0.7 + 均线×0.3<br>否决: 布林/量价/蜡烛 中≥2个强烈反对 → score×0.3<br>确认: 各系统分别给予 +10%/+8%/+6% 加成</div>
+    <p>不使用KDJ，作为对照基线。这就是五书系统的原始逻辑。</p>
+</div>
+
+<div class="mode-card" style="border-left: 4px solid var(--accent-green);">
+    <h4>模式2: c6_veto_4 (六书否决 — 核心升级)</h4>
+    <div class="formula">base = 背离×0.7 + 均线×0.3<br>否决: 布林/量价/蜡烛/<strong>KDJ</strong> 中≥2个强烈反对 → score×veto_dampen<br>确认: KDJ额外给予 +kdj_bonus(默认9%) 加成</div>
+    <p>将KDJ加入否决投票(3→4个辅助系统)。KDJ既可以否决也可以确认C6信号。<code>veto_dampen</code>和<code>kdj_bonus</code>都是可调参数。</p>
+</div>
+
+<div class="mode-card" style="border-left: 4px solid #ff9e64;">
+    <h4>模式3: kdj_weighted (KDJ加权 — KDJ进入底座)</h4>
+    <div class="formula">base = 背离×div_w + 均线×ma_w + <strong>KDJ×kdj_w</strong><br>权重约束: div_w + ma_w + kdj_w = 1.0<br>默认: 0.55 + 0.25 + 0.20</div>
+    <p>KDJ不再只是辅助确认，而是直接参与基础分计算，和背离/均线同级。搜索空间: kdj_w ∈ [0.10, 0.30], div_w ∈ [0.45, 0.60]。</p>
+</div>
+
+<div class="mode-card" style="border-left: 4px solid #bb9af7;">
+    <h4>模式4: kdj_timing (KDJ择时 — 乘法确认)</h4>
+    <div class="formula">base = 背离×0.7 + 均线×0.3<br>KDJ强卖(≥30) → score × <strong>kdj_strong_mult</strong>(默认1.25)<br>KDJ弱卖(≥15) → score × <strong>kdj_normal_mult</strong>(默认1.12)<br>KDJ反向(对手≥25) → score × <strong>kdj_reverse_mult</strong>(默认0.70)</div>
+    <p>C6底座不变，KDJ通过<strong>乘法</strong>放大或缩小信号。当KDJ与C6同向时增强信号，反向时削弱。三个乘数都是可调参数。</p>
+</div>
+
+<div class="mode-card" style="border-left: 4px solid var(--accent-red);">
+    <h4>模式5: kdj_gate (KDJ门控 — 准入条件)</h4>
+    <div class="formula">if KDJ卖出 &lt; kdj_gate_threshold:<br>&nbsp;&nbsp;&nbsp;&nbsp;sell_score = base × <strong>0.4</strong>  // KDJ不配合, 大幅削弱<br>else:<br>&nbsp;&nbsp;&nbsp;&nbsp;sell_score = base × (1 + 加成)  // KDJ配合, 正常+确认加成</div>
+    <p>最激进的方式: KDJ不满足最低门槛直接削弱60%。门控阈值搜索范围: [5, 8, 10, 12, 15, 20]。</p>
+</div>
+
+<div class="code-filename">optimize_six_book.py · calc_fusion_score_six() — c6_veto_4模式核心</div>
+<div class="code-block">
+<span class="keyword">if</span> mode == <span class="string">'c6_veto_4'</span>:
+    base_sell = (div_sell * <span class="number">0.7</span> + ma_sell * <span class="number">0.3</span>) * ma_arr_bonus
+
+    <span class="comment"># 否决投票: 4个辅助系统中≥2个强烈反对 → 削弱</span>
+<span class="highlight-line">    sell_vetoes = sum(<span class="number">1</span> <span class="keyword">for</span> s <span class="keyword">in</span> [bb_buy, vp_buy, cs_buy, <span class="var">kdj_buy</span>]</span>
+<span class="highlight-line">                      <span class="keyword">if</span> s >= veto_threshold)</span>
+
+    <span class="keyword">if</span> sell_vetoes >= <span class="number">2</span>:
+        sell_score = base_sell * veto_dampen  <span class="comment"># 被否决!</span>
+    <span class="keyword">else</span>:
+        bonus = <span class="number">0</span>
+        <span class="keyword">if</span> bb_sell >= <span class="number">15</span>: bonus += bb_bonus    <span class="comment"># +10%</span>
+        <span class="keyword">if</span> vp_sell >= <span class="number">15</span>: bonus += vp_bonus    <span class="comment"># +8%</span>
+        <span class="keyword">if</span> cs_sell >= <span class="number">25</span>: bonus += cs_bonus    <span class="comment"># +6%</span>
+<span class="highlight-line">        <span class="keyword">if</span> kdj_sell >= <span class="number">15</span>: bonus += kdj_bonus  <span class="comment"># +9% ★KDJ确认★</span></span>
+        sell_score = base_sell * (<span class="number">1</span> + bonus)
+</div>
+
+<!-- ==================== 5. 回测引擎 ==================== -->
+<div id="s5" class="section-title"><span class="num">5</span>回测引擎核心逻辑 — 合约做多做空+分段止盈</div>
+
+<div class="subsection-title">5.1 交易决策流程(每根K线)</div>
+
+<div class="flow-diagram">
+    <div class="flow-box primary"><div class="label">Step 1</div><div class="value">强平检查</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><div class="label">Step 2</div><div class="value">资金费率</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box gold"><div class="label">Step 3</div><div class="value">计算SS/BS</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box danger"><div class="label">Step 4</div><div class="value">管理空仓</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box danger"><div class="label">Step 5</div><div class="value">管理多仓</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box secondary"><div class="label">Step 6</div><div class="value">现货+开仓</div></div>
+</div>
+
+<div class="subsection-title">5.2 信号冲突检测</div>
+<div class="code-block">
+<span class="comment"># 当卖出和买入信号都很强时, 不做操作(避免双向挤压)</span>
+in_conflict = <span class="keyword">False</span>
+<span class="keyword">if</span> ss > <span class="number">0</span> <span class="keyword">and</span> bs > <span class="number">0</span>:
+    ratio = min(ss, bs) / max(ss, bs)
+<span class="highlight-line">    in_conflict = ratio >= <span class="number">0.6</span> <span class="keyword">and</span> min(ss, bs) >= <span class="number">15</span>  <span class="comment"># 两方势均力敌 → 观望</span></span>
+</div>
+
+<div class="subsection-title">5.3 自适应杠杆</div>
+<div class="code-block">
+<span class="comment"># 根据信号强度自动调整杠杆(不盲目上满)</span>
+actual_lev = min(
+    lev       <span class="keyword">if</span> ss >= <span class="number">50</span>   <span class="comment"># 强信号 → 满杠杆(5x)</span>
+    <span class="keyword">else</span> min(lev, <span class="number">3</span>) <span class="keyword">if</span> ss >= <span class="number">35</span>  <span class="comment"># 中信号 → 最多3x</span>
+    <span class="keyword">else</span> <span class="number">2</span>,              <span class="comment"># 弱信号 → 仅2x</span>
+    eng.max_leverage)
+</div>
+
+<div class="subsection-title">5.4 二段分段止盈 (创新机制)</div>
+
+<div class="explain-box key">
+    <h4>为什么需要分段止盈?</h4>
+    <p>合约交易中，一次性止盈容易错过更大行情(过早)或回吐利润(过晚)。分段止盈在盈利达到第一目标时先平掉一部分(锁定利润)，剩余仓位继续持有并用追踪止盈管理。</p>
+</div>
+
+<div class="code-filename">optimize_six_book.py · 二段止盈实现</div>
+<div class="code-block">
+<span class="comment"># 一段止盈: 盈利达到partial_tp_1时, 平掉partial_tp_1_pct的仓位</span>
+<span class="keyword">if</span> use_partial_tp <span class="keyword">and not</span> short_partial_done <span class="keyword">and</span> pnl_r >= partial_tp_1:
+    partial_qty = old_qty * partial_tp_1_pct
+    partial_pnl = (entry_price - price) * partial_qty
+<span class="highlight-line">    eng.usdt += margin * partial_tp_1_pct + partial_pnl  <span class="comment"># 返还保证金+利润</span></span>
+    fee = partial_qty * price * TAKER_FEE               <span class="comment"># 扣手续费!</span>
+    eng.usdt -= fee
+    short_partial_done = <span class="keyword">True</span>
+
+<span class="comment"># 二段止盈: 一段已完成 + 盈利达到partial_tp_2</span>
+<span class="keyword">if</span> use_partial_tp_2 <span class="keyword">and</span> short_partial_done <span class="keyword">and</span> pnl_r >= partial_tp_2:
+    <span class="comment"># 再平掉partial_tp_2_pct...</span>
+</div>
+
+<div class="subsection-title">5.5 五层退出机制 (优先级从高到低)</div>
+
+<table class="param-table">
+    <thead><tr><th>优先级</th><th>退出条件</th><th>默认参数</th><th>冷却期</th></tr></thead>
+    <tbody>
+        <tr><td>1</td><td>止盈 (pnl_r >= short_tp)</td><td>空+60%, 多+30%</td><td>cooldown×2</td></tr>
+        <tr><td>2</td><td>追踪止盈 (最高盈利回撤过大)</td><td>trail=25%, 回撤60%触发</td><td>cooldown×1</td></tr>
+        <tr><td>3</td><td>反向信号 (对手方score>=40)</td><td>close_short_bs=40</td><td>cooldown×3</td></tr>
+        <tr><td>4</td><td>止损 (pnl_r < short_sl)</td><td>空-25%, 多-8%</td><td>cooldown×4</td></tr>
+        <tr><td>5</td><td>超时 (持仓超过max_hold)</td><td>72 bars (3天@1h)</td><td>cooldown×1</td></tr>
+    </tbody>
+</table>
+
+<!-- ==================== 6. 参数搜索空间 ==================== -->
+<div id="s6" class="section-title"><span class="num">6</span>16维参数搜索空间 — 366种变体×4时间框架</div>
+
+<table class="param-table">
+    <thead><tr><th>Phase</th><th>搜索维度</th><th>变体数</th><th>搜索范围</th></tr></thead>
+    <tbody>
+        <tr><td>1</td><td>融合模式</td><td>5</td><td><code>c6_veto, c6_veto_4, kdj_weighted, kdj_timing, kdj_gate</code></td></tr>
+        <tr><td>2</td><td>否决阈值</td><td>5</td><td><code>15, 20, 25, 30, 35</code></td></tr>
+        <tr><td>3</td><td>KDJ确认奖励</td><td>5</td><td><code>5%, 8%, 12%, 15%, 20%</code></td></tr>
+        <tr><td>4</td><td>KDJ加权权重</td><td>~16</td><td>KDJ: [10%~30%] × 背离: [45%~60%]</td></tr>
+        <tr><td>5</td><td>KDJ择时乘数</td><td>~60</td><td>强: [1.15~1.40] × 弱: [1.05~1.20] × 反: [0.5~0.8]</td></tr>
+        <tr><td>6</td><td>KDJ门控阈值</td><td>6</td><td><code>5, 8, 10, 12, 15, 20</code></td></tr>
+        <tr><td>7</td><td>止损(SL)</td><td>~24</td><td>空: [-15%~-35%] × 多: [-6%~-15%]</td></tr>
+        <tr><td>8</td><td>止盈(TP)</td><td>~35</td><td>空: [40%~100%] × 多: [20%~50%]</td></tr>
+        <tr><td>9</td><td>追踪止盈</td><td>~29</td><td>trail: [15%~35%] × pullback: [45%~70%]</td></tr>
+        <tr><td>10</td><td>分段止盈</td><td>~24</td><td>触发: [15%~40%] × 平仓比: [20%~50%]</td></tr>
+        <tr><td>11</td><td>二段止盈</td><td>~36</td><td>一段+二段触发×比例的组合</td></tr>
+        <tr><td>12</td><td>信号阈值</td><td>~80</td><td>卖/空/买/多 四个阈值的组合</td></tr>
+        <tr><td>13</td><td>持仓时间</td><td>6</td><td><code>36, 48, 72, 96, 120, 168 bars</code></td></tr>
+        <tr><td>14</td><td>ATR自适应止损</td><td>4</td><td><code>2.0x, 2.5x, 3.0x, 3.5x</code></td></tr>
+        <tr><td>15</td><td>杠杆+仓位</td><td>~15</td><td>杠杆: [3x~7x] × 仓位: [50%~80%]</td></tr>
+        <tr><td>16</td><td>否决削弱比例</td><td>5</td><td><code>15%, 20%, 30%, 40%, 50%</code></td></tr>
+    </tbody>
+</table>
+
+<div class="explain-box">
+    <h4>总计</h4>
+    <p>366种参数变体 × 4个TOP时间框架 = <strong>1,464次回测</strong> (Phase B)<br>
+    + 9种精细交叉组合 (Phase D) = 共<strong>1,473次</strong>完整回测运行</p>
+</div>
+
+<!-- ==================== 7. 四阶段优化 ==================== -->
+<div id="s7" class="section-title"><span class="num">7</span>四阶段优化流程 — 从基线到精细交叉组合</div>
+
+<div class="flow-diagram" style="flex-direction: column; align-items: stretch;">
+    <div class="flow-box primary" style="text-align: left; width: auto;">
+        <div class="value">Phase A: 时间框架筛选</div>
+        <div class="label" style="margin-top: 8px;">12个时间框架 × 六书基准配置 → 选出TOP4时间框架<br>结果: <strong>16h</strong>(α=+72.02%) > <strong>4h</strong>(+47.14%) > <strong>12h</strong>(+47.05%) > <strong>1h</strong>(+44.04%)</div>
+    </div>
+    <div style="text-align: center; color: var(--accent-yellow); font-size: 1.5em; margin: 8px;">▼</div>
+    <div class="flow-box gold" style="text-align: left; width: auto;">
+        <div class="value">Phase B: 大规模参数搜索</div>
+        <div class="label" style="margin-top: 8px;">366种参数变体 × 4个TOP时间框架 = 1,464次回测<br>结果: 每个时间框架输出TOP15最优参数</div>
+    </div>
+    <div style="text-align: center; color: var(--accent-yellow); font-size: 1.5em; margin: 8px;">▼</div>
+    <div class="flow-box secondary" style="text-align: left; width: auto;">
+        <div class="value">Phase C: 全局TOP排序</div>
+        <div class="label" style="margin-top: 8px;">跨时间框架×跨参数统一排序 → 输出全局TOP30<br>提取各维度(SL/TP/Trail/分段/阈值/杠杆)最佳参数</div>
+    </div>
+    <div style="text-align: center; color: var(--accent-yellow); font-size: 1.5em; margin: 8px;">▼</div>
+    <div class="flow-box danger" style="text-align: left; width: auto;">
+        <div class="value">Phase D: 精细交叉组合</div>
+        <div class="label" style="margin-top: 8px;">取各维度最佳参数交叉组合(A~I 9种)，在最优时间框架上验证<br>最终: <strong>α=+90.35%</strong> ★ 超越五书最优+86.69%</div>
+    </div>
+</div>
+
+<div class="code-filename">optimize_six_book.py · Phase D 精细组合构建逻辑</div>
+<div class="code-block">
+<span class="comment"># 从各维度提取最佳配置</span>
+best_mode  = best_of(<span class="string">'模式_'</span>, all_results)    <span class="comment"># 最佳融合模式</span>
+best_sl    = best_of(<span class="string">'SL'</span>, all_results)       <span class="comment"># 最佳止损</span>
+best_tp    = best_of(<span class="string">'TP'</span>, all_results)       <span class="comment"># 最佳止盈</span>
+best_trail = best_of(<span class="string">'Trail'</span>, all_results)    <span class="comment"># 最佳追踪</span>
+best_partial = best_of(<span class="string">'分段TP'</span>, all_results) <span class="comment"># 最佳分段</span>
+
+<span class="comment"># 组合A: 最佳模式 + 最佳SL + 最佳TP + 最佳分段</span>
+combined = {**prev_best}
+<span class="highlight-line">combined[<span class="string">'fusion_mode'</span>] = best_mode[<span class="number">0</span>][<span class="string">'config'</span>][<span class="string">'fusion_mode'</span>]</span>
+combined[<span class="string">'short_sl'</span>] = best_sl[<span class="number">0</span>][<span class="string">'config'</span>][<span class="string">'short_sl'</span>]
+combined[<span class="string">'short_tp'</span>] = best_tp[<span class="number">0</span>][<span class="string">'config'</span>][<span class="string">'short_tp'</span>]
+<span class="comment"># ... 交叉各维度最优 ...</span>
+</div>
+
+<!-- ==================== 8. 实战分析 ==================== -->
+<div id="s8" class="section-title"><span class="num">8</span>实战分析: 为什么最优策略胜出</div>
+
+<div class="explain-box key">
+    <h4>全局最优: 1h · c6_veto · α=+90.35%</h4>
+    <p>最终全局最优是在1h时间框架上使用<strong>c6_veto</strong>(五书兼容模式)加上五书最优SL/TP参数。这说明:</p>
+    <p>1. <strong>1h时间框架</strong>在当前市场环境下(ETH 30天)信噪比最佳——足够细以捕捉短线机会，又不至于噪声过大</p>
+    <p>2. <strong>分段止盈@20%平30%</strong>是关键创新——在盈利20%时先锁定30%仓位利润，大幅降低回撤</p>
+    <p>3. <strong>不对称止损</strong>(空-25% vs 多-8%)反映了ETH的上涨偏向——多头止损更紧，空头给更多空间</p>
+</div>
+
+<div class="explain-box warn">
+    <h4>KDJ择时在1h上的表现: α=+83.24%</h4>
+    <p>KDJ择时模式(kdj_timing: 强1.2/弱1.1/反0.7)虽然没有超过纯五书模式，但贡献了独特价值:</p>
+    <p>1. <strong>回撤更低</strong>: -4.30% vs c6_veto的-6.09%，风险调整后收益更优</p>
+    <p>2. <strong>交易更少</strong>: 102次 vs 138次，单次交易效率更高(减少了假信号)</p>
+    <p>3. <strong>16h时间框架</strong>上KDJ配合双段止盈达到α=+83.90%(仅-2.01%回撤!)，风险收益比极佳</p>
+</div>
+
+<div class="explain-box red">
+    <h4>手续费的真实影响</h4>
+    <p>138次交易产生<strong>$13,012</strong>手续费(初始资金$200,000的6.5%)。这不是小数目。低频策略(16h: 31次交易, $2,914费用)在净收益上更有优势。<strong>频繁交易是alpha的敌人</strong>——这就是为什么止盈止损参数如此重要。</p>
+</div>
+
+<div class="explain-box">
+    <h4>六书系统的真正价值</h4>
+    <p>虽然本次最优恰好是c6_veto(不直接用KDJ评分)，但六书框架的价值在于:</p>
+    <p>1. <strong>KDJ信号计算</strong>本身就为data pipeline增加了新维度，未来可以更灵活地组合</p>
+    <p>2. <strong>KDJ择时+低回撤</strong>在风险敏感场景下更适合(机构级策略更看重Sharpe而非纯alpha)</p>
+    <p>3. <strong>多时间框架发现</strong>: 16h是一个被忽视的高效时间框架，六书优化中发现它的基线就高达+72%</p>
+    <p>4. <strong>双段止盈</strong>是新的止盈维度，在16h上表现出色(α=+83.90%)，值得进一步探索</p>
+</div>
+
+{% endblock %}

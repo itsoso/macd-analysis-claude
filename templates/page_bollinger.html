@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}布林带策略 - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">布林带策略</div>
+            <div class="page-subtitle">《布林线》John Bollinger · %B/BandWidth/Squeeze/W底M顶 · ETH/USDT回测</div>
+
+            <div id="bb-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载布林带策略数据...
+            </div>
+
+            <div id="bb-content" style="display:none;">
+                <!-- 信号统计 -->
+                <div class="card">
+                    <div class="card-title">布林带信号统计
+                        <span class="badge purple">BOLLINGER BANDS</span>
+                    </div>
+                    <div id="bb-signal-stats"></div>
+                </div>
+
+                <!-- 策略卡片 -->
+                <div class="card">
+                    <div class="card-title" id="bb-strat-title">布林带策略对比</div>
+                    <div style="background:rgba(168,85,247,0.06);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid #a855f7;">
+                        <div style="font-weight:600;color:#a855f7;margin-bottom:6px;">策略说明</div>
+                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;" id="bb-desc">
+                            基于布林带(MA20&plusmn;2&sigma;)的交易系统。核心指标: %B(价格在带中位置)、BandWidth(带宽=波动率)、Squeeze(低波动率压缩)。<br>
+                            W底/M顶形态识别, 带外突破回归, 中轨趋势跟随等多维度信号。
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px;" id="bb-cards"></div>
+                </div>
+
+                <!-- Alpha对比图 -->
+                <div class="card">
+                    <div class="card-title">策略Alpha对比</div>
+                    <div id="bb-alpha-chart" style="height:300px;"></div>
+                </div>
+
+                <!-- 策略详情表格 -->
+                <div class="card">
+                    <div class="card-title">策略详细对比</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="bb-table">
+                            <thead><tr>
+                                <th>排名</th><th>策略</th><th>&alpha;%</th>
+                                <th>策略收益</th><th>BH收益</th><th>最大回撤</th>
+                                <th>交易数</th><th>强平</th><th>总费用</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 最佳策略交易明细 -->
+                <div class="card">
+                    <div class="card-title" id="bb-best-title">最佳策略交易明细</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="bb-trades-table">
+                            <thead><tr>
+                                <th>时间</th><th>操作</th><th>方向</th>
+                                <th>价格</th><th>杠杆</th><th>总资产</th><th>原因</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="bb-conclusion"></div>
+            </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadBollinger() {
+        try {
+            const res = await fetch('/api/bollinger');
+            if (res.ok) {
+                renderBollinger(await res.json());
+            } else {
+                document.getElementById('bb-loading').innerHTML = '<p style="color:var(--accent-red);">布林带策略数据未找到, 请先运行 python bollinger_strategy.py</p>';
+            }
+        } catch(e) {
+            document.getElementById('bb-loading').innerHTML = `<p style="color:var(--accent-red);">加载失败: ${e.message}</p>`;
+        }
+    }
+
+    function renderBollinger(data) {
+        document.getElementById('bb-loading').style.display = 'none';
+        document.getElementById('bb-content').style.display = 'block';
+
+        const results = data.results || [];
+        const ranked = [...results].sort((a, b) => b.alpha - a.alpha);
+        const best = ranked[0] || {};
+
+        document.getElementById('bb-strat-title').textContent = `${results.length}种布林带策略对比 · ${data.trade_days || 30}天`;
+
+        // 信号统计
+        const sigEl = document.getElementById('bb-signal-stats');
+        if (sigEl) {
+            sigEl.innerHTML = `
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+                    <div style="background:rgba(168,85,247,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">Squeeze (低波动压缩)</div>
+                        <div style="font-size:24px;font-weight:700;color:#a855f7;">${data.squeeze_count || 0}</div>
+                        <div style="font-size:11px;color:var(--text-muted);">带宽低于历史均值 &rarr; 即将突破</div>
+                    </div>
+                    <div style="background:rgba(34,197,94,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">W底形态</div>
+                        <div style="font-size:24px;font-weight:700;color:#22c55e;">${data.w_bottom_count || 0}</div>
+                        <div style="font-size:11px;color:var(--text-muted);">双底触及下轨 &rarr; 看涨反转</div>
+                    </div>
+                    <div style="background:rgba(239,68,68,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">M顶形态</div>
+                        <div style="font-size:24px;font-weight:700;color:#ef4444;">${data.m_top_count || 0}</div>
+                        <div style="font-size:11px;color:var(--text-muted);">双顶触及上轨 &rarr; 看跌反转</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 策略卡片
+        const cardsEl = document.getElementById('bb-cards');
+        if (cardsEl) {
+            const colors = ['#a855f7', '#ef4444', '#22c55e', '#6b7280'];
+            cardsEl.innerHTML = ranked.map((r, i) => {
+                const isBest = i === 0;
+                const c = colors[i % colors.length];
+                return `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;${isBest ? 'border:1.5px solid #22c55e;' : ''}">
+                    <div style="font-weight:700;font-size:14px;color:${c};margin-bottom:4px;">${r.name}${isBest ? ' ★' : ''}</div>
+                    <div style="display:flex;gap:12px;font-size:13px;flex-wrap:wrap;">
+                        <span style="color:${r.alpha > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}% &alpha;</span>
+                        <span style="color:var(--text-muted);">${r.max_drawdown.toFixed(1)}% DD</span>
+                        <span style="color:var(--text-muted);">${r.total_trades}笔</span>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // Alpha柱状图
+        const chartEl = document.getElementById('bb-alpha-chart');
+        if (chartEl && ranked.length > 0) {
+            const maxAlpha = Math.max(...ranked.map(r => Math.abs(r.alpha)), 1);
+            chartEl.innerHTML = `<div style="display:flex;align-items:flex-end;gap:16px;height:260px;padding:20px;">
+                ${ranked.map((r, i) => {
+                    const h = Math.max(Math.abs(r.alpha) / maxAlpha * 200, 8);
+                    const isPos = r.alpha >= 0;
+                    const c = isPos ? '#22c55e' : '#ef4444';
+                    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;">
+                        <div style="font-size:11px;color:${c};font-weight:700;margin-bottom:4px;">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</div>
+                        <div style="width:100%;max-width:80px;height:${h}px;background:${c}30;border:1px solid ${c};border-radius:4px 4px 0 0;"></div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-top:6px;text-align:center;">${r.name}</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+        }
+
+        // 策略表格
+        const tableBody = document.querySelector('#bb-table tbody');
+        if (tableBody) {
+            tableBody.innerHTML = ranked.map((r, i) => {
+                const fees = r.fees || {};
+                return `<tr ${i === 0 ? 'style="background:rgba(34,197,94,0.06);"' : ''}>
+                    <td>#${i + 1}${i === 0 ? ' ★' : ''}</td>
+                    <td><b>${r.name}</b></td>
+                    <td style="color:${r.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</td>
+                    <td>${r.strategy_return > 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</td>
+                    <td>${r.buy_hold_return > 0 ? '+' : ''}${r.buy_hold_return.toFixed(2)}%</td>
+                    <td>${r.max_drawdown.toFixed(2)}%</td>
+                    <td>${r.total_trades}</td>
+                    <td>${r.liquidations || 0}</td>
+                    <td>$${(fees.total_costs || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 交易明细
+        document.getElementById('bb-best-title').textContent = `最佳策略: ${best.name} · 交易明细`;
+        const tradesBody = document.querySelector('#bb-trades-table tbody');
+        if (tradesBody && best.trades) {
+            tradesBody.innerHTML = best.trades.slice(0, 50).map(t => {
+                const isSell = t.action?.includes('SELL') || t.action?.includes('SHORT');
+                const color = isSell ? 'var(--accent-red)' : 'var(--accent-green)';
+                return `<tr>
+                    <td style="font-size:12px;">${String(t.time).substring(0, 16)}</td>
+                    <td style="color:${color};font-weight:600;">${t.action || ''}</td>
+                    <td>${t.direction || ''}</td>
+                    <td>$${(t.price || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td>${t.leverage || 1}x</td>
+                    <td>$${(t.total || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;">${(t.reason || '').substring(0, 80)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 结论
+        const conclusionEl = document.getElementById('bb-conclusion');
+        if (conclusionEl) {
+            conclusionEl.innerHTML = `
+                <div class="card-title">回测结论</div>
+                <div style="background:rgba(168,85,247,0.06);border-radius:8px;padding:16px;border-left:3px solid #a855f7;">
+                    <div style="font-weight:700;color:#a855f7;margin-bottom:8px;">
+                        最佳策略: ${best.name} · &alpha; = ${best.alpha > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%
+                    </div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                        基于《布林线》John Bollinger理论, 在ETH/USDT ${data.trade_days || 30}天回测中:<br>
+                        &middot; 买入持有收益: ${(best.buy_hold_return || 0).toFixed(2)}%<br>
+                        &middot; 最佳策略收益: ${(best.strategy_return || 0).toFixed(2)}%, 超额&alpha; = ${best.alpha > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%<br>
+                        &middot; 交易${best.total_trades || 0}笔, 最大回撤${(best.max_drawdown || 0).toFixed(2)}%<br>
+                        &middot; Squeeze检测: ${data.squeeze_count || 0}次 | W底: ${data.w_bottom_count || 0}次 | M顶: ${data.m_top_count || 0}次<br>
+                        &middot; 核心信号: %B超买超卖/%B背离/BandWidth Squeeze/W底M顶/中轨趋势跟随/带外突破回归
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadBollinger();
+});
+</script>
+{% endblock %}

@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}《量价分析》书籍大纲 - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">量价分析理论大纲</div>
+            <div class="page-subtitle">基于 Jesse Livermore(利弗莫尔)交易法 + Richard Wyckoff(威科夫)方法论 · 量价关系的终极指南</div>
+
+            <!-- 书籍概述 -->
+            <div class="card" style="border-left: 3px solid var(--accent-purple);">
+                <div class="card-title">
+                    <span style="color:var(--accent-purple);">📊</span> 理论核心思想
+                </div>
+                <div style="font-size:14px;color:var(--text-secondary);line-height:1.8;">
+                    <b>Jesse Livermore(1877-1940)</b>——华尔街传奇投机之王，《股票作手回忆录》的原型人物。<br>
+                    <b>Richard Wyckoff(1873-1934)</b>——量价分析的创始人，独家采访过Livermore，提出了完整的<b>威科夫方法论</b>。<br>
+                    两人的核心共识：<span style="color:var(--accent-purple);font-weight:600;">成交量是市场的灵魂，价格只是结果</span>。<br>
+                    量在价先——成交量的变化往往先于价格变化，读懂量价关系就是读懂"聪明钱"的意图。
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">一</div>
+                    <div class="chapter-title">第一部分 · Livermore的交易哲学</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>利弗莫尔用一生的交易经验总结的<span class="key-concept">不朽市场智慧</span>。</p>
+                    <ul>
+                        <li><span class="key-concept">市场永远是对的</span> — 亏损时不要责怪市场，要检讨自己的判断。"华尔街没有新鲜事"</li>
+                        <li><span class="key-concept">关键点位(Pivotal Point)</span> — Livermore最核心的概念
+                            <ul>
+                                <li>关键点是价格运动中的转折位置，突破关键点=趋势确立</li>
+                                <li>"在正确的时间买入比在最低价买入更重要"</li>
+                                <li>等待关键点出现，然后果断行动——这就是时机</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">跟随大势</span> — "大势向好时做多，大势向下时做空，盘整时观望"。不要逆势操作</li>
+                        <li><span class="key-concept">耐心等待</span> — "赚大钱靠的不是思考，而是坐等"。频繁交易是亏损的根源</li>
+                        <li><span class="key-concept">止损纪律</span> — "当你发现自己错了，最好的办法是立刻认错出场"。永远不要让小亏变成大亏</li>
+                        <li><span class="key-concept">金字塔加仓</span> — 只在盈利时加仓，永远不在亏损时摊平成本</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch2">二</div>
+                    <div class="chapter-title">第二部分 · 威科夫方法论基础</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>Wyckoff将量价分析系统化为<span class="key-concept">三大定律</span>和<span class="key-concept">四大市场阶段</span>。</p>
+                    <ul>
+                        <li><span class="key-concept">供求定律(Law of Supply and Demand)</span> — 当需求大于供给时价格上涨，当供给大于需求时价格下跌。成交量反映供求力度</li>
+                        <li><span class="key-concept">因果定律(Law of Cause and Effect)</span> — 大的价格运动之前必有充分的"蓄势"(因)
+                            <ul>
+                                <li>横盘区间越长、越宽，之后的突破行情越大</li>
+                                <li>"蓄势"(cause)的大小决定"行情"(effect)的幅度</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">努力与结果定律(Law of Effort vs Result)</span> — 如果付出巨大的"努力"(大成交量)却只产生微小的"结果"(小价格变动)，说明趋势即将反转
+                            <ul>
+                                <li>放量不涨=上方有强大抛压</li>
+                                <li>放量不跌=下方有强大承接</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch3">三</div>
+                    <div class="chapter-title">第三部分 · 威科夫四大市场阶段 (核心章节)</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>市场永远在<span class="key-concept">四个阶段</span>中循环运行，识别当前阶段是操作的前提。</p>
+                    <div class="principle-grid" style="padding-left:0; margin-top:12px;">
+                        <div class="principle-card buy">
+                            <h3>阶段一：吸筹(Accumulation)</h3>
+                            <p>
+                                <b>特征：</b>长期下跌后的横盘区间。成交量间歇性放大但价格不再创新低。<br>
+                                <b>行为：</b>"聪明钱"(机构)在低位静悄悄地买入<br>
+                                <b>量价线索：</b>下跌时缩量(卖压枯竭)，反弹时放量(买入力量)<br>
+                                <b>操作：</b>耐心等待，不追跌。确认吸筹完成后在突破时买入
+                            </p>
+                        </div>
+                        <div class="principle-card sell">
+                            <h3>阶段三：派发(Distribution)</h3>
+                            <p>
+                                <b>特征：</b>长期上涨后的横盘区间。成交量极大但价格不再创新高。<br>
+                                <b>行为：</b>"聪明钱"在高位把筹码卖给散户<br>
+                                <b>量价线索：</b>上涨时缩量(推动力不足)，下跌时放量(抛售)<br>
+                                <b>操作：</b>逐步减仓卖出。确认派发完成后在跌破时做空
+                            </p>
+                        </div>
+                    </div>
+                    <ul>
+                        <li><span class="key-concept">阶段二：上涨(Markup)</span> — 吸筹完成后的上升趋势。特征：放量上涨+缩量回调。操作：持有或回调买入</li>
+                        <li><span class="key-concept">阶段四：下跌(Markdown)</span> — 派发完成后的下降趋势。特征：放量下跌+缩量反弹。操作：做空或空仓</li>
+                        <li><b>关键转换信号</b>：
+                            <ul>
+                                <li>吸筹→上涨：突破横盘区间上沿+放量=Spring(弹簧)</li>
+                                <li>派发→下跌：跌破横盘区间下沿+放量=Upthrust(上冲回落)</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch4">四</div>
+                    <div class="chapter-title">第四部分 · 量价关系八大类型</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>价格涨跌与成交量增减组合成<span class="key-concept">八种经典量价关系</span>。</p>
+                    <ul>
+                        <li><span class="key-concept">价升量增</span> — 健康上涨，趋势延续。<b>最正常的上涨形态</b></li>
+                        <li><span class="key-concept">价升量减(量价背离)</span> — 上涨乏力，推动力不足。<b>最重要的顶部预警</b>之一</li>
+                        <li><span class="key-concept">价升量平</span> — 温和上涨，需要观察后续是否放量确认</li>
+                        <li><span class="key-concept">价升量巨(天量天价)</span> — 极端放量冲高，可能是<b>高潮顶(Climax Top)</b>。往往是最后的疯狂</li>
+                        <li><span class="key-concept">价跌量增</span> — 恐慌抛售或主力出货。若在高位=<b>确认下跌趋势</b></li>
+                        <li><span class="key-concept">价跌量减</span> — 卖压枯竭，下跌力度减弱。可能是<b>底部信号</b></li>
+                        <li><span class="key-concept">价跌量巨(恐慌抛售)</span> — 极端放量暴跌，可能是<b>Selling Climax(卖出高潮)</b>。往往接近底部</li>
+                        <li><span class="key-concept">缩量横盘(地量)</span> — 市场极度冷淡，波动率极低。<b>"地量见地价"</b>——大行情的前兆</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch5">五</div>
+                    <div class="chapter-title">第五部分 · 量化指标体系</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>将量价理论<span class="key-concept">量化</span>为可计算的技术指标。</p>
+                    <ul>
+                        <li><span class="key-concept">OBV(On-Balance Volume，能量潮)</span> — Joseph Granville发明
+                            <ul>
+                                <li>阳线日的成交量累加，阴线日的成交量累减</li>
+                                <li>OBV方向比绝对值重要：OBV上升=资金流入，OBV下降=资金流出</li>
+                                <li><b>OBV背离</b>：价格创新高但OBV未创新高=看跌背离(极重要的顶部信号)</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">VWAP(成交量加权平均价)</span> — 机构交易者的核心参考
+                            <ul>
+                                <li>VWAP = Σ(价格×成交量) / Σ(成交量)</li>
+                                <li>价格在VWAP上方=多头优势，价格在VWAP下方=空头优势</li>
+                                <li>VWAP是"公平价格"的近似值</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">MFI(Money Flow Index，资金流量指标)</span> — 成交量加权的RSI
+                            <ul>
+                                <li>MFI>80=资金过度流入(超买)，MFI<20=资金过度流出(超卖)</li>
+                                <li>MFI背离与价格背离结合=高可靠的反转信号</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">量比(Volume Ratio)</span> — 当前成交量/过去N日平均成交量
+                            <ul>
+                                <li>量比>2=显著放量，量比>5=极端放量</li>
+                                <li>量比<0.5=明显缩量，量比<0.2=极度萎缩</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">A/D线(Accumulation/Distribution)</span> — 累积/派发线
+                            <ul>
+                                <li>基于收盘价在当日范围内的位置来分配成交量</li>
+                                <li>A/D上升=吸筹主导，A/D下降=派发主导</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">六</div>
+                    <div class="chapter-title">第六部分 · 量价突破与确认</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>成交量是判断<span class="key-concept">突破真假</span>的黄金标准。</p>
+                    <ul>
+                        <li><span class="key-concept">放量突破</span> — 价格突破关键阻力位+成交量显著放大(>1.5倍平均)=<b>有效突破</b>
+                            <ul>
+                                <li>突破后回踩不破支撑位=确认，可加仓</li>
+                                <li>成交量是突破的"燃料"——没有成交量的突破是假突破</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">缩量突破</span> — 价格突破但成交量未配合=<b>假突破概率极高</b>
+                            <ul>
+                                <li>缩量突破后通常会在1~3根K线内回落</li>
+                                <li>可以作为反向交易的信号</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">量价收敛</span> — 价格波动越来越小+成交量越来越萎缩=<b>变盘前兆</b>
+                            <ul>
+                                <li>类似布林带Squeeze，但从量的角度确认</li>
+                                <li>收敛后第一根放量K线的方向就是突破方向</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">高潮量(Climax Volume)</span> — 成交量达到极端(>3倍平均)+价格剧烈波动
+                            <ul>
+                                <li>高位的高潮量=可能是顶部(Buying Climax)</li>
+                                <li>低位的高潮量=可能是底部(Selling Climax)</li>
+                                <li>高潮量后市场通常需要时间消化</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch2">七</div>
+                    <div class="chapter-title">第七部分 · 实战交易系统</div>
+                </div>
+                <div class="chapter-content">
+                    <p><b>精华总结：</b>将量价理论整合为<span class="key-concept">可执行的交易决策框架</span>。</p>
+                    <ul>
+                        <li><span class="key-concept">Livermore的交易法则</span>：
+                            <ul>
+                                <li>"先判断大势，然后等待关键点位，最后验证成交量"</li>
+                                <li>只在市场给出明确信号时行动，其余时间<b>耐心等待</b></li>
+                                <li>用1/5的资金试探，确认正确后再用全部资金进入</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">Wyckoff的五步分析法</span>：
+                            <ol style="padding-left:18px;">
+                                <li>判断当前市场处于四个阶段中的哪一个</li>
+                                <li>选择与大势一致的方向操作</li>
+                                <li>选择比大盘强(做多时)或比大盘弱(做空时)的标的</li>
+                                <li>等待该标的准备好行动(出现量价信号)</li>
+                                <li>在大盘配合时入场</li>
+                            </ol>
+                        </li>
+                        <li><b>核心交易纪律</b>：
+                            <ul>
+                                <li>不在缩量中买入(缺乏推动力)，不在放量中做空(可能是吸筹)</li>
+                                <li>量价背离出现后不急于操作，等待确认信号</li>
+                                <li>高潮量后等待市场冷静(通常3~5根K线)再做决策</li>
+                                <li>永远以成交量验证价格行为——<b>"有量才有真相"</b></li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- 代码实现说明 -->
+            <div class="card" style="border-left: 3px solid var(--accent-blue);">
+                <div class="card-title">
+                    <span style="color:var(--accent-blue);">💻</span> 代码实现
+                </div>
+                <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                    <code>volume_price_strategy.py</code> — OBV计算 + VWAP计算 + MFI资金流量指标 + 量价背离检测 +
+                    高潮量识别 + 放量/缩量突破判断 + 威科夫阶段识别 + 4种策略变体回测
+                </div>
+            </div>
+{% endblock %}

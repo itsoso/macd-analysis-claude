@@ -646,8 +646,8 @@
     <!-- Sidebar -->
     <nav class="sidebar">
         <div class="sidebar-header">
-            <h1>背离技术分析</h1>
-            <p>江南小隐 · 代码实现 & ETH回测</p>
+            <h1>技术分析平台</h1>
+            <p>背离分析 + 均线分析 · ETH回测</p>
         </div>
 
         <div class="nav-section">
@@ -689,6 +689,12 @@
             </div>
             <div class="nav-item" data-page="strategy-futures">
                 <span class="nav-icon">📊</span> 合约做空策略
+            </div>
+            <div class="nav-item" data-page="ma-strategy">
+                <span class="nav-icon">📈</span> 均线技术分析
+            </div>
+            <div class="nav-item" data-page="combined-strategy">
+                <span class="nav-icon">🔗</span> 双书融合策略
             </div>
             <div class="nav-item" data-page="multi-compare">
                 <span class="nav-icon">📊</span> 多周期对比
@@ -1663,13 +1669,13 @@
             <!-- ====== 15分钟双向回测 ====== -->
             <div id="s15m-section" style="display:none;">
                 <div class="card" style="margin-top:24px;">
-                    <div class="card-title">15分钟双向回测 · 做多+做空
+                    <div class="card-title" id="s15m-title">15分钟双向回测 · 做多+做空
                         <span class="badge" style="background:rgba(249,115,22,0.15);color:#f97316;">15M BIDIRECTIONAL</span>
                     </div>
                     <div style="background:rgba(249,115,22,0.06);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid #f97316;">
                         <div style="font-weight:600;color:#f97316;margin-bottom:6px;">策略说明</div>
-                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
-                            主信号: 15分钟K线 (2880根/30天) + 1h/8h辅助<br>
+                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;" id="s15m-desc">
+                            主信号: 15分钟K线 + 1h/8h辅助<br>
                             方向: 顶背离→卖出+开空 | 底背离→买入+开多<br>
                             初始: 10万USDT + 价值10万USDT ETH | 手续费: 0.05% + 0.1%滑点 + 资金费率
                         </div>
@@ -1974,6 +1980,83 @@
             </div>
         </div>
 
+        <!-- ====== 均线技术分析 ====== -->
+        <div class="page" id="ma-strategy">
+            <div class="page-title">均线技术分析</div>
+            <div class="page-subtitle">《均线技术分析》邱立波著 · 葛南维八大法则 + 均线排列 + 17种特殊形态 · ETH/USDT回测</div>
+
+            <div id="ma-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载均线策略数据...
+            </div>
+
+            <div id="ma-content" style="display:none;">
+                <!-- 书籍大纲 -->
+                <div class="card" id="ma-outline">
+                    <div class="card-title">书籍大纲
+                        <span class="badge" style="background:rgba(59,130,246,0.15);color:#3b82f6;">4章 · 364页</span>
+                    </div>
+                    <div id="ma-outline-content"></div>
+                </div>
+
+                <!-- 信号统计 -->
+                <div class="card" id="ma-signal-stats">
+                    <div class="card-title">信号统计
+                        <span class="badge" style="background:rgba(168,85,247,0.15);color:#a855f7;">SIGNAL ANALYSIS</span>
+                    </div>
+                    <div id="ma-signal-content"></div>
+                </div>
+
+                <!-- 策略卡片 -->
+                <div class="card">
+                    <div class="card-title" id="ma-strat-title">8种均线策略对比</div>
+                    <div style="background:rgba(59,130,246,0.06);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid #3b82f6;">
+                        <div style="font-weight:600;color:#3b82f6;margin-bottom:6px;">策略说明</div>
+                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;" id="ma-desc"></div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px;" id="ma-cards"></div>
+                </div>
+
+                <!-- Alpha对比图 -->
+                <div class="card">
+                    <div class="card-title">策略Alpha对比</div>
+                    <div id="ma-alpha-chart" style="height:300px;"></div>
+                </div>
+
+                <!-- 策略详情表格 -->
+                <div class="card">
+                    <div class="card-title">策略详细对比</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="ma-table">
+                            <thead><tr>
+                                <th>排名</th><th>策略</th><th>α%</th>
+                                <th>策略收益</th><th>BH收益</th><th>最大回撤</th>
+                                <th>交易数</th><th>强平</th><th>总费用</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 最佳策略交易明细 -->
+                <div class="card">
+                    <div class="card-title" id="ma-best-title">最佳策略交易明细</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="ma-trades-table">
+                            <thead><tr>
+                                <th>时间</th><th>操作</th><th>方向</th>
+                                <th>价格</th><th>杠杆</th><th>总资产</th><th>原因</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="ma-conclusion"></div>
+            </div>
+        </div>
+
         <!-- ====== 策略优化对比 ====== -->
         <div class="page" id="strategy-compare">
             <div class="page-title">策略优化对比实验</div>
@@ -2080,6 +2163,120 @@
                     <!-- 终极结论 -->
                     <div class="card" id="se-conclusion"></div>
                 </div>
+            </div>
+        </div>
+
+        <!-- ====== 双书融合策略 ====== -->
+        <div class="page" id="combined-strategy">
+            <div class="page-title">双书融合策略</div>
+            <div class="page-subtitle">《背离技术分析》× 《均线技术分析》 · 背离拐点 + 均线趋势 · 信号共振减少假信号</div>
+
+            <div id="cs-loading" class="loading">
+                <div class="spinner"></div>
+                <p>加载融合策略数据...</p>
+            </div>
+
+            <div id="cs-content" style="display:none">
+                <!-- 融合原理 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>融合原理</h3>
+                    </div>
+                    <div style="padding:20px;line-height:1.8;color:var(--text-secondary)">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:20px">
+                            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;border-left:4px solid var(--accent-red)">
+                                <div style="font-weight:700;color:var(--accent-red);margin-bottom:8px">《背离技术分析》— 捕捉拐点</div>
+                                <div style="font-size:13px">MACD隔堆背离、面积背离、DIF背离、背驰、KDJ/CCI/RSI极值、量价分析</div>
+                                <div style="font-size:12px;color:var(--text-muted);margin-top:6px">核心能力: 检测价格与指标的不一致, 预判反转</div>
+                            </div>
+                            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;border-left:4px solid var(--accent-blue)">
+                                <div style="font-weight:700;color:var(--accent-blue);margin-bottom:8px">《均线技术分析》— 确认趋势</div>
+                                <div style="font-size:13px">葛南维八大法则、金叉死叉、多空排列、银山谷/金山谷/死亡谷、均线粘合突破</div>
+                                <div style="font-size:12px;color:var(--text-muted);margin-top:6px">核心能力: 确认趋势方向和强度, 过滤噪音</div>
+                            </div>
+                        </div>
+                        <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;border-left:4px solid var(--accent-purple)">
+                            <div style="font-weight:700;color:var(--accent-purple);margin-bottom:8px">融合逻辑 — 两种技术互补</div>
+                            <div style="font-size:13px">
+                                <b>加权融合:</b> 两系统信号按权重叠加 · <b>共振确认:</b> 两系统同时触发才交易(高确信度) · 
+                                <b>均线过滤背离:</b> 背离产生信号, 均线确认方向 · <b>背离过滤均线:</b> 均线产生信号, 背离确认拐点
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 信号统计 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>信号统计</h3>
+                    </div>
+                    <div id="cs-signal-stats" style="padding:20px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px"></div>
+                </div>
+
+                <!-- 策略卡片 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>8种融合策略对比</h3>
+                    </div>
+                    <div id="cs-strategy-cards" style="padding:20px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px"></div>
+                </div>
+
+                <!-- Alpha对比柱状图 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Alpha对比</h3>
+                    </div>
+                    <div id="cs-alpha-chart" style="padding:20px;height:280px;display:flex;align-items:flex-end;gap:12px;justify-content:center"></div>
+                </div>
+
+                <!-- 排名表格 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>策略排名</h3>
+                    </div>
+                    <div style="padding:0;overflow-x:auto">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th><th>策略</th><th>融合模式</th>
+                                    <th>Alpha</th><th>策略收益</th><th>买持收益</th>
+                                    <th>最大回撤</th><th>交易次数</th><th>强平</th>
+                                    <th>总费用</th><th>最终资产</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cs-ranking-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 最佳策略详情 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3 id="cs-best-title">最佳策略交易记录</h3>
+                    </div>
+                    <div style="padding:0;overflow-x:auto">
+                        <table class="data-table" style="font-size:12px">
+                            <thead>
+                                <tr>
+                                    <th>时间</th><th>操作</th><th>价格</th>
+                                    <th>杠杆</th><th>总资产</th><th>原因</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cs-trades-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 跨策略对比 -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>跨策略对比: 融合 vs 单独</h3>
+                    </div>
+                    <div id="cs-cross-compare" style="padding:20px"></div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="cs-conclusion"></div>
             </div>
         </div>
 
@@ -2245,6 +2442,8 @@
             if (pageId === 'global-strategy' && !window._gsLoaded) loadGlobalStrategy();
                 if (pageId === 'strategy-compare' && !window._scLoaded) loadStrategyCompare();
                 if (pageId === 'strategy-futures' && !window._ftLoaded) loadFuturesStrategy();
+                if (pageId === 'ma-strategy' && !window._maLoaded) loadMAStrategy();
+                if (pageId === 'combined-strategy' && !window._csLoaded) loadCombinedStrategy();
                 if (pageId === 'multi-compare' && !window._multiLoaded) loadMultiData();
                 if (pageId.startsWith('backtest') && !window._backtestLoaded) loadBacktestData();
         });
@@ -3469,6 +3668,11 @@
             const res15m = await fetch('/api/strategy_15m');
             if (res15m.ok) { render15mStrategy(await res15m.json()); }
         } catch(e) {}
+        // 加载均线技术分析
+        try {
+            const resMA = await fetch('/api/ma_strategy');
+            if (resMA.ok) { renderMAStrategy(await resMA.json()); }
+        } catch(e) {}
     }
 
     function renderFuturesPage(data) {
@@ -4411,6 +4615,22 @@
         if (!section) return;
         section.style.display = 'block';
 
+        // 更新标题和描述显示交易区间
+        const titleEl = document.getElementById('s15m-title');
+        const descEl = document.getElementById('s15m-desc');
+        const tradeDays = data.trade_days || 30;
+        const tradeRange = data.trade_range || data.data_range || '';
+        if (titleEl) {
+            titleEl.innerHTML = `15分钟双向回测 · 做多+做空 · ${tradeDays}天
+                <span class="badge" style="background:rgba(249,115,22,0.15);color:#f97316;">15M BIDIRECTIONAL</span>`;
+        }
+        if (descEl) {
+            descEl.innerHTML = `主信号: 15分钟K线 (${data.total_bars || '?'}根) + 1h/8h辅助<br>
+                交易区间: ${tradeRange}<br>
+                方向: 顶背离→卖出+开空 | 底背离→买入+开多<br>
+                初始: 10万USDT + 价值10万USDT ETH | 手续费: 0.05% + 0.1%滑点 + 资金费率`;
+        }
+
         const results = data.results || [];
         const ranked = [...results].sort((a, b) => b.alpha - a.alpha);
         const best = ranked[0] || {};
@@ -4789,6 +5009,380 @@
                 </div>
             `;
         }
+    }
+    // ===================== 均线技术分析 =====================
+    async function loadMAStrategy() {
+        try {
+            const res = await fetch('/api/ma_strategy');
+            if (res.ok) {
+                window._maLoaded = true;
+                renderMAStrategy(await res.json());
+            } else {
+                document.getElementById('ma-loading').innerHTML = '<p style="color:var(--accent-red);">均线策略数据未找到, 请先运行 python ma_strategy.py</p>';
+            }
+        } catch(e) {
+            document.getElementById('ma-loading').innerHTML = `<p style="color:var(--accent-red);">加载失败: ${e.message}</p>`;
+        }
+    }
+
+    function renderMAStrategy(data) {
+        document.getElementById('ma-loading').style.display = 'none';
+        document.getElementById('ma-content').style.display = 'block';
+
+        const results = data.results || [];
+        const ranked = [...results].sort((a, b) => b.alpha - a.alpha);
+        const best = ranked[0] || {};
+        const stats = data.signal_stats || {};
+        const outline = data.book_outline || {};
+
+        // 标题更新
+        const titleEl = document.getElementById('ma-strat-title');
+        if (titleEl) titleEl.textContent = `8种均线策略对比 · ${data.trade_days || 7}天`;
+
+        const descEl = document.getElementById('ma-desc');
+        if (descEl) {
+            descEl.innerHTML = `主信号: 1h K线 (${data.total_bars || '?'}根) · 均线: SMA5/10/20/30/60/120/240<br>
+                交易区间: ${data.trade_range || ''}<br>
+                方向: 买入信号→买入现货+开多 | 卖出信号→卖出现货+开空<br>
+                初始: ${data.initial_capital || '10万USDT + 价值10万USDT的ETH'}`;
+        }
+
+        // 书籍大纲
+        const outlineEl = document.getElementById('ma-outline-content');
+        if (outlineEl && outline.chapters) {
+            const chapterColors = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444'];
+            outlineEl.innerHTML = outline.chapters.map((ch, i) => `
+                <div style="margin-bottom:16px;">
+                    <div style="font-weight:700;color:${chapterColors[i % 4]};font-size:15px;margin-bottom:8px;">${ch.chapter}</div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:8px;">
+                        ${ch.sections.map(s => `<div style="background:var(--bg-hover);border-radius:6px;padding:8px 12px;font-size:13px;color:var(--text-secondary);border-left:3px solid ${chapterColors[i % 4]}30;">${s}</div>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 信号统计
+        const sigEl = document.getElementById('ma-signal-content');
+        if (sigEl && stats.buy_signals) {
+            const bs = stats.buy_signals;
+            const ss = stats.sell_signals;
+            const arr = stats.arrangement || {};
+            const gran = stats.granville || {};
+            const buyRules = (gran.rule_1||0)+(gran.rule_2||0)+(gran.rule_3||0)+(gran.rule_4||0);
+            const sellRules = (gran.rule_5||0)+(gran.rule_6||0)+(gran.rule_7||0)+(gran.rule_8||0);
+            sigEl.innerHTML = `
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
+                    <div style="background:rgba(34,197,94,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">买入信号</div>
+                        <div style="font-size:24px;font-weight:700;color:#22c55e;">${bs.count_gt_15}</div>
+                        <div style="font-size:12px;color:var(--text-muted);">强信号(>30): ${bs.count_gt_30} | 极强(>50): ${bs.count_gt_50}</div>
+                    </div>
+                    <div style="background:rgba(239,68,68,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">卖出信号</div>
+                        <div style="font-size:24px;font-weight:700;color:#ef4444;">${ss.count_gt_15}</div>
+                        <div style="font-size:12px;color:var(--text-muted);">强信号(>30): ${ss.count_gt_30} | 极强(>50): ${ss.count_gt_50}</div>
+                    </div>
+                    <div style="background:rgba(59,130,246,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">均线排列</div>
+                        <div style="font-size:14px;margin-top:6px;">
+                            <span style="color:#22c55e;">多头 ${arr.bullish_pct?.toFixed(1)||0}%</span> ·
+                            <span style="color:#ef4444;">空头 ${arr.bearish_pct?.toFixed(1)||0}%</span> ·
+                            <span style="color:var(--text-muted);">混合 ${arr.mixed_pct?.toFixed(1)||0}%</span>
+                        </div>
+                    </div>
+                    <div style="background:rgba(168,85,247,0.08);border-radius:8px;padding:14px;">
+                        <div style="font-size:12px;color:var(--text-muted);">葛南维法则</div>
+                        <div style="font-size:14px;margin-top:6px;">
+                            <span style="color:#22c55e;">买入 ${buyRules}次</span> ·
+                            <span style="color:#ef4444;">卖出 ${sellRules}次</span>
+                        </div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+                            法则1-4(买): ${gran.rule_1||0}/${gran.rule_2||0}/${gran.rule_3||0}/${gran.rule_4||0} |
+                            法则5-8(卖): ${gran.rule_5||0}/${gran.rule_6||0}/${gran.rule_7||0}/${gran.rule_8||0}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 策略卡片
+        const cardsEl = document.getElementById('ma-cards');
+        if (cardsEl) {
+            const colors = ['#3b82f6', '#22c55e', '#a855f7', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#6b7280'];
+            cardsEl.innerHTML = ranked.map((r, i) => {
+                const isBest = i === 0;
+                const c = colors[i % colors.length];
+                return `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;${isBest ? 'border:1.5px solid #22c55e;' : ''}">
+                    <div style="font-weight:700;font-size:14px;color:${c};margin-bottom:4px;">${r.name}${isBest ? ' ★' : ''}</div>
+                    <div style="display:flex;gap:12px;font-size:13px;flex-wrap:wrap;">
+                        <span style="color:${r.alpha > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}% α</span>
+                        <span style="color:var(--text-muted);">${r.max_drawdown.toFixed(1)}% DD</span>
+                        <span style="color:var(--text-muted);">${r.total_trades}笔</span>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // Alpha对比柱状图
+        const chartEl = document.getElementById('ma-alpha-chart');
+        if (chartEl && ranked.length > 0) {
+            chartEl.innerHTML = '';
+            const maxAlpha = Math.max(...ranked.map(r => Math.abs(r.alpha)), 1);
+            chartEl.innerHTML = `<div style="display:flex;align-items:flex-end;gap:12px;height:260px;padding:20px;">
+                ${ranked.map((r, i) => {
+                    const h = Math.max(Math.abs(r.alpha) / maxAlpha * 200, 8);
+                    const isPos = r.alpha >= 0;
+                    const c = isPos ? '#22c55e' : '#ef4444';
+                    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;">
+                        <div style="font-size:11px;color:${c};font-weight:700;margin-bottom:4px;">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</div>
+                        <div style="width:100%;max-width:60px;height:${h}px;background:${c}30;border:1px solid ${c};border-radius:4px 4px 0 0;"></div>
+                        <div style="font-size:10px;color:var(--text-muted);margin-top:6px;text-align:center;writing-mode:vertical-rl;height:80px;">${r.name}</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+        }
+
+        // 策略详情表格
+        const tableBody = document.querySelector('#ma-table tbody');
+        if (tableBody) {
+            tableBody.innerHTML = ranked.map((r, i) => {
+                const fees = r.fees || {};
+                return `<tr ${i === 0 ? 'style="background:rgba(34,197,94,0.06);"' : ''}>
+                    <td>#${i + 1}${i === 0 ? ' ★' : ''}</td>
+                    <td><b>${r.name}</b></td>
+                    <td style="color:${r.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}%</td>
+                    <td>${r.strategy_return > 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</td>
+                    <td>${r.buy_hold_return > 0 ? '+' : ''}${r.buy_hold_return.toFixed(2)}%</td>
+                    <td>${r.max_drawdown.toFixed(2)}%</td>
+                    <td>${r.total_trades}</td>
+                    <td>${r.liquidations || 0}</td>
+                    <td>$${(fees.total_costs || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 最佳策略交易明细
+        const bestTitle = document.getElementById('ma-best-title');
+        if (bestTitle) bestTitle.textContent = `最佳策略: ${best.name} · 交易明细`;
+
+        const tradesBody = document.querySelector('#ma-trades-table tbody');
+        if (tradesBody && best.trades) {
+            tradesBody.innerHTML = best.trades.slice(0, 50).map(t => {
+                const isOpen = t.action?.includes('OPEN');
+                const isSell = t.action?.includes('SELL') || t.action?.includes('SHORT');
+                const color = isSell ? 'var(--accent-red)' : 'var(--accent-green)';
+                return `<tr>
+                    <td style="font-size:12px;">${String(t.time).substring(0, 16)}</td>
+                    <td style="color:${color};font-weight:600;">${t.action || ''}</td>
+                    <td>${t.direction || ''}</td>
+                    <td>$${(t.price || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td>${t.leverage || 1}x</td>
+                    <td>$${(t.total || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;">${(t.reason || '').substring(0, 60)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 结论
+        const conclusionEl = document.getElementById('ma-conclusion');
+        if (conclusionEl) {
+            const bestStrat = data.best_strategy || {};
+            conclusionEl.innerHTML = `
+                <div class="card-title">回测结论</div>
+                <div style="background:rgba(59,130,246,0.06);border-radius:8px;padding:16px;border-left:3px solid #3b82f6;">
+                    <div style="font-weight:700;color:#3b82f6;margin-bottom:8px;">
+                        最佳策略: ${bestStrat.name || best.name} · α = ${(bestStrat.alpha || best.alpha || 0) > 0 ? '+' : ''}${(bestStrat.alpha || best.alpha || 0).toFixed(2)}%
+                    </div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                        基于《均线技术分析》全书理论, 在ETH/USDT ${data.trade_days || 7}天回测中:<br>
+                        · 买入持有收益: ${(best.buy_hold_return || 0).toFixed(2)}%<br>
+                        · 最佳策略收益: ${(best.strategy_return || 0).toFixed(2)}%, 超额α = ${(best.alpha || 0) > 0 ? '+' : ''}${(best.alpha || 0).toFixed(2)}%<br>
+                        · 交易${bestStrat.trades_count || best.total_trades || 0}笔, 最大回撤${(best.max_drawdown || 0).toFixed(2)}%<br>
+                        · 核心信号源: 葛南维八大法则 + 均线排列(多头/空头) + 金叉死叉 + 特殊形态(银山谷/金山谷/死亡谷/蛟龙出海/烘云托月等)
+                    </div>
+                </div>
+            `;
+        }
+    }
+
+    // ===================== 双书融合策略 =====================
+    async function loadCombinedStrategy() {
+        try {
+            const res = await fetch('/api/combined_strategy');
+            if (res.ok) {
+                window._csLoaded = true;
+                renderCombinedStrategy(await res.json());
+            } else {
+                document.getElementById('cs-loading').innerHTML = '<p style="color:var(--accent-red);">融合策略数据未找到, 请先运行 python combined_strategy.py</p>';
+            }
+        } catch(e) {
+            document.getElementById('cs-loading').innerHTML = '<p style="color:var(--accent-red);">加载失败: '+e.message+'</p>';
+        }
+    }
+
+    function renderCombinedStrategy(data) {
+        document.getElementById('cs-loading').style.display = 'none';
+        document.getElementById('cs-content').style.display = 'block';
+
+        const results = data.results || [];
+        const ranking = data.ranking || [];
+        const bestInfo = data.best_strategy || {};
+        const sigInfo = data.signal_summary || {};
+
+        // 信号统计
+        const statsEl = document.getElementById('cs-signal-stats');
+        const statItems = [
+            {label: '1h背离信号', value: sigInfo.div_1h_count || 0, color: 'var(--accent-red)'},
+            {label: '8h背离信号', value: sigInfo.div_8h_count || 0, color: 'var(--accent-yellow)'},
+            {label: '均线买入信号', value: sigInfo.ma_buy_count || 0, color: 'var(--accent-green)'},
+            {label: '均线卖出信号', value: sigInfo.ma_sell_count || 0, color: 'var(--accent-blue)'},
+        ];
+        statsEl.innerHTML = statItems.map(s => `
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:16px;text-align:center;border-top:3px solid ${s.color}">
+                <div style="font-size:28px;font-weight:700;color:${s.color}">${s.value}</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${s.label}</div>
+            </div>`).join('');
+
+        // 策略卡片
+        const cardsEl = document.getElementById('cs-strategy-cards');
+        const fusionLabels = {
+            'weighted': '加权', 'resonance': '共振', 'ma_filter': '均线滤波', 'div_filter': '背离滤波'
+        };
+        const sorted = [...results].sort((a,b) => (b.alpha||0) - (a.alpha||0));
+        cardsEl.innerHTML = sorted.map((r, i) => {
+            const alpha = (r.alpha || 0);
+            const isTop = i === 0;
+            const borderColor = alpha > 10 ? 'var(--accent-green)' : alpha > 0 ? 'var(--accent-blue)' : 'var(--accent-red)';
+            const fees = r.fees || {};
+            return `
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:16px;border-left:4px solid ${borderColor};${isTop?'box-shadow:0 0 20px rgba(0,214,143,0.15);':''}">
+                <div style="font-weight:700;font-size:14px;margin-bottom:8px;color:var(--text-primary)">${isTop?'<span style="color:gold">★ </span>':''}${r.name}</div>
+                <div style="font-size:24px;font-weight:700;color:${borderColor};margin-bottom:8px">
+                    α ${alpha > 0 ? '+' : ''}${alpha.toFixed(2)}%
+                </div>
+                <div style="font-size:12px;color:var(--text-muted);line-height:1.8">
+                    收益: ${(r.strategy_return||0).toFixed(2)}% · 买持: ${(r.buy_hold_return||0).toFixed(2)}%<br>
+                    回撤: ${(r.max_drawdown||0).toFixed(2)}% · 交易: ${r.total_trades||0}笔<br>
+                    费用: $${(fees.total_costs||0).toLocaleString()}
+                </div>
+            </div>`;
+        }).join('');
+
+        // Alpha柱状图
+        const chartEl = document.getElementById('cs-alpha-chart');
+        const maxAlpha = Math.max(...results.map(r => Math.abs(r.alpha || 0)), 1);
+        chartEl.innerHTML = results.map(r => {
+            const alpha = r.alpha || 0;
+            const h = Math.max(8, Math.abs(alpha) / maxAlpha * 200);
+            const color = alpha > 10 ? 'var(--accent-green)' : alpha > 0 ? 'var(--accent-blue)' : 'var(--accent-red)';
+            const name = r.name.replace(/C\d+: /, '');
+            return `
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1">
+                <div style="font-size:11px;font-weight:600;color:${color}">${alpha > 0 ? '+' : ''}${alpha.toFixed(1)}%</div>
+                <div style="width:100%;height:${h}px;background:${color};border-radius:6px 6px 0 0;opacity:0.8"></div>
+                <div style="font-size:10px;color:var(--text-muted);text-align:center;max-width:80px;word-break:break-all">${name}</div>
+            </div>`;
+        }).join('');
+
+        // 排名表格
+        const rankBody = document.getElementById('cs-ranking-body');
+        const fusionModeMap = {};
+        const strategies = [
+            {name:'C1',mode:'加权(背离6:均线4)'},{name:'C2',mode:'加权(背离4:均线6)'},
+            {name:'C3',mode:'共振确认'},{name:'C4',mode:'均线过滤背离'},
+            {name:'C5',mode:'背离过滤均线'},{name:'C6',mode:'加权+激进做空'},
+            {name:'C7',mode:'共振+保守'},{name:'C8',mode:'均线过滤+趋势加速'}
+        ];
+        strategies.forEach(s => fusionModeMap[s.name] = s.mode);
+
+        rankBody.innerHTML = sorted.map((r, i) => {
+            const alpha = r.alpha || 0;
+            const ac = alpha > 10 ? 'var(--accent-green)' : alpha > 0 ? 'var(--accent-blue)' : 'var(--accent-red)';
+            const fees = r.fees || {};
+            const cKey = (r.name || '').substring(0, 2);
+            const mode = fusionModeMap[cKey] || '-';
+            return `<tr>
+                <td>${i+1}</td>
+                <td style="font-weight:600">${i===0?'★ ':''}${r.name}</td>
+                <td><span style="font-size:11px;background:var(--bg-hover);padding:2px 8px;border-radius:4px">${mode}</span></td>
+                <td style="font-weight:700;color:${ac}">${alpha>0?'+':''}${alpha.toFixed(2)}%</td>
+                <td>${(r.strategy_return||0).toFixed(2)}%</td>
+                <td>${(r.buy_hold_return||0).toFixed(2)}%</td>
+                <td>${(r.max_drawdown||0).toFixed(2)}%</td>
+                <td>${r.total_trades||0}</td>
+                <td>${r.liquidations||0}</td>
+                <td>$${(fees.total_costs||0).toLocaleString()}</td>
+                <td>$${(r.final_total||0).toLocaleString()}</td>
+            </tr>`;
+        }).join('');
+
+        // 最佳策略交易记录
+        const best = sorted[0];
+        document.getElementById('cs-best-title').textContent = `最佳策略: ${best.name} · 交易记录`;
+        const tradesBody = document.getElementById('cs-trades-body');
+        const trades = (best.trades || []).slice(0, 30);
+        tradesBody.innerHTML = trades.map(t => {
+            const action = t.action || '';
+            const ac = action.includes('SELL') || action.includes('SHORT') ? 'var(--accent-red)' :
+                        action.includes('BUY') || action.includes('LONG') ? 'var(--accent-green)' : 'var(--text-secondary)';
+            return `<tr>
+                <td style="font-size:11px">${(t.time||'').toString().substring(0,16)}</td>
+                <td style="color:${ac};font-weight:600">${action}</td>
+                <td>$${(t.price||0).toLocaleString(undefined,{minimumFractionDigits:2})}</td>
+                <td>${t.leverage||1}x</td>
+                <td>$${(t.total||0).toLocaleString()}</td>
+                <td style="font-size:11px;color:var(--text-muted);max-width:300px;overflow:hidden;text-overflow:ellipsis">${t.reason||''}</td>
+            </tr>`;
+        }).join('');
+
+        // 跨策略对比
+        const crossEl = document.getElementById('cs-cross-compare');
+        const bestAlpha = best.alpha || 0;
+        crossEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">融合策略最佳α</div>
+                <div style="font-size:32px;font-weight:700;color:var(--accent-green)">${bestAlpha>0?'+':''}${bestAlpha.toFixed(2)}%</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${best.name}</div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">交易次数 / 强平</div>
+                <div style="font-size:32px;font-weight:700;color:var(--accent-blue)">${best.total_trades||0} / ${best.liquidations||0}</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px">手续费 $${((best.fees||{}).total_costs||0).toLocaleString()}</div>
+            </div>
+            <div style="background:var(--bg-secondary);border-radius:12px;padding:20px;text-align:center">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">最大回撤</div>
+                <div style="font-size:32px;font-weight:700;color:var(--accent-yellow)">${(best.max_drawdown||0).toFixed(2)}%</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:4px">最终资产 $${(best.final_total||0).toLocaleString()}</div>
+            </div>
+        </div>
+        <div style="margin-top:20px;padding:16px;background:var(--bg-secondary);border-radius:12px;font-size:13px;color:var(--text-secondary);line-height:1.8">
+            <b style="color:var(--accent-purple)">融合优势分析:</b><br>
+            · 背离系统擅长检测<b style="color:var(--accent-red)">顶部/底部拐点</b>，均线系统擅长确认<b style="color:var(--accent-blue)">趋势方向</b><br>
+            · 两者结合可以在背离信号出现时，用均线排列方向进行二次确认，过滤假信号<br>
+            · 共振策略(C3)虽然交易次数少，但信号质量最高；加权策略(C1/C2)则平衡了信号覆盖率和准确度<br>
+            · 激进做空(C6)在下跌行情中表现突出，因为背离顶部信号+均线空头排列的双重确认大幅提升了做空时机的准确性
+        </div>`;
+
+        // 结论
+        const conclusionEl = document.getElementById('cs-conclusion');
+        const bestFees = best.fees || {};
+        conclusionEl.innerHTML = `
+            <div class="card-title">回测结论</div>
+            <div style="background:rgba(168,85,247,0.08);border-radius:8px;padding:16px;border-left:3px solid var(--accent-purple);">
+                <div style="font-weight:700;color:var(--accent-purple);margin-bottom:8px;">
+                    最佳融合策略: ${best.name} · α = ${bestAlpha > 0 ? '+' : ''}${bestAlpha.toFixed(2)}%
+                </div>
+                <div style="font-size:13px;color:var(--text-secondary);line-height:1.8;">
+                    基于《背离技术分析》和《均线技术分析》双书融合, 在ETH/USDT ${data.trade_days || 30}天回测中:<br>
+                    · 买入持有收益: ${(best.buy_hold_return || 0).toFixed(2)}%<br>
+                    · 最佳策略收益: ${(best.strategy_return || 0).toFixed(2)}%, 超额α = ${bestAlpha > 0 ? '+' : ''}${bestAlpha.toFixed(2)}%<br>
+                    · 交易${best.total_trades||0}笔, 最大回撤${(best.max_drawdown||0).toFixed(2)}%<br>
+                    · 总费用: 现货$${(bestFees.spot_fees||0).toLocaleString()} + 合约$${(bestFees.futures_fees||0).toLocaleString()} + 资金费$${(bestFees.net_funding||0).toLocaleString()} + 滑点$${(bestFees.slippage_cost||0).toLocaleString()}<br>
+                    · <b style="color:var(--accent-purple)">核心价值:</b> 两本书的技术体系互补融合, 背离检测拐点 + 均线确认趋势, 有效减少假信号, 提升交易质量
+                </div>
+            </div>
+        `;
     }
     </script>
 </body>

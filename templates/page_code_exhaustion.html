@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}code-exhaustion - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">第四章 · 背离与背驰</div>
+            <div class="page-subtitle">exhaustion.py · 全书最核心的操作策略</div>
+
+            <div class="principle-grid">
+                <div class="principle-card sell">
+                    <h3>卖点用背离 (宁早勿晚)</h3>
+                    <p>MACD隔堆背离一次 + DIF返回零轴 → 即考虑卖出<br>
+                    或: 两次以上隔堆背离 → 无论是否返回零轴都考虑卖出</p>
+                </div>
+                <div class="principle-card buy">
+                    <h3>买点用背驰 (宁迟勿早)</h3>
+                    <p>二次以上隔堆背离 + DIF两次返回零轴后再度底背离 → 才考虑买入<br>
+                    条件更严格, 减少抄底风险</p>
+                </div>
+            </div>
+
+            <div class="code-section">
+                <div class="code-header">
+                    <span class="code-file">divergence/exhaustion.py</span>
+                    <span>背驰检测核心逻辑</span>
+                </div>
+                <pre><code><span class="kw">class</span> <span class="cl">ExhaustionAnalyzer</span>:
+    <span class="st">"""背驰分析器 — 趋势的最后一次背离"""</span>
+
+    <span class="kw">def</span> <span class="fn">_count_zero_returns</span>(<span class="kw">self</span>, direction=<span class="st">'top'</span>):
+        <span class="st">"""计算MACD DIF线返回零轴的次数
+        顶背驰: DIF从正值区域回到0附近再回升的次数
+        底背驰: DIF从负值区域回到0附近再回落的次数"""</span>
+        dif = <span class="kw">self</span>.df[<span class="st">'DIF'</span>]
+        zero_threshold = dif.abs().mean() * <span class="nu">0.1</span>  <span class="cm"># 接近零轴的阈值</span>
+        <span class="cm"># 遍历DIF序列, 检测 "远离零轴 -> 接近零轴 -> 再次远离" 的模式</span>
+        returns = []
+        <span class="cm">...</span>
+        <span class="kw">return</span> returns
+
+    <span class="kw">def</span> <span class="fn">_count_separated_divergences</span>(<span class="kw">self</span>, direction=<span class="st">'top'</span>):
+        <span class="st">"""计算隔堆背离次数(最关键的背驰判据)"""</span>
+        <span class="cm"># 使用 MACDDivergenceAnalyzer 获取隔堆背离信号</span>
+        bar_divs = <span class="kw">self</span>.macd_analyzer.detect_bar_length_divergence()
+        separated = [d <span class="kw">for</span> d <span class="kw">in</span> bar_divs
+                     <span class="kw">if</span> d.get(<span class="st">'subtype'</span>) == <span class="st">'separated'</span>
+                     <span class="kw">and</span> d[<span class="st">'type'</span>] == direction]
+        <span class="kw">return</span> separated
+
+    <span class="kw">def</span> <span class="fn">detect_exhaustion</span>(<span class="kw">self</span>):
+        <span class="st">"""综合判断背驰"""</span>
+        results = []
+
+        <span class="cm"># 顶背驰 (卖出条件宽松)</span>
+        top_sep = <span class="kw">self</span>._count_separated_divergences(<span class="st">'top'</span>)
+        top_zeros = <span class="kw">self</span>._count_zero_returns(<span class="st">'top'</span>)
+        <span class="kw">if</span> len(top_sep) >= <span class="nu">1</span> <span class="kw">and</span> len(top_zeros) >= <span class="nu">1</span>:
+            results.append({<span class="st">'type'</span>: <span class="st">'top_exhaustion'</span>, <span class="st">'confidence'</span>: <span class="st">'high'</span>})
+        <span class="kw">elif</span> len(top_sep) >= <span class="nu">2</span>:
+            results.append({<span class="st">'type'</span>: <span class="st">'top_exhaustion'</span>, <span class="st">'confidence'</span>: <span class="st">'medium'</span>})
+
+        <span class="cm"># 底背驰 (买入条件严格)</span>
+        bot_sep = <span class="kw">self</span>._count_separated_divergences(<span class="st">'bottom'</span>)
+        bot_zeros = <span class="kw">self</span>._count_zero_returns(<span class="st">'bottom'</span>)
+        <span class="kw">if</span> len(bot_sep) >= <span class="nu">2</span> <span class="kw">and</span> len(bot_zeros) >= <span class="nu">2</span>:
+            results.append({<span class="st">'type'</span>: <span class="st">'bottom_exhaustion'</span>, <span class="st">'confidence'</span>: <span class="st">'high'</span>})
+
+        <span class="kw">return</span> results</code></pre>
+            </div>
+{% endblock %}

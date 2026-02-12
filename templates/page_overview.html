@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}overview - 技术分析平台{% endblock %}
+
+{% block content %}
+            <div class="page-title">《背离技术分析》书籍大纲</div>
+            <div class="page-subtitle">江南小隐 著 · 理财学院系列 · 全面解析背离与背驰交易体系</div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch1">一</div>
+                    <div class="chapter-title">第一章 · 背离总述</div>
+                </div>
+                <div class="chapter-content">
+                    <p>背离的核心定义: <span class="key-concept">将前后两段走势的特征进行比较, 发现趋势衰竭信号</span></p>
+                    <ul>
+                        <li>背离是趋势衰竭的信号, 但不一定马上反转</li>
+                        <li>可以"背离了又背离", 直到产生<span class="key-concept">背驰</span>才是最终反转</li>
+                        <li>背离分析是确认性分析, 而非预测性分析</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch2">二</div>
+                    <div class="chapter-title">第二章 · 几何形态背离</div>
+                </div>
+                <div class="chapter-content">
+                    <ul>
+                        <li><span class="key-concept">趋势K线背离</span> — 上涨中出现大阴线/下跌中出现大阳线, 预示趋势可能反转</li>
+                        <li><span class="key-concept">趋势幅度背离</span> — 后一段趋势的垂直幅度小于前一段, 说明推动力减弱</li>
+                        <li><span class="key-concept">时间度背离</span> — 后一段趋势持续K线数少于前一段, 时间上的衰竭</li>
+                        <li><span class="key-concept">均线背离</span> — 价格剧烈穿越长期均线(均线方向与价格运动方向相反)</li>
+                        <li><span class="key-concept">均线相交面积背离</span> — 短期与长期均线之间的面积缩小</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch3">三</div>
+                    <div class="chapter-title">第三章 · MACD技术指标背离 (核心章节)</div>
+                </div>
+                <div class="chapter-content">
+                    <ul>
+                        <li><span class="key-concept">黄白线(DIF/DEA)背离</span> — 价格创新高/低, DIF/DEA线未同步创新高/低</li>
+                        <li><span class="key-concept">彩柱线长度背离</span> — 红/绿柱最大长度缩短
+                            <ul>
+                                <li><strong>当堆背离</strong>: 同一堆柱体内后面的柱子比前面短</li>
+                                <li><strong>邻堆背离</strong>: 相邻两堆柱体中后堆最大柱子比前堆短</li>
+                                <li><strong>隔堆背离</strong>: 隔开的两堆柱体中后堆不如前堆(最重要!)</li>
+                            </ul>
+                        </li>
+                        <li><span class="key-concept">彩柱线面积背离</span> — 柱体堆面积缩小 (邻堆/隔堆)</li>
+                        <li><span class="key-concept">黄白线相交面积背离</span> — DIF与DEA围合的面积缩小</li>
+                        <li><span class="key-concept">金叉/死叉</span> — DIF上穿/下穿DEA的交叉信号</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch4">四</div>
+                    <div class="chapter-title">第四章 · 背离与背驰 (核心策略)</div>
+                </div>
+                <div class="chapter-content">
+                    <div class="principle-grid" style="padding-left:0; margin-top:12px;">
+                        <div class="principle-card sell">
+                            <h3>卖点用背离 (宁早勿晚)</h3>
+                            <p>
+                                满足任一条件即考虑卖出:<br>
+                                ① MACD DIF远离零轴后返回, 重新上升不创新高 + 已有一次隔堆背离<br>
+                                ② 虽未返回零轴, 但已有两次以上隔堆背离
+                            </p>
+                        </div>
+                        <div class="principle-card buy">
+                            <h3>买点用背驰 (宁迟勿早)</h3>
+                            <p>
+                                需<strong>同时满足两个条件</strong>才考虑买入:<br>
+                                ① 产生了两次以上隔堆背离<br>
+                                ② MACD DIF线两次返回零轴后再度底背离
+                            </p>
+                        </div>
+                    </div>
+                    <ul>
+                        <li><span class="key-concept">背驰</span> = 趋势的最后一次背离, 一旦产生马上反转</li>
+                        <li>背离可以反复, 但背驰只出现一次</li>
+                        <li>背驰是背离量积累到质变的飞跃</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="chapter">
+                <div class="chapter-header">
+                    <div class="chapter-num ch5">五</div>
+                    <div class="chapter-title">第五章 · 其他背离方法</div>
+                </div>
+                <div class="chapter-content">
+                    <ul>
+                        <li><span class="key-concept">KDJ指标背离</span> — 价格新高/低而KDJ的K/D线未同步, 尤其在超买(>80)/超卖(<20)区域</li>
+                        <li><span class="key-concept">CCI指标背离</span> — 价格新高/低而CCI未同步, CCI越过+100(天线)或跌破-100(地线)为强信号</li>
+                        <li><span class="key-concept">RSI指标背离</span> — 价格新高/低而RSI未同步, 关注RSI在80以上(超买)或20以下(超卖)的区域</li>
+                        <li><span class="key-concept">量价背离</span> — 价升量减(上涨乏力)、价跌量增(恐慌抛售)、地量地价(潜在底部)</li>
+                    </ul>
+                </div>
+            </div>
+{% endblock %}

@@ -1,0 +1,684 @@
+{% extends "base.html" %}
+{% block title %}最佳策略代码详解 - F12: C6+三书否决{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .hero-banner {
+        background: linear-gradient(135deg, rgba(168,85,247,0.12), rgba(74,158,255,0.08));
+        border: 1px solid rgba(168,85,247,0.25);
+        border-radius: 16px; padding: 32px; margin-bottom: 28px; position: relative; overflow: hidden;
+    }
+    .hero-banner::before {
+        content: ''; position: absolute; top: -60px; right: -40px;
+        width: 200px; height: 200px; border-radius: 50%;
+        background: radial-gradient(circle, rgba(168,85,247,0.15), transparent);
+    }
+    .hero-name { font-size: 28px; font-weight: 800; color: var(--accent-purple); margin-bottom: 6px; }
+    .hero-desc { font-size: 14px; color: var(--text-secondary); margin-bottom: 20px; line-height: 1.6; }
+    .hero-metrics { display: flex; gap: 24px; flex-wrap: wrap; }
+    .hero-metric { text-align: center; }
+    .hero-metric-value { font-size: 32px; font-weight: 800; }
+    .hero-metric-label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .flow-diagram {
+        display: flex; flex-direction: column; gap: 0; padding: 20px 0;
+        align-items: center;
+    }
+    .flow-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    .flow-box {
+        padding: 12px 20px; border-radius: 10px; font-size: 13px; font-weight: 600;
+        text-align: center; border: 1px solid var(--border); min-width: 100px;
+    }
+    .flow-box.book1 { background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+    .flow-box.book2 { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+    .flow-box.book3 { background: rgba(255,170,0,0.15); color: var(--accent-yellow); }
+    .flow-box.book4 { background: rgba(255,77,106,0.15); color: var(--accent-red); }
+    .flow-box.book5 { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+    .flow-box.core { background: rgba(255,77,106,0.2); color: #ff6b8a; border-color: rgba(255,77,106,0.4); font-size: 15px; }
+    .flow-box.output { background: rgba(0,214,143,0.2); color: #00d68f; border-color: rgba(0,214,143,0.4); }
+    .flow-arrow {
+        font-size: 22px; color: var(--text-muted); text-align: center; padding: 6px 0;
+    }
+    .code-tabs { display: flex; gap: 2px; background: var(--bg-secondary); border-radius: 8px 8px 0 0; padding: 4px; }
+    .code-tab {
+        padding: 8px 18px; font-size: 13px; font-weight: 500; border-radius: 6px;
+        cursor: pointer; color: var(--text-muted); transition: all 0.15s;
+    }
+    .code-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+    .code-tab.active { color: var(--accent-purple); background: rgba(168,85,247,0.12); }
+    .code-panel { display: none; }
+    .code-panel.active { display: block; }
+    .param-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px,1fr)); gap: 10px; }
+    .param-item {
+        background: var(--bg-secondary); border: 1px solid var(--border);
+        border-radius: 8px; padding: 10px 14px;
+    }
+    .param-name { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
+    .param-val { font-size: 16px; font-weight: 700; color: var(--accent-blue); }
+    .exec-step {
+        display: flex; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--border);
+    }
+    .exec-step:last-child { border-bottom: none; }
+    .exec-num {
+        width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 14px; font-weight: 700;
+        background: rgba(168,85,247,0.15); color: var(--accent-purple);
+    }
+    .exec-content { flex: 1; }
+    .exec-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+    .exec-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.7; }
+</style>
+{% endblock %}
+
+{% block content %}
+            <div class="page-title">最佳策略代码详解</div>
+            <div class="page-subtitle">F12: C6+三书否决 · 五书融合策略冠军 · 完整源码 + 执行流程 + 实时回测结果</div>
+
+            <div id="bs-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载策略数据...
+            </div>
+
+            <div id="bs-content" style="display:none;">
+
+                <!-- Hero Banner -->
+                <div class="hero-banner">
+                    <div class="hero-name" id="bs-hero-name">F12: C6+三书否决</div>
+                    <div class="hero-desc">
+                        以两书融合C6策略(背离70%+均线30%)为核心底座，新增蜡烛图、布林带、量价分析三个系统作为"否决权"层。<br>
+                        当新三书中有≥2个系统强烈反对时，大幅削弱信号(仅保留30%)；无反对时则给予正向确认加成。
+                    </div>
+                    <div class="hero-metrics" id="bs-hero-metrics"></div>
+                </div>
+
+                <!-- Tab 1: 架构总览 -->
+                <div class="card">
+                    <div class="card-title">
+                        策略架构总览
+                        <span class="badge purple">ARCHITECTURE</span>
+                    </div>
+                    <div class="flow-diagram">
+                        <div class="flow-row">
+                            <div class="flow-box book1">《背离技术分析》<br><small>MACD/KDJ/CCI/RSI</small></div>
+                            <div class="flow-box book2">《均线技术分析》<br><small>葛南维八法/排列</small></div>
+                            <div class="flow-box book3">《日本蜡烛图技术》<br><small>30+种K线形态</small></div>
+                            <div class="flow-box book4">《布林线》<br><small>%B/Squeeze/BW</small></div>
+                            <div class="flow-box book5">量价分析<br><small>OBV/MFI/VWAP</small></div>
+                        </div>
+                        <div class="flow-arrow">&#8595; 独立计算信号评分 &#8595;</div>
+                        <div class="flow-row">
+                            <div class="flow-box core" style="min-width:300px;">
+                                C6核心底座<br>
+                                <small>sell = 背离×0.7 + 均线×0.3</small><br>
+                                <small>buy = 背离×0.7 + 均线×0.3</small>
+                            </div>
+                        </div>
+                        <div class="flow-arrow">&#8595; 三书否决层 &#8595;</div>
+                        <div class="flow-row">
+                            <div class="flow-box book3" style="border-style:dashed;">K线否决?</div>
+                            <div class="flow-box book4" style="border-style:dashed;">布林否决?</div>
+                            <div class="flow-box book5" style="border-style:dashed;">量价否决?</div>
+                        </div>
+                        <div class="flow-arrow">&#8595; ≥2票否决→信号×0.3 | 无否决→正向确认加成 &#8595;</div>
+                        <div class="flow-row">
+                            <div class="flow-box output" style="min-width:200px;">最终信号评分</div>
+                        </div>
+                        <div class="flow-arrow">&#8595;</div>
+                        <div class="flow-row">
+                            <div class="flow-box output">现货买卖</div>
+                            <div class="flow-box output">合约做空</div>
+                            <div class="flow-box output">合约做多</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 2: 核心代码 -->
+                <div class="card">
+                    <div class="card-title">
+                        核心代码实现
+                        <span class="badge purple">SOURCE CODE</span>
+                    </div>
+                    <div class="code-tabs">
+                        <div class="code-tab active" onclick="switchCodeTab(0)">信号融合</div>
+                        <div class="code-tab" onclick="switchCodeTab(1)">交易执行</div>
+                        <div class="code-tab" onclick="switchCodeTab(2)">策略参数</div>
+                        <div class="code-tab" onclick="switchCodeTab(3)">风控管理</div>
+                    </div>
+
+                    <!-- 信号融合代码 -->
+                    <div class="code-panel active" id="code-panel-0">
+                        <div class="code-header">
+                            <span class="code-file">five_book_fusion.py</span>
+                            <span>calc_fusion_score() — c6_veto 模式</span>
+                        </div>
+                        <pre><code><span class="cm"># === C6底座 + 新三书否决权 ===</span>
+<span class="cm"># 核心逻辑不变, 但当新三书强烈反对时可以否决交易</span>
+<span class="kw">elif</span> mode == <span class="st">'c6_veto'</span>:
+
+    <span class="cm"># 第一步: 构建C6核心底座 (背离70% + 均线30%)</span>
+    base_sell = div_sell * <span class="nu">0.7</span> + ma_sell * <span class="nu">0.3</span>
+    base_buy  = div_buy  * <span class="nu">0.7</span> + ma_buy  * <span class="nu">0.3</span>
+
+    <span class="cm"># 第二步: 否决逻辑 — 三个新系统(K线/布林/量价)投否决票</span>
+    <span class="cm"># 检查: 要做空时, 这三个系统是否强烈看涨(反向信号)?</span>
+    veto_threshold = config.get(<span class="st">'veto_threshold'</span>, <span class="nu">25</span>)
+
+    <span class="cm"># 统计反向信号的"否决票"</span>
+    sell_vetoes = <span class="fn">sum</span>(<span class="nu">1</span> <span class="kw">for</span> s <span class="kw">in</span>
+        [bb_buy, vp_buy, cs_buy]      <span class="cm"># 做空时,检查看涨信号</span>
+        <span class="kw">if</span> s >= veto_threshold)
+    buy_vetoes = <span class="fn">sum</span>(<span class="nu">1</span> <span class="kw">for</span> s <span class="kw">in</span>
+        [bb_sell, vp_sell, cs_sell]    <span class="cm"># 做多时,检查看跌信号</span>
+        <span class="kw">if</span> s >= veto_threshold)
+
+    <span class="cm"># 第三步: 否决 or 确认</span>
+    <span class="kw">if</span> sell_vetoes >= <span class="nu">2</span>:
+        <span class="cm"># ≥2票否决 → 大幅削弱做空信号(仅保留30%)</span>
+        sell_score = base_sell * <span class="nu">0.3</span>
+        r_sell.append(<span class="st">f"被否决({sell_vetoes}/3)"</span>)
+    <span class="kw">else</span>:
+        <span class="cm"># 无否决 → 正面确认加成</span>
+        sell_bonus = <span class="nu">0</span>
+        <span class="kw">if</span> bb_sell >= <span class="nu">15</span>:
+            sell_bonus += <span class="nu">0.10</span>  <span class="cm"># 布林带确认+10%</span>
+        <span class="kw">if</span> vp_sell >= <span class="nu">15</span>:
+            sell_bonus += <span class="nu">0.08</span>  <span class="cm"># 量价确认+8%</span>
+        <span class="kw">if</span> cs_sell >= <span class="nu">25</span>:
+            sell_bonus += <span class="nu">0.06</span>  <span class="cm"># K线确认+6%</span>
+        sell_score = base_sell * (<span class="nu">1</span> + sell_bonus)
+
+    <span class="cm"># 买入方向同理</span>
+    <span class="kw">if</span> buy_vetoes >= <span class="nu">2</span>:
+        buy_score = base_buy * <span class="nu">0.3</span>
+    <span class="kw">else</span>:
+        buy_bonus = <span class="nu">0</span>
+        <span class="kw">if</span> bb_buy >= <span class="nu">15</span>: buy_bonus += <span class="nu">0.10</span>
+        <span class="kw">if</span> vp_buy >= <span class="nu">15</span>: buy_bonus += <span class="nu">0.08</span>
+        <span class="kw">if</span> cs_buy >= <span class="nu">25</span>: buy_bonus += <span class="nu">0.06</span>
+        buy_score = base_buy * (<span class="nu">1</span> + buy_bonus)</code></pre>
+                    </div>
+
+                    <!-- 交易执行代码 -->
+                    <div class="code-panel" id="code-panel-1">
+                        <div class="code-header">
+                            <span class="code-file">five_book_fusion.py</span>
+                            <span>run_fusion_strategy() — 交易执行主循环</span>
+                        </div>
+                        <pre><code><span class="kw">def</span> <span class="fn">run_fusion_strategy</span>(data, signals, config, trade_days=<span class="nu">None</span>):
+    eng = <span class="cl">FuturesEngine</span>(config[<span class="st">'name'</span>], max_leverage=<span class="nu">5</span>)
+    main_df = data[<span class="st">'1h'</span>]
+
+    <span class="cm"># 每根K线循环计算信号</span>
+    <span class="kw">for</span> idx <span class="kw">in</span> <span class="fn">range</span>(<span class="nu">60</span>, <span class="fn">len</span>(main_df)):
+        dt = main_df.index[idx]
+        price = main_df[<span class="st">'close'</span>].iloc[idx]
+
+        <span class="cm"># 计算五书融合信号</span>
+        ss, bs, r_sell, r_buy = <span class="fn">calc_fusion_score</span>(
+            signals, data, idx, dt, config)
+
+        <span class="cm"># 冲突检测: 多空信号同时强烈 → 放弃交易</span>
+        in_conflict = <span class="kw">False</span>
+        <span class="kw">if</span> ss > <span class="nu">0</span> <span class="kw">and</span> bs > <span class="nu">0</span>:
+            ratio = <span class="fn">min</span>(ss, bs) / <span class="fn">max</span>(ss, bs)
+            in_conflict = ratio >= <span class="nu">0.6</span> <span class="kw">and</span> <span class="fn">min</span>(ss, bs) >= <span class="nu">15</span>
+
+        <span class="cm"># === 做空入场 ===</span>
+        sell_dom = (ss > bs * <span class="nu">1.5</span>) <span class="kw">if</span> bs > <span class="nu">0</span> <span class="kw">else True</span>
+        <span class="kw">if</span> short_cd == <span class="nu">0</span> <span class="kw">and</span> ss >= short_threshold \
+                <span class="kw">and not</span> eng.futures_short <span class="kw">and</span> sell_dom:
+            <span class="cm"># 动态杠杆: 信号越强杠杆越大</span>
+            actual_lev = <span class="fn">min</span>(
+                lev <span class="kw">if</span> ss >= <span class="nu">50</span>       <span class="cm"># 强信号→5x</span>
+                <span class="kw">else</span> <span class="fn">min</span>(lev, <span class="nu">3</span>) <span class="kw">if</span> ss >= <span class="nu">35</span>  <span class="cm"># 中等→3x</span>
+                <span class="kw">else</span> <span class="nu">2</span>,             <span class="cm"># 弱信号→2x</span>
+                eng.max_leverage)
+            margin = eng.<span class="fn">available_margin</span>() * margin_use
+            eng.<span class="fn">open_short</span>(price, dt, margin, actual_lev,
+                <span class="st">f"五书空 {actual_lev}x {reason_s}"</span>)
+
+        <span class="cm"># === 空仓管理(反向信号主导检查) ===</span>
+        <span class="kw">if</span> eng.futures_short <span class="kw">and</span> bs >= <span class="nu">40</span>:
+            <span class="cm"># 关键: 必须确认反向信号确实"主导"</span>
+            <span class="cm"># 即 ss < bs*0.7, 防止弱反向信号导致过早平仓</span>
+            bs_dom = (ss &lt; bs * <span class="nu">0.7</span>) <span class="kw">if</span> bs > <span class="nu">0</span> <span class="kw">else True</span>
+            <span class="kw">if</span> bs_dom:
+                eng.<span class="fn">close_short</span>(price, dt,
+                    <span class="st">f"反向信号平空 BS={bs:.0f}"</span>)</code></pre>
+                    </div>
+
+                    <!-- 策略参数 -->
+                    <div class="code-panel" id="code-panel-2">
+                        <div class="code-header">
+                            <span class="code-file">five_book_fusion.py</span>
+                            <span>F12策略参数配置</span>
+                        </div>
+                        <pre><code><span class="cm"># F12: C6底座+三书否决权</span>
+{
+    <span class="st">'name'</span>: <span class="st">'F12: C6+三书否决'</span>,
+    <span class="st">'fusion_mode'</span>: <span class="st">'c6_veto'</span>,      <span class="cm"># 融合模式: C6底座+否决</span>
+    <span class="st">'veto_threshold'</span>: <span class="nu">25</span>,         <span class="cm"># 否决门槛: ≥25分视为反对</span>
+
+    <span class="cm"># --- 信号阈值 ---</span>
+    <span class="st">'sell_threshold'</span>: <span class="nu">18</span>,         <span class="cm"># 卖出现货门槛</span>
+    <span class="st">'short_threshold'</span>: <span class="nu">25</span>,        <span class="cm"># 开空合约门槛</span>
+    <span class="st">'buy_threshold'</span>: <span class="nu">25</span>,          <span class="cm"># 买入现货门槛(较高→偏空)</span>
+    <span class="st">'long_threshold'</span>: <span class="nu">40</span>,         <span class="cm"># 开多合约门槛(很高→谨慎做多)</span>
+
+    <span class="cm"># --- 杠杆与仓位 ---</span>
+    <span class="st">'lev'</span>: <span class="nu">5</span>,                    <span class="cm"># 最大杠杆</span>
+    <span class="st">'max_lev'</span>: <span class="nu">5</span>,                <span class="cm"># 杠杆上限</span>
+    <span class="st">'margin_use'</span>: <span class="nu">0.70</span>,          <span class="cm"># 可用保证金使用比例</span>
+    <span class="st">'single_pct'</span>: <span class="nu">0.20</span>,          <span class="cm"># 单笔保证金上限(总资产20%)</span>
+    <span class="st">'total_pct'</span>: <span class="nu">0.50</span>,           <span class="cm"># 总保证金上限(总资产50%)</span>
+
+    <span class="cm"># --- 现货 ---</span>
+    <span class="st">'sell_pct'</span>: <span class="nu">0.55</span>,            <span class="cm"># 每次卖出55%持仓</span>
+
+    <span class="cm"># --- 风控参数 ---</span>
+    <span class="st">'short_sl'</span>: <span class="nu">-0.30</span>,           <span class="cm"># 空仓止损: -30%</span>
+    <span class="st">'short_tp'</span>: <span class="nu">0.80</span>,            <span class="cm"># 空仓止盈: +80%</span>
+    <span class="st">'short_trail'</span>: <span class="nu">0.25</span>,         <span class="cm"># 追踪止盈触发: +25%</span>
+    <span class="st">'short_max_hold'</span>: <span class="nu">72</span>,        <span class="cm"># 空仓最大持有: 72小时</span>
+
+    <span class="cm"># --- 冷却 ---</span>
+    <span class="st">'cooldown'</span>: <span class="nu">4</span>,               <span class="cm"># 合约冷却: 4小时</span>
+    <span class="st">'spot_cooldown'</span>: <span class="nu">12</span>,         <span class="cm"># 现货冷却: 12小时</span>
+}</code></pre>
+                    </div>
+
+                    <!-- 风控管理 -->
+                    <div class="code-panel" id="code-panel-3">
+                        <div class="code-header">
+                            <span class="code-file">five_book_fusion.py</span>
+                            <span>风控管理 — 四重保护机制</span>
+                        </div>
+                        <pre><code><span class="cm"># === 空仓管理: 四重保护 ===</span>
+<span class="kw">if</span> eng.futures_short <span class="kw">and not</span> short_just_opened:
+    short_bars += <span class="nu">1</span>
+    pnl_r = eng.futures_short.<span class="fn">calc_pnl</span>(price) / eng.futures_short.margin
+
+    <span class="cm"># 保护1: 固定止盈(+80%利润)</span>
+    <span class="kw">if</span> pnl_r >= short_tp:  <span class="cm"># 0.80</span>
+        eng.<span class="fn">close_short</span>(price, dt, <span class="st">f"止盈 +{pnl_r*100:.0f}%"</span>)
+        short_cd = cooldown * <span class="nu">2</span>  <span class="cm"># 止盈后更长冷却</span>
+
+    <span class="cm"># 保护2: 追踪止盈(利润从高点回撤40%)</span>
+    <span class="kw">if</span> pnl_r > short_max_pnl:
+        short_max_pnl = pnl_r   <span class="cm"># 更新最大浮盈</span>
+    <span class="kw">if</span> short_max_pnl >= <span class="nu">0.25</span>:  <span class="cm"># 浮盈超过25%才启动</span>
+        <span class="kw">if</span> pnl_r &lt; short_max_pnl * <span class="nu">0.60</span>:  <span class="cm"># 回撤40%</span>
+            eng.<span class="fn">close_short</span>(price, dt, <span class="st">"追踪止盈"</span>)
+
+    <span class="cm"># 保护3: 反向信号平仓(带主导检查)</span>
+    <span class="kw">if</span> bs >= <span class="nu">40</span>:
+        bs_dom = (ss &lt; bs * <span class="nu">0.7</span>)  <span class="cm"># 核心: 必须"主导"</span>
+        <span class="kw">if</span> bs_dom:
+            eng.<span class="fn">close_short</span>(price, dt,
+                <span class="st">f"反向信号平空 BS={bs:.0f}"</span>)
+            short_cd = cooldown * <span class="nu">3</span>  <span class="cm"># 反向平仓→最长冷却</span>
+
+    <span class="cm"># 保护4: 固定止损(-30%)</span>
+    <span class="kw">if</span> pnl_r &lt; <span class="nu">-0.30</span>:
+        eng.<span class="fn">close_short</span>(price, dt,
+            <span class="st">f"止损 {pnl_r*100:.0f}%"</span>)
+        short_cd = cooldown * <span class="nu">4</span>  <span class="cm"># 止损后最长冷却</span>
+
+    <span class="cm"># 保护5: 超时强平(最大持有72小时)</span>
+    <span class="kw">if</span> short_bars >= <span class="nu">72</span>:
+        eng.<span class="fn">close_short</span>(price, dt, <span class="st">"超时"</span>)</code></pre>
+                    </div>
+                </div>
+
+                <!-- Tab 3: 执行流程 -->
+                <div class="card">
+                    <div class="card-title">
+                        策略执行流程
+                        <span class="badge green">EXECUTION FLOW</span>
+                    </div>
+                    <div>
+                        <div class="exec-step">
+                            <div class="exec-num">1</div>
+                            <div class="exec-content">
+                                <div class="exec-title">数据获取与预计算</div>
+                                <div class="exec-desc">
+                                    从币安获取 ETH/USDT 三个时间周期(1h/4h/8h)的K线数据，分别计算技术指标。<br>
+                                    然后预计算五个独立信号系统：背离信号(1h+8h)、均线信号、K线形态、布林带指标、量价指标。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="exec-step">
+                            <div class="exec-num">2</div>
+                            <div class="exec-content">
+                                <div class="exec-title">C6核心底座计算</div>
+                                <div class="exec-desc">
+                                    对每根1h K线，计算 <code>base_sell = 背离×0.7 + 均线×0.3</code>，
+                                    <code>base_buy = 背离×0.7 + 均线×0.3</code>。<br>
+                                    若均线呈空头排列(MA5 &lt; MA20 &lt; MA60)，卖出基础分×1.1增强；多头排列同理。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="exec-step">
+                            <div class="exec-num">3</div>
+                            <div class="exec-content">
+                                <div class="exec-title">三书否决层</div>
+                                <div class="exec-desc">
+                                    检查K线形态、布林带、量价三个系统的<b>反向信号</b>强度。<br>
+                                    做空场景：若 bb_buy≥25 或 vp_buy≥25 或 cs_buy≥25，每个计1票否决。<br>
+                                    <b>≥2票否决</b> → 信号削弱至30% | <b>&lt;2票</b> → 正面确认加成(BB+10%, 量价+8%, K线+6%)
+                                </div>
+                            </div>
+                        </div>
+                        <div class="exec-step">
+                            <div class="exec-num">4</div>
+                            <div class="exec-content">
+                                <div class="exec-title">冲突检测 + 主导判断</div>
+                                <div class="exec-desc">
+                                    若多空信号同时强烈(双方比值≥0.6且最小值≥15)，放弃交易。<br>
+                                    做空还需满足"主导条件"：卖出信号 &gt; 买入信号×1.5，确保方向明确。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="exec-step">
+                            <div class="exec-num">5</div>
+                            <div class="exec-content">
+                                <div class="exec-title">动态杠杆 + 交易执行</div>
+                                <div class="exec-desc">
+                                    根据信号强度动态调整杠杆：≥50分→5x, ≥35分→3x, &lt;35分→2x。<br>
+                                    使用可用保证金的70%开仓。同时管理现货买卖(卖出55%/买入25%)。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="exec-step">
+                            <div class="exec-num">6</div>
+                            <div class="exec-content">
+                                <div class="exec-title">五重风控管理</div>
+                                <div class="exec-desc">
+                                    ① 止盈+80% ② 追踪止盈(浮盈>25%后回撤40%) ③ 反向信号平仓(需主导检查)<br>
+                                    ④ 止损-30% ⑤ 超时72小时强平。每次平仓后根据类型设置不同冷却时间。
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 4: 参数面板 -->
+                <div class="card">
+                    <div class="card-title">
+                        F12 完整参数配置
+                        <span class="badge yellow">PARAMETERS</span>
+                    </div>
+                    <div class="param-grid" id="bs-params"></div>
+                </div>
+
+                <!-- Tab 5: 性能指标 -->
+                <div class="card">
+                    <div class="card-title">
+                        回测性能指标
+                        <span class="badge green">PERFORMANCE</span>
+                    </div>
+                    <div class="stats-grid" id="bs-perf-grid"></div>
+                </div>
+
+                <!-- Tab 6: 交易明细 -->
+                <div class="card">
+                    <div class="card-title" id="bs-trades-title">交易明细</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" id="bs-trades-table">
+                            <thead><tr>
+                                <th>时间</th><th>操作</th><th>价格</th>
+                                <th>杠杆</th><th>总资产</th><th>原因</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Tab 7: 资产曲线 -->
+                <div class="card">
+                    <div class="card-title">资产净值曲线</div>
+                    <div id="bs-equity-chart" style="height:320px;position:relative;"></div>
+                </div>
+
+                <!-- Tab 8: 费用分析 -->
+                <div class="card">
+                    <div class="card-title">
+                        费用结构分析
+                        <span class="badge red">COSTS</span>
+                    </div>
+                    <div id="bs-fees-detail"></div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="bs-conclusion"></div>
+            </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function switchCodeTab(idx) {
+    document.querySelectorAll('.code-tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+    document.querySelectorAll('.code-panel').forEach((p, i) => p.classList.toggle('active', i === idx));
+}
+
+async function loadBestStrategy() {
+    try {
+        const res = await fetch('/api/five_book');
+        if (!res.ok) throw new Error('数据未找到');
+        const data = await res.json();
+        renderBestStrategy(data);
+    } catch(e) {
+        document.getElementById('bs-loading').innerHTML =
+            `<p style="color:var(--accent-red);">加载失败: ${e.message}<br>请先运行 python five_book_fusion.py</p>`;
+    }
+}
+
+function renderBestStrategy(data) {
+    document.getElementById('bs-loading').style.display = 'none';
+    document.getElementById('bs-content').style.display = 'block';
+
+    const results = data.results || [];
+    const ranked = [...results].sort((a, b) => b.alpha - a.alpha);
+    const best = ranked[0] || {};
+    const fees = best.fees || {};
+
+    // Hero metrics
+    const heroEl = document.getElementById('bs-hero-metrics');
+    heroEl.innerHTML = [
+        { label: 'Alpha', value: `${best.alpha > 0 ? '+' : ''}${(best.alpha||0).toFixed(2)}%`, color: best.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' },
+        { label: '策略收益', value: `${best.strategy_return > 0 ? '+' : ''}${(best.strategy_return||0).toFixed(2)}%`, color: best.strategy_return >= 0 ? 'var(--accent-green)' : 'var(--accent-red)' },
+        { label: '买入持有', value: `${(best.buy_hold_return||0).toFixed(2)}%`, color: 'var(--text-secondary)' },
+        { label: '最大回撤', value: `${(best.max_drawdown||0).toFixed(2)}%`, color: 'var(--accent-red)' },
+        { label: '交易数', value: `${best.total_trades || 0}`, color: 'var(--accent-blue)' },
+        { label: '总费用', value: `$${(fees.total_costs||0).toLocaleString(undefined,{maximumFractionDigits:0})}`, color: 'var(--accent-yellow)' },
+    ].map(m => `<div class="hero-metric">
+        <div class="hero-metric-value" style="color:${m.color};">${m.value}</div>
+        <div class="hero-metric-label">${m.label}</div>
+    </div>`).join('');
+
+    document.getElementById('bs-hero-name').textContent = best.name || 'F12: C6+三书否决';
+
+    // 参数面板
+    const params = [
+        { name: '融合模式', val: 'c6_veto' },
+        { name: '否决门槛', val: '25分' },
+        { name: '卖出阈值', val: '18分' },
+        { name: '做空阈值', val: '25分' },
+        { name: '买入阈值', val: '25分' },
+        { name: '做多阈值', val: '40分' },
+        { name: '最大杠杆', val: '5x' },
+        { name: '保证金比例', val: '70%' },
+        { name: '单笔上限', val: '20%' },
+        { name: '总保证金上限', val: '50%' },
+        { name: '空仓止损', val: '-30%' },
+        { name: '空仓止盈', val: '+80%' },
+        { name: '追踪止盈', val: '25%触发' },
+        { name: '最大持仓', val: '72小时' },
+        { name: '合约冷却', val: '4小时' },
+        { name: '现货冷却', val: '12小时' },
+        { name: '现货卖出比', val: '55%' },
+        { name: '背离权重', val: '70%' },
+        { name: '均线权重', val: '30%' },
+        { name: '主导条件', val: '>1.5x' },
+    ];
+    document.getElementById('bs-params').innerHTML = params.map(p =>
+        `<div class="param-item"><div class="param-name">${p.name}</div><div class="param-val">${p.val}</div></div>`
+    ).join('');
+
+    // 性能指标
+    const perfEl = document.getElementById('bs-perf-grid');
+    const pMetrics = [
+        { label: 'Alpha (超额收益)', value: `${best.alpha > 0 ? '+' : ''}${(best.alpha||0).toFixed(2)}%`, cls: best.alpha >= 0 ? 'positive' : 'negative' },
+        { label: '策略总收益', value: `${best.strategy_return > 0 ? '+' : ''}${(best.strategy_return||0).toFixed(2)}%`, cls: best.strategy_return >= 0 ? 'positive' : 'negative' },
+        { label: '买入持有收益', value: `${(best.buy_hold_return||0).toFixed(2)}%`, cls: best.buy_hold_return >= 0 ? 'positive' : 'negative' },
+        { label: '最大回撤', value: `${(best.max_drawdown||0).toFixed(2)}%`, cls: 'negative' },
+        { label: '总交易数', value: `${best.total_trades || 0}`, cls: '' },
+        { label: '强平次数', value: `${best.liquidations || 0}`, cls: (best.liquidations||0) > 0 ? 'negative' : 'positive' },
+        { label: '最终总资产', value: `$${(best.final_total||0).toLocaleString(undefined,{maximumFractionDigits:0})}`, cls: '' },
+        { label: '总费用', value: `$${(fees.total_costs||0).toLocaleString(undefined,{maximumFractionDigits:0})}`, cls: '' },
+    ];
+    perfEl.innerHTML = pMetrics.map(m =>
+        `<div class="stat-card"><div class="stat-label">${m.label}</div><div class="stat-value ${m.cls}">${m.value}</div></div>`
+    ).join('');
+
+    // 交易明细
+    document.getElementById('bs-trades-title').textContent = `${best.name} · 全部 ${(best.trades||[]).length} 笔交易`;
+    const tBody = document.querySelector('#bs-trades-table tbody');
+    if (tBody && best.trades) {
+        tBody.innerHTML = best.trades.map(t => {
+            const isSell = (t.action||'').includes('SELL') || (t.action||'').includes('SHORT');
+            const color = isSell ? 'var(--accent-red)' : 'var(--accent-green)';
+            const pnlMatch = (t.reason||'').match(/PnL=([+-]?\d[\d,]*)/);
+            let pnlHtml = '';
+            if (pnlMatch) {
+                const pnlVal = parseFloat(pnlMatch[1].replace(/,/g, ''));
+                pnlHtml = `<span style="color:${pnlVal >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};font-weight:600;">PnL=${pnlMatch[1]}</span>`;
+            }
+            return `<tr>
+                <td style="font-size:12px;white-space:nowrap;">${String(t.time).substring(0,16)}</td>
+                <td style="color:${color};font-weight:600;font-size:12px;">${t.action||''}</td>
+                <td>$${(t.price||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+                <td>${t.leverage||1}x</td>
+                <td>$${(t.total||0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                <td style="font-size:12px;max-width:380px;overflow:hidden;text-overflow:ellipsis;">${pnlHtml ? pnlHtml + ' ' : ''}${(t.reason||'').replace(/PnL=[+-]?\d[\d,]*/,'').substring(0,60)}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    // 资产曲线
+    const chartEl = document.getElementById('bs-equity-chart');
+    if (chartEl && best.history && best.history.length > 5) {
+        const hist = best.history;
+        const maxVal = Math.max(...hist.map(h => h.total));
+        const minVal = Math.min(...hist.map(h => h.total));
+        const range = maxVal - minVal || 1;
+        const w = chartEl.offsetWidth - 40;
+        const h = 280;
+
+        let pathD = '';
+        let bhPathD = '';
+        const initTotal = hist[0].total;
+        const initPrice = hist[0].price;
+
+        hist.forEach((pt, i) => {
+            const x = 20 + (i / (hist.length - 1)) * w;
+            const y = 10 + (1 - (pt.total - minVal) / range) * h;
+            pathD += (i === 0 ? 'M' : 'L') + `${x},${y}`;
+
+            const bhTotal = initTotal * (pt.price / initPrice);
+            const bhY = 10 + (1 - (bhTotal - minVal) / range) * h;
+            bhPathD += (i === 0 ? 'M' : 'L') + `${x},${bhY}`;
+        });
+
+        chartEl.innerHTML = `
+            <svg width="100%" height="100%" viewBox="0 0 ${w + 40} ${h + 40}">
+                <path d="${bhPathD}" fill="none" stroke="rgba(139,143,163,0.4)" stroke-width="1.5" stroke-dasharray="4,3"/>
+                <path d="${pathD}" fill="none" stroke="var(--accent-purple)" stroke-width="2.5"/>
+                <text x="25" y="${h + 30}" font-size="11" fill="var(--text-muted)">${String(hist[0].time).substring(0,10)}</text>
+                <text x="${w - 30}" y="${h + 30}" font-size="11" fill="var(--text-muted)">${String(hist[hist.length-1].time).substring(0,10)}</text>
+                <text x="${w + 5}" y="18" font-size="11" fill="var(--accent-purple)">策略</text>
+                <text x="${w + 5}" y="34" font-size="11" fill="var(--text-muted)">BH</text>
+            </svg>
+        `;
+    }
+
+    // 费用分析
+    const feeEl = document.getElementById('bs-fees-detail');
+    if (feeEl) {
+        const fItems = [
+            { name: '现货手续费', val: fees.spot_fees || 0, color: '#4a9eff', desc: '现货买卖 0.1% Maker' },
+            { name: '合约手续费', val: fees.futures_fees || 0, color: '#ff4d6a', desc: '合约开平 0.04% Taker' },
+            { name: '资金费率', val: fees.net_funding || 0, color: '#ffaa00', desc: '8h结算, 做空通常收取' },
+            { name: '滑点成本', val: fees.slippage_cost || 0, color: '#a855f7', desc: '模拟0.05%~0.15%滑点' },
+        ];
+        const totalFee = fees.total_costs || fItems.reduce((a,b)=>a+b.val, 0);
+        const maxFee = Math.max(...fItems.map(f => f.val), 1);
+
+        feeEl.innerHTML = `
+            <div style="margin-bottom:16px;">
+                ${fItems.map(f => `
+                    <div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);">
+                        <div style="width:110px;font-size:13px;font-weight:500;">${f.name}</div>
+                        <div style="flex:1;">
+                            <div style="height:20px;background:${f.color}20;border-radius:4px;overflow:hidden;">
+                                <div style="height:100%;width:${Math.max(f.val/maxFee*100,2)}%;background:${f.color};border-radius:4px;"></div>
+                            </div>
+                        </div>
+                        <div style="width:80px;text-align:right;font-weight:700;color:${f.color};">$${f.val.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+                        <div style="width:160px;font-size:11px;color:var(--text-muted);">${f.desc}</div>
+                    </div>
+                `).join('')}
+            </div>
+            <div style="text-align:right;font-size:15px;font-weight:700;color:var(--text-primary);">
+                总费用: <span style="color:var(--accent-red);">$${totalFee.toLocaleString(undefined,{maximumFractionDigits:0})}</span>
+                <span style="font-size:12px;color:var(--text-muted);margin-left:8px;">
+                    (占策略总资产 ${(totalFee / (best.final_total || 200000) * 100).toFixed(2)}%)
+                </span>
+            </div>
+        `;
+    }
+
+    // 结论
+    const conEl = document.getElementById('bs-conclusion');
+    if (conEl) {
+        conEl.innerHTML = `
+            <div class="card-title">策略核心优势总结</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <div style="background:rgba(168,85,247,0.06);border-radius:10px;padding:16px;border-left:3px solid var(--accent-purple);">
+                    <div style="font-weight:700;color:var(--accent-purple);margin-bottom:8px;">C6底座 — 经验证的核心</div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
+                        以两书融合C6策略(背离70%+均线30%)为核心, 这是经过大量回测验证的最佳信号组合。
+                        背离信号捕捉拐点, 均线确认趋势方向, 两者互补。
+                    </div>
+                </div>
+                <div style="background:rgba(255,77,106,0.06);border-radius:10px;padding:16px;border-left:3px solid var(--accent-red);">
+                    <div style="font-weight:700;color:var(--accent-red);margin-bottom:8px;">三书否决 — 智能过滤</div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
+                        K线形态、布林带、量价分析不参与核心打分, 而是作为"安全网"。
+                        当≥2个系统强烈反对时否决交易, 避免C6的少数错误信号。
+                    </div>
+                </div>
+                <div style="background:rgba(0,214,143,0.06);border-radius:10px;padding:16px;border-left:3px solid var(--accent-green);">
+                    <div style="font-weight:700;color:var(--accent-green);margin-bottom:8px;">主导检查 — 防止过早平仓</div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
+                        反向信号平仓时, 必须满足"主导条件"(反向 > 原方向×0.7)。
+                        这大幅减少了不必要的平仓, 让盈利仓位运行更久。
+                    </div>
+                </div>
+                <div style="background:rgba(74,158,255,0.06);border-radius:10px;padding:16px;border-left:3px solid var(--accent-blue);">
+                    <div style="font-weight:700;color:var(--accent-blue);margin-bottom:8px;">动态杠杆 — 信号驱动仓位</div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
+                        根据信号强度自动调整杠杆: 强信号(≥50)用5x, 中等(≥35)用3x, 弱(&lt;35)用2x。
+                        在确定性高时加大押注, 不确定时降低风险。
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadBestStrategy();
+});
+</script>
+{% endblock %}

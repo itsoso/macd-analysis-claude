@@ -1,0 +1,313 @@
+{% extends "base.html" %}
+{% block title %}multi-compare - 技术分析平台{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+{% endblock %}
+
+{% block content %}
+            <div class="page-title">12周期回测对比</div>
+            <div class="page-subtitle">ETH/USDT · 10分钟 ~ 32小时 · 背离/背驰策略在不同时间框架下的表现</div>
+
+            <div id="multi-loading" class="loading">
+                <div class="spinner"></div>
+                正在加载多周期回测数据...
+            </div>
+
+            <div id="multi-content" style="display:none;">
+                <!-- 超额收益柱状图 -->
+                <div class="card">
+                    <div class="card-title">超额收益对比 <span class="badge green">策略收益 - 买入持有收益</span></div>
+                    <div id="alpha-bar-chart" style="width:100%;height:320px;"></div>
+                </div>
+
+                <!-- 核心指标对比表 -->
+                <div class="card">
+                    <div class="card-title">核心指标对比表</div>
+                    <div class="trade-table-wrap" style="max-height:none;">
+                        <table id="multi-table">
+                            <thead><tr id="multi-table-head"></tr></thead>
+                            <tbody id="multi-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 资产曲线叠加图 -->
+                <div class="card">
+                    <div class="card-title">资产曲线叠加 <span class="badge">点击图例切换显示</span></div>
+                    <div id="multi-equity-chart" style="width:100%;height:380px;"></div>
+                </div>
+
+                <!-- 结论 -->
+                <div class="card" id="multi-conclusion"></div>
+            </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const INTERVALS = ['10m','15m','30m','1h','2h','3h','4h','6h','8h','16h','24h','32h'];
+const INTERVAL_LABELS = {'10m':'10分钟','15m':'15分钟','30m':'30分钟','1h':'1小时','2h':'2小时','3h':'3小时','4h':'4小时','6h':'6小时','8h':'8小时','16h':'16小时','24h':'24小时','32h':'32小时'};
+const COLORS = ['#4a9eff','#ff4d6a','#00d68f','#ffaa00','#a855f7','#06b6d4','#f43f5e','#84cc16','#ec4899','#f97316','#8b5cf6','#14b8a6'];
+function fmtDate(d) { return d ? d.toString().substring(0,16) : ''; }
+
+    // ========================================
+    //   Multi-Interval Comparison
+    // ========================================
+    let multiData = null;
+
+    async function loadMultiData() {
+        if (window._multiLoaded) return;
+        try {
+            const resp = await fetch('/api/backtest_multi');
+            if (!resp.ok) throw new Error('No data');
+            multiData = await resp.json();
+            window._multiLoaded = true;
+            renderMultiBarChart();
+            renderMultiTable();
+            renderMultiEquity();
+            renderConclusion();
+            document.getElementById('multi-loading').style.display = 'none';
+            document.getElementById('multi-content').style.display = 'block';
+        } catch (e) {
+            document.getElementById('multi-loading').innerHTML =
+                '<span style="color:var(--accent-red)">未找到多周期数据。请先生成 backtest_multi.json</span>';
+        }
+    }
+
+    function renderMultiBarChart() {
+        const container = document.getElementById('alpha-bar-chart');
+        const items = INTERVALS.map((iv, i) => {
+            const s = multiData[iv];
+            const alpha = s ? (s.total_return - s.buy_hold_return) : null;
+            return { iv, alpha, color: COLORS[i], label: INTERVAL_LABELS[iv] };
+        }).filter(x => x.alpha !== null);
+
+        const maxAbs = Math.max(...items.map(x => Math.abs(x.alpha)), 1);
+
+        // Build bar chart with CSS
+        const barH = 200;
+        const zeroY = barH / 2;
+
+        let html = '<div style="position:relative;height:' + (barH + 60) + 'px;display:flex;align-items:center;">';
+        // Y axis labels
+        html += '<div style="display:flex;flex-direction:column;justify-content:space-between;height:' + barH + 'px;padding-right:8px;font-size:11px;color:var(--text-muted);width:50px;text-align:right;">';
+        html += '<span>+' + maxAbs.toFixed(0) + '%</span>';
+        html += '<span>0%</span>';
+        html += '<span>-' + maxAbs.toFixed(0) + '%</span>';
+        html += '</div>';
+        // Bars
+        html += '<div style="flex:1;display:flex;align-items:center;height:' + barH + 'px;position:relative;">';
+        // Zero line
+        html += '<div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--text-muted);opacity:0.3;"></div>';
+        // Bar area
+        html += '<div style="display:flex;align-items:center;height:100%;width:100%;justify-content:space-around;">';
+
+        items.forEach(item => {
+            const pct = item.alpha / maxAbs;
+            const h = Math.abs(pct) * (barH / 2 - 10);
+            const isPos = item.alpha >= 0;
+            const barColor = isPos ? 'var(--accent-green)' : 'var(--accent-red)';
+            const valColor = isPos ? 'var(--accent-green)' : 'var(--accent-red)';
+
+            html += '<div style="display:flex;flex-direction:column;align-items:center;flex:1;max-width:80px;height:100%;justify-content:center;position:relative;">';
+            if (isPos) {
+                html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:50%;">';
+                html += '<span style="font-size:11px;font-weight:600;color:' + valColor + ';margin-bottom:3px;">+' + item.alpha.toFixed(1) + '%</span>';
+                html += '<div style="width:32px;height:' + h + 'px;background:' + barColor + ';border-radius:4px 4px 0 0;opacity:0.85;"></div>';
+                html += '</div>';
+                html += '<div style="height:50%;"></div>';
+            } else {
+                html += '<div style="height:50%;"></div>';
+                html += '<div style="display:flex;flex-direction:column;align-items:center;justify-content:flex-start;height:50%;">';
+                html += '<div style="width:32px;height:' + h + 'px;background:' + barColor + ';border-radius:0 0 4px 4px;opacity:0.85;"></div>';
+                html += '<span style="font-size:11px;font-weight:600;color:' + valColor + ';margin-top:3px;">' + item.alpha.toFixed(1) + '%</span>';
+                html += '</div>';
+            }
+            html += '<div style="position:absolute;bottom:-24px;font-size:11px;color:var(--text-muted);white-space:nowrap;">' + item.label + '</div>';
+            html += '</div>';
+        });
+
+        html += '</div></div></div>';
+        container.innerHTML = html;
+    }
+
+    function renderMultiTable() {
+        // Header
+        let headHtml = '<th style="text-align:left;">指标</th>';
+        INTERVALS.forEach((iv, i) => {
+            headHtml += '<th>' + INTERVAL_LABELS[iv] + '</th>';
+        });
+        document.getElementById('multi-table-head').innerHTML = headHtml;
+
+        // Rows
+        const rows = [
+            { label: '策略收益', key: 'total_return', unit: '%', signed: true, higherBetter: true },
+            { label: '买入持有', key: 'buy_hold_return', unit: '%', signed: true },
+            { label: '超额收益', key: '_alpha', unit: '%', signed: true, higherBetter: true },
+            { label: '最大回撤', key: 'max_drawdown', unit: '%', lowerBetter: true },
+            { label: '交易次数', key: 'total_trades', unit: '' },
+            { label: '胜率', key: 'win_rate', unit: '%', higherBetter: true },
+            { label: '平均盈利', key: 'avg_win_pct', unit: '%', higherBetter: true },
+            { label: '平均亏损', key: 'avg_loss_pct', unit: '%' },
+            { label: 'Sharpe', key: 'sharpe_ratio', unit: '', higherBetter: true },
+        ];
+
+        let bodyHtml = '';
+        rows.forEach(row => {
+            let vals = INTERVALS.map(iv => {
+                const s = multiData[iv];
+                if (!s) return null;
+                if (row.key === '_alpha') return s.total_return - s.buy_hold_return;
+                return s[row.key];
+            });
+
+            // Find best value (only among intervals with trades)
+            let bestIdx = -1;
+            if (row.higherBetter) {
+                let best = -Infinity;
+                vals.forEach((v, i) => {
+                    const s = multiData[INTERVALS[i]];
+                    if (v !== null && s && s.total_trades > 0 && v > best) { best = v; bestIdx = i; }
+                });
+            } else if (row.lowerBetter) {
+                let best = Infinity;
+                vals.forEach((v, i) => {
+                    const s = multiData[INTERVALS[i]];
+                    if (v !== null && s && s.total_trades > 0 && Math.abs(v) < Math.abs(best)) { best = v; bestIdx = i; }
+                });
+            }
+
+            bodyHtml += '<tr>';
+            bodyHtml += '<td style="text-align:left;font-weight:600;color:var(--text-primary);">' + row.label + '</td>';
+            vals.forEach((v, i) => {
+                if (v === null) {
+                    bodyHtml += '<td style="color:var(--text-muted);">—</td>';
+                } else {
+                    let cls = '';
+                    if (i === bestIdx) cls = 'cell-best';
+                    let display;
+                    if (row.unit === '%') {
+                        display = (row.signed && v > 0 ? '+' : '') + v.toFixed(1) + '%';
+                    } else {
+                        display = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(1)) : v;
+                    }
+                    // Color coding for return/alpha
+                    let style = '';
+                    if (row.key === 'total_return' || row.key === '_alpha') {
+                        style = v >= 0 ? 'color:var(--accent-green);' : 'color:var(--accent-red);';
+                    }
+                    bodyHtml += '<td class="' + cls + '" style="' + style + '">' + display + '</td>';
+                }
+            });
+            bodyHtml += '</tr>';
+        });
+
+        document.getElementById('multi-table-body').innerHTML = bodyHtml;
+    }
+
+    function renderMultiEquity() {
+        const container = document.getElementById('multi-equity-chart');
+
+        const chart = LightweightCharts.createChart(container, {
+            width: container.clientWidth,
+            height: 380,
+            layout: { background: { color: '#1e2130' }, textColor: '#8b8fa3' },
+            grid: { vertLines: { color: '#2a2d3e' }, horzLines: { color: '#2a2d3e' } },
+            crosshair: { mode: 0 },
+            timeScale: { timeVisible: true, secondsVisible: false },
+            rightPriceScale: { borderVisible: false },
+        });
+
+        const series = {};
+        // Only show intervals with equity curves and trades
+        const activeIntervals = INTERVALS.filter(iv => {
+            const s = multiData[iv];
+            return s && s.equity_curve && s.equity_curve.length > 0 && s.total_trades > 0;
+        });
+
+        activeIntervals.forEach((iv, i) => {
+            const s = multiData[iv];
+            const ec = s.equity_curve;
+            if (!ec || ec.length < 2) return;
+
+            const line = chart.addLineSeries({
+                color: COLORS[i % COLORS.length],
+                lineWidth: iv === '4h' ? 3 : 1,
+                title: INTERVAL_LABELS[iv],
+            });
+
+            // Normalize to percentage
+            const initVal = ec[0].equity || 10000;
+            const data = ec.map(e => ({
+                time: Math.floor(new Date(e.date).getTime() / 1000),
+                value: (e.equity / initVal) * 100,
+            }));
+            line.setData(data);
+            series[iv] = line;
+        });
+
+        chart.timeScale().fitContent();
+        new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
+    }
+
+    function renderConclusion() {
+        // Rank by alpha (only intervals with actual trades)
+        const ranked = INTERVALS
+            .filter(iv => multiData[iv] && multiData[iv].total_trades > 0)
+            .map(iv => ({
+                iv,
+                label: INTERVAL_LABELS[iv],
+                alpha: multiData[iv].total_return - multiData[iv].buy_hold_return,
+                ret: multiData[iv].total_return,
+                dd: multiData[iv].max_drawdown,
+                trades: multiData[iv].total_trades,
+                wr: multiData[iv].win_rate,
+            }))
+            .sort((a, b) => b.alpha - a.alpha);
+
+        const noTrade = INTERVALS.filter(iv => multiData[iv] && multiData[iv].total_trades === 0);
+
+        let html = '<div class="conclusion-title">分析结论</div>';
+        html += '<div class="conclusion-grid">';
+
+        // Top 3
+        html += '<div class="conclusion-item" style="border-color:var(--accent-green);">';
+        html += '<h4 style="color:var(--accent-green);">超额收益排名 (有实际交易)</h4>';
+        html += '<div style="margin-top:8px;">';
+        ranked.slice(0, 5).forEach((r, i) => {
+            const rankCls = i < 3 ? ' rank-' + (i+1) : '';
+            const badge = i < 3 ? '<span class="rank-badge' + rankCls + '">' + (i+1) + '</span>' : '<span style="display:inline-block;width:26px;text-align:center;color:var(--text-muted);">' + (i+1) + '.</span>';
+            html += '<div style="padding:4px 0;font-size:13px;">';
+            html += badge;
+            html += '<strong>' + r.label + '</strong>';
+            html += ' <span style="color:' + (r.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)') + ';font-weight:600;">' + (r.alpha >= 0 ? '+' : '') + r.alpha.toFixed(1) + '%</span>';
+            html += ' <span style="color:var(--text-muted);font-size:11px;">(' + r.trades + '笔, 胜率' + r.wr.toFixed(0) + '%)</span>';
+            html += '</div>';
+        });
+        html += '</div></div>';
+
+        // Key insight
+        const best = ranked[0];
+        html += '<div class="conclusion-item" style="border-color:var(--accent-blue);">';
+        html += '<h4 style="color:var(--accent-blue);">核心发现</h4>';
+        html += '<p>';
+        html += '<strong>' + best.label + '</strong> 是当前行情最优周期，超额收益 <strong style="color:var(--accent-green);">' + (best.alpha >= 0 ? '+' : '') + best.alpha.toFixed(1) + '%</strong>。';
+        html += '<br><br>';
+        html += '背离/背驰本质是<strong>趋势级别</strong>信号。时间框架越大，信号噪音越少，但交易机会也越少。';
+        html += '<br><br>';
+        html += '<strong>最优窗口: 2h ~ 8h</strong>，兼顾信号质量和交易频率。';
+        if (noTrade.length > 0) {
+            html += '<br><br><span style="color:var(--text-muted);font-size:12px;">' + noTrade.map(iv => INTERVAL_LABELS[iv]).join('、') + ' 未触发交易信号，持币不动。</span>';
+        }
+        html += '</p></div>';
+
+        html += '</div>';
+        document.getElementById('multi-conclusion').innerHTML = html;
+    }
+
+
+// Auto-load on page ready
+document.addEventListener('DOMContentLoaded', function() {
+    loadMultiData();
+});
+</script>
+{% endblock %}

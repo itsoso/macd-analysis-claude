@@ -119,7 +119,8 @@ def get_15m_realtime(df_15m, idx):
 # ======================================================
 #   策略执行器
 # ======================================================
-def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
+def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config,
+                     start_dt=None):
     """
     15分钟双向策略执行器
 
@@ -128,10 +129,19 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
     2. 底部信号(BS) → 买现货 + 开多 + 平空
     3. 趋势过滤: 用1h/4h确认大趋势方向
     4. 风控: 止损/止盈/追踪/超时
+
+    start_dt: 如果指定, 只在此时间之后执行交易(之前的数据用于信号计算)
     """
     eng = FuturesEngine(config['name'], max_leverage=config.get('max_lev', 5))
     main_df = data['15m']
-    eng.spot_eth = eng.initial_eth_value / main_df['close'].iloc[0]
+    # 如果指定了起始时间, 用该时间点的价格作为初始价
+    if start_dt:
+        init_idx = main_df.index.searchsorted(start_dt)
+        if init_idx >= len(main_df):
+            init_idx = 0
+        eng.spot_eth = eng.initial_eth_value / main_df['close'].iloc[init_idx]
+    else:
+        eng.spot_eth = eng.initial_eth_value / main_df['close'].iloc[0]
 
     # 风控参数
     eng.max_single_margin = eng.initial_total * config.get('single_pct', 0.15)
@@ -179,7 +189,17 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
     for idx in range(60, len(main_df)):  # 从第60个bar开始(前15h用于MA计算)
         dt = main_df.index[idx]
         price = main_df['close'].iloc[idx]
+
+        # 如果指定了start_dt, 在该时间之前只记录历史不交易
+        if start_dt and dt < start_dt:
+            if idx % 4 == 0:
+                eng.record_history(dt, price)
+            continue
+
         eng.check_liquidation(price, dt)
+
+        short_just_opened = False  # 本bar是否刚开空仓(防同bar开平)
+        long_just_opened = False   # 本bar是否刚开多仓(防同bar开平)
 
         # 资金费率: 15m周期, 每32个bar=8小时
         eng.funding_counter += 1
@@ -254,8 +274,14 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
             if t <= dt:
                 cur_sig_id = t
         signal_changed = (cur_sig_id != prev_sig_id)
-        # 信号冲突: TS和BS同时较高 → 不做现货交易
-        in_conflict = (ts >= conflict_threshold and bs >= conflict_threshold)
+        # 信号冲突检测(改进版: 使用比例判断而非绝对阈值)
+        # 当两个信号强度接近时才视为冲突; 一方明显主导时允许交易
+        if ts > 0 and bs > 0:
+            ratio = min(ts, bs) / max(ts, bs)
+            # 两者都超过阈值 且 强度比例接近(>60%) → 真正冲突
+            in_conflict = (min(ts, bs) >= conflict_threshold and ratio >= 0.6)
+        else:
+            in_conflict = False
 
         # ========================================
         # 决策1: 卖出现货 (顶部信号)
@@ -282,8 +308,12 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
         # ========================================
         # 决策2: 开空仓 (顶部信号 + 趋势确认)
         # ========================================
-        if (short_cd == 0 and ts >= ts_short and not eng.futures_short
-                and bs < config.get('bs_conflict', 20)):
+        # 开空条件: TS够强 + 冷却完 + 无持仓 + TS明显主导BS(或BS较低)
+        ts_dominates = (ts > bs * 1.5) if bs > 0 else True
+        bs_conflict_val = config.get('bs_conflict', 20)
+        short_ok = (short_cd == 0 and ts >= ts_short and not eng.futures_short
+                    and (bs < bs_conflict_val or ts_dominates))
+        if short_ok:
             # 书本理论: 顶背离确认后做空, 用趋势和指标过滤
             confirm = 0
             if trend.get('is_downtrend') or trend.get('hourly_downtrend'):
@@ -313,11 +343,12 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
                 short_max_pnl = 0
                 short_bars = 0
                 short_cd = cooldown_bars
+                short_just_opened = True  # 标记本bar刚开空仓
 
         # ========================================
         # 决策3: 管理空仓 (风控)
         # ========================================
-        if eng.futures_short:
+        if eng.futures_short and not short_just_opened:
             short_bars += 1
             pnl_r = eng.futures_short.calc_pnl(price) / eng.futures_short.margin
 
@@ -340,12 +371,15 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
                         short_cd = cooldown_bars
                         short_bars = 0
 
-                # 底部信号平空
+                # 底部信号平空 — 仅当BS明显主导TS时才平(避免TS强势时误平)
                 if eng.futures_short and bs >= bs_close_short:
-                    eng.close_short(price, dt, f"底部信号平空 BS={bs:.0f}")
-                    short_max_pnl = 0
-                    short_cd = cooldown_bars * 3
-                    short_bars = 0
+                    # BS必须真正主导: BS > TS*1.3 才算底部确认
+                    bs_is_dominant = (ts < bs * 0.7) if bs > 0 else True
+                    if bs_is_dominant:
+                        eng.close_short(price, dt, f"底部信号平空 BS={bs:.0f} TS={ts:.0f}")
+                        short_max_pnl = 0
+                        short_cd = cooldown_bars * 3
+                        short_bars = 0
 
                 # 硬止损
                 if eng.futures_short and pnl_r < short_sl:
@@ -360,6 +394,8 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
                     short_max_pnl = 0
                     short_cd = cooldown_bars
                     short_bars = 0
+        elif eng.futures_short and short_just_opened:
+            short_bars = 1  # 刚开仓, 开始计时但跳过风控检查
 
         # ========================================
         # 决策4: 买入现货 (底部信号)
@@ -384,8 +420,12 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
         # ========================================
         # 决策5: 开多仓 (底部信号 + 趋势确认)
         # ========================================
-        if (long_cd == 0 and bs >= bs_long and not eng.futures_long
-                and ts < config.get('ts_conflict', 20)):
+        # 开多条件: BS够强 + 冷却完 + 无持仓 + BS明显主导TS(或TS较低)
+        bs_dominates = (bs > ts * 1.5) if ts > 0 else True
+        ts_conflict_val = config.get('ts_conflict', 20)
+        long_ok = (long_cd == 0 and bs >= bs_long and not eng.futures_long
+                   and (ts < ts_conflict_val or bs_dominates))
+        if long_ok:
             confirm = 0
             if trend.get('is_uptrend') or trend.get('hourly_uptrend'):
                 confirm += 1
@@ -412,11 +452,12 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
                 long_max_pnl = 0
                 long_bars = 0
                 long_cd = cooldown_bars
+                long_just_opened = True  # 标记本bar刚开多仓
 
         # ========================================
         # 决策6: 管理多仓 (风控)
         # ========================================
-        if eng.futures_long:
+        if eng.futures_long and not long_just_opened:
             long_bars += 1
             pnl_r = eng.futures_long.calc_pnl(price) / eng.futures_long.margin
 
@@ -439,12 +480,14 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
                         long_cd = cooldown_bars
                         long_bars = 0
 
-                # 顶部信号平多
+                # 顶部信号平多 — 仅当TS明显主导BS时才平
                 if eng.futures_long and ts >= ts_close_long:
-                    eng.close_long(price, dt, f"顶部信号平多 TS={ts:.0f}")
-                    long_max_pnl = 0
-                    long_cd = cooldown_bars * 3
-                    long_bars = 0
+                    ts_is_dominant = (bs < ts * 0.7) if ts > 0 else True
+                    if ts_is_dominant:
+                        eng.close_long(price, dt, f"顶部信号平多 TS={ts:.0f} BS={bs:.0f}")
+                        long_max_pnl = 0
+                        long_cd = cooldown_bars * 3
+                        long_bars = 0
 
                 # 硬止损
                 if eng.futures_long and pnl_r < long_sl:
@@ -459,6 +502,8 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
                     long_max_pnl = 0
                     long_cd = cooldown_bars
                     long_bars = 0
+        elif eng.futures_long and long_just_opened:
+            long_bars = 1  # 刚开仓, 开始计时但跳过风控检查
 
         # 更新信号记忆
         prev_sig_id = cur_sig_id
@@ -475,6 +520,11 @@ def run_strategy_15m(data, signals_15m, signals_1h, signals_8h, config):
     if eng.futures_long:
         eng.close_long(last_price, last_dt, "期末平仓")
 
+    # 如果指定了start_dt, 用该时刻的数据作为基准来计算BH收益
+    if start_dt:
+        trade_df = main_df[main_df.index >= start_dt]
+        if len(trade_df) > 1:
+            return eng.get_result(trade_df)
     return eng.get_result(main_df)
 
 
@@ -550,14 +600,29 @@ def get_strategies():
 # ======================================================
 #   主函数
 # ======================================================
-def main():
+def main(trade_days=None):
+    """
+    trade_days: 实际交易天数。如果指定, 获取30天数据用于信号计算,
+                但只在最近N天内执行交易。默认None=全部30天。
+    """
     data = fetch_data_15m()
 
     if '15m' not in data:
         print("错误: 无法获取15m数据")
         return
 
-    # 计算信号
+    # 确定交易起始时间
+    start_dt = None
+    if trade_days and trade_days < 30:
+        end_dt = data['15m'].index[-1]
+        start_dt = end_dt - pd.Timedelta(days=trade_days)
+        bars_in_trade = len(data['15m'][data['15m'].index >= start_dt])
+        print(f"\n回测模式: 最近{trade_days}天")
+        print(f"  交易起始: {start_dt}")
+        print(f"  交易K线数: {bars_in_trade}")
+        print(f"  信号计算: 使用全部30天数据")
+
+    # 计算信号(使用全部数据, 确保信号准确)
     print("\n计算信号...")
     signals_15m = analyze_signals_enhanced(data['15m'], 200)
     print(f"  15m: {len(signals_15m)} 个信号点")
@@ -576,9 +641,14 @@ def main():
     strategies = get_strategies()
     all_results = []
 
+    trade_label = f"最近{trade_days}天" if trade_days else "30天"
+    trade_start_str = str(start_dt)[:16] if start_dt else str(data['15m'].index[0])[:16]
+    trade_end_str = str(data['15m'].index[-1])[:16]
+
     print(f"\n{'=' * 110}")
-    print(f"  15分钟双向回测 · {len(strategies)}种策略")
-    print(f"  数据: {data['15m'].index[0]} ~ {data['15m'].index[-1]} ({len(data['15m'])}根K线)")
+    print(f"  15分钟双向回测 · {len(strategies)}种策略 · {trade_label}")
+    print(f"  信号数据: {data['15m'].index[0]} ~ {data['15m'].index[-1]} ({len(data['15m'])}根K线)")
+    print(f"  交易区间: {trade_start_str} ~ {trade_end_str}")
     print(f"  初始: 10万USDT + 价值10万USDT的ETH")
     print(f"{'=' * 110}")
 
@@ -587,7 +657,8 @@ def main():
     print('-' * 110)
 
     for cfg in strategies:
-        r = run_strategy_15m(data, signals_15m, signals_1h, signals_8h, cfg)
+        r = run_strategy_15m(data, signals_15m, signals_1h, signals_8h, cfg,
+                             start_dt=start_dt)
         all_results.append(r)
         fees = r.get('fees', {})
         print(f"  {cfg['name']:<22} {r['alpha']:>+7.2f}% {r['strategy_return']:>+9.2f}% "
@@ -632,9 +703,11 @@ def main():
 
     # 保存结果
     output = {
-        'description': '15分钟双向回测(做多+做空)',
+        'description': f'15分钟双向回测(做多+做空) · {trade_label}',
         'run_time': datetime.now().isoformat(),
         'data_range': f"{data['15m'].index[0]} ~ {data['15m'].index[-1]}",
+        'trade_range': f"{trade_start_str} ~ {trade_end_str}",
+        'trade_days': trade_days or 30,
         'total_bars': len(data['15m']),
         'initial_capital': '10万USDT + 价值10万USDT的ETH',
         'timeframe': '15m',
@@ -677,4 +750,15 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # 支持命令行参数: python strategy_15m.py [天数]
+    # 例: python strategy_15m.py 3  → 最近3天回测
+    trade_days = None
+    if len(sys.argv) > 1:
+        try:
+            trade_days = int(sys.argv[1])
+            if trade_days <= 0 or trade_days > 30:
+                print(f"天数范围: 1-30, 输入: {trade_days}")
+                trade_days = None
+        except ValueError:
+            print(f"无效参数: {sys.argv[1]}, 使用默认30天")
+    main(trade_days=trade_days)
