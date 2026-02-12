@@ -617,11 +617,18 @@ function getSelectedTFs() {
     return tfs;
 }
 
+let _signalMultiRunning = false;
+
 async function testSignalMulti() {
+    if (_signalMultiRunning) return;          // 防止重复触发
     const tfs = getSelectedTFs();
     if (tfs.length === 0) { alert('请至少选择一个时间框架'); return; }
 
+    _signalMultiRunning = true;
     setLoading('signalMultiBtnText', true);
+    // 同时禁用全选/全不选按钮，避免检测中修改TF
+    document.querySelectorAll('#tfCheckboxes .tf-chip').forEach(l => l.style.pointerEvents = 'none');
+
     const timerEl = document.getElementById('signalMultiTimer');
     const t0 = Date.now();
     const timer = setInterval(() => {
@@ -653,6 +660,8 @@ async function testSignalMulti() {
         showOutput('signalOutput', '请求失败: ' + e.message);
     }
     setLoading('signalMultiBtnText', false);
+    document.querySelectorAll('#tfCheckboxes .tf-chip').forEach(l => l.style.pointerEvents = '');
+    _signalMultiRunning = false;
 }
 
 function renderMultiSignalResult(data) {
