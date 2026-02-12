@@ -39,3 +39,4 @@ divergence_analysis.png
 *.log
 timeframe_test_result.json
 timeframe_analysis_result.json
+strategy_15m_result.json

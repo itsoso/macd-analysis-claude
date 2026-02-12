@@ -27,6 +27,7 @@ STRATEGY_FUTURES_V4_FILE = os.path.join(BASE_DIR, 'strategy_futures_v4_result.js
 STRATEGY_FUTURES_V5_FILE = os.path.join(BASE_DIR, 'strategy_futures_v5_result.json')
 STRATEGY_FUTURES_FINAL_FILE = os.path.join(BASE_DIR, 'strategy_futures_final_result.json')
 TIMEFRAME_ANALYSIS_FILE = os.path.join(BASE_DIR, 'timeframe_analysis_result.json')
+STRATEGY_15M_FILE = os.path.join(BASE_DIR, 'strategy_15m_result.json')
 
 
 def load_json(path):
@@ -156,6 +157,15 @@ def api_timeframe_analysis():
     if data:
         return jsonify(data)
     return jsonify({'error': '未找到时间周期分析数据, 请先运行 python strategy_timeframe_analysis.py'}), 404
+
+
+@app.route('/api/strategy_15m')
+def api_strategy_15m():
+    """返回15分钟双向回测结果"""
+    data = load_json(STRATEGY_15M_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({'error': '未找到15m回测数据, 请先运行 python strategy_15m.py'}), 404
 
 
 if __name__ == '__main__':

@@ -1659,6 +1659,49 @@
 
                 <div class="card" id="tf-conclusion"></div>
             </div>
+
+            <!-- ====== 15分钟双向回测 ====== -->
+            <div id="s15m-section" style="display:none;">
+                <div class="card" style="margin-top:24px;">
+                    <div class="card-title">15分钟双向回测 · 做多+做空
+                        <span class="badge" style="background:rgba(249,115,22,0.15);color:#f97316;">15M BIDIRECTIONAL</span>
+                    </div>
+                    <div style="background:rgba(249,115,22,0.06);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid #f97316;">
+                        <div style="font-weight:600;color:#f97316;margin-bottom:6px;">策略说明</div>
+                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
+                            主信号: 15分钟K线 (2880根/30天) + 1h/8h辅助<br>
+                            方向: 顶背离→卖出+开空 | 底背离→买入+开多<br>
+                            初始: 10万USDT + 价值10万USDT ETH | 手续费: 0.05% + 0.1%滑点 + 资金费率
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;" id="s15m-cards"></div>
+                </div>
+                <div class="card">
+                    <div class="card-title">策略α对比</div>
+                    <div id="s15m-bar" style="width:100%;min-height:300px;"></div>
+                </div>
+                <div class="card">
+                    <div class="card-title">策略详细对比</div>
+                    <div class="trade-table-wrap" style="max-height:none;">
+                        <table id="s15m-table"><thead><tr><th>排名</th><th>策略</th><th>α(%)</th><th>策略收益(%)</th><th>BH收益(%)</th><th>回撤(%)</th><th>交易</th><th>强平</th><th>费用($)</th></tr></thead><tbody id="s15m-body"></tbody></table>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-title">最佳策略资产曲线</div>
+                    <div id="s15m-equity" style="width:100%;height:400px;"></div>
+                </div>
+                <div class="card">
+                    <div class="card-title">最佳策略交易明细 <span class="badge" style="background:rgba(249,115,22,0.15);color:#f97316;" id="s15m-trade-count"></span></div>
+                    <div class="trade-table-wrap" style="max-height:500px;">
+                        <table><thead><tr><th>#</th><th>时间</th><th>操作</th><th>方向</th><th>价格</th><th>杠杆</th><th>总资产</th><th>决策依据</th></tr></thead><tbody id="s15m-trades"></tbody></table>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-title">费用明细</div>
+                    <div id="s15m-fees"></div>
+                </div>
+                <div class="card" id="s15m-conclusion"></div>
+            </div>
         </div>
 
         <!-- ====== 策略优化对比 ====== -->
@@ -3151,6 +3194,11 @@
             const resTF = await fetch('/api/timeframe_analysis');
             if (resTF.ok) { renderTimeframeAnalysis(await resTF.json()); }
         } catch(e) {}
+        // 加载15分钟双向回测
+        try {
+            const res15m = await fetch('/api/strategy_15m');
+            if (res15m.ok) { render15mStrategy(await res15m.json()); }
+        } catch(e) {}
     }
 
     function renderFuturesPage(data) {
@@ -4070,6 +4118,174 @@
                     <span>真实前向回测: α=+${(best.alpha||0).toFixed(0)}% — 这才是实盘可预期的收益水平</span>
                 </div>
             </div>`;
+    }
+
+    function render15mStrategy(data) {
+        const section = document.getElementById('s15m-section');
+        if (!section) return;
+        section.style.display = 'block';
+
+        const results = data.results || [];
+        const ranked = [...results].sort((a, b) => b.alpha - a.alpha);
+        const best = ranked[0] || {};
+
+        // 策略卡片
+        const cardsEl = document.getElementById('s15m-cards');
+        if (cardsEl) {
+            const colors = ['#22c55e', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#6b7280'];
+            cardsEl.innerHTML = ranked.map((r, i) => {
+                const isBest = i === 0;
+                const c = colors[i % colors.length];
+                return `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;${isBest ? 'border:1.5px solid #22c55e;' : ''}">
+                    <div style="font-weight:700;font-size:14px;color:${c};margin-bottom:4px;">
+                        ${r.name}${isBest ? ' ★' : ''}
+                    </div>
+                    <div style="display:flex;gap:12px;font-size:13px;flex-wrap:wrap;">
+                        <span style="color:${r.alpha > 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">${r.alpha > 0 ? '+' : ''}${r.alpha.toFixed(2)}% α</span>
+                        <span style="color:var(--text-muted);">${r.max_drawdown.toFixed(1)}% DD</span>
+                        <span style="color:var(--text-muted);">${r.total_trades}笔</span>
+                        ${r.liquidations > 0 ? '<span style="color:var(--accent-red);">强平'+r.liquidations+'</span>' : ''}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        // 柱状图
+        const barEl = document.getElementById('s15m-bar');
+        if (barEl && ranked.length > 0) {
+            const chart = LightweightCharts.createChart(barEl, {
+                width: barEl.clientWidth, height: 300,
+                layout: { background: { color: 'transparent' }, textColor: '#d1d5db' },
+                grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
+            });
+            const s = chart.addHistogramSeries({ color: '#f97316' });
+            s.setData(ranked.map((r, i) => ({
+                time: `2026-03-${String(i + 1).padStart(2, '0')}`,
+                value: r.alpha,
+                color: r.alpha >= 25 ? '#22c55e' : r.alpha >= 15 ? '#3b82f6' : r.alpha > 0 ? '#f97316' : '#ef4444',
+            })));
+            chart.timeScale().fitContent();
+            new ResizeObserver(() => chart.applyOptions({ width: barEl.clientWidth })).observe(barEl);
+        }
+
+        // 表格
+        const tbody = document.getElementById('s15m-body');
+        if (tbody) {
+            tbody.innerHTML = ranked.map((r, i) => {
+                const fees = r.fees || {};
+                return `<tr style="${i === 0 ? 'background:rgba(34,197,94,0.08);' : ''}">
+                    <td><b>#${i + 1}</b>${i === 0 ? ' ★' : ''}</td>
+                    <td>${r.name}</td>
+                    <td class="${r.alpha >= 0 ? 'pnl-pos' : 'pnl-neg'}"><b>${r.alpha >= 0 ? '+' : ''}${r.alpha.toFixed(2)}%</b></td>
+                    <td class="${r.strategy_return >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r.strategy_return >= 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</td>
+                    <td class="pnl-neg">${r.buy_hold_return.toFixed(2)}%</td>
+                    <td>${r.max_drawdown.toFixed(2)}%</td>
+                    <td>${r.total_trades}</td>
+                    <td>${r.liquidations || 0}</td>
+                    <td>$${(fees.total_costs || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 资产曲线
+        const eqEl = document.getElementById('s15m-equity');
+        if (eqEl && best.history && best.history.length > 0) {
+            const chart2 = LightweightCharts.createChart(eqEl, {
+                width: eqEl.clientWidth, height: 400,
+                layout: { background: { color: 'transparent' }, textColor: '#d1d5db' },
+                grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
+                rightPriceScale: { borderColor: 'rgba(255,255,255,0.1)' },
+            });
+            const totalLine = chart2.addLineSeries({ color: '#22c55e', lineWidth: 2, title: '总资产' });
+            totalLine.setData(best.history.map(h => ({
+                time: Math.floor(new Date(h.time).getTime() / 1000),
+                value: h.total,
+            })));
+            const bhLine = chart2.addLineSeries({ color: '#6b7280', lineWidth: 1, lineStyle: 2, title: 'Buy&Hold' });
+            const firstTotal = best.history[0].total;
+            const firstPrice = best.history[0].eth_price;
+            bhLine.setData(best.history.map(h => ({
+                time: Math.floor(new Date(h.time).getTime() / 1000),
+                value: firstTotal * (1 + (h.eth_price - firstPrice) / firstPrice * 0.5),
+            })));
+            chart2.timeScale().fitContent();
+            new ResizeObserver(() => chart2.applyOptions({ width: eqEl.clientWidth })).observe(eqEl);
+        }
+
+        // 交易明细
+        const tradesEl = document.getElementById('s15m-trades');
+        const countEl = document.getElementById('s15m-trade-count');
+        if (tradesEl && best.trades) {
+            if (countEl) countEl.textContent = `${best.trades.length}笔`;
+            tradesEl.innerHTML = best.trades.map((t, i) => {
+                const actionColor = {
+                    'OPEN_SHORT': '#ef4444', 'CLOSE_SHORT': '#22c55e',
+                    'OPEN_LONG': '#3b82f6', 'CLOSE_LONG': '#f59e0b',
+                    'SPOT_SELL': '#f97316', 'SPOT_BUY': '#06b6d4',
+                    'LIQUIDATED': '#dc2626',
+                }[t.action] || '#6b7280';
+                return `<tr>
+                    <td>${i + 1}</td>
+                    <td style="font-family:monospace;font-size:12px;">${(t.time || '').substring(0, 16)}</td>
+                    <td><span style="color:${actionColor};font-weight:600;">${t.action}</span></td>
+                    <td>${t.direction || ''}</td>
+                    <td>$${(t.price || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                    <td>${t.leverage || 1}x</td>
+                    <td>$${(t.total || 0).toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
+                    <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${t.reason || ''}">${t.reason || ''}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 费用明细
+        const feesEl = document.getElementById('s15m-fees');
+        if (feesEl && best.fees) {
+            const f = best.fees;
+            feesEl.innerHTML = `
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
+                    <div style="background:var(--bg-hover);border-radius:8px;padding:12px;text-align:center;">
+                        <div style="font-size:12px;color:var(--text-muted);">现货手续费</div>
+                        <div style="font-size:16px;font-weight:700;color:#f97316;">$${(f.spot_fees || 0).toFixed(2)}</div>
+                    </div>
+                    <div style="background:var(--bg-hover);border-radius:8px;padding:12px;text-align:center;">
+                        <div style="font-size:12px;color:var(--text-muted);">合约手续费</div>
+                        <div style="font-size:16px;font-weight:700;color:#ef4444;">$${(f.futures_fees || 0).toFixed(2)}</div>
+                    </div>
+                    <div style="background:var(--bg-hover);border-radius:8px;padding:12px;text-align:center;">
+                        <div style="font-size:12px;color:var(--text-muted);">资金费率(净)</div>
+                        <div style="font-size:16px;font-weight:700;color:${(f.net_funding||0)>0?'#22c55e':'#ef4444'};">$${(f.net_funding || 0).toFixed(2)}</div>
+                    </div>
+                    <div style="background:var(--bg-hover);border-radius:8px;padding:12px;text-align:center;">
+                        <div style="font-size:12px;color:var(--text-muted);">滑点成本</div>
+                        <div style="font-size:16px;font-weight:700;color:#f59e0b;">$${(f.slippage_cost || 0).toFixed(2)}</div>
+                    </div>
+                    <div style="background:var(--bg-hover);border-radius:8px;padding:12px;text-align:center;">
+                        <div style="font-size:12px;color:var(--text-muted);">总费用</div>
+                        <div style="font-size:16px;font-weight:700;color:#ef4444;">$${(f.total_costs || 0).toFixed(2)}</div>
+                    </div>
+                </div>`;
+        }
+
+        // 结论
+        const concEl = document.getElementById('s15m-conclusion');
+        if (concEl) {
+            const bestInfo = data.best_strategy || {};
+            concEl.innerHTML = `
+                <div class="card-title">15分钟双向回测结论</div>
+                <div style="background:var(--bg-hover);border-radius:8px;padding:14px;margin-bottom:12px;">
+                    <b style="color:#f97316;">最佳策略: ${bestInfo.name || best.name}</b>
+                    &nbsp;|&nbsp; α=<b style="color:#22c55e;">${(bestInfo.alpha || best.alpha || 0).toFixed(2)}%</b>
+                    &nbsp;|&nbsp; ${bestInfo.trades_count || best.total_trades || 0}笔交易
+                </div>
+                <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
+                    <b>关键发现:</b><br>
+                    1. 15分钟信号可以做多做空双向交易, α范围: +2%~+26%<br>
+                    2. 信号冲突(TS和BS同时高)是15m的核心挑战, 需要冲突过滤机制<br>
+                    3. 现货交易需要严格冷却(12h+), 否则频繁买卖的手续费会吞噬所有利润<br>
+                    4. 做多在底部区域(2/6)捕捉到+$10,905盈利的多头合约, 是α的重要来源<br>
+                    5. 对比1h策略α≈+25%, 15m策略的核心优势在于更精确的入场时机
+                </div>`;
+        }
     }
 
     function renderTimeframeAnalysis(data) {
