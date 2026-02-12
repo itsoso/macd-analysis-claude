@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}多周期联合决策 · 30天 vs 7天 回测{% endblock %}
+{% block title %}多周期联合决策 · 60天/30天/7天 回测{% endblock %}
 
 {% block extra_styles %}
 <style>
@@ -24,7 +24,7 @@
         padding: 5px 14px; border-radius: 16px; font-size: 0.8rem; color: var(--text-secondary);
     }
 
-    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 28px; }
     .summary-card { background: var(--bg-card); border-radius: 12px; padding: 20px; border: 1px solid var(--border); }
     .summary-card.hl { border-color: #a855f7; background: linear-gradient(135deg, rgba(168,85,247,0.08), rgba(74,158,255,0.06)); }
     .summary-card .s-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
@@ -39,10 +39,12 @@
     .hbar-group-label { font-size: 0.82rem; color: var(--text-primary); margin-bottom: 6px; font-weight: 500; }
     .hbar-row { display: flex; align-items: center; margin-bottom: 5px; gap: 8px; }
     .hbar-period { width: 32px; font-size: 0.72rem; font-weight: 600; flex-shrink: 0; text-align: right; }
+    .hbar-period.p60 { color: #22c55e; }
     .hbar-period.p30 { color: #a855f7; }
     .hbar-period.p7 { color: var(--accent-yellow); }
     .hbar-track { flex: 1; height: 22px; background: rgba(255,255,255,0.04); border-radius: 4px; overflow: hidden; }
     .hbar-fill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding: 0 8px; font-size: 0.72rem; font-weight: 600; color: #fff; min-width: 50px; transition: width 0.5s ease; }
+    .hbar-fill.f60 { background: linear-gradient(90deg, #22c55e, #4ade80); }
     .hbar-fill.f30 { background: linear-gradient(90deg, #a855f7, #818cf8); }
     .hbar-fill.f7 { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
     .hbar-legend { display: flex; gap: 20px; margin-bottom: 14px; font-size: 0.82rem; color: var(--text-secondary); }
@@ -81,6 +83,12 @@
     .baseline-box h4 { color: var(--accent-blue); margin: 0 0 12px 0; }
 
     .ld-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 300px; }
+
+    .interp-box { background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.2); border-radius: 12px; padding: 20px 24px; margin-top: 16px; }
+    .interp-box h4 { color: #22c55e; margin: 0 0 12px 0; font-size: 1rem; }
+    .interp-box ul { margin: 0; padding-left: 18px; color: var(--text-secondary); }
+    .interp-box li { margin-bottom: 8px; line-height: 1.7; font-size: 0.88rem; }
+    .interp-box strong { color: var(--text-primary); }
 </style>
 {% endblock %}
 
@@ -111,187 +119,145 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function render(data) {
+    const r60 = data.results_60d || [];
     const r30 = data.results_30d || [];
     const r7 = data.results_7d || [];
     const s = data.summary || {};
+    const s60 = s['60d'] || {};
     const s30 = s['30d'] || {};
     const s7 = s['7d'] || {};
     const fm = data.fee_model || {};
     const bc = data.base_config || {};
     const baselines = data.single_tf_baselines || {};
+    const hasR60 = r60.length > 0;
 
     const root = document.getElementById('root');
     root.innerHTML = '';
 
     // ── Hero ──
+    const periodLabel = hasR60 ? '60天/30天/7天' : '30天/7天';
     root.innerHTML += `
         <div class="bt-hero">
-            <h1>🔗 多周期联合决策 · 30天 vs 7天 回测</h1>
-            <div class="subtitle">加权共识 + 共振链检测 · 币安 ETH/USDT 真实K线 · 含手续费/滑点/资金费率</div>
+            <h1>🔗 多周期联合决策 · ${periodLabel} 回测</h1>
+            <div class="subtitle">统一 fuse_tf_scores 融合算法 · 币安 ETH/USDT 真实K线 · 含手续费/滑点/资金费率</div>
             <div class="badges">
                 <span class="badge-item">🧠 多周期联合决策</span>
+                <span class="badge-item">融合: fuse_tf_scores (回测/实盘统一)</span>
                 <span class="badge-item">基线: ${bc.best_single_tf||'1h'} α=${fv(bc.best_single_alpha)}%</span>
-                <span class="badge-item">Taker ${fm.taker_fee||'0.05%'}</span>
-                <span class="badge-item">滑点 ${fm.slippage||'0.1%'}</span>
+                <span class="badge-item">Taker ${fm.taker_fee||'0.05%'} · 滑点 ${fm.slippage||'0.1%'}</span>
                 <span class="badge-item">${data.run_time ? new Date(data.run_time).toLocaleString('zh-CN') : ''}</span>
             </div>
         </div>
     `;
 
     // ── Summary Cards ──
-    root.innerHTML += `
-        <div class="summary-grid">
-            <div class="summary-card hl">
-                <div class="s-label">30天最优 Alpha</div>
-                <div class="s-value" style="color:${(s30.best_alpha||0)>=0?'var(--accent-green)':'var(--accent-red)'}">${fv(s30.best_alpha)}%</div>
-                <div class="s-detail">${r30.length?r30[0].combo_name+'@'+r30[0].primary_tf:'-'}</div>
-            </div>
-            <div class="summary-card hl">
-                <div class="s-label">7天最优 Alpha</div>
-                <div class="s-value" style="color:${(s7.best_alpha||0)>=0?'var(--accent-green)':'var(--accent-red)'}">${fv(s7.best_alpha)}%</div>
-                <div class="s-detail">${r7.length?r7[0].combo_name+'@'+r7[0].primary_tf:'-'}</div>
-            </div>
-            <div class="summary-card">
-                <div class="s-label">30天平均 Alpha</div>
-                <div class="s-value" style="color:${(s30.avg_alpha||0)>=0?'var(--accent-green)':'var(--accent-red)'}">${fv(s30.avg_alpha)}%</div>
-                <div class="s-detail">${s30.profitable_count||0}/${s30.total_count||0} 策略盈利</div>
-            </div>
-            <div class="summary-card">
-                <div class="s-label">7天平均 Alpha</div>
-                <div class="s-value" style="color:${(s7.avg_alpha||0)>=0?'var(--accent-green)':'var(--accent-red)'}">${fv(s7.avg_alpha)}%</div>
-                <div class="s-detail">${s7.profitable_count||0}/${s7.total_count||0} 策略盈利</div>
-            </div>
-            <div class="summary-card">
-                <div class="s-label">30天平均交易数</div>
-                <div class="s-value" style="color:var(--accent-blue)">${s30.avg_trades||0}</div>
-                <div class="s-detail">多周期共识过滤噪声</div>
-            </div>
-            <div class="summary-card">
-                <div class="s-label">单TF基线</div>
-                <div class="s-value" style="color:var(--text-secondary)">${fv(bc.best_single_alpha)}%</div>
-                <div class="s-detail">${bc.best_single_tf||'1h'} · ${bc.fusion_mode||'c6_veto_4'}</div>
-            </div>
-        </div>
-    `;
+    const periods = [];
+    if (hasR60) periods.push({label:'60天', s: s60, r: r60, color:'#22c55e'});
+    periods.push({label:'30天', s: s30, r: r30, color:'#a855f7'});
+    periods.push({label:'7天', s: s7, r: r7, color:'#f59e0b'});
 
-    // ── Single TF Baselines ──
-    const bl30 = baselines['30'] || {};
-    const bl7 = baselines['7'] || {};
-    if (Object.keys(bl30).length || Object.keys(bl7).length) {
-        let blHtml = `<div class="sec-title"><span class="icon">📏</span> 单TF基线对比 (vs 多周期)</div>`;
-        blHtml += '<div class="baseline-box"><div style="overflow-x:auto"><table class="dt"><thead><tr>';
-        blHtml += '<th>主TF</th><th class="center">30天单TF Alpha</th><th class="center">30天多TF最优</th><th class="center">差异</th>';
-        blHtml += '<th class="center">7天单TF Alpha</th><th class="center">7天多TF最优</th><th class="center">差异</th>';
-        blHtml += '</tr></thead><tbody>';
-        for (const ptf of Object.keys(bl30)) {
-            const s30a = bl30[ptf]?.alpha || 0;
-            const s7a = (bl7[ptf] || {}).alpha || 0;
-            const m30 = r30.find(r => r.primary_tf === ptf);
-            const m7 = r7.find(r => r.primary_tf === ptf);
-            const m30a = m30 ? m30.alpha : 0;
-            const m7a = m7 ? m7.alpha : 0;
-            const d30 = m30a - s30a;
-            const d7 = m7a - s7a;
-            blHtml += `<tr>
-                <td><strong>${ptf}</strong></td>
-                <td class="center ${s30a>=0?'pos':'neg'}">${fv(s30a)}%</td>
-                <td class="center ${m30a>=0?'pos':'neg'}">${fv(m30a)}%</td>
-                <td class="center ${d30>=0?'pos':'neg'}">${fv(d30)}%</td>
-                <td class="center ${s7a>=0?'pos':'neg'}">${fv(s7a)}%</td>
-                <td class="center ${m7a>=0?'pos':'neg'}">${fv(m7a)}%</td>
-                <td class="center ${d7>=0?'pos':'neg'}">${fv(d7)}%</td>
-            </tr>`;
-        }
-        blHtml += '</tbody></table></div></div>';
-        root.innerHTML += blHtml;
+    let cardsHtml = '<div class="summary-grid">';
+    for (const p of periods) {
+        cardsHtml += `
+            <div class="summary-card hl">
+                <div class="s-label">${p.label}最优 Alpha</div>
+                <div class="s-value" style="color:${(p.s.best_alpha||0)>=0?'var(--accent-green)':'var(--accent-red)'}">${fv(p.s.best_alpha)}%</div>
+                <div class="s-detail">${p.r.length?p.r[0].combo_name+'@'+p.r[0].primary_tf:'-'}</div>
+            </div>`;
     }
+    for (const p of periods) {
+        cardsHtml += `
+            <div class="summary-card">
+                <div class="s-label">${p.label}平均 Alpha</div>
+                <div class="s-value" style="color:${(p.s.avg_alpha||0)>=0?'var(--accent-green)':'var(--accent-red)'}">${fv(p.s.avg_alpha)}%</div>
+                <div class="s-detail">${p.s.profitable_count||0}/${p.s.total_count||0} 策略盈利 · 平均${p.s.avg_trades||0}笔交易</div>
+            </div>`;
+    }
+    cardsHtml += `
+        <div class="summary-card">
+            <div class="s-label">单TF基线</div>
+            <div class="s-value" style="color:var(--text-secondary)">${fv(bc.best_single_alpha)}%</div>
+            <div class="s-detail">${bc.best_single_tf||'1h'} · ${bc.fusion_mode||'c6_veto_4'}</div>
+        </div>
+    </div>`;
+    root.innerHTML += cardsHtml;
 
     // ── Alpha Bar Chart ──
+    const primaryList = hasR60 ? r60 : r30;
     const matched = [];
-    for (const s of r30) {
-        const m = r7.find(r => r.combo_name === s.combo_name && r.primary_tf === s.primary_tf);
-        if (m) matched.push({ label: s.combo_name + '@' + s.primary_tf, a30: s.alpha, a7: m.alpha });
+    for (const s of primaryList) {
+        const m30 = r30.find(r => r.combo_name === s.combo_name && r.primary_tf === s.primary_tf);
+        const m7 = r7.find(r => r.combo_name === s.combo_name && r.primary_tf === s.primary_tf);
+        const m60 = hasR60 ? r60.find(r => r.combo_name === s.combo_name && r.primary_tf === s.primary_tf) : null;
+        if (m30 && m7) matched.push({
+            label: s.combo_name + '@' + s.primary_tf,
+            a60: m60 ? m60.alpha : null, a30: m30.alpha, a7: m7.alpha
+        });
     }
     if (matched.length) {
-        const maxA = Math.max(...matched.map(m=>Math.abs(m.a30)), ...matched.map(m=>Math.abs(m.a7)), 1);
+        const allVals = matched.flatMap(m => [Math.abs(m.a30), Math.abs(m.a7), ...(m.a60 !== null ? [Math.abs(m.a60)] : [])]);
+        const maxA = Math.max(...allVals, 1);
         let barHtml = `<div class="sec-title"><span class="icon">📊</span> Alpha 可视化对比</div>`;
-        barHtml += '<div class="hbar-legend"><span><span class="hbar-legend-dot" style="background:#a855f7"></span> 30天</span>';
+        barHtml += '<div class="hbar-legend">';
+        if (hasR60) barHtml += '<span><span class="hbar-legend-dot" style="background:#22c55e"></span> 60天</span>';
+        barHtml += '<span><span class="hbar-legend-dot" style="background:#a855f7"></span> 30天</span>';
         barHtml += '<span><span class="hbar-legend-dot" style="background:#f59e0b"></span> 7天</span></div>';
         barHtml += '<div class="hbar-chart">';
-        for (const m of matched.slice(0, 12)) {
+        for (const m of matched.slice(0, 10)) {
+            barHtml += `<div class="hbar-group"><div class="hbar-group-label">${m.label}</div>`;
+            if (m.a60 !== null) {
+                const w = Math.max(3, (Math.abs(m.a60) / maxA) * 100);
+                barHtml += `<div class="hbar-row"><div class="hbar-period p60">60d</div>
+                    <div class="hbar-track"><div class="hbar-fill f60" style="width:${w}%">${fv(m.a60)}%</div></div></div>`;
+            }
             const w30 = Math.max(3, (Math.abs(m.a30) / maxA) * 100);
             const w7 = Math.max(3, (Math.abs(m.a7) / maxA) * 100);
             barHtml += `
-                <div class="hbar-group">
-                    <div class="hbar-group-label">${m.label}</div>
-                    <div class="hbar-row">
-                        <div class="hbar-period p30">30d</div>
-                        <div class="hbar-track"><div class="hbar-fill f30" style="width:${w30}%">${fv(m.a30)}%</div></div>
-                    </div>
-                    <div class="hbar-row">
-                        <div class="hbar-period p7">7d</div>
-                        <div class="hbar-track"><div class="hbar-fill f7" style="width:${w7}%">${fv(m.a7)}%</div></div>
-                    </div>
-                </div>`;
+                <div class="hbar-row"><div class="hbar-period p30">30d</div>
+                    <div class="hbar-track"><div class="hbar-fill f30" style="width:${w30}%">${fv(m.a30)}%</div></div></div>
+                <div class="hbar-row"><div class="hbar-period p7">7d</div>
+                    <div class="hbar-track"><div class="hbar-fill f7" style="width:${w7}%">${fv(m.a7)}%</div></div></div>
+            </div>`;
         }
         barHtml += '</div>';
         root.innerHTML += barHtml;
     }
 
-    // ── VS Table ──
-    let vsHtml = `<div class="sec-title"><span class="icon">⚖️</span> 30天 vs 7天 逐方案对比</div>`;
-    vsHtml += '<div style="overflow-x:auto"><table class="dt"><thead><tr>';
-    vsHtml += '<th>方案</th><th class="center">主TF</th>';
-    vsHtml += '<th class="center">30天Alpha</th><th class="center">30天回撤</th><th class="center">30天交易</th><th class="center">vs单TF</th>';
-    vsHtml += '<th class="center">7天Alpha</th><th class="center">7天回撤</th><th class="center">7天交易</th><th class="center">vs单TF</th>';
-    vsHtml += '</tr></thead><tbody>';
-    for (const s of r30) {
-        const m = r7.find(r => r.combo_name === s.combo_name && r.primary_tf === s.primary_tf);
-        if (!m) continue;
-        const isTop = s === r30[0];
-        vsHtml += `<tr class="${isTop ? 'gold' : ''}">
-            <td><span class="tbadge combo">${s.combo_name}</span></td>
-            <td class="center"><span class="tbadge ptf">${s.primary_tf}</span></td>
-            <td class="center ${s.alpha>=0?'pos':'neg'}">${fv(s.alpha)}%</td>
-            <td class="center neg">${s.max_drawdown.toFixed(2)}%</td>
-            <td class="center">${s.total_trades}</td>
-            <td class="center ${(s.vs_single_tf||0)>=0?'pos':'neg'}">${fv(s.vs_single_tf)}%</td>
-            <td class="center ${m.alpha>=0?'pos':'neg'}">${fv(m.alpha)}%</td>
-            <td class="center neg">${m.max_drawdown.toFixed(2)}%</td>
-            <td class="center">${m.total_trades}</td>
-            <td class="center ${(m.vs_single_tf||0)>=0?'pos':'neg'}">${fv(m.vs_single_tf)}%</td>
-        </tr>`;
-    }
-    vsHtml += '</tbody></table></div>';
-    root.innerHTML += vsHtml;
-
     // ── Detail Tabs ──
     let tabHtml = `<div class="sec-title"><span class="icon">📋</span> 详细回测结果</div>`;
-    tabHtml += `<div class="tab-wrap">
-        <div class="tab-header">
-            <div class="tab-btn active" onclick="switchTab(this,'t30')">最近30天</div>
-            <div class="tab-btn" onclick="switchTab(this,'t7')">最近7天</div>
-        </div>
-        <div class="tab-body active" id="t30">${buildTbl(r30)}</div>
-        <div class="tab-body" id="t7">${buildTbl(r7)}</div>
-    </div>`;
+    tabHtml += `<div class="tab-wrap"><div class="tab-header">`;
+    if (hasR60) tabHtml += `<div class="tab-btn active" onclick="switchTab(this,'t60')">最近60天</div>`;
+    tabHtml += `<div class="tab-btn ${hasR60?'':'active'}" onclick="switchTab(this,'t30')">最近30天</div>`;
+    tabHtml += `<div class="tab-btn" onclick="switchTab(this,'t7')">最近7天</div>`;
+    tabHtml += `</div>`;
+    if (hasR60) tabHtml += `<div class="tab-body active" id="t60">${buildTbl(r60)}</div>`;
+    tabHtml += `<div class="tab-body ${hasR60?'':'active'}" id="t30">${buildTbl(r30)}</div>`;
+    tabHtml += `<div class="tab-body" id="t7">${buildTbl(r7)}</div>`;
+    tabHtml += `</div>`;
     root.innerHTML += tabHtml;
 
     // ── Stats Compare ──
     let statHtml = `<div class="sec-title"><span class="icon">📈</span> 总体统计对比</div>`;
-    statHtml += `<div style="overflow-x:auto"><table class="dt">
-        <thead><tr><th>指标</th><th class="center">30天</th><th class="center">7天</th></tr></thead>
-        <tbody>
-            <tr><td>平均 Alpha</td><td class="center ${(s30.avg_alpha||0)>=0?'pos':'neg'}">${fv(s30.avg_alpha)}%</td><td class="center ${(s7.avg_alpha||0)>=0?'pos':'neg'}">${fv(s7.avg_alpha)}%</td></tr>
-            <tr><td>最优 Alpha</td><td class="center ${(s30.best_alpha||0)>=0?'pos':'neg'}">${fv(s30.best_alpha)}%</td><td class="center ${(s7.best_alpha||0)>=0?'pos':'neg'}">${fv(s7.best_alpha)}%</td></tr>
-            <tr><td>最差 Alpha</td>
-                <td class="center ${(s30.worst_alpha||0)>=0?'pos':'neg'}">${fv(s30.worst_alpha)}%</td>
-                <td class="center ${(s7.worst_alpha||0)>=0?'pos':'neg'}">${fv(s7.worst_alpha)}%</td></tr>
-            <tr><td>盈利策略数</td><td class="center">${s30.profitable_count||0} / ${s30.total_count||0}</td><td class="center">${s7.profitable_count||0} / ${s7.total_count||0}</td></tr>
-            <tr><td>平均交易数</td><td class="center">${s30.avg_trades||0}</td><td class="center">${s7.avg_trades||0}</td></tr>
-        </tbody>
-    </table></div>`;
+    statHtml += `<div style="overflow-x:auto"><table class="dt"><thead><tr><th>指标</th>`;
+    for (const p of periods) statHtml += `<th class="center">${p.label}</th>`;
+    statHtml += `</tr></thead><tbody>`;
+    const statRows = [
+        {label: '平均 Alpha', fn: s => fv(s.avg_alpha)+'%', cls: s => (s.avg_alpha||0) >= 0 ? 'pos' : 'neg'},
+        {label: '最优 Alpha', fn: s => fv(s.best_alpha)+'%', cls: s => (s.best_alpha||0) >= 0 ? 'pos' : 'neg'},
+        {label: '最差 Alpha', fn: s => fv(s.worst_alpha)+'%', cls: s => (s.worst_alpha||0) >= 0 ? 'pos' : 'neg'},
+        {label: '盈利策略数', fn: s => (s.profitable_count||0) + ' / ' + (s.total_count||0), cls: () => ''},
+        {label: '平均交易数', fn: s => String(s.avg_trades||0), cls: () => ''},
+    ];
+    for (const row of statRows) {
+        statHtml += `<tr><td>${row.label}</td>`;
+        for (const p of periods) statHtml += `<td class="center ${row.cls(p.s)}">${row.fn(p.s)}</td>`;
+        statHtml += `</tr>`;
+    }
+    statHtml += `</tbody></table></div>`;
     root.innerHTML += statHtml;
+
+    // ── Data-Driven Interpretation ──
+    root.innerHTML += buildInterpretation(r60, r30, r7, s60, s30, s7, baselines, bc);
 
     // ── Strategy Explanation ──
     root.innerHTML += `
@@ -299,29 +265,92 @@ function render(data) {
         <div class="insight-box">
             <h4>📐 什么是多周期联合决策?</h4>
             <ul>
-                <li><strong>核心理念</strong>: 同时计算多个时间框架(如15m/30m/1h/4h/8h/24h)的六维信号，通过加权共识算法统一决策，避免单一周期的"一叶障目"。</li>
-                <li><strong>加权共识</strong>: 大周期权重远高于小周期 (<code>24h=28</code> vs <code>15m=3</code>)。3个小周期看多无法对抗2个大周期看空。</li>
-                <li><strong>共振链检测</strong>: 相邻时间框架连续同方向信号(如 <code>1h→4h→8h→24h</code> 全看多)形成共振链，信号可靠度更高。</li>
-                <li><strong>大周期定调</strong>: ≥4h的周期作为趋势"裁判"，小周期不能逆势操作。大周期看多但小周期看空 → 等待，不做空。</li>
-                <li><strong>"主TF"概念</strong>: 主TF(如1h/4h)决定交易频率和K线粒度。辅助TF提供方向确认。</li>
+                <li><strong>核心理念</strong>: 同时计算多个时间框架(如15m/30m/1h/4h/8h/24h)的六维信号，通过 <code>fuse_tf_scores</code> 统一融合算法决策，回测与实盘使用完全相同的逻辑。</li>
+                <li><strong>连续分数融合</strong>: 各TF的卖出分(ss)和买入分(bs)直接加权平均，保留分数连续信息，避免先离散化再合并的信息损失。</li>
+                <li><strong>大小周期衰减</strong>: 大周期(≥4h)偏空但小周期偏多时，买入信号衰减50%；反之卖出信号衰减50%。</li>
+                <li><strong>共振链增强</strong>: 相邻TF连续同向(如 <code>1h→4h→8h</code>)形成共振链，跨4h以上的3级以上共振信号增强+24%。</li>
+                <li><strong>Coverage门控</strong>: 实盘时如果部分TF数据缺失，信号按覆盖率线性衰减；低于50%直接 fail-closed。</li>
             </ul>
         </div>
     `;
+}
 
-    // ── Insights ──
-    root.innerHTML += `
-        <div class="sec-title"><span class="icon">💡</span> 关键发现</div>
-        <div class="insight-box">
-            <h4>🔍 回测结论</h4>
-            <ul>
-                <li><strong>多周期 vs 单TF</strong>: "vs单TF"列显示多周期策略是否超越了相同主TF的单周期策略。正值表示多周期带来了额外Alpha。</li>
-                <li><strong>交易次数减少</strong>: 多周期共识天然过滤了单TF的假信号，交易次数通常少于单TF，降低了手续费成本。</li>
-                <li><strong>不同TF组合表现差异大</strong>: "核心周期"和"大周期"组合通常更稳健，"全周期"方案信号更分散可能导致犹豫。</li>
-                <li><strong>主TF选择很关键</strong>: 同一个TF组合配不同主TF，Alpha差异可达数十个百分点。需要根据市场节奏选择合适的主TF。</li>
-                <li><strong>30天 vs 7天稳定性</strong>: 两个周期Alpha方向一致的策略具备更强的鲁棒性，适合实盘使用。</li>
-            </ul>
-        </div>
-    `;
+function buildInterpretation(r60, r30, r7, s60, s30, s7, baselines, bc) {
+    const findings = [];
+    const hasR60 = r60.length > 0;
+
+    // 1. 整体表现
+    if (hasR60 && s60.avg_alpha !== undefined) {
+        const allPositive = s60.profitable_count === s60.total_count
+            && s30.profitable_count === s30.total_count
+            && s7.profitable_count === s7.total_count;
+        if (allPositive) {
+            findings.push(`<strong>全面盈利</strong>: 所有 ${s60.total_count} 种策略组合在60天、30天、7天三个周期内全部实现正Alpha，多周期联合决策显著降低了亏损风险。`);
+        }
+    }
+
+    // 2. 最佳方案
+    const best60 = r60.length ? r60[0] : null;
+    const best30 = r30.length ? r30[0] : null;
+    const best7 = r7.length ? r7[0] : null;
+    if (best60) {
+        findings.push(`<strong>60天最优</strong>: <code>${best60.combo_name}@${best60.primary_tf}</code> α=${fv(best60.alpha)}%，策略收益${fv(best60.strategy_return)}%，共${best60.total_trades}笔交易。`);
+    }
+    if (best30) {
+        findings.push(`<strong>30天最优</strong>: <code>${best30.combo_name}@${best30.primary_tf}</code> α=${fv(best30.alpha)}%。`);
+    }
+
+    // 3. 稳定性分析
+    if (hasR60 && r30.length && r7.length) {
+        // 找在三个周期中排名都在前5的方案
+        const top5_60 = new Set(r60.slice(0, 5).map(r => r.combo_name + '@' + r.primary_tf));
+        const top5_30 = new Set(r30.slice(0, 5).map(r => r.combo_name + '@' + r.primary_tf));
+        const top5_7 = new Set(r7.slice(0, 5).map(r => r.combo_name + '@' + r.primary_tf));
+        const stableWinners = [...top5_60].filter(k => top5_30.has(k) || top5_7.has(k));
+        if (stableWinners.length > 0) {
+            findings.push(`<strong>稳健方案</strong>: ${stableWinners.map(k => '<code>' + k + '</code>').join('、')} 在多个回测周期中都位列前5，具备较强的跨周期鲁棒性，适合作为实盘候选。`);
+        }
+    }
+
+    // 4. Alpha衰减/增长趋势
+    if (hasR60 && s60.avg_alpha !== undefined && s30.avg_alpha !== undefined && s7.avg_alpha !== undefined) {
+        const avgPerDay60 = s60.avg_alpha / 60;
+        const avgPerDay30 = s30.avg_alpha / 30;
+        const avgPerDay7 = s7.avg_alpha / 7;
+        if (avgPerDay7 > avgPerDay30 && avgPerDay30 > avgPerDay60) {
+            findings.push(`<strong>近期加速</strong>: 日均Alpha 7天(${avgPerDay7.toFixed(2)}%/d) > 30天(${avgPerDay30.toFixed(2)}%/d) > 60天(${avgPerDay60.toFixed(2)}%/d)，策略在近期市场环境下表现更佳，可能处于策略适配期。`);
+        } else if (avgPerDay60 > avgPerDay30 && avgPerDay30 > avgPerDay7) {
+            findings.push(`<strong>近期衰减</strong>: 日均Alpha 60天(${avgPerDay60.toFixed(2)}%/d) > 30天(${avgPerDay30.toFixed(2)}%/d) > 7天(${avgPerDay7.toFixed(2)}%/d)，近期市场环境可能对策略不利，需要关注参数适配性。`);
+        }
+    }
+
+    // 5. vs 单TF提升
+    if (r30.length) {
+        const avgVsSingle = r30.reduce((s, r) => s + (r.vs_single_tf || 0), 0) / r30.length;
+        if (avgVsSingle > 0) {
+            findings.push(`<strong>多周期优势</strong>: 30天平均 vs 单TF 提升 ${fv(avgVsSingle)}%，多周期联合决策比单一时间框架策略平均多获得了 ${Math.abs(avgVsSingle).toFixed(1)}% 的Alpha。`);
+        }
+    }
+
+    // 6. 回撤警告
+    if (r60.length) {
+        const worstDD = Math.min(...r60.map(r => r.max_drawdown));
+        if (worstDD < -30) {
+            findings.push(`<strong>⚠️ 回撤提醒</strong>: 最大回撤达到 ${worstDD.toFixed(1)}%，尽管Alpha为正，但过程中存在较大浮亏。实盘需配合严格的风控和仓位管理。`);
+        }
+    }
+
+    let html = `<div class="sec-title"><span class="icon">🔍</span> 数据解读与结论</div>`;
+    html += `<div class="interp-box"><h4>📊 自动分析 (基于本次回测数据)</h4><ul>`;
+    for (const f of findings) {
+        html += `<li>${f}</li>`;
+    }
+    if (findings.length === 0) {
+        html += `<li>数据不足，无法生成自动分析。请等待回测完成后刷新页面。</li>`;
+    }
+    html += `</ul></div>`;
+
+    return html;
 }
 
 // ── Helpers ──
@@ -338,7 +367,7 @@ function switchTab(btn, id) {
 }
 
 function buildTbl(results) {
-    if (!results || !results.length) return '<p style="color:var(--text-muted)">暂无数据。请运行 <code>python backtest_multi_tf_30d_7d.py</code> 生成数据。</p>';
+    if (!results || !results.length) return '<p style="color:var(--text-muted)">暂无数据。</p>';
     let h = '<div style="overflow-x:auto"><table class="dt"><thead><tr>';
     h += '<th>#</th><th>方案</th><th>主TF</th><th>决策TFs</th><th class="center">Alpha</th>';
     h += '<th class="center">策略收益</th><th class="center">BH收益</th><th class="center">回撤</th>';
