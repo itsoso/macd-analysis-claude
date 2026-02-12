@@ -1,21 +1,19 @@
 """
-合约做空策略 Phase 6+7 — 最终优化
+合约做空策略 — 最终版 (消除事后偏差)
 
-目标: 在B1(α=+28.15%)基础上, 通过风控参数优化+策略微调找到最大收益
+核心原则:
+  所有交易决策必须基于"当时时间点"的实盘数据, 不可使用未来信息。
 
-Phase 6: 风控参数网格搜索
-  - max_single_margin: 5%→20% (步长2.5%)
-  - max_margin_total: 10%→30%
-  - leverage: 2x vs 3x
-  - available_margin比例: 0.8-1.0
-  - 跨参数组合搜索
+事后偏差清单 (已在此版本中消除):
+  ✗ hold∞ (永不平仓) → 因为已知ETH持续下跌 → 替换为信号+止损退出
+  ✗ bs_close=9999 (禁用底部信号) → 因为已知$2962不是真底 → 替换为合理阈值
+  ✗ single_pct=80% (80%保证金) → 因为已知不会强平 → 替换为标准仓位管理
+  ✗ 参数在测试集上优化后在同一数据评测 → 替换为walk-forward验证
 
-Phase 7: 策略结构微调
-  - 卖出比例: 0.85-0.98
-  - 是否追卖残余
-  - 是否开第二笔空仓
-  - 是否底部做多
-  - 早鸟减仓
+验证方法:
+  方法A: 书本理论策略 — 参数完全来自《背离技术分析》理论, 不做任何调优
+  方法B: Walk-Forward — 前15天训练参数, 后15天验证(样本外测试)
+  方法C: 参数敏感性 — 展示参数在合理范围内的表现分布(而非只选最佳)
 """
 
 import pandas as pd
@@ -23,6 +21,7 @@ import numpy as np
 import json
 import sys
 import os
+from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -35,144 +34,485 @@ from strategy_futures_v2 import get_tf_signal, get_trend_info
 from strategy_futures_v4 import _calc_top_score, _calc_bottom_score
 
 
-def run_strategy(data, signals_all, config):
-    """通用策略执行器"""
+# =======================================================
+# 通用回测执行器 (严格无前瞻)
+# =======================================================
+def run_strategy(data, signals_all, config, start_dt=None, end_dt=None):
+    """
+    通用策略执行器 — 严格前向
+
+    所有决策仅依赖:
+      1. 当前bar及之前的价格/指标
+      2. 预计算的信号(信号本身只使用历史数据, 已经验证)
+      3. 固定的策略参数(不依赖未来)
+    """
     eng = FuturesEngine(config['name'], max_leverage=config.get('max_lev', 3))
     main_df = data['1h']
     eng.spot_eth = eng.initial_eth_value / main_df['close'].iloc[0]
 
-    # 覆盖风控参数
-    if 'single_pct' in config:
-        eng.max_single_margin = eng.initial_total * config['single_pct']
-    if 'total_pct' in config:
-        eng.max_margin_total = eng.initial_total * config['total_pct']
-    if 'lifetime_pct' in config:
-        eng.max_lifetime_margin = eng.initial_total * config['lifetime_pct']
+    # 风控参数
+    eng.max_single_margin = eng.initial_total * config.get('single_pct', 0.15)
+    eng.max_margin_total = eng.initial_total * config.get('total_pct', 0.30)
+    eng.max_lifetime_margin = eng.initial_total * config.get('lifetime_pct', 2.0)
 
-    # 覆盖可用保证金计算中的USDT比例限制 (默认0.5 → 可调)
-    usdt_ratio = config.get('usdt_ratio', 0.5)
-    if usdt_ratio != 0.5:
-        original_available = eng.available_margin
-        def custom_available():
-            avail_usdt = eng.available_usdt()
-            remaining_cap = eng.max_margin_total - eng.frozen_margin
-            lifetime_remain = eng.max_lifetime_margin - eng.lifetime_margin_used
-            return max(0, min(avail_usdt * usdt_ratio, remaining_cap,
-                              eng.max_single_margin, lifetime_remain))
-        eng.available_margin = custom_available
+    # 策略参数 (来自理论/前半段训练, 非当前数据优化)
+    ts_sell = config.get('ts_sell', 15)        # 卖出信号阈值
+    ts_short = config.get('ts_short', 20)      # 开空信号阈值
+    bs_close = config.get('bs_close', 35)      # 底部平仓信号阈值
+    sell_pct = config.get('sell_pct', 0.80)    # 每次卖出比例
+    margin_use = config.get('margin_use', 0.80) # 可用保证金使用比例
+    lev = config.get('lev', 3)                 # 杠杆倍数
+    trail_start = config.get('trail_start', 0.5)  # 追踪止盈启动(50%盈利)
+    trail_keep = config.get('trail_keep', 0.6)    # 追踪保留(回撤40%则平仓)
+    sl = config.get('sl', -0.4)               # 硬止损(-40%)
+    tp = config.get('tp', 1.5)                 # 硬止盈(+150%)
+    max_hold_bars = config.get('max_hold', 336) # 最大持仓时间(14天*24h)
+    cooldown_bars = config.get('cooldown', 8)   # 开仓冷却期(小时)
+    require_downtrend = config.get('require_downtrend', True)  # 是否要求下降趋势
 
     max_pnl_r = 0
-    short_count = 0
-    long_count = 0
-    cd_short = 0
-    cd_long = 0
-    early_sold = False
-    sell_pct = config.get('sell_pct', 0.92)
-    margin_use = config.get('margin_use', 0.95)
-    lev_default = config.get('lev', 3)
-    ts_sell = config.get('ts_sell', 15)
-    ts_short = config.get('ts_short', 20)
-    max_shorts = config.get('max_shorts', 1)
-    do_long = config.get('do_long', False)
-    do_early = config.get('do_early', False)
-    do_chase_sell = config.get('do_chase_sell', True)
-    short_cd = config.get('short_cd', 48)
-    require_downtrend = config.get('require_downtrend', False)
-    trail_start = config.get('trail_start', 1.0)
-    trail_keep = config.get('trail_keep', 0.55)
-    sl = config.get('sl', -0.6)
-    min_short_bars = config.get('min_short_bars', 0)
-    bs_close = config.get('bs_close', 40)
-    bars_since_short = 0
+    cd = 0
+    bars_held = 0
 
     for idx in range(20, len(main_df)):
-        dt = main_df.index[idx]; price = main_df['close'].iloc[idx]
-        eng.check_liquidation(price, dt); eng.charge_funding(price, dt)
-        if cd_short > 0: cd_short -= 1
-        if cd_long > 0: cd_long -= 1
+        dt = main_df.index[idx]
+        price = main_df['close'].iloc[idx]
 
+        # 时间范围过滤(walk-forward用)
+        if start_dt and dt < start_dt:
+            continue
+        if end_dt and dt > end_dt:
+            continue
+
+        eng.check_liquidation(price, dt)
+        eng.charge_funding(price, dt)
+        if cd > 0:
+            cd -= 1
+
+        # ---- 当前bar的信号 (只用历史数据计算) ----
         trend = get_trend_info(data, dt, price)
         sig = _merge_signals(signals_all, dt)
-        ts, parts = _calc_top_score(sig, trend)
+        ts, ts_parts = _calc_top_score(sig, trend)
         bs = _calc_bottom_score(sig, trend)
 
-        # 早鸟减仓
-        if do_early and not early_sold:
-            ind = get_realtime_indicators(main_df, idx)
-            k = ind.get('K', 50); rsi = ind.get('RSI6', 50)
-            if ts >= 5 or (k > 75 and rsi > 70):
-                if eng.spot_eth * price > 20000:
-                    eng.spot_sell(price, dt, 0.35, f"早鸟 K={k:.0f}")
-                    early_sold = True
+        # ---- 决策1: 卖出现货 ----
+        # 条件: 顶部信号足够强 + 还有足够的ETH
+        if ts >= ts_sell and eng.spot_eth * price > 1000:
+            eng.spot_sell(price, dt, sell_pct,
+                          f"信号卖出 TS={ts:.0f} {','.join(ts_parts[:2])}")
 
-        # 主信号: 清仓现货
-        if ts >= ts_sell and eng.spot_eth * price > 500:
-            eng.spot_sell(price, dt, sell_pct, f"清仓 TS={ts:.0f}")
-
-        # 追卖残余
-        if do_chase_sell and short_count > 0 and eng.spot_eth * price > 500:
-            if ts >= 8:
-                eng.spot_sell(price, dt, 0.8, "追卖")
-
-        # 开空
-        trend_ok = (not require_downtrend) or trend['is_downtrend']
-        if (cd_short == 0 and ts >= ts_short and trend_ok and
-                not eng.futures_short and short_count < max_shorts):
+        # ---- 决策2: 开空仓 ----
+        # 条件: 更强的顶部信号 + 无现有空仓 + 冷却期结束
+        # 关键: 当底部信号也很强时(BS >= bs_conflict), 说明信号矛盾, 不开仓
+        # (书本理论: 顶底信号矛盾时应观望, 不是任何一方的错)
+        bs_conflict = config.get('bs_conflict', 25)
+        trend_ok = (not require_downtrend) or trend.get('is_downtrend', False)
+        signal_clean = bs < bs_conflict  # 底部信号不能太强, 否则信号矛盾
+        if (cd == 0 and ts >= ts_short and trend_ok and signal_clean and
+                not eng.futures_short):
             margin = eng.available_margin() * margin_use
-            lev = min(lev_default, eng.max_leverage)
-            if ts >= 35: lev = min(3, eng.max_leverage)
-            eng.open_short(price, dt, margin, lev,
-                f"做空#{short_count+1} {lev}x TS={ts:.0f}")
-            max_pnl_r = 0; short_count += 1; cd_short = short_cd
+            max_allowed_lev = min(lev, eng.max_leverage)
+            # 根据信号强度微调杠杆(理论依据: 信号越强确信度越高)
+            # 但不超过用户设置的最大杠杆
+            if ts >= 35:
+                actual_lev = max_allowed_lev  # 强信号: 用满配置杠杆
+            elif ts >= 25:
+                actual_lev = min(max_allowed_lev, 2)  # 中信号: 最多2x
+            else:
+                actual_lev = min(max_allowed_lev, 2)  # 弱信号: 最多2x
 
-        # 做多(底部)
-        if (do_long and cd_long == 0 and bs >= 35 and
-                not eng.futures_long and not eng.futures_short and long_count < 2):
-            margin = eng.available_margin() * 0.4
-            eng.open_long(price, dt, margin, 2, f"做多 BS={bs:.0f}")
-            max_pnl_r = 0; long_count += 1; cd_long = 24
+            eng.open_short(price, dt, margin, actual_lev,
+                           f"做空 {actual_lev}x TS={ts:.0f} BS={bs:.0f} {','.join(ts_parts[:3])}")
+            max_pnl_r = 0
+            bars_held = 0
+            cd = cooldown_bars
 
-        # 平空
+        # ---- 决策3: 管理空仓 ----
         if eng.futures_short:
-            bars_since_short += 1
+            bars_held += 1
             pnl_r = eng.futures_short.calc_pnl(price) / eng.futures_short.margin
-            max_pnl_r = max(max_pnl_r, pnl_r)
-            can_close = bars_since_short >= min_short_bars
-            if can_close:
-                if max_pnl_r >= trail_start:
-                    trail = max_pnl_r * trail_keep
-                    if pnl_r < trail:
-                        eng.close_short(price, dt, f"追踪 max={max_pnl_r*100:.0f}%")
-                        max_pnl_r = 0; cd_short = 24; bars_since_short = 0
-                if eng.futures_short and bs >= bs_close:
-                    eng.close_short(price, dt, f"强底 BS={bs:.0f}")
-                    max_pnl_r = 0; cd_short = 12; bars_since_short = 0
+
+            # 3a: 硬止盈
+            if pnl_r >= tp:
+                eng.close_short(price, dt, f"止盈 +{pnl_r*100:.0f}%")
+                max_pnl_r = 0
+                cd = cooldown_bars
+                bars_held = 0
+
+            # 3b: 追踪止盈
+            elif pnl_r > max_pnl_r:
+                max_pnl_r = pnl_r
+            elif max_pnl_r >= trail_start:
+                trail_level = max_pnl_r * trail_keep
+                if pnl_r < trail_level and eng.futures_short:
+                    eng.close_short(price, dt,
+                                    f"追踪止盈 max={max_pnl_r*100:.0f}% now={pnl_r*100:.0f}%")
+                    max_pnl_r = 0
+                    cd = cooldown_bars
+                    bars_held = 0
+
+            # 3c: 底部信号平仓 (关键: 尊重实时信号, 不能因为事后知道会继续跌而忽略)
+            if eng.futures_short and bs >= bs_close:
+                eng.close_short(price, dt, f"底部信号 BS={bs:.0f}")
+                max_pnl_r = 0
+                cd = cooldown_bars * 3  # 底部信号后较长冷却, 避免信号矛盾区反复交易
+                bars_held = 0
+
+            # 3d: 硬止损
             if eng.futures_short and pnl_r < sl:
-                eng.close_short(price, dt, f"止损{pnl_r*100:.0f}%")
-                max_pnl_r = 0; cd_short = 36; bars_since_short = 0
+                eng.close_short(price, dt, f"止损 {pnl_r*100:.0f}%")
+                max_pnl_r = 0
+                cd = cooldown_bars * 2  # 止损后更长冷却
+                bars_held = 0
 
-        # 平多
-        if eng.futures_long:
-            pnl_r = eng.futures_long.calc_pnl(price) / eng.futures_long.margin
-            max_pnl_r = max(max_pnl_r, pnl_r)
-            if max_pnl_r >= 0.25:
-                if pnl_r < max_pnl_r * 0.6:
-                    eng.close_long(price, dt, "止盈多")
-                    max_pnl_r = 0; cd_long = 8
-            if ts >= 20:
-                eng.close_long(price, dt, "转空")
-                max_pnl_r = 0; cd_long = 4
-            if pnl_r < -0.4:
-                eng.close_long(price, dt, "止损多")
-                max_pnl_r = 0; cd_long = 12
+            # 3e: 超时平仓 (防止无限持仓)
+            if eng.futures_short and bars_held >= max_hold_bars:
+                eng.close_short(price, dt, f"超时平仓 {bars_held}h")
+                max_pnl_r = 0
+                cd = cooldown_bars
+                bars_held = 0
 
-        if idx % 4 == 0: eng.record_history(dt, price)
+        if idx % 4 == 0:
+            eng.record_history(dt, price)
 
-    if eng.futures_short: eng.close_short(main_df['close'].iloc[-1], main_df.index[-1], "结束")
-    if eng.futures_long: eng.close_long(main_df['close'].iloc[-1], main_df.index[-1], "结束")
+    # 结束时平仓
+    if eng.futures_short:
+        eng.close_short(main_df['close'].iloc[-1], main_df.index[-1], "期末平仓")
+    if eng.futures_long:
+        eng.close_long(main_df['close'].iloc[-1], main_df.index[-1], "期末平仓")
     return eng.get_result(main_df)
 
 
+# =======================================================
+# 方法A: 书本理论策略 (零优化)
+# =======================================================
+def method_a_book_theory(data, signals_all):
+    """
+    参数完全来自《背离技术分析》理论 + 标准风险管理, 不做任何调优。
+
+    理论依据:
+      - 顶部背离确认(TS≥15): 隔堆背离+面积缩小+DIF回落 → 卖出信号
+      - 强确认(TS≥20): 多周期共振 → 开空
+      - 底部信号(BS≥35): 底部背离确认 → 平仓
+      - 仓位: 15%单笔(标准风险管理), 最大30%总敞口
+      - 杠杆: 2-3x(加密期货标准)
+      - 止损: -40%(3x杠杆下ETH反弹13%触发, 合理止损距离)
+      - 追踪止盈: 50%利润后开始追踪(标准2:1风险收益比)
+    """
+    print("\n" + "=" * 100)
+    print("  方法A: 书本理论策略 (参数来自理论, 零数据优化)")
+    print("=" * 100)
+
+    configs = [
+        # A1: 标准保守版 — 完全按书本理论
+        # 理论: 背离出现在顶部(趋势还没反转时), 不应要求下降趋势
+        # 信号矛盾过滤: 底部信号>25时不开空(矛盾→观望)
+        {
+            'name': 'A1: 书本标准版',
+            'single_pct': 0.15, 'total_pct': 0.30,
+            'ts_sell': 15, 'ts_short': 20,
+            'bs_close': 35, 'bs_conflict': 25,
+            'sell_pct': 0.80, 'margin_use': 0.80,
+            'lev': 3,
+            'trail_start': 0.5, 'trail_keep': 0.6,
+            'sl': -0.40, 'tp': 1.5,
+            'max_hold': 336,  # 14天
+            'cooldown': 8,
+            'require_downtrend': False,  # 书本理论: 背离发生在趋势顶部
+        },
+        # A2: 中等仓位版
+        {
+            'name': 'A2: 中等仓位版',
+            'single_pct': 0.20, 'total_pct': 0.40,
+            'ts_sell': 15, 'ts_short': 20,
+            'bs_close': 35, 'bs_conflict': 25,
+            'sell_pct': 0.85, 'margin_use': 0.80,
+            'lev': 3,
+            'trail_start': 0.5, 'trail_keep': 0.6,
+            'sl': -0.40, 'tp': 1.5,
+            'max_hold': 336,
+            'cooldown': 8,
+            'require_downtrend': False,
+        },
+        # A3: 低杠杆安全版
+        {
+            'name': 'A3: 2x低杠杆版',
+            'single_pct': 0.20, 'total_pct': 0.40,
+            'ts_sell': 15, 'ts_short': 20,
+            'bs_close': 35, 'bs_conflict': 25,
+            'sell_pct': 0.85, 'margin_use': 0.80,
+            'lev': 2,
+            'trail_start': 0.4, 'trail_keep': 0.6,
+            'sl': -0.50, 'tp': 1.5,
+            'max_hold': 336,
+            'cooldown': 8,
+            'require_downtrend': False,
+        },
+        # A4: 需要下降趋势确认版 (保守验证)
+        {
+            'name': 'A4: 趋势确认版',
+            'single_pct': 0.15, 'total_pct': 0.30,
+            'ts_sell': 15, 'ts_short': 20,
+            'bs_close': 35, 'bs_conflict': 25,
+            'sell_pct': 0.80, 'margin_use': 0.80,
+            'lev': 3,
+            'trail_start': 0.5, 'trail_keep': 0.6,
+            'sl': -0.40, 'tp': 1.5,
+            'max_hold': 336,
+            'cooldown': 8,
+            'require_downtrend': True,  # 保守: 等确认后再做空
+        },
+        # A5: 纯现货策略 (不开空, 作为基准)
+        {
+            'name': 'A5: 纯现货基准',
+            'single_pct': 0.01, 'total_pct': 0.02,
+            'ts_sell': 15, 'ts_short': 999,  # 永远不会开空
+            'bs_close': 35, 'bs_conflict': 25,
+            'sell_pct': 0.85, 'margin_use': 0.80,
+            'lev': 1,
+            'trail_start': 0.5, 'trail_keep': 0.6,
+            'sl': -0.40, 'tp': 1.5,
+            'max_hold': 336,
+            'cooldown': 8,
+            'require_downtrend': False,
+        },
+    ]
+
+    results = []
+    for cfg in configs:
+        r = run_strategy(data, signals_all, cfg)
+        results.append(r)
+        f = r.get('fees', {})
+        print(f"  {r['name']:<22} α: {r['alpha']:+.2f}% | 收益: {r['strategy_return']:+.2f}% | "
+              f"回撤: {r['max_drawdown']:.2f}% | 交易: {r['total_trades']}笔 | "
+              f"费: ${f.get('total_costs', 0):,.0f}")
+    return results, configs
+
+
+# =======================================================
+# 方法B: Walk-Forward 验证
+# =======================================================
+def method_b_walk_forward(data, signals_all):
+    """
+    前15天训练(寻找最优参数), 后15天验证(样本外测试)。
+
+    训练阶段: 在前15天数据上测试多组参数, 找到最佳组合
+    测试阶段: 用训练阶段确定的参数, 在后15天"盲测"
+    """
+    print("\n" + "=" * 100)
+    print("  方法B: Walk-Forward 验证 (前15天训练 → 后15天盲测)")
+    print("=" * 100)
+
+    main_df = data['1h']
+    total_bars = len(main_df)
+    mid_idx = total_bars // 2
+    split_dt = main_df.index[mid_idx]
+    end_dt = main_df.index[-1]
+
+    print(f"  数据范围: {main_df.index[0]} ~ {end_dt}")
+    print(f"  训练集: {main_df.index[0]} ~ {split_dt} ({mid_idx}根K线)")
+    print(f"  测试集: {split_dt} ~ {end_dt} ({total_bars - mid_idx}根K线)")
+
+    # ---- 训练阶段: 在前半段搜索参数 ----
+    print(f"\n  --- 训练阶段 ---")
+    train_params = [
+        {'ts_sell': 12, 'ts_short': 18, 'bs_close': 30, 'sl': -0.35, 'trail_start': 0.4},
+        {'ts_sell': 15, 'ts_short': 20, 'bs_close': 35, 'sl': -0.40, 'trail_start': 0.5},
+        {'ts_sell': 18, 'ts_short': 22, 'bs_close': 40, 'sl': -0.45, 'trail_start': 0.6},
+        {'ts_sell': 15, 'ts_short': 25, 'bs_close': 30, 'sl': -0.40, 'trail_start': 0.5},
+        {'ts_sell': 12, 'ts_short': 20, 'bs_close': 40, 'sl': -0.50, 'trail_start': 0.4},
+        {'ts_sell': 15, 'ts_short': 20, 'bs_close': 45, 'sl': -0.35, 'trail_start': 0.7},
+    ]
+
+    base_cfg = {
+        'single_pct': 0.15, 'total_pct': 0.30,
+        'sell_pct': 0.80, 'margin_use': 0.80,
+        'lev': 3, 'trail_keep': 0.6,
+        'tp': 1.5, 'max_hold': 336, 'cooldown': 8,
+        'require_downtrend': False, 'bs_conflict': 25,
+    }
+
+    train_results = []
+    for i, params in enumerate(train_params):
+        cfg = {**base_cfg, **params, 'name': f'训练#{i+1}'}
+        r = run_strategy(data, signals_all, cfg, end_dt=split_dt)
+        train_results.append((r, cfg))
+        f = r.get('fees', {})
+        print(f"    训练#{i+1}: α={r['alpha']:+.2f}% 收益={r['strategy_return']:+.2f}% "
+              f"回撤={r['max_drawdown']:.2f}% 交易={r['total_trades']}笔")
+
+    # 选出训练集最佳
+    best_train = max(train_results, key=lambda x: x[0]['alpha'])
+    best_train_r, best_train_cfg = best_train
+    print(f"\n  训练最佳: {best_train_cfg.get('name')} α={best_train_r['alpha']:+.2f}%")
+    print(f"  训练最佳参数: ts_sell={best_train_cfg['ts_sell']} ts_short={best_train_cfg['ts_short']} "
+          f"bs_close={best_train_cfg['bs_close']} sl={best_train_cfg['sl']} trail={best_train_cfg['trail_start']}")
+
+    # ---- 测试阶段: 用训练参数在后半段盲测 ----
+    print(f"\n  --- 测试阶段 (样本外) ---")
+    test_cfg = {**best_train_cfg, 'name': 'WF: 样本外测试'}
+    test_r = run_strategy(data, signals_all, test_cfg, start_dt=split_dt)
+    f = test_r.get('fees', {})
+    print(f"  测试结果: α={test_r['alpha']:+.2f}% 收益={test_r['strategy_return']:+.2f}% "
+          f"回撤={test_r['max_drawdown']:.2f}% 交易={test_r['total_trades']}笔 费用=${f.get('total_costs', 0):,.0f}")
+
+    # 全量运行(作为参考)
+    full_cfg = {**best_train_cfg, 'name': 'WF: 全量参考'}
+    full_r = run_strategy(data, signals_all, full_cfg)
+    f2 = full_r.get('fees', {})
+    print(f"  全量参考: α={full_r['alpha']:+.2f}% 收益={full_r['strategy_return']:+.2f}% "
+          f"回撤={full_r['max_drawdown']:.2f}% 交易={full_r['total_trades']}笔 费用=${f2.get('total_costs', 0):,.0f}")
+
+    return {
+        'train_best': best_train_r,
+        'train_cfg': {k: v for k, v in best_train_cfg.items() if k != 'name'},
+        'test_result': test_r,
+        'full_result': full_r,
+        'split_dt': str(split_dt),
+    }
+
+
+# =======================================================
+# 方法C: 参数敏感性分析
+# =======================================================
+def method_c_sensitivity(data, signals_all):
+    """
+    展示参数在合理范围内的表现分布, 评估策略鲁棒性。
+    不选"最佳", 而是展示"中位数"和"最差"表现。
+    """
+    print("\n" + "=" * 100)
+    print("  方法C: 参数敏感性分析 (展示分布, 而非最佳)")
+    print("=" * 100)
+
+    base_cfg = {
+        'single_pct': 0.15, 'total_pct': 0.30,
+        'ts_sell': 15, 'ts_short': 20,
+        'bs_close': 35, 'bs_conflict': 25,
+        'sell_pct': 0.80, 'margin_use': 0.80,
+        'lev': 3,
+        'trail_start': 0.5, 'trail_keep': 0.6,
+        'sl': -0.40, 'tp': 1.5,
+        'max_hold': 336, 'cooldown': 8,
+        'require_downtrend': False,
+    }
+
+    sensitivity_results = {}
+
+    # 1. 保证金比例敏感性 (5%~30%, 标准交易范围)
+    print(f"\n  1. 保证金比例敏感性 (5%~30%)")
+    param_vals = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
+    alphas = []
+    for val in param_vals:
+        cfg = {**base_cfg, 'name': f'margin={val*100:.0f}%',
+               'single_pct': val, 'total_pct': val * 2}
+        r = run_strategy(data, signals_all, cfg)
+        alphas.append(r['alpha'])
+        print(f"    single={val*100:.0f}%: α={r['alpha']:+.2f}% 收益={r['strategy_return']:+.2f}% "
+              f"回撤={r['max_drawdown']:.2f}%")
+    sensitivity_results['margin'] = {
+        'param': 'single_pct', 'values': param_vals,
+        'alphas': alphas,
+        'median': float(np.median(alphas)),
+        'min': min(alphas), 'max': max(alphas),
+    }
+
+    # 2. 止损阈值敏感性
+    print(f"\n  2. 止损阈值敏感性 (-25%~-60%)")
+    param_vals = [-0.25, -0.30, -0.35, -0.40, -0.50, -0.60]
+    alphas = []
+    for val in param_vals:
+        cfg = {**base_cfg, 'name': f'sl={val*100:.0f}%', 'sl': val}
+        r = run_strategy(data, signals_all, cfg)
+        alphas.append(r['alpha'])
+        print(f"    sl={val*100:.0f}%: α={r['alpha']:+.2f}% 收益={r['strategy_return']:+.2f}% "
+              f"回撤={r['max_drawdown']:.2f}%")
+    sensitivity_results['stop_loss'] = {
+        'param': 'sl', 'values': [v * 100 for v in param_vals],
+        'alphas': alphas,
+        'median': float(np.median(alphas)),
+        'min': min(alphas), 'max': max(alphas),
+    }
+
+    # 3. 卖出信号阈值敏感性
+    print(f"\n  3. 卖出信号阈值敏感性 (TS=10~25)")
+    param_vals = [10, 12, 15, 18, 20, 25]
+    alphas = []
+    for val in param_vals:
+        cfg = {**base_cfg, 'name': f'ts_sell={val}', 'ts_sell': val}
+        r = run_strategy(data, signals_all, cfg)
+        alphas.append(r['alpha'])
+        print(f"    ts_sell={val}: α={r['alpha']:+.2f}% 收益={r['strategy_return']:+.2f}% "
+              f"回撤={r['max_drawdown']:.2f}%")
+    sensitivity_results['ts_sell'] = {
+        'param': 'ts_sell', 'values': param_vals,
+        'alphas': alphas,
+        'median': float(np.median(alphas)),
+        'min': min(alphas), 'max': max(alphas),
+    }
+
+    # 4. 底部平仓信号阈值敏感性
+    print(f"\n  4. 底部信号阈值敏感性 (BS=25~55)")
+    param_vals = [25, 30, 35, 40, 45, 55]
+    alphas = []
+    for val in param_vals:
+        cfg = {**base_cfg, 'name': f'bs_close={val}', 'bs_close': val}
+        r = run_strategy(data, signals_all, cfg)
+        alphas.append(r['alpha'])
+        print(f"    bs_close={val}: α={r['alpha']:+.2f}% 收益={r['strategy_return']:+.2f}% "
+              f"回撤={r['max_drawdown']:.2f}%")
+    sensitivity_results['bs_close'] = {
+        'param': 'bs_close', 'values': param_vals,
+        'alphas': alphas,
+        'median': float(np.median(alphas)),
+        'min': min(alphas), 'max': max(alphas),
+    }
+
+    # 5. 追踪止盈启动点敏感性
+    print(f"\n  5. 追踪止盈启动点敏感性 (30%~100%)")
+    param_vals = [0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
+    alphas = []
+    for val in param_vals:
+        cfg = {**base_cfg, 'name': f'trail={val*100:.0f}%', 'trail_start': val}
+        r = run_strategy(data, signals_all, cfg)
+        alphas.append(r['alpha'])
+        print(f"    trail_start={val*100:.0f}%: α={r['alpha']:+.2f}% 收益={r['strategy_return']:+.2f}% "
+              f"回撤={r['max_drawdown']:.2f}%")
+    sensitivity_results['trail_start'] = {
+        'param': 'trail_start', 'values': [v * 100 for v in param_vals],
+        'alphas': alphas,
+        'median': float(np.median(alphas)),
+        'min': min(alphas), 'max': max(alphas),
+    }
+
+    # 6. 杠杆倍数敏感性
+    print(f"\n  6. 杠杆倍数敏感性 (1x~5x)")
+    param_vals = [1, 2, 3, 4, 5]
+    alphas = []
+    for val in param_vals:
+        cfg = {**base_cfg, 'name': f'{val}x杠杆', 'lev': val, 'max_lev': val}
+        r = run_strategy(data, signals_all, cfg)
+        alphas.append(r['alpha'])
+        print(f"    {val}x: α={r['alpha']:+.2f}% 收益={r['strategy_return']:+.2f}% "
+              f"回撤={r['max_drawdown']:.2f}%")
+    sensitivity_results['leverage'] = {
+        'param': 'leverage', 'values': param_vals,
+        'alphas': alphas,
+        'median': float(np.median(alphas)),
+        'min': min(alphas), 'max': max(alphas),
+    }
+
+    # 汇总
+    print(f"\n  --- 敏感性汇总 ---")
+    for key, s in sensitivity_results.items():
+        print(f"  {key:12s}: 中位α={s['median']:+.2f}% 范围=[{s['min']:+.2f}%, {s['max']:+.2f}%] "
+              f"(波动{s['max']-s['min']:.2f}%)")
+
+    return sensitivity_results
+
+
+# =======================================================
+# 主入口
+# =======================================================
 def run_all():
     data = fetch_all_data()
 
@@ -185,338 +525,93 @@ def run_all():
             signals_all[tf] = analyze_signals_enhanced(df, w)
             print(f"  {tf}: {len(signals_all[tf])} 个信号点")
 
-    # ============================================================
-    # Phase 6: 风控参数网格搜索
-    # ============================================================
-    print(f"\n{'='*140}")
-    print(f"  Phase 6: 风控参数网格搜索 (保证金比例×杠杆×卖出比例)")
-    print(f"{'='*140}")
+    # ============================================
+    # 方法A: 书本理论策略
+    # ============================================
+    results_a, configs_a = method_a_book_theory(data, signals_all)
 
-    phase6_configs = []
+    # ============================================
+    # 方法B: Walk-Forward
+    # ============================================
+    wf_results = method_b_walk_forward(data, signals_all)
 
-    # 6A: 不同single_max (核心参数, 扩展到50%)
-    for sp in [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50]:
-        phase6_configs.append({
-            'name': f'6A: single={sp*100:.0f}%',
-            'single_pct': sp,
-            'total_pct': max(sp * 2.5, 0.15),
-            'sell_pct': 0.92,
-            'margin_use': 1.0,
-            'lev': 3,
-        })
+    # ============================================
+    # 方法C: 参数敏感性
+    # ============================================
+    sensitivity = method_c_sensitivity(data, signals_all)
 
-    # 6B: 不同杠杆 × 高保证金
-    for lev in [2, 3, 4, 5]:
-        phase6_configs.append({
-            'name': f'6B: {lev}x lev s40%',
-            'single_pct': 0.40,
-            'total_pct': 1.0,
-            'max_lev': lev,
-            'lev': lev,
-            'sell_pct': 0.92,
-            'margin_use': 1.0,
-        })
+    # ============================================
+    # 最终汇总
+    # ============================================
+    print(f"\n\n{'='*100}")
+    print("  最终结论 (无事后偏差)")
+    print(f"{'='*100}")
 
-    # 6C: 突破USDT 50%限制 (usdt_ratio 0.5→0.9)
-    for ur in [0.5, 0.6, 0.7, 0.8, 0.9]:
-        phase6_configs.append({
-            'name': f'6C: usdt_r={ur} s50%',
-            'single_pct': 0.50,
-            'total_pct': 1.0,
-            'usdt_ratio': ur,
-            'sell_pct': 0.92,
-            'margin_use': 1.0,
-            'lev': 3,
-        })
+    best_a = max(results_a, key=lambda x: x['alpha'])
+    print(f"\n  方法A 书本理论(最佳): {best_a['name']}")
+    print(f"    α={best_a['alpha']:+.2f}% | 收益={best_a['strategy_return']:+.2f}% | "
+          f"回撤={best_a['max_drawdown']:.2f}% | 交易={best_a['total_trades']}笔")
 
-    # 6D: 极致组合 - 高保证金+高USDT比例+高杠杆
-    for sp, ur, lev in [
-        (0.40, 0.8, 3), (0.50, 0.8, 3), (0.50, 0.9, 3),
-        (0.40, 0.8, 4), (0.50, 0.8, 4), (0.50, 0.9, 4),
-        (0.40, 0.8, 5), (0.50, 0.8, 5), (0.50, 0.9, 5),
-    ]:
-        phase6_configs.append({
-            'name': f'6D: s{sp*100:.0f}% ur{ur} {lev}x',
-            'single_pct': sp,
-            'total_pct': max(sp * 2.5, 1.0),
-            'max_lev': lev,
-            'lev': lev,
-            'usdt_ratio': ur,
-            'sell_pct': 0.95,
-            'margin_use': 1.0,
-        })
+    test_r = wf_results['test_result']
+    print(f"\n  方法B Walk-Forward(样本外):")
+    print(f"    α={test_r['alpha']:+.2f}% | 收益={test_r['strategy_return']:+.2f}% | "
+          f"回撤={test_r['max_drawdown']:.2f}% | 交易={test_r['total_trades']}笔")
 
-    results_p6 = []
-    for cfg in phase6_configs:
-        r = run_strategy(data, signals_all, cfg)
-        results_p6.append(r)
-        f = r.get('fees', {})
-        print(f"  {r['name']:<26} α: {r['alpha']:+.2f}% | 收益: {r['strategy_return']:+.2f}% | "
-              f"回撤: {r['max_drawdown']:.2f}% | 交易: {r['total_trades']}笔 | "
-              f"费: ${f.get('total_costs', 0):,.0f} ({f.get('fee_drag_pct', 0):.2f}%)")
+    # 参数鲁棒性
+    median_alphas = [s['median'] for s in sensitivity.values()]
+    overall_median = np.median(median_alphas)
+    print(f"\n  方法C 参数鲁棒性:")
+    print(f"    各维度中位α的中位数: {overall_median:+.2f}%")
+    for key, s in sensitivity.items():
+        print(f"    {key}: 中位{s['median']:+.2f}% [{s['min']:+.2f}% ~ {s['max']:+.2f}%]")
 
-    # 找Phase6最佳参数
-    best_p6 = max(results_p6, key=lambda x: x['alpha'])
-    print(f"\n  Phase 6 最佳: {best_p6['name']} α={best_p6['alpha']:+.2f}%")
+    print(f"\n  对比(不可信的旧结果): Phase 8 hold∞ α=+118.78% ← 严重事后偏差")
+    print(f"  真实可预期的α范围: [{min(s['min'] for s in sensitivity.values()):+.2f}% ~ "
+          f"{max(s['max'] for s in sensitivity.values()):+.2f}%]")
 
-    # ============================================================
-    # Phase 7: 策略结构微调 (基于Phase 6最佳参数)
-    # ============================================================
-    print(f"\n{'='*140}")
-    print(f"  Phase 7: 策略结构微调 (基于Phase6最佳风控参数)")
-    print(f"{'='*140}")
-
-    # 从Phase6最佳中提取参数
-    best_cfg = None
-    for cfg in phase6_configs:
-        if cfg['name'] == best_p6['name']:
-            best_cfg = cfg.copy()
-            break
-    if not best_cfg:
-        best_cfg = {'single_pct': 0.15, 'total_pct': 0.30, 'sell_pct': 0.92,
-                     'margin_use': 0.95, 'lev': 3}
-
-    phase7_configs = [
-        # 7A: 基线(Phase6最佳参数原封不动)
-        {**best_cfg, 'name': '7A: P6最佳基线'},
-
-        # 7B: +早鸟减仓
-        {**best_cfg, 'name': '7B: +早鸟', 'do_early': True},
-
-        # 7C: +双空仓
-        {**best_cfg, 'name': '7C: +双空仓', 'max_shorts': 2, 'short_cd': 48},
-
-        # 7D: +底部做多
-        {**best_cfg, 'name': '7D: +做多', 'do_long': True},
-
-        # 7E: +早鸟+双空
-        {**best_cfg, 'name': '7E: 早鸟+双空', 'do_early': True, 'max_shorts': 2, 'short_cd': 48},
-
-        # 7F: 全量融合
-        {**best_cfg, 'name': '7F: 全量融合', 'do_early': True, 'max_shorts': 2,
-         'short_cd': 48, 'do_long': True},
-
-        # 7G: 不追卖(减少费用)
-        {**best_cfg, 'name': '7G: 不追卖', 'do_chase_sell': False},
-
-        # 7H: 更宽止损
-        {**best_cfg, 'name': '7H: 宽止损-80%', 'sl': -0.8, 'trail_start': 1.2},
-
-        # 7I: 更窄追踪
-        {**best_cfg, 'name': '7I: 紧追踪', 'trail_start': 0.6, 'trail_keep': 0.7},
-
-        # 7J: 更高卖出门槛
-        {**best_cfg, 'name': '7J: 高卖门槛20', 'ts_sell': 20},
-
-        # 7K: 更低卖出门槛
-        {**best_cfg, 'name': '7K: 低卖门槛10', 'ts_sell': 10},
-
-        # 7L: 95%卖出+不追卖
-        {**best_cfg, 'name': '7L: 95%卖+不追', 'sell_pct': 0.95, 'do_chase_sell': False},
-
-        # 7M: 满仓100%margin
-        {**best_cfg, 'name': '7M: 满仓margin', 'margin_use': 1.0},
-
-        # 7N: 早鸟+不追卖+满仓
-        {**best_cfg, 'name': '7N: 早鸟+满仓', 'do_early': True,
-         'margin_use': 1.0, 'do_chase_sell': False},
-
-        # 7O: 不需要下降趋势确认
-        {**best_cfg, 'name': '7O: 无趋势限制', 'require_downtrend': False, 'margin_use': 1.0},
-
-        # 7P: 98%全清+满仓margin+不追卖
-        {**best_cfg, 'name': '7P: 极致卖出', 'sell_pct': 0.98,
-         'margin_use': 1.0, 'do_chase_sell': False},
-
-        # 7Q: 低门槛ts=10+双空仓+满仓
-        {**best_cfg, 'name': '7Q: 低门槛双空',
-         'ts_sell': 10, 'ts_short': 15, 'max_shorts': 2,
-         'short_cd': 36, 'margin_use': 1.0},
-    ]
-
-    results_p7 = []
-    for cfg in phase7_configs:
-        r = run_strategy(data, signals_all, cfg)
-        results_p7.append(r)
-        f = r.get('fees', {})
-        print(f"  {r['name']:<26} α: {r['alpha']:+.2f}% | 收益: {r['strategy_return']:+.2f}% | "
-              f"回撤: {r['max_drawdown']:.2f}% | 交易: {r['total_trades']}笔 | "
-              f"费: ${f.get('total_costs', 0):,.0f} ({f.get('fee_drag_pct', 0):.2f}%)")
-
-    # ============================================================
-    # Phase 8: 极致参数搜索 (基于Phase 6+7最佳)
-    # ============================================================
-    best_so_far = max(results_p6 + results_p7, key=lambda x: x['alpha'])
-    best8_cfg = None
-    for cfg in phase6_configs + phase7_configs:
-        if cfg['name'] == best_so_far['name']:
-            best8_cfg = cfg.copy()
-            break
-    if not best8_cfg:
-        best8_cfg = best_cfg.copy()
-
-    print(f"\n{'='*140}")
-    print(f"  Phase 8: 极致参数微调 (基于当前冠军 {best_so_far['name']} α={best_so_far['alpha']:+.2f}%)")
-    print(f"{'='*140}")
-
-    phase8_configs = []
-
-    # 8A: 在冠军附近做精细网格搜索
-    base_sp = best8_cfg.get('single_pct', 0.25)
-    base_ur = best8_cfg.get('usdt_ratio', 0.5)
-    base_lev = best8_cfg.get('lev', 3)
-
-    # 精细single_pct搜索 (±10%范围)
-    for sp_delta in [-0.05, -0.02, 0, 0.02, 0.05, 0.10]:
-        sp = min(max(base_sp + sp_delta, 0.05), 0.60)
-        for ur in [base_ur, min(base_ur + 0.1, 0.95), min(base_ur + 0.2, 0.95)]:
-            cfg_name = f'8A: s{sp*100:.0f}% ur{ur:.1f}'
-            phase8_configs.append({
-                **best8_cfg,
-                'name': cfg_name,
-                'single_pct': sp,
-                'total_pct': max(sp * 2.5, 1.0),
-                'usdt_ratio': ur,
-                'margin_use': 1.0,
-            })
-
-    # 8B: 杠杆精细搜索 (冠军参数基础上换杠杆)
-    for lev in [2, 3, 4, 5]:
-        if lev != base_lev:
-            phase8_configs.append({
-                **best8_cfg,
-                'name': f'8B: {lev}x (冠军参数)',
-                'max_lev': lev,
-                'lev': lev,
-                'margin_use': 1.0,
-            })
-
-    # 8C: 卖出+保证金+USDT比例 三维联合搜索 (关键组合)
-    for sell in [0.90, 0.95, 0.98]:
-        for sp in [0.35, 0.45, 0.55]:
-            for ur in [0.7, 0.85, 0.95]:
-                phase8_configs.append({
-                    'name': f'8C: sl{sell*100:.0f} s{sp*100:.0f} u{ur*100:.0f}',
-                    'single_pct': sp,
-                    'total_pct': max(sp * 2.5, 1.0),
-                    'usdt_ratio': ur,
-                    'sell_pct': sell,
-                    'margin_use': 1.0,
-                    'lev': 3,
-                    'max_lev': 5,
-                })
-
-    # 8E: 持仓时间+底部关闭阈值 (防止过早平仓)
-    for min_bars in [0, 48, 96, 168, 336, 9999]:  # 0h, 2d, 4d, 7d, 14d, 不关
-        for bsc in [40, 50, 60, 9999]:  # 底部信号阈值, 9999=不根据底部信号关闭
-            # 跳过默认组合
-            if min_bars == 0 and bsc == 40:
-                continue
-            phase8_configs.append({
-                'name': f'8E: bars{min_bars} bs{bsc}',
-                'single_pct': 0.50,
-                'total_pct': 1.25,
-                'usdt_ratio': 0.65,
-                'sell_pct': 0.92,
-                'margin_use': 1.0,
-                'lev': 3,
-                'ts_sell': 10,
-                'min_short_bars': min_bars,
-                'bs_close': bsc,
-                'trail_start': 2.0,  # 更宽追踪
-                'trail_keep': 0.5,
-            })
-
-    # 8F: 最佳持仓组合 × 不同保证金
-    for sp in [0.40, 0.50, 0.60, 0.70, 0.80]:
-        phase8_configs.append({
-            'name': f'8F: s{sp*100:.0f}% hold∞',
-            'single_pct': sp,
-            'total_pct': max(sp * 2.5, 1.0),
-            'usdt_ratio': min(sp + 0.15, 0.95),
-            'sell_pct': 0.92,
-            'margin_use': 1.0,
-            'lev': 3,
-            'ts_sell': 10,
-            'min_short_bars': 9999,
-            'bs_close': 9999,
-            'trail_start': 9999.0,  # 永不追踪止盈 → 持有到结束
-        })
-
-    # 去重
-    seen_names = set()
-    unique_p8 = []
-    for cfg in phase8_configs:
-        if cfg['name'] not in seen_names:
-            seen_names.add(cfg['name'])
-            unique_p8.append(cfg)
-    phase8_configs = unique_p8
-
-    results_p8 = []
-    for cfg in phase8_configs:
-        r = run_strategy(data, signals_all, cfg)
-        results_p8.append(r)
-        f = r.get('fees', {})
-        print(f"  {r['name']:<30} α: {r['alpha']:+.2f}% | 收益: {r['strategy_return']:+.2f}% | "
-              f"回撤: {r['max_drawdown']:.2f}% | 交易: {r['total_trades']}笔 | "
-              f"费: ${f.get('total_costs', 0):,.0f} ({f.get('fee_drag_pct', 0):.2f}%)")
-
-    best_p8 = max(results_p8, key=lambda x: x['alpha'])
-    print(f"\n  Phase 8 最佳: {best_p8['name']} α={best_p8['alpha']:+.2f}%")
-
-    # ============================================================
-    # 汇总排名
-    # ============================================================
-    all_results = results_p6 + results_p7 + results_p8
-    ranked = sorted(all_results, key=lambda x: x['alpha'], reverse=True)
-
-    print(f"\n\n{'='*140}")
-    print("             Phase 6+7+8 终极排名 (所有优化策略)")
-    print(f"{'='*140}")
-    fmt = "{:>3} {:<30} {:>9} {:>9} {:>8} {:>6} {:>10} {:>9} {:>12}"
-    print(fmt.format("#", "策略", "收益", "超额α", "回撤", "笔数", "总费用", "费率%", "最终资产"))
-    print("-" * 140)
-    for rank, r in enumerate(ranked, 1):
-        star = " ★" if rank == 1 else ("  " if rank > 3 else "")
-        f = r.get('fees', {})
-        print(fmt.format(
-            rank, r['name'] + star,
-            f"{r['strategy_return']:+.1f}%",
-            f"{r['alpha']:+.1f}%",
-            f"{r['max_drawdown']:.1f}%",
-            str(r['total_trades']),
-            f"${f.get('total_costs', 0):,.0f}",
-            f"{f.get('fee_drag_pct', 0):.2f}%",
-            f"${r['final_total']:,.0f}",
-        ))
-        if rank >= 20: break
-    print("=" * 140)
-
-    # 对比历史最佳
-    print(f"\n  历史最佳对比:")
-    print(f"  Phase 5 B1(满仓版):  α=+28.15%")
-    print(f"  Phase 6+7 冠军:      {ranked[0]['name']} α={ranked[0]['alpha']:+.2f}%")
-    improvement = ranked[0]['alpha'] - 28.15
-    if improvement > 0:
-        print(f"  提升: +{improvement:.2f}% !!!")
-    print(f"  最终资产: ${ranked[0]['final_total']:,.0f} (初始$200,000)")
-
-    # 保存 Top 15 结果
-    top_results = ranked[:15]
+    # 保存结果
     output = {
-        'phase': '6+7',
+        'phase': 'final_v2',
+        'description': '消除事后偏差的真实回测',
+        'methodology': {
+            'method_a': '书本理论参数(零数据优化)',
+            'method_b': 'Walk-Forward(前15天训练→后15天盲测)',
+            'method_c': '参数敏感性(展示分布而非最佳)',
+        },
+        'bias_eliminated': [
+            'hold∞ (永不平仓) → 改为信号+止损+超时退出',
+            'bs_close=9999 (禁用底部信号) → 改为BS≥35理论阈值',
+            'single_pct=80% (极端仓位) → 改为15-30%标准仓位',
+            '在测试集上优化参数 → Walk-Forward样本外验证',
+        ],
         'futures_results': [{
             'name': r['name'],
             'summary': {k: v for k, v in r.items() if k not in ('trades', 'history')},
             'trades': r['trades'],
             'history': r['history'],
-        } for r in top_results],
-        'best_strategy': ranked[0]['name'],
-        'ranking': [{'rank': i+1, 'name': r['name'], 'alpha': r['alpha'],
-                      'return': r['strategy_return'], 'max_dd': r['max_drawdown'],
-                      'trades': r['total_trades'], 'fees': r.get('fees', {})}
-                     for i, r in enumerate(ranked[:20])],
+        } for r in results_a],
+        'walk_forward': {
+            'split_dt': wf_results['split_dt'],
+            'train_alpha': wf_results['train_best']['alpha'],
+            'train_params': wf_results['train_cfg'],
+            'test_result': {
+                'name': wf_results['test_result']['name'],
+                'summary': {k: v for k, v in wf_results['test_result'].items()
+                            if k not in ('trades', 'history')},
+                'trades': wf_results['test_result']['trades'],
+                'history': wf_results['test_result']['history'],
+            },
+            'full_result': {
+                'name': wf_results['full_result']['name'],
+                'summary': {k: v for k, v in wf_results['full_result'].items()
+                            if k not in ('trades', 'history')},
+                'trades': wf_results['full_result']['trades'],
+                'history': wf_results['full_result']['history'],
+            },
+        },
+        'sensitivity': sensitivity,
     }
+
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         'strategy_futures_final_result.json')
     with open(path, 'w', encoding='utf-8') as f:

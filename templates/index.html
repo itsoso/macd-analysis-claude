@@ -1558,36 +1558,41 @@
                 <div class="card" id="ft5-conclusion"></div>
             </div>
 
-            <!-- ====== Phase 6+7+8: 终极参数优化 ====== -->
+            <!-- ====== 终极优化: 消除事后偏差 ====== -->
             <div id="ftfinal-section" style="display:none;">
                 <div class="card" style="margin-top:24px;">
-                    <div class="card-title">Phase 6+7+8 · 终极参数优化
-                        <span class="badge" style="background:rgba(245,158,11,0.15);color:#f59e0b;">ULTIMATE</span>
+                    <div class="card-title">终极版 · 消除事后偏差的真实回测
+                        <span class="badge" style="background:rgba(59,130,246,0.15);color:#3b82f6;">HONEST</span>
                     </div>
-                    <div style="background:rgba(245,158,11,0.08);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid #f59e0b;">
-                        <div style="font-weight:600;color:#f59e0b;margin-bottom:6px;">三大关键突破</div>
+                    <div style="background:rgba(239,68,68,0.06);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid #ef4444;">
+                        <div style="font-weight:600;color:#ef4444;margin-bottom:6px;">已消除的事后偏差</div>
                         <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
-                            <b>1. 风控参数放宽</b>: 单笔保证金上限从5%提升到80%，USDT可用比例从50%提升到95%<br>
-                            <b>2. 禁止过早平仓</b>: 底部信号(BS)不再触发平仓，持有空仓直到趋势真正反转<br>
-                            <b>3. 低门槛卖出</b>: 降低卖出信号阈值(TS≥10)，更早清仓现货锁定利润
+                            <s>hold∞ (永不平仓)</s> → 改为信号+止损+超时退出<br>
+                            <s>bs_close=9999 (禁用底部信号)</s> → 改为BS≥35理论阈值<br>
+                            <s>single_pct=80% (极端仓位)</s> → 改为15-30%标准仓位<br>
+                            <s>在测试集上优化参数</s> → Walk-Forward样本外验证
                         </div>
                     </div>
-                    <div class="page-subtitle" style="margin-bottom:12px;" id="ftfinal-subtitle">
-                        Phase 6: 保证金网格搜索 → Phase 7: 策略结构微调 → Phase 8: 极致参数搜索
+                    <div class="page-subtitle" style="margin-bottom:12px;">
+                        三种验证方法: 书本理论(零优化) + Walk-Forward(盲测) + 参数敏感性(鲁棒性)
                     </div>
                     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px;" id="ftfinal-strategy-cards"></div>
                 </div>
-                <div class="card"><div class="card-title">Phase 6+7+8 收益排名</div><div id="ftfinal-bar-chart" style="width:100%;min-height:420px;"></div></div>
-                <div class="card"><div class="card-title">Top 15 详细对比</div>
+                <div class="card"><div class="card-title">方法A: 书本理论策略对比</div><div id="ftfinal-bar-chart" style="width:100%;min-height:300px;"></div></div>
+                <div class="card"><div class="card-title">策略详细对比</div>
                     <div class="trade-table-wrap" style="max-height:none;"><table id="ftfinal-table"><thead><tr id="ftfinal-table-head"></tr></thead><tbody id="ftfinal-table-body"></tbody></table></div>
                 </div>
-                <div class="card"><div class="card-title">冠军策略资产曲线</div><div id="ftfinal-equity-chart" style="width:100%;height:400px;"></div></div>
-                <div class="card"><div class="card-title">冠军策略交易明细 <span class="badge" style="background:rgba(245,158,11,0.15);color:#f59e0b;" id="ftfinal-trade-count"></span></div>
-                    <div class="trade-table-wrap" style="max-height:500px;"><table id="ftfinal-trades-table"><thead><tr><th>#</th><th>时间</th><th>操作</th><th>方向</th><th>价格</th><th>数量</th><th>名义价值</th><th>杠杆</th><th>USDT余额</th><th>冻结保证金</th><th>总资产</th><th>原因</th></tr></thead><tbody id="ftfinal-trades-body"></tbody></table></div>
+                <div class="card"><div class="card-title">最佳策略资产曲线</div><div id="ftfinal-equity-chart" style="width:100%;height:400px;"></div></div>
+                <div class="card"><div class="card-title">最佳策略交易明细 <span class="badge" style="background:rgba(59,130,246,0.15);color:#3b82f6;" id="ftfinal-trade-count"></span></div>
+                    <div class="trade-table-wrap" style="max-height:500px;"><table id="ftfinal-trades-table"><thead><tr><th>#</th><th>时间</th><th>操作</th><th>方向</th><th>价格</th><th>数量</th><th>名义价值</th><th>杠杆</th><th>USDT余额</th><th>冻结保证金</th><th>总资产</th><th>决策依据</th></tr></thead><tbody id="ftfinal-trades-body"></tbody></table></div>
                 </div>
-                <div class="card" id="ftfinal-risk-section">
-                    <div class="card-title">风险等级分析</div>
-                    <div id="ftfinal-risk-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;"></div>
+                <div class="card" id="ftfinal-wf-section">
+                    <div class="card-title">方法B: Walk-Forward 样本外验证</div>
+                    <div id="ftfinal-wf-content"></div>
+                </div>
+                <div class="card" id="ftfinal-sensitivity-section">
+                    <div class="card-title">方法C: 参数敏感性分析</div>
+                    <div id="ftfinal-sensitivity-content"></div>
                 </div>
                 <div class="card" id="ftfinal-conclusion"></div>
             </div>
@@ -3816,47 +3821,50 @@
             </div>`;
     }
 
-    // ===================== Phase 6+7+8 终极优化渲染器 =====================
+    // ===================== 终极优化渲染器 (消除事后偏差) =====================
     function renderFuturesFinal(data) {
         const section = document.getElementById('ftfinal-section');
         if (!section) return;
         section.style.display = 'block';
 
         const results = data.futures_results || [];
-        const ranking = data.ranking || [];
         const sorted = [...results].sort((a, b) => (b.summary?.alpha || 0) - (a.summary?.alpha || 0));
         const best = sorted[0]?.summary || {};
+        const wf = data.walk_forward || {};
+        const sensitivity = data.sensitivity || {};
+        const biases = data.bias_eliminated || [];
 
-        // 策略卡片 (Top 5)
+        // 策略卡片
         const cardsEl = document.getElementById('ftfinal-strategy-cards');
-        const riskLevels = ['🏆 极致', '🔥 激进', '⚡ 积极', '💎 稳健', '🛡️ 保守'];
-        const riskColors = ['#f59e0b', '#ef4444', '#8b5cf6', '#10b981', '#3b82f6'];
-        sorted.slice(0, 5).forEach((r, i) => {
+        const cardColors = ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#64748b'];
+        sorted.forEach((r, i) => {
             const s = r.summary || {};
-            cardsEl.innerHTML += `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;border-left:3px solid ${riskColors[i]};">
-                <div style="font-weight:600;color:${riskColors[i]};font-size:14px;margin-bottom:6px;">${riskLevels[i]} ${r.name}</div>
+            const hasFutures = r.trades?.some(t => t.action?.includes('SHORT'));
+            cardsEl.innerHTML += `<div style="background:var(--bg-hover);border-radius:10px;padding:14px;border-left:3px solid ${cardColors[i]||'#64748b'};">
+                <div style="font-weight:600;color:${cardColors[i]||'#64748b'};font-size:14px;margin-bottom:6px;">${r.name}</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px;color:var(--text-secondary);">
                     <span>α: <b style="color:var(--accent-green);">${s.alpha>=0?'+':''}${(s.alpha||0).toFixed(1)}%</b></span>
                     <span>收益: <b>${(s.strategy_return||0).toFixed(1)}%</b></span>
                     <span>回撤: <b>${(s.max_drawdown||0).toFixed(1)}%</b></span>
-                    <span>资产: <b>$${Number(s.final_total||0).toLocaleString()}</b></span>
+                    <span>交易: <b>${s.total_trades||0}笔</b></span>
+                    <span>费用: <b>$${Number(s.fees?.total_costs||0).toLocaleString()}</b></span>
+                    <span>做空: <b>${hasFutures ? '是' : '否'}</b></span>
                 </div>
             </div>`;
         });
 
-        // 排名柱状图 (Top 20)
-        const chartData = ranking.slice(0, 20);
+        // 柱状图
         const barEl = document.getElementById('ftfinal-bar-chart');
-        const maxAlpha = Math.max(...chartData.map(d => d.alpha));
-        barEl.innerHTML = chartData.map((d, i) => {
-            const w = Math.max(d.alpha / maxAlpha * 100, 2);
-            const color = i === 0 ? '#f59e0b' : (i < 3 ? '#ef4444' : (i < 8 ? '#8b5cf6' : '#64748b'));
-            const star = i === 0 ? ' ★' : '';
-            return `<div style="display:flex;align-items:center;margin-bottom:4px;font-size:12px;">
-                <span style="width:200px;text-align:right;padding-right:10px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${d.rank}. ${d.name}${star}</span>
+        const maxAlpha = Math.max(...sorted.map(r => r.summary?.alpha || 0));
+        barEl.innerHTML = sorted.map((r, i) => {
+            const s = r.summary || {};
+            const w = Math.max((s.alpha||0) / maxAlpha * 100, 2);
+            const color = cardColors[i] || '#64748b';
+            return `<div style="display:flex;align-items:center;margin-bottom:6px;font-size:13px;">
+                <span style="width:180px;text-align:right;padding-right:10px;color:var(--text-secondary);">${r.name}</span>
                 <div style="flex:1;display:flex;align-items:center;">
-                    <div style="height:20px;width:${w}%;background:${color};border-radius:4px;transition:width .6s;"></div>
-                    <span style="margin-left:8px;font-weight:600;color:${color};">+${d.alpha.toFixed(1)}%</span>
+                    <div style="height:24px;width:${w}%;background:${color};border-radius:4px;"></div>
+                    <span style="margin-left:8px;font-weight:600;color:${color};">+${(s.alpha||0).toFixed(1)}%</span>
                 </div>
             </div>`;
         }).join('');
@@ -3865,23 +3873,23 @@
         const headEl = document.getElementById('ftfinal-table-head');
         headEl.innerHTML = '<th>#</th><th>策略</th><th>超额α</th><th>收益</th><th>回撤</th><th>交易</th><th>费用</th><th>费率</th><th>最终资产</th>';
         const bodyEl = document.getElementById('ftfinal-table-body');
-        bodyEl.innerHTML = ranking.slice(0, 15).map((d, i) => {
-            const f = d.fees || {};
-            const rowStyle = i === 0 ? 'background:rgba(245,158,11,0.08);font-weight:600;' : '';
+        bodyEl.innerHTML = sorted.map((r, i) => {
+            const s = r.summary || {};
+            const f = s.fees || {};
+            const rowStyle = i === 0 ? 'background:rgba(59,130,246,0.08);font-weight:600;' : '';
             return `<tr style="${rowStyle}">
-                <td>${d.rank}</td>
-                <td>${d.name}${i===0?' ★':''}</td>
-                <td style="color:var(--accent-green);font-weight:600;">${d.alpha>=0?'+':''}${d.alpha.toFixed(2)}%</td>
-                <td style="color:${d.return>=0?'var(--accent-green)':'var(--accent-red)'};">${d.return>=0?'+':''}${d.return.toFixed(2)}%</td>
-                <td>${d.max_dd.toFixed(2)}%</td>
-                <td>${d.trades}</td>
+                <td>${i+1}</td><td>${r.name}${i===0?' ★':''}</td>
+                <td style="color:var(--accent-green);font-weight:600;">${(s.alpha||0)>=0?'+':''}${(s.alpha||0).toFixed(2)}%</td>
+                <td style="color:${(s.strategy_return||0)>=0?'var(--accent-green)':'var(--accent-red)'};">${(s.strategy_return||0)>=0?'+':''}${(s.strategy_return||0).toFixed(2)}%</td>
+                <td>${(s.max_drawdown||0).toFixed(2)}%</td>
+                <td>${s.total_trades||0}</td>
                 <td>$${Number(f.total_costs||0).toLocaleString()}</td>
                 <td>${(f.fee_drag_pct||0).toFixed(2)}%</td>
-                <td>$${Number(d.alpha ? (200000*(1+d.return/100)) : 0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                <td>$${Number(s.final_total||0).toLocaleString()}</td>
             </tr>`;
         }).join('');
 
-        // 资产曲线 (冠军策略)
+        // 资产曲线
         if (sorted[0]?.history?.length) {
             const eqEl = document.getElementById('ftfinal-equity-chart');
             const hist = sorted[0].history;
@@ -3891,20 +3899,10 @@
                 grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
                 crosshair: { mode: 0 },
             });
-            const lineSeries = chart.addLineSeries({ color: '#f59e0b', lineWidth: 2 });
-            const lineData = hist.map(h => ({
-                time: new Date(h.time).getTime()/1000,
-                value: h.total
-            }));
-            lineSeries.setData(lineData);
-
-            // 基准线
+            const lineSeries = chart.addLineSeries({ color: '#3b82f6', lineWidth: 2 });
+            lineSeries.setData(hist.map(h => ({time: new Date(h.time).getTime()/1000, value: h.total})));
             const benchSeries = chart.addLineSeries({ color: '#64748b', lineWidth: 1, lineStyle: 2 });
-            const benchData = hist.map(h => ({
-                time: new Date(h.time).getTime()/1000,
-                value: h.benchmark || 200000
-            }));
-            benchSeries.setData(benchData);
+            benchSeries.setData(hist.map(h => ({time: new Date(h.time).getTime()/1000, value: h.benchmark || 200000})));
             chart.timeScale().fitContent();
         }
 
@@ -3919,68 +3917,89 @@
             const isSell = t.action?.includes('SELL');
             const color = isOpen ? '#f59e0b' : (isClose ? '#10b981' : (isSell ? '#ef4444' : '#64748b'));
             return `<tr>
-                <td>${i+1}</td>
-                <td>${fmtDate(t.time)}</td>
+                <td>${i+1}</td><td>${fmtDate(t.time)}</td>
                 <td style="color:${color};font-weight:600;">${t.action||''}</td>
-                <td>${t.direction||'spot'}</td>
-                <td>$${Number(t.price||0).toLocaleString()}</td>
-                <td>${Number(t.quantity||0).toFixed(4)}</td>
-                <td>$${Number(t.value||0).toLocaleString()}</td>
-                <td>${t.leverage||1}x</td>
-                <td>$${Number(t.usdt_after||0).toLocaleString()}</td>
-                <td>$${Number(t.frozen_margin||0).toLocaleString()}</td>
-                <td>$${Number(t.total||0).toLocaleString()}</td>
-                <td style="font-size:11px;color:var(--text-secondary);max-width:200px;overflow:hidden;text-overflow:ellipsis;">${t.reason||''}</td>
+                <td>${t.direction||'spot'}</td><td>$${Number(t.price||0).toLocaleString()}</td>
+                <td>${Number(t.quantity||0).toFixed(4)}</td><td>$${Number(t.value||0).toLocaleString()}</td>
+                <td>${t.leverage||1}x</td><td>$${Number(t.usdt_after||0).toLocaleString()}</td>
+                <td>$${Number(t.frozen_margin||0).toLocaleString()}</td><td>$${Number(t.total||0).toLocaleString()}</td>
+                <td style="font-size:11px;color:var(--text-secondary);max-width:220px;">${t.reason||''}</td>
             </tr>`;
         }).join('');
 
-        // 风险等级分析
-        const riskEl = document.getElementById('ftfinal-risk-grid');
-        const riskProfiles = [
-            { name: '保守型 (s40%)', alpha: 70, dd: 6.5, margin: 40, desc: '40%保证金, 最大回撤-6.5%, 适合风险厌恶者' },
-            { name: '稳健型 (s50%)', alpha: 82, dd: 7.9, margin: 50, desc: '50%保证金, 最大回撤-7.9%, 平衡风险收益' },
-            { name: '积极型 (s60%)', alpha: 95, dd: 9.1, margin: 60, desc: '60%保证金, 最大回撤-9.1%, 追求较高收益' },
-            { name: '激进型 (s80%)', alpha: 119, dd: 11.4, margin: 80, desc: '80%保证金, 最大回撤-11.4%, 高风险高收益' },
-        ];
-        riskEl.innerHTML = riskProfiles.map(p => {
-            const color = p.margin <= 40 ? '#3b82f6' : (p.margin <= 50 ? '#10b981' : (p.margin <= 60 ? '#8b5cf6' : '#ef4444'));
-            return `<div style="background:var(--bg-hover);border-radius:10px;padding:16px;border-top:3px solid ${color};">
-                <div style="font-weight:700;color:${color};font-size:15px;margin-bottom:8px;">${p.name}</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:13px;margin-bottom:8px;">
-                    <span>α: <b style="color:var(--accent-green);">+${p.alpha}%</b></span>
-                    <span>回撤: <b>${p.dd}%</b></span>
-                    <span>保证金: <b>$${(p.margin*2000).toLocaleString()}</b></span>
-                    <span>强平线: <b>ETH+33%</b></span>
+        // Walk-Forward
+        const wfEl = document.getElementById('ftfinal-wf-content');
+        if (wf.test_result) {
+            const tr = wf.test_result.summary || {};
+            const trainA = wf.train_alpha || 0;
+            const testA = tr.alpha || 0;
+            const decay = trainA - testA;
+            wfEl.innerHTML = `
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+                    <div style="background:var(--bg-hover);border-radius:10px;padding:16px;border-top:3px solid #10b981;">
+                        <div style="font-weight:600;color:#10b981;margin-bottom:8px;">训练集 (前15天)</div>
+                        <div>α: <b style="color:var(--accent-green);">+${trainA.toFixed(1)}%</b></div>
+                        <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">参数: ts_sell=${wf.train_params?.ts_sell||15} ts_short=${wf.train_params?.ts_short||20} bs_close=${wf.train_params?.bs_close||35}</div>
+                    </div>
+                    <div style="background:var(--bg-hover);border-radius:10px;padding:16px;border-top:3px solid #3b82f6;">
+                        <div style="font-weight:600;color:#3b82f6;margin-bottom:8px;">测试集 (后15天, 样本外)</div>
+                        <div>α: <b style="color:var(--accent-green);">+${testA.toFixed(1)}%</b></div>
+                        <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">衰减: ${decay.toFixed(1)}% (训练→测试)</div>
+                    </div>
                 </div>
-                <div style="font-size:12px;color:var(--text-secondary);line-height:1.5;">${p.desc}</div>
+                <div style="padding:12px;background:var(--bg-hover);border-radius:8px;font-size:13px;line-height:1.6;">
+                    <b>验证结论:</b> 训练α=+${trainA.toFixed(1)}% → 样本外α=+${testA.toFixed(1)}%, 
+                    ${testA > 0 ? '策略在未见数据上仍然有效' : '策略在样本外失效, 存在过拟合风险'}。
+                    衰减${decay.toFixed(1)}%${decay < 10 ? '在可接受范围内' : ', 存在一定过拟合'}.
+                </div>`;
+        }
+
+        // 参数敏感性
+        const sensEl = document.getElementById('ftfinal-sensitivity-content');
+        if (Object.keys(sensitivity).length) {
+            const paramNames = {'margin': '保证金比例', 'stop_loss': '止损阈值', 'ts_sell': '卖出信号', 'bs_close': '底部信号', 'trail_start': '追踪止盈', 'leverage': '杠杆倍数'};
+            sensEl.innerHTML = Object.entries(sensitivity).map(([key, s]) => {
+                const name = paramNames[key] || key;
+                const range = (s.max - s.min).toFixed(2);
+                const stable = parseFloat(range) < 2;
+                return `<div style="display:flex;align-items:center;margin-bottom:8px;font-size:13px;">
+                    <span style="width:100px;color:var(--text-secondary);">${name}</span>
+                    <div style="flex:1;display:flex;align-items:center;gap:8px;">
+                        <span style="font-size:12px;color:#64748b;">${s.min>=0?'+':''}${s.min.toFixed(1)}%</span>
+                        <div style="flex:1;height:8px;background:#1e293b;border-radius:4px;position:relative;">
+                            <div style="position:absolute;left:${((s.min-20)/(30-20))*100}%;right:${100-((s.max-20)/(30-20))*100}%;height:100%;background:${stable?'#10b981':'#f59e0b'};border-radius:4px;min-width:3px;"></div>
+                        </div>
+                        <span style="font-size:12px;color:#64748b;">${s.max>=0?'+':''}${s.max.toFixed(1)}%</span>
+                    </div>
+                    <span style="width:80px;text-align:right;font-weight:600;color:${stable?'#10b981':'#f59e0b'};">${stable?'稳定':'敏感'} (${range}%)</span>
+                </div>`;
+            }).join('') + `<div style="padding:12px;background:var(--bg-hover);border-radius:8px;font-size:13px;margin-top:12px;line-height:1.6;">
+                <b>鲁棒性结论:</b> 大多数参数变化对α影响很小(<1%), 说明策略核心收益来自信号质量而非参数调优。
+                保证金比例是最敏感参数(波动${sensitivity.margin?.max-sensitivity.margin?.min || 0 > 3 ? '较大' : '可控'}), 反映了仓位管理的重要性。
             </div>`;
-        }).join('');
+        }
 
         // 结论
         const conclEl = document.getElementById('ftfinal-conclusion');
-        conclEl.innerHTML = `<div class="card-title">终极优化结论</div>
-            <div style="padding:16px;background:rgba(245,158,11,0.06);border-radius:10px;border-left:3px solid #f59e0b;">
-                <p><b style="color:#f59e0b;font-size:16px;">🏆 终极冠军: ${sorted[0]?.name}</b></p>
+        conclEl.innerHTML = `<div class="card-title">最终结论 (无事后偏差)</div>
+            <div style="padding:16px;background:rgba(59,130,246,0.06);border-radius:10px;border-left:3px solid #3b82f6;">
+                <p><b style="color:#3b82f6;font-size:16px;">真实可预期超额收益: α ≈ +${(best.alpha||0).toFixed(0)}%</b></p>
                 <p style="margin-top:8px;">
-                    超额收益(α) <b style="color:var(--accent-green);">+${best.alpha?.toFixed(1)}%</b>
-                    | 策略收益 <b style="color:var(--accent-green);">+${best.strategy_return?.toFixed(1)}%</b>
-                    | 最大回撤 <b>${best.max_drawdown?.toFixed(1)}%</b>
-                    | 交易 <b>${best.total_trades}笔</b>
-                    | 最终资产 <b style="color:#f59e0b;">$${Number(best.final_total||0).toLocaleString()}</b>
+                    方法A书本理论: <b style="color:var(--accent-green);">+${(best.alpha||0).toFixed(1)}%</b>
+                    | Walk-Forward样本外: <b style="color:var(--accent-green);">+${(wf.test_result?.summary?.alpha||0).toFixed(1)}%</b>
+                    | 参数中位数: <b style="color:var(--accent-green);">+${(sensitivity.margin?.median||0).toFixed(1)}%</b>
                 </p>
                 <div style="margin-top:16px;padding:14px;background:var(--bg-hover);border-radius:8px;">
-                    <b style="color:#f59e0b;">优化历程:</b><br>
-                    <span>Phase 5 B1: α=+28.15% → Phase 6+7: α=+36.66% → Phase 8: α=+${best.alpha?.toFixed(1)}%</span><br>
-                    <span style="margin-top:6px;display:block;"><b>核心策略(仅5笔交易):</b></span>
-                    <span>1. 在TS≥10信号触发时，立即卖出92%现货ETH</span><br>
-                    <span>2. 在TS≥20更强信号确认时，投入${best.max_drawdown < -10 ? '80' : '50-60'}%资金开3x空仓</span><br>
-                    <span>3. 坚定持有空仓，忽略中途反弹信号，直到趋势完全反转</span><br>
-                    <span>4. 全程费用仅$${Number(best.fees?.total_costs||0).toLocaleString()}(${(best.fees?.fee_drag_pct||0).toFixed(2)}%)</span>
+                    <b style="color:#3b82f6;">核心策略 (${best.total_trades||0}笔交易):</b><br>
+                    <span>1. 当多周期背离信号(TS≥15)触发时, 卖出80-85%现货ETH</span><br>
+                    <span>2. 同时开3x空仓(15-20%保证金), 仅在底部信号(BS)不矛盾时开仓</span><br>
+                    <span>3. 底部信号(BS≥35)触发时立即平仓 — 尊重实时信号</span><br>
+                    <span>4. 配合止损(-40%)、追踪止盈(50%)、超时(14天)等标准风控</span>
                 </div>
                 <div style="margin-top:12px;padding:14px;background:var(--bg-hover);border-radius:8px;border-left:3px solid #ef4444;">
-                    <b style="color:#ef4444;">⚠️ 风险提示:</b><br>
-                    <span>该策略在ETH持续下跌环境中表现最优。若ETH在开空后上涨33%将触发强平，损失全部保证金。</span><br>
-                    <span>建议根据风险承受能力选择保证金比例: 保守40% / 稳健50% / 积极60% / 激进80%。</span>
+                    <b style="color:#ef4444;">对比旧结果(已废弃):</b><br>
+                    <span>Phase 8 hold∞: α=+119% ← <s>事后偏差: 已知ETH会持续下跌所以永不平仓</s></span><br>
+                    <span>真实前向回测: α=+${(best.alpha||0).toFixed(0)}% — 这才是实盘可预期的收益水平</span>
                 </div>
             </div>`;
     }
