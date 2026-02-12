@@ -102,6 +102,7 @@ SIX_BOOK_FILE = os.path.join(BASE_DIR, 'six_book_fusion_result.json')
 KDJ_FILE = os.path.join(BASE_DIR, 'kdj_result.json')
 OPTIMIZE_SIX_BOOK_FILE = os.path.join(BASE_DIR, 'optimize_six_book_result.json')
 BACKTEST_30D_7D_FILE = os.path.join(BASE_DIR, 'backtest_30d_7d_result.json')
+MULTI_TF_BACKTEST_30D_7D_FILE = os.path.join(BASE_DIR, 'backtest_multi_tf_30d_7d_result.json')
 
 
 def load_json(path):
@@ -262,6 +263,11 @@ def page_multi_tf_backtest():
 @app.route('/strategy/multi-tf-deep-dive')
 def page_multi_tf_deep_dive():
     return render_template('page_multi_tf_deep_dive.html', active_page='multi-tf-deep-dive')
+
+
+@app.route('/strategy/multi-tf-backtest-30d-7d')
+def page_multi_tf_backtest_30d_7d():
+    return render_template('page_multi_tf_backtest_30d_7d.html', active_page='multi-tf-backtest-30d-7d')
 
 
 @app.route('/strategy/six-book-deep-dive')
@@ -506,6 +512,15 @@ def api_backtest_30d_7d():
     if data:
         return jsonify(data)
     return jsonify({'error': '未找到回测对比数据, 请先运行 python backtest_30d_7d.py'}), 404
+
+
+@app.route('/api/multi_tf_backtest_30d_7d')
+def api_multi_tf_backtest_30d_7d():
+    """返回多周期联合决策30天vs7天回测对比数据"""
+    data = load_json(MULTI_TF_BACKTEST_30D_7D_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({'error': '未找到多周期回测数据, 请先运行 python backtest_multi_tf_30d_7d.py'}), 404
 
 
 @app.route('/api/turtle_backtest')

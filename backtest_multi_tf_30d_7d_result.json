@@ -1,0 +1,818 @@
+{
+  "description": "多周期联合决策 · 30天 vs 7天 真实回测对比",
+  "run_time": "2026-02-12T23:02:23.830645",
+  "data_source": "币安 ETH/USDT 真实K线",
+  "base_config": {
+    "best_single_tf": "1h",
+    "best_single_alpha": 149.89,
+    "fusion_mode": "c6_veto"
+  },
+  "fee_model": {
+    "taker_fee": "0.05%",
+    "slippage": "0.1%",
+    "funding_rate": "±0.01%/8h",
+    "liquidation_fee": "0.5%"
+  },
+  "single_tf_baselines": {
+    "30": {
+      "1h": {
+        "alpha": 89.47,
+        "strategy_return": 70.55,
+        "buy_hold_return": -18.92,
+        "max_drawdown": -20.13,
+        "total_trades": 55
+      },
+      "2h": {
+        "alpha": 58.18,
+        "strategy_return": 39.26,
+        "buy_hold_return": -18.92,
+        "max_drawdown": -20.92,
+        "total_trades": 116
+      },
+      "4h": {
+        "alpha": 64.62,
+        "strategy_return": 45.7,
+        "buy_hold_return": -18.92,
+        "max_drawdown": -20.52,
+        "total_trades": 78
+      }
+    },
+    "7": {
+      "1h": {
+        "alpha": 18.17,
+        "strategy_return": 18.64,
+        "buy_hold_return": 0.47,
+        "max_drawdown": -39.58,
+        "total_trades": 20
+      },
+      "2h": {
+        "alpha": -4.01,
+        "strategy_return": -3.54,
+        "buy_hold_return": 0.46,
+        "max_drawdown": -39.2,
+        "total_trades": 31
+      },
+      "4h": {
+        "alpha": 2.24,
+        "strategy_return": 2.71,
+        "buy_hold_return": 0.46,
+        "max_drawdown": -36.46,
+        "total_trades": 19
+      }
+    }
+  },
+  "results_30d": [
+    {
+      "rank": 1,
+      "combo_name": "均衡搭配",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 113.39,
+      "strategy_return": 94.47,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.13,
+      "total_trades": 60,
+      "liquidations": 0,
+      "total_cost": 5571.26,
+      "vs_single_tf": 23.92
+    },
+    {
+      "rank": 2,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 107.98,
+      "strategy_return": 89.06,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.13,
+      "total_trades": 60,
+      "liquidations": 0,
+      "total_cost": 4829.11,
+      "vs_single_tf": 18.51
+    },
+    {
+      "rank": 3,
+      "combo_name": "全周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 106.94,
+      "strategy_return": 88.02,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.13,
+      "total_trades": 60,
+      "liquidations": 0,
+      "total_cost": 5412.97,
+      "vs_single_tf": 17.47
+    },
+    {
+      "rank": 4,
+      "combo_name": "中大周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 101.34,
+      "strategy_return": 82.42,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.13,
+      "total_trades": 62,
+      "liquidations": 0,
+      "total_cost": 5769.35,
+      "vs_single_tf": 11.87
+    },
+    {
+      "rank": 5,
+      "combo_name": "核心周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 99.77,
+      "strategy_return": 80.85,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.13,
+      "total_trades": 46,
+      "liquidations": 0,
+      "total_cost": 3686.24,
+      "vs_single_tf": 10.3
+    },
+    {
+      "rank": 6,
+      "combo_name": "全周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 97.33,
+      "strategy_return": 78.41,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.52,
+      "total_trades": 52,
+      "liquidations": 0,
+      "total_cost": 4388.64,
+      "vs_single_tf": 32.71
+    },
+    {
+      "rank": 7,
+      "combo_name": "均衡搭配",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 96.61,
+      "strategy_return": 77.69,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.52,
+      "total_trades": 53,
+      "liquidations": 0,
+      "total_cost": 4853.13,
+      "vs_single_tf": 31.99
+    },
+    {
+      "rank": 8,
+      "combo_name": "全周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 95.61,
+      "strategy_return": 76.69,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.92,
+      "total_trades": 54,
+      "liquidations": 0,
+      "total_cost": 4601.86,
+      "vs_single_tf": 37.43
+    },
+    {
+      "rank": 9,
+      "combo_name": "中大周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 94.32,
+      "strategy_return": 75.4,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.52,
+      "total_trades": 54,
+      "liquidations": 0,
+      "total_cost": 4797.13,
+      "vs_single_tf": 29.7
+    },
+    {
+      "rank": 10,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 92.14,
+      "strategy_return": 73.22,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.52,
+      "total_trades": 50,
+      "liquidations": 0,
+      "total_cost": 4447.91,
+      "vs_single_tf": 27.52
+    },
+    {
+      "rank": 11,
+      "combo_name": "均衡搭配",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 91.61,
+      "strategy_return": 72.69,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.92,
+      "total_trades": 53,
+      "liquidations": 0,
+      "total_cost": 4863.54,
+      "vs_single_tf": 33.43
+    },
+    {
+      "rank": 12,
+      "combo_name": "核心周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 88.91,
+      "strategy_return": 69.98,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.92,
+      "total_trades": 48,
+      "liquidations": 0,
+      "total_cost": 3998.73,
+      "vs_single_tf": 30.73
+    },
+    {
+      "rank": 13,
+      "combo_name": "中大周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 82.1,
+      "strategy_return": 63.18,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.92,
+      "total_trades": 55,
+      "liquidations": 0,
+      "total_cost": 4901.77,
+      "vs_single_tf": 23.92
+    },
+    {
+      "rank": 14,
+      "combo_name": "核心周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 80.63,
+      "strategy_return": 61.71,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.52,
+      "total_trades": 48,
+      "liquidations": 0,
+      "total_cost": 4132.78,
+      "vs_single_tf": 16.01
+    },
+    {
+      "rank": 15,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 80.57,
+      "strategy_return": 61.64,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.92,
+      "total_trades": 52,
+      "liquidations": 0,
+      "total_cost": 4485.47,
+      "vs_single_tf": 22.39
+    },
+    {
+      "rank": 16,
+      "combo_name": "快慢双层",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 74.93,
+      "strategy_return": 56.01,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.13,
+      "total_trades": 44,
+      "liquidations": 0,
+      "total_cost": 2544.92,
+      "vs_single_tf": -14.54
+    },
+    {
+      "rank": 17,
+      "combo_name": "快慢双层",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 63.71,
+      "strategy_return": 44.79,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.52,
+      "total_trades": 42,
+      "liquidations": 0,
+      "total_cost": 2712.54,
+      "vs_single_tf": -0.91
+    },
+    {
+      "rank": 18,
+      "combo_name": "快慢双层",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 62.89,
+      "strategy_return": 43.97,
+      "buy_hold_return": -18.92,
+      "max_drawdown": -20.92,
+      "total_trades": 42,
+      "liquidations": 0,
+      "total_cost": 2888.33,
+      "vs_single_tf": 4.71
+    }
+  ],
+  "results_7d": [
+    {
+      "rank": 1,
+      "combo_name": "均衡搭配",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 15.78,
+      "strategy_return": 16.24,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.71,
+      "total_trades": 21,
+      "liquidations": 0,
+      "total_cost": 1247.93,
+      "vs_single_tf": 19.79
+    },
+    {
+      "rank": 2,
+      "combo_name": "全周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 15.5,
+      "strategy_return": 15.97,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.68,
+      "total_trades": 17,
+      "liquidations": 0,
+      "total_cost": 1251.57,
+      "vs_single_tf": 19.51
+    },
+    {
+      "rank": 3,
+      "combo_name": "均衡搭配",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 15.5,
+      "strategy_return": 15.96,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.46,
+      "total_trades": 21,
+      "liquidations": 0,
+      "total_cost": 1236.71,
+      "vs_single_tf": 13.26
+    },
+    {
+      "rank": 4,
+      "combo_name": "核心周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 15.46,
+      "strategy_return": 15.93,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.46,
+      "total_trades": 15,
+      "liquidations": 0,
+      "total_cost": 910.46,
+      "vs_single_tf": 13.22
+    },
+    {
+      "rank": 5,
+      "combo_name": "全周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 15.46,
+      "strategy_return": 15.93,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.46,
+      "total_trades": 15,
+      "liquidations": 0,
+      "total_cost": 910.46,
+      "vs_single_tf": 13.22
+    },
+    {
+      "rank": 6,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 15.46,
+      "strategy_return": 15.92,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.68,
+      "total_trades": 17,
+      "liquidations": 0,
+      "total_cost": 1422.37,
+      "vs_single_tf": 19.47
+    },
+    {
+      "rank": 7,
+      "combo_name": "全周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 15.28,
+      "strategy_return": 15.75,
+      "buy_hold_return": 0.47,
+      "max_drawdown": -36.09,
+      "total_trades": 17,
+      "liquidations": 0,
+      "total_cost": 1246.53,
+      "vs_single_tf": -2.89
+    },
+    {
+      "rank": 8,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 15.28,
+      "strategy_return": 15.75,
+      "buy_hold_return": 0.47,
+      "max_drawdown": -36.09,
+      "total_trades": 17,
+      "liquidations": 0,
+      "total_cost": 1246.53,
+      "vs_single_tf": -2.89
+    },
+    {
+      "rank": 9,
+      "combo_name": "中大周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 15.27,
+      "strategy_return": 15.74,
+      "buy_hold_return": 0.47,
+      "max_drawdown": -36.09,
+      "total_trades": 19,
+      "liquidations": 0,
+      "total_cost": 1796.22,
+      "vs_single_tf": -2.9
+    },
+    {
+      "rank": 10,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 15.2,
+      "strategy_return": 15.66,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.48,
+      "total_trades": 17,
+      "liquidations": 0,
+      "total_cost": 1417.23,
+      "vs_single_tf": 12.96
+    },
+    {
+      "rank": 11,
+      "combo_name": "中大周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 15.07,
+      "strategy_return": 15.53,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.68,
+      "total_trades": 19,
+      "liquidations": 0,
+      "total_cost": 1809.29,
+      "vs_single_tf": 19.08
+    },
+    {
+      "rank": 12,
+      "combo_name": "均衡搭配",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 14.54,
+      "strategy_return": 15.01,
+      "buy_hold_return": 0.47,
+      "max_drawdown": -36.09,
+      "total_trades": 23,
+      "liquidations": 0,
+      "total_cost": 1638.36,
+      "vs_single_tf": -3.63
+    },
+    {
+      "rank": 13,
+      "combo_name": "核心周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 14.07,
+      "strategy_return": 14.54,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.68,
+      "total_trades": 17,
+      "liquidations": 0,
+      "total_cost": 1260.04,
+      "vs_single_tf": 18.08
+    },
+    {
+      "rank": 14,
+      "combo_name": "核心周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 13.9,
+      "strategy_return": 14.37,
+      "buy_hold_return": 0.47,
+      "max_drawdown": -36.09,
+      "total_trades": 17,
+      "liquidations": 0,
+      "total_cost": 1253.42,
+      "vs_single_tf": -4.27
+    },
+    {
+      "rank": 15,
+      "combo_name": "中大周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 6.69,
+      "strategy_return": 7.15,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -36.48,
+      "total_trades": 18,
+      "liquidations": 0,
+      "total_cost": 1447.8,
+      "vs_single_tf": 4.45
+    },
+    {
+      "rank": 16,
+      "combo_name": "快慢双层",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 5.07,
+      "strategy_return": 5.54,
+      "buy_hold_return": 0.47,
+      "max_drawdown": -38.36,
+      "total_trades": 20,
+      "liquidations": 0,
+      "total_cost": 784.98,
+      "vs_single_tf": -13.1
+    },
+    {
+      "rank": 17,
+      "combo_name": "快慢双层",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 4.83,
+      "strategy_return": 5.29,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -38.17,
+      "total_trades": 18,
+      "liquidations": 0,
+      "total_cost": 782.95,
+      "vs_single_tf": 2.59
+    },
+    {
+      "rank": 18,
+      "combo_name": "快慢双层",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 4.76,
+      "strategy_return": 5.23,
+      "buy_hold_return": 0.46,
+      "max_drawdown": -38.68,
+      "total_trades": 19,
+      "liquidations": 0,
+      "total_cost": 786.47,
+      "vs_single_tf": 8.77
+    }
+  ],
+  "summary": {
+    "30d": {
+      "avg_alpha": 90.6,
+      "best_alpha": 113.39,
+      "worst_alpha": 62.89,
+      "profitable_count": 18,
+      "total_count": 18,
+      "avg_trades": 51.9
+    },
+    "7d": {
+      "avg_alpha": 12.95,
+      "best_alpha": 15.78,
+      "worst_alpha": 4.76,
+      "profitable_count": 18,
+      "total_count": 18,
+      "avg_trades": 18.2
+    }
+  }
+}
