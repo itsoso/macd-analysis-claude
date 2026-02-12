@@ -4,6 +4,7 @@ import pytest
 
 import backtest_multi_tf_30d_7d as bt_60307
 import optimize_six_book as opt_six
+import multi_tf_consensus
 from candlestick_patterns import (
     candle_features,
     detect_hanging_man,
@@ -163,3 +164,82 @@ def test_apply_conservative_risk_clamps_aggressive_config():
     assert safe["lev"] <= 3
     assert safe["margin_use"] <= 0.50
     assert safe["max_lev"] <= 3
+
+
+def test_calc_multi_tf_consensus_passes_configured_coverage_min(monkeypatch):
+    called = {}
+
+    def fake_fuse(tf_scores, decision_tfs, config):
+        called["config"] = dict(config)
+        return {
+            "weighted_ss": 10.0,
+            "weighted_bs": 20.0,
+            "meta": {},
+            "decision": {"direction": "long", "actionable": True, "strength": 80},
+            "coverage": 1.0,
+            "weighted_scores": {},
+        }
+
+    monkeypatch.setattr(multi_tf_consensus, "fuse_tf_scores", fake_fuse)
+    dt = pd.Timestamp("2025-01-01 00:00:00")
+    score_map = {"1h": {dt: (10.0, 20.0)}}
+    ss, bs, _meta = opt_six.calc_multi_tf_consensus(
+        score_map,
+        ["1h"],
+        dt,
+        {"short_threshold": 25, "long_threshold": 40, "coverage_min": 0.75},
+    )
+
+    assert ss == 10.0
+    assert bs == 20.0
+    assert called["config"]["coverage_min"] == 0.75
+
+
+def test_run_strategy_multi_tf_live_gate_blocks_non_actionable(monkeypatch):
+    df = _make_ohlcv(n=180, start=100, step=0.2)
+
+    def fake_consensus(_map, _tfs, _dt, _cfg):
+        return 80.0, 0.0, {
+            "decision": {"direction": "short", "actionable": False, "strength": 100},
+            "coverage": 1.0,
+        }
+
+    monkeypatch.setattr(opt_six, "calc_multi_tf_consensus", fake_consensus)
+
+    cfg = _base_exec_config()
+    cfg.update({"use_live_gate": True, "consensus_min_strength": 40, "coverage_min": 0.5})
+    result = opt_six.run_strategy_multi_tf(
+        primary_df=df,
+        tf_score_map={"1h": {}},
+        decision_tfs=["1h"],
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+    )
+
+    assert result["total_trades"] == 0
+
+
+def test_run_strategy_multi_tf_live_gate_allows_actionable_direction(monkeypatch):
+    df = _make_ohlcv(n=180, start=120, step=-0.2)
+
+    def fake_consensus(_map, _tfs, _dt, _cfg):
+        return 80.0, 0.0, {
+            "decision": {"direction": "short", "actionable": True, "strength": 90},
+            "coverage": 1.0,
+        }
+
+    monkeypatch.setattr(opt_six, "calc_multi_tf_consensus", fake_consensus)
+
+    cfg = _base_exec_config()
+    cfg.update({"use_live_gate": True, "consensus_min_strength": 40, "coverage_min": 0.5})
+    result = opt_six.run_strategy_multi_tf(
+        primary_df=df,
+        tf_score_map={"1h": {}},
+        decision_tfs=["1h"],
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+    )
+
+    assert any(t["action"] == "OPEN_SHORT" for t in result["trades"])

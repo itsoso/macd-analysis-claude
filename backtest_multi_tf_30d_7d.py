@@ -324,6 +324,10 @@ def main(args):
         'kdj_reverse_mult': best_config.get('kdj_reverse_mult', 0.70),
         'kdj_gate_threshold': best_config.get('kdj_gate_threshold', 10),
         'veto_dampen': best_config.get('veto_dampen', 0.30),
+        # 与实盘门控口径对齐
+        'use_live_gate': use_live_gate,
+        'consensus_min_strength': args.consensus_min_strength,
+        'coverage_min': args.coverage_min,
     }
     if use_conservative:
         f12_base = _apply_conservative_risk(f12_base)
@@ -603,6 +607,69 @@ def main(args):
             'avg_trades': round(np.mean([r['total_trades'] for r in results_list]), 1),
         }
 
+    def _build_robust_rankings():
+        """跨 60/30/7 窗口的稳健性排序。"""
+        buckets = {}
+        for days, rows in [(60, r60), (30, r30), (7, r7)]:
+            for row in rows:
+                key = f"{row['combo_name']}@{row['primary_tf']}|{'+'.join(row['decision_tfs'])}"
+                if key not in buckets:
+                    buckets[key] = {
+                        "combo": f"{row['combo_name']}@{row['primary_tf']}",
+                        "decision_tfs": row["decision_tfs"],
+                        "alpha_by_window": {},
+                        "mdd_by_window": {},
+                        "trades_by_window": {},
+                    }
+                buckets[key]["alpha_by_window"][str(days)] = float(row["alpha"])
+                buckets[key]["mdd_by_window"][str(days)] = float(row["max_drawdown"])
+                buckets[key]["trades_by_window"][str(days)] = int(row["total_trades"])
+
+        rankings = []
+        for _, item in buckets.items():
+            alphas = item["alpha_by_window"]
+            if not {"60", "30", "7"}.issubset(alphas.keys()):
+                continue
+            mdds = item["mdd_by_window"]
+            trades = item["trades_by_window"]
+            alpha_values = [alphas["60"], alphas["30"], alphas["7"]]
+            avg_alpha = float(np.mean(alpha_values))
+            min_alpha = float(min(alpha_values))
+            max_alpha = float(max(alpha_values))
+            spread = max_alpha - min_alpha
+            avg_mdd = float(np.mean([mdds["60"], mdds["30"], mdds["7"]]))
+            avg_trades = float(np.mean([trades["60"], trades["30"], trades["7"]]))
+
+            # 稳健性评分: 先看保底收益，再惩罚跨窗波动和深回撤
+            score = min_alpha - spread * 0.15 - max(0.0, abs(avg_mdd) - 15.0) * 0.3
+            rankings.append({
+                "combo": item["combo"],
+                "decision_tfs": item["decision_tfs"],
+                "alpha_60d": round(alphas["60"], 2),
+                "alpha_30d": round(alphas["30"], 2),
+                "alpha_7d": round(alphas["7"], 2),
+                "avg_alpha": round(avg_alpha, 2),
+                "min_alpha": round(min_alpha, 2),
+                "max_alpha": round(max_alpha, 2),
+                "alpha_spread": round(spread, 2),
+                "avg_mdd": round(avg_mdd, 2),
+                "avg_trades": round(avg_trades, 1),
+                "robust_score": round(score, 2),
+            })
+
+        rankings.sort(key=lambda x: x["robust_score"], reverse=True)
+        return rankings
+
+    robust_rankings = _build_robust_rankings()
+    if robust_rankings:
+        print(f"\n  === 稳健组合榜 TOP10 (跨 60/30/7) ===")
+        print(f"  {'排名':>4} {'组合':<28} {'60d':>8} {'30d':>8} {'7d':>8} {'Minα':>8} {'Spread':>8} {'Score':>8}")
+        print("  " + "-" * 90)
+        for i, rr in enumerate(robust_rankings[:10]):
+            print(f"  #{i+1:>3} {rr['combo']:<28} "
+                  f"{rr['alpha_60d']:>+7.2f}% {rr['alpha_30d']:>+7.2f}% {rr['alpha_7d']:>+7.2f}% "
+                  f"{rr['min_alpha']:>+7.2f}% {rr['alpha_spread']:>7.2f} {rr['robust_score']:>7.2f}")
+
     output = {
         'description': '多周期联合决策 · 60天/30天/7天 真实回测对比 (统一fuse_tf_scores)',
         'run_time': datetime.now().isoformat(),
@@ -617,6 +684,9 @@ def main(args):
         'realism': {
             'conservative_risk': use_conservative,
             'strict_oos': use_oos,
+            'live_gate': use_live_gate,
+            'consensus_min_strength': args.consensus_min_strength,
+            'coverage_min': args.coverage_min,
             'train_days': args.train_days,
             'oos_candidates': args.oos_candidates,
             'oos_selection': oos_meta,
@@ -636,6 +706,7 @@ def main(args):
         'results_60d': _format_period_results(r60),
         'results_30d': _format_period_results(r30),
         'results_7d': _format_period_results(r7),
+        'robust_rankings': robust_rankings[:30],
     }
 
     summary = {}
@@ -730,6 +801,18 @@ if __name__ == '__main__':
         help="样本外筛选时评估的候选参数数量 (默认 8)",
     )
     parser.add_argument(
+        "--coverage-min",
+        type=float,
+        default=0.5,
+        help="多周期融合最低覆盖率(实盘口径默认 0.5)",
+    )
+    parser.add_argument(
+        "--consensus-min-strength",
+        type=int,
+        default=40,
+        help="多周期共识最低强度(实盘口径默认 40)",
+    )
+    parser.add_argument(
         "--disable-oos",
         action="store_true",
         help="关闭严格样本外筛选 (默认开启)",
@@ -738,6 +821,11 @@ if __name__ == '__main__':
         "--disable-conservative",
         action="store_true",
         help="关闭保守仓位约束 (默认开启)",
+    )
+    parser.add_argument(
+        "--disable-live-gate",
+        action="store_true",
+        help="关闭实盘口径门控(actionable/direction/strength/coverage)",
     )
     parser.add_argument(
         "--no-update-latest",
