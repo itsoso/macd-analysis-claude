@@ -92,7 +92,8 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
     eng = FuturesEngine(config.get('name', 'opt'), max_leverage=config.get('max_lev', 5))
 
     start_dt = None
-    if trade_days and trade_days < 60:
+    # 始终按 trade_days 截窗。此前 trade_days==60 不截窗会夸大 60 天回测收益。
+    if trade_days and trade_days > 0:
         start_dt = primary_df.index[-1] - pd.Timedelta(days=trade_days)
 
     init_idx = 0
@@ -524,15 +525,47 @@ def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
         ss, bs = _get_tf_score_at(tf_score_map, tf, dt)
         tf_scores[tf] = (ss, bs)
 
-    # 回测不需要 coverage 惩罚 (所有数据预先可用)
+    # 覆盖率门控可配置:
+    # - 传统回测: coverage_min=0.0 (不门控)
+    # - 实盘口径回放: coverage_min=0.5 (与 live 一致)
     fuse_config = {
         'short_threshold': config.get('short_threshold', 25),
         'long_threshold': config.get('long_threshold', 40),
-        'coverage_min': 0.0,  # 回测中不启用 coverage 门控
+        'coverage_min': config.get('coverage_min', 0.0),
     }
     result = fuse_tf_scores(tf_scores, decision_tfs, fuse_config)
+    meta = dict(result.get("meta", {}))
+    meta["decision"] = result.get("decision", {})
+    meta["coverage"] = result.get("coverage", 0.0)
+    meta["weighted_scores"] = result.get("weighted_scores", {})
+    return result["weighted_ss"], result["weighted_bs"], meta
 
-    return result["weighted_ss"], result["weighted_bs"], result.get("meta", {})
+
+def _apply_live_parity_gate(ss, bs, meta, config):
+    """
+    可选: 回测中复用实盘共识门控口径 (actionable/direction/strength)。
+    """
+    if not config.get('use_live_gate', False):
+        return ss, bs
+
+    decision = meta.get("decision", {}) if isinstance(meta, dict) else {}
+    direction = decision.get("direction", "hold")
+    strength = float(decision.get("strength", 0))
+    actionable = bool(decision.get("actionable", False))
+    min_strength = float(config.get("consensus_min_strength", 40))
+    short_threshold = float(config.get("short_threshold", 25))
+    long_threshold = float(config.get("long_threshold", 40))
+
+    if not actionable:
+        return 0.0, 0.0
+    if direction not in ("long", "short"):
+        return 0.0, 0.0
+    if strength < min_strength:
+        return 0.0, 0.0
+
+    if direction == "long":
+        return 0.0, max(float(bs), long_threshold)
+    return max(float(ss), short_threshold), 0.0
 
 
 def run_strategy_multi_tf(primary_df, tf_score_map, decision_tfs, config,
@@ -540,7 +573,8 @@ def run_strategy_multi_tf(primary_df, tf_score_map, decision_tfs, config,
     """多周期联合决策回测引擎。"""
 
     def _multi_tf_score(_idx, dt, _price):
-        ss, bs, _meta = calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config)
+        ss, bs, meta = calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config)
+        ss, bs = _apply_live_parity_gate(ss, bs, meta, config)
         return ss, bs
 
     return _run_strategy_core(

@@ -87,16 +87,159 @@ def _file_lock(lock_path):
             fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
 
 
+def _slice_train_window(df, test_days=60, train_days=60):
+    """
+    样本外切片: 训练集使用测试窗口之前的区间，严格不与测试窗口重叠。
+    """
+    if df is None or len(df) == 0:
+        return df
+    test_start = df.index[-1] - pd.Timedelta(days=test_days)
+    train_start = test_start - pd.Timedelta(days=train_days)
+    sliced = df[(df.index >= train_start) & (df.index < test_start)].copy()
+    return sliced
+
+
+def _apply_conservative_risk(config):
+    """
+    保守仓位约束，降低回测虚高风险。
+    """
+    safe = dict(config)
+    safe["single_pct"] = min(float(safe.get("single_pct", 0.20)), 0.10)
+    safe["total_pct"] = min(float(safe.get("total_pct", 0.50)), 0.35)
+    safe["margin_use"] = min(float(safe.get("margin_use", 0.70)), 0.50)
+    safe["lev"] = min(int(safe.get("lev", 5)), 3)
+    safe["max_lev"] = min(int(safe.get("max_lev", safe["lev"])), 3)
+    return safe
+
+
+def _scale_runtime_config(base_config, primary_tf, tf_hours, name):
+    """
+    按主周期缩放 hold/cooldown，避免不同TF直接复用同一bars参数。
+    """
+    config = dict(base_config)
+    config["name"] = name
+    tf_h = tf_hours.get(primary_tf, 1)
+    config["short_max_hold"] = max(6, int(config.get("short_max_hold", 72) / tf_h))
+    config["long_max_hold"] = max(6, int(config.get("long_max_hold", 72) / tf_h))
+    config["cooldown"] = max(1, int(config.get("cooldown", 4) / tf_h))
+    config["spot_cooldown"] = max(2, int(config.get("spot_cooldown", 12) / tf_h))
+    return config
+
+
+def _select_oos_base_config(
+    opt_result,
+    all_data,
+    test_days,
+    train_days,
+    tf_hours,
+    fallback_config,
+    ref_tf,
+    top_n=8,
+    conservative=False,
+):
+    """
+    从优化候选中做一次严格样本外筛选:
+      - 训练窗口: [T-test_days-train_days, T-test_days)
+      - 测试窗口: [T-test_days, T]
+    """
+    if ref_tf not in all_data:
+        return dict(fallback_config), {"mode": "fallback", "reason": f"ref_tf {ref_tf} 不可用"}
+
+    top = opt_result.get("global_top30") or []
+    candidates = []
+
+    gb_cfg = (opt_result.get("global_best") or {}).get("config")
+    if isinstance(gb_cfg, dict):
+        candidates.append(dict(gb_cfg))
+
+    for row in top:
+        cfg = row.get("config")
+        if isinstance(cfg, dict):
+            candidates.append(dict(cfg))
+        if len(candidates) >= top_n:
+            break
+
+    candidates.append(dict(fallback_config))
+
+    # 去重
+    seen = set()
+    uniq = []
+    for cfg in candidates:
+        key = json.dumps(cfg, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(cfg)
+
+    train_df = _slice_train_window(all_data[ref_tf], test_days=test_days, train_days=train_days)
+    if train_df is None or len(train_df) < 120:
+        return dict(fallback_config), {
+            "mode": "fallback",
+            "reason": f"训练窗口不足: {0 if train_df is None else len(train_df)} bars",
+        }
+
+    train_start = train_df.index[0]
+    train_end = train_df.index[-1]
+    train_data_all = {}
+    for tf, df in all_data.items():
+        sliced = df[(df.index >= train_start) & (df.index <= train_end)].copy()
+        if len(sliced) > 50:
+            train_data_all[tf] = sliced
+
+    # 训练信号与配置无关，计算一次复用
+    train_signals = compute_signals_six(train_df, ref_tf, train_data_all, max_bars=0)
+
+    scored = []
+    for i, cand_cfg in enumerate(uniq):
+        merged = {**fallback_config, **cand_cfg}
+        if conservative:
+            merged = _apply_conservative_risk(merged)
+        runtime_cfg = _scale_runtime_config(merged, ref_tf, tf_hours, f"oos_train_{i+1}_{ref_tf}")
+
+        r = run_strategy(train_df, train_signals, runtime_cfg, tf=ref_tf, trade_days=train_days)
+        objective = float(r["alpha"]) - max(0.0, abs(float(r["max_drawdown"])) - 20.0) * 0.5
+        scored.append(
+            {
+                "objective": objective,
+                "alpha": float(r["alpha"]),
+                "max_drawdown": float(r["max_drawdown"]),
+                "config": merged,
+                "tag": merged.get("tag", f"candidate_{i+1}"),
+            }
+        )
+
+    scored.sort(key=lambda x: x["objective"], reverse=True)
+    best = scored[0]
+    meta = {
+        "mode": "strict_oos",
+        "ref_tf": ref_tf,
+        "train_days": train_days,
+        "test_days": test_days,
+        "candidates": len(scored),
+        "selected_tag": best["tag"],
+        "selected_alpha_train": round(best["alpha"], 2),
+        "selected_mdd_train": round(best["max_drawdown"], 2),
+        "selected_objective_train": round(best["objective"], 2),
+    }
+    return dict(best["config"]), meta
+
+
 def main(args):
     runner = args.runner
     host = socket.gethostname()
     pid = os.getpid()
     run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{runner}_{pid}"
+    use_oos = not args.disable_oos
+    use_conservative = not args.disable_conservative
+    use_live_gate = not args.disable_live_gate
 
     print("=" * 120)
     print("  多周期联合决策 · 60天/30天/7天 真实回测对比")
     print("  数据源: 币安 ETH/USDT 真实K线 · 含手续费/滑点/资金费率")
     print("  融合算法: fuse_tf_scores (回测/实盘统一)")
+    print(f"  现实约束: conservative={'ON' if use_conservative else 'OFF'} "
+          f"| strict_oos={'ON' if use_oos else 'OFF'} "
+          f"| live_gate={'ON' if use_live_gate else 'OFF'}")
     print(f"  运行标识: {run_id} ({runner}@{host})")
     print("=" * 120)
 
@@ -182,6 +325,8 @@ def main(args):
         'kdj_gate_threshold': best_config.get('kdj_gate_threshold', 10),
         'veto_dampen': best_config.get('veto_dampen', 0.30),
     }
+    if use_conservative:
+        f12_base = _apply_conservative_risk(f12_base)
 
     # ======================================================
     # 获取数据
@@ -189,9 +334,10 @@ def main(args):
     print(f"\n[1/4] 获取数据 (时间框架: {', '.join(all_tfs_needed)})...")
 
     all_data = {}
+    history_days = 60 + max(args.train_days, 30)
     for tf in all_tfs_needed:
-        print(f"  获取 {tf} 数据 (120天)...")
-        df = fetch_data_for_tf(tf, 120)
+        print(f"  获取 {tf} 数据 ({history_days}天 + 30天缓冲)...")
+        df = fetch_data_for_tf(tf, history_days)
         if df is not None:
             all_data[tf] = df
             print(f"    {tf}: {len(df)} 条K线, {df.index[0]} ~ {df.index[-1]}")
@@ -220,6 +366,36 @@ def main(args):
         all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=2000)
     print(f"  信号计算完成: {len(all_signals)} 个TF")
 
+    tf_hours = {
+        '10m': 1/6, '15m': 0.25, '30m': 0.5, '1h': 1, '2h': 2, '3h': 3,
+        '4h': 4, '6h': 6, '8h': 8, '12h': 12, '16h': 16, '24h': 24,
+    }
+
+    oos_meta = {
+        "mode": "disabled",
+        "reason": "disable_oos=true" if not use_oos else "not_applied",
+    }
+    if use_oos and primary_tf_candidates:
+        ref_tf = best_tf if best_tf in available_tfs else primary_tf_candidates[0]
+        selected_cfg, oos_meta = _select_oos_base_config(
+            opt_result=opt_result,
+            all_data=all_data,
+            test_days=60,
+            train_days=args.train_days,
+            tf_hours=tf_hours,
+            fallback_config=f12_base,
+            ref_tf=ref_tf,
+            top_n=args.oos_candidates,
+            conservative=use_conservative,
+        )
+        f12_base = selected_cfg
+        print("\n[2.5/4] 严格样本外筛选完成:")
+        print(f"  参考TF: {oos_meta.get('ref_tf', ref_tf)}")
+        print(f"  候选数: {oos_meta.get('candidates', 0)}")
+        print(f"  选中: {oos_meta.get('selected_tag', '-')}")
+        print(f"  训练集α: {oos_meta.get('selected_alpha_train', 0):+.2f}%")
+        print(f"  训练集回撤: {oos_meta.get('selected_mdd_train', 0):.2f}%")
+
     # 构建评分索引
     print(f"\n[3/4] 构建TF评分索引...")
     tf_score_index = _build_tf_score_index(all_data, all_signals, available_tfs, f12_base)
@@ -230,11 +406,6 @@ def main(args):
     # ======================================================
     # 分别运行 30天 和 7天 回测
     # ======================================================
-    tf_hours = {
-        '10m': 1/6, '15m': 0.25, '30m': 0.5, '1h': 1, '2h': 2, '3h': 3,
-        '4h': 4, '6h': 6, '8h': 8, '12h': 12, '16h': 16, '24h': 24,
-    }
-
     periods = [
         {'days': 60, 'label': '最近60天'},
         {'days': 30, 'label': '最近30天'},
@@ -253,13 +424,7 @@ def main(args):
                 continue
             df = all_data[ptf]
             sigs = all_signals[ptf]
-            config = dict(f12_base)
-            config['name'] = f'单TF_{ptf}_{days}d'
-            tf_h = tf_hours.get(ptf, 1)
-            config['short_max_hold'] = max(6, int(f12_base.get('short_max_hold', 72) / tf_h))
-            config['long_max_hold'] = max(6, int(f12_base.get('long_max_hold', 72) / tf_h))
-            config['cooldown'] = max(1, int(f12_base.get('cooldown', 4) / tf_h))
-            config['spot_cooldown'] = max(2, int(f12_base.get('spot_cooldown', 12) / tf_h))
+            config = _scale_runtime_config(f12_base, ptf, tf_hours, f'单TF_{ptf}_{days}d')
             r = run_strategy(df, sigs, config, tf=ptf, trade_days=days)
             baselines[ptf] = {
                 'alpha': r['alpha'],
@@ -304,7 +469,7 @@ def main(args):
 
         # 多周期回测
         print(f"\n  {'方案':<20} {'主TF':>5} {'辅助TFs':<45} {'Alpha':>10} {'策略收益':>12} "
-              f"{'BH':>8} {'回撤':>8} {'交易':>6} {'vs单TF':>10}")
+              f"{'BH':>8} {'现金':>8} {'回撤':>8} {'交易':>6} {'vs单TF':>10}")
         print('  ' + '-' * 130)
 
         period_results = []
@@ -314,14 +479,7 @@ def main(args):
                 if ptf not in all_data:
                     continue
 
-                config = dict(f12_base)
-                config['name'] = f'多TF_{combo_name}@{ptf}_{days}d'
-
-                tf_h = tf_hours.get(ptf, 1)
-                config['short_max_hold'] = max(6, int(f12_base.get('short_max_hold', 72) / tf_h))
-                config['long_max_hold'] = max(6, int(f12_base.get('long_max_hold', 72) / tf_h))
-                config['cooldown'] = max(1, int(f12_base.get('cooldown', 4) / tf_h))
-                config['spot_cooldown'] = max(2, int(f12_base.get('spot_cooldown', 12) / tf_h))
+                config = _scale_runtime_config(f12_base, ptf, tf_hours, f'多TF_{combo_name}@{ptf}_{days}d')
 
                 r = run_strategy_multi_tf(
                     all_data[ptf], tf_score_index, combo_tfs, config,
@@ -339,6 +497,8 @@ def main(args):
                     'alpha': r['alpha'],
                     'strategy_return': r['strategy_return'],
                     'buy_hold_return': r['buy_hold_return'],
+                    'cash_hold_return': 0.0,
+                    'alpha_vs_cash': r['strategy_return'],
                     'max_drawdown': r['max_drawdown'],
                     'total_trades': r['total_trades'],
                     'liquidations': r['liquidations'],
@@ -351,7 +511,7 @@ def main(args):
                 marker = ' ★' if vs_single > 0 else ''
                 print(f"  {combo_name:<20} {ptf:>5} {','.join(combo_tfs):<45} "
                       f"{r['alpha']:>+9.2f}% {r['strategy_return']:>+11.2f}% "
-                      f"{r['buy_hold_return']:>+7.2f}% {r['max_drawdown']:>7.2f}% "
+                      f"{r['buy_hold_return']:>+7.2f}% {0:>+7.2f}% {r['max_drawdown']:>7.2f}% "
                       f"{r['total_trades']:>5} {vs_single:>+9.2f}%{marker}")
 
         period_results.sort(key=lambda x: x['alpha'], reverse=True)
@@ -422,6 +582,8 @@ def main(args):
             'alpha': r['alpha'],
             'strategy_return': r['strategy_return'],
             'buy_hold_return': r['buy_hold_return'],
+            'cash_hold_return': r.get('cash_hold_return', 0.0),
+            'alpha_vs_cash': r.get('alpha_vs_cash', r['strategy_return']),
             'max_drawdown': r['max_drawdown'],
             'total_trades': r['total_trades'],
             'liquidations': r.get('liquidations', 0),
@@ -451,6 +613,13 @@ def main(args):
             'runner': runner,
             'host': host,
             'pid': pid,
+        },
+        'realism': {
+            'conservative_risk': use_conservative,
+            'strict_oos': use_oos,
+            'train_days': args.train_days,
+            'oos_candidates': args.oos_candidates,
+            'oos_selection': oos_meta,
         },
         'base_config': {
             'best_single_tf': best_tf,
@@ -524,7 +693,10 @@ def main(args):
         if not args.no_update_latest:
             _atomic_dump_json(latest_path, output)
 
-    print(f"\n结果已保存(最新): {latest_path}")
+    if args.no_update_latest:
+        print(f"\n结果已生成(未覆盖最新): {latest_path}")
+    else:
+        print(f"\n结果已保存(最新): {latest_path}")
     print(f"结果已归档(快照): {snapshot_path}")
     return output
 
@@ -544,6 +716,28 @@ if __name__ == '__main__':
         type=str,
         default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "backtests"),
         help="结果输出目录 (默认 data/backtests)",
+    )
+    parser.add_argument(
+        "--train-days",
+        type=int,
+        default=60,
+        help="严格样本外筛选的训练窗口天数 (默认 60)",
+    )
+    parser.add_argument(
+        "--oos-candidates",
+        type=int,
+        default=8,
+        help="样本外筛选时评估的候选参数数量 (默认 8)",
+    )
+    parser.add_argument(
+        "--disable-oos",
+        action="store_true",
+        help="关闭严格样本外筛选 (默认开启)",
+    )
+    parser.add_argument(
+        "--disable-conservative",
+        action="store_true",
+        help="关闭保守仓位约束 (默认开启)",
     )
     parser.add_argument(
         "--no-update-latest",
