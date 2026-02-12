@@ -17,12 +17,77 @@
 """
 
 import argparse
+import atexit
+import fcntl
 import json
 import os
+import signal
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# ── PID 文件锁 ─────────────────────────────────────────
+# 使用 fcntl.flock 保证同一时间只有一个引擎实例运行
+# 锁在进程退出时（包括崩溃）由 OS 自动释放
+
+_PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         'data', 'live', 'engine.pid')
+_lock_fd = None  # type: int | None
+
+
+def _acquire_engine_lock() -> bool:
+    """尝试获取引擎排他锁。成功返回 True，已有实例运行返回 False。"""
+    global _lock_fd
+    os.makedirs(os.path.dirname(_PID_FILE), exist_ok=True)
+
+    # 先读取已有 PID（在尝试加锁前，避免截断文件）
+    existing_pid = '?'
+    try:
+        with open(_PID_FILE, 'r') as f:
+            existing_pid = f.read().strip() or '?'
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    try:
+        # 用 'a' 模式打开（不截断），先尝试拿锁
+        _lock_fd = open(_PID_FILE, 'a+')
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # 拿到锁后截断并写入当前 PID
+        _lock_fd.seek(0)
+        _lock_fd.truncate()
+        _lock_fd.write(str(os.getpid()))
+        _lock_fd.flush()
+        return True
+    except (IOError, OSError):
+        # 锁被占用
+        if _lock_fd is not None:
+            try:
+                _lock_fd.close()
+            except Exception:
+                pass
+            _lock_fd = None
+        print(f"\n  ❌ 引擎已在运行 (PID={existing_pid})，不允许重复启动")
+        print(f"  如需重启，请先停止正在运行的实例\n")
+        return False
+
+
+def _release_engine_lock():
+    """释放锁并删除 PID 文件"""
+    global _lock_fd
+    if _lock_fd is not None:
+        try:
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+            _lock_fd.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(_PID_FILE)
+        except Exception:
+            pass
+        _lock_fd = None
 
 from live_config import (
     LiveTradingConfig, TradingPhase, StrategyConfig,
@@ -80,6 +145,11 @@ def print_phase_info(phase: str):
 def cmd_run(args):
     """运行交易引擎"""
     print(BANNER)
+
+    # ── 防重复启动: 获取排他锁 ──
+    if not _acquire_engine_lock():
+        sys.exit(1)
+    atexit.register(_release_engine_lock)
 
     # 加载配置
     if args.config and os.path.exists(args.config):

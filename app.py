@@ -103,7 +103,7 @@ SIX_BOOK_FILE = os.path.join(BASE_DIR, 'six_book_fusion_result.json')
 KDJ_FILE = os.path.join(BASE_DIR, 'kdj_result.json')
 OPTIMIZE_SIX_BOOK_FILE = os.path.join(BASE_DIR, 'optimize_six_book_result.json')
 BACKTEST_30D_7D_FILE = os.path.join(BASE_DIR, 'backtest_30d_7d_result.json')
-MULTI_TF_BACKTEST_30D_7D_FILE = os.path.join(BASE_DIR, 'backtest_multi_tf_30d_7d_result.json')
+MULTI_TF_BACKTEST_30D_7D_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'backtest_multi_tf_30d_7d_result.json')
 
 RESULT_FILE_PATHS = {
     'BACKTEST_FILE': BACKTEST_FILE,
@@ -330,7 +330,43 @@ def api_live_test_connection():
 
 
 def _detect_engine_process():
-    """通过系统进程检测引擎是否在运行"""
+    """通过 PID 文件 + 系统进程检测引擎是否在运行。
+    优先读取 engine.pid 文件锁（比 pgrep 更可靠），
+    如果 PID 文件对应进程存活则返回该进程信息。
+    """
+    pid_file = os.path.join(BASE_DIR, 'data', 'live', 'engine.pid')
+
+    # 方案 1: 读取 PID 文件 + 验证进程存活
+    if os.path.exists(pid_file):
+        try:
+            import fcntl
+            f = open(pid_file, 'r')
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # 能拿到锁 → 说明没有引擎持有它，PID 文件是残留
+                fcntl.flock(f, fcntl.LOCK_UN)
+                f.close()
+            except (IOError, OSError):
+                # 拿不到锁 → 有进程正在持有 → 引擎在运行
+                f.seek(0)
+                pid_str = f.read().strip()
+                f.close()
+                if pid_str.isdigit():
+                    pid = int(pid_str)
+                    # 读取 engine_state.json 获取 phase
+                    phase = 'paper'
+                    try:
+                        state_file = os.path.join(BASE_DIR, 'data', 'live', 'engine_state.json')
+                        with open(state_file, 'r') as sf:
+                            state = json.load(sf)
+                        phase = state.get('phase', 'paper')
+                    except Exception:
+                        pass
+                    return {"running": True, "pid": pid, "phase": phase}
+        except Exception:
+            pass
+
+    # 方案 2: 回退到 pgrep（兼容没有 PID 文件的旧版本）
     try:
         r = subprocess.run(
             ['pgrep', '-af', 'live_runner.py'],
@@ -343,13 +379,21 @@ def _detect_engine_process():
             if len(parts) >= 2 and 'live_runner.py' in parts[1]:
                 pid = int(parts[0])
                 cmd = parts[1]
+                # 排除 --test-signal / --status 等非引擎命令
+                if any(x in cmd for x in ['--test-signal', '--status',
+                                           '--kill-switch', '--generate-config',
+                                           '--test-connection']):
+                    continue
                 # 解析 phase
                 phase = 'paper'
                 if '--phase' in cmd:
-                    idx = cmd.split().index('--phase')
                     tokens = cmd.split()
-                    if idx + 1 < len(tokens):
-                        phase = tokens[idx + 1]
+                    try:
+                        idx = tokens.index('--phase')
+                        if idx + 1 < len(tokens):
+                            phase = tokens[idx + 1]
+                    except ValueError:
+                        pass
                 return {"running": True, "pid": pid, "phase": phase, "cmd": cmd}
     except Exception:
         pass
@@ -531,6 +575,40 @@ def api_live_start():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+def _kill_all_engine_processes(exclude_pid=None):
+    """杀死所有 live_runner.py 引擎进程（排除指定 PID）。
+    用于清理因历史 bug 残留的僵尸进程。"""
+    killed = []
+    try:
+        r = subprocess.run(
+            ['pgrep', '-af', 'live_runner.py'],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in r.stdout.strip().split('\n'):
+            if not line.strip():
+                continue
+            parts = line.split(None, 1)
+            if len(parts) < 2 or 'live_runner.py' not in parts[1]:
+                continue
+            cmd = parts[1]
+            # 排除非引擎命令
+            if any(x in cmd for x in ['--test-signal', '--status',
+                                       '--kill-switch', '--generate-config',
+                                       '--test-connection']):
+                continue
+            pid = int(parts[0])
+            if exclude_pid and pid == exclude_pid:
+                continue
+            try:
+                os.kill(pid, __import__('signal').SIGKILL)
+                killed.append(pid)
+            except ProcessLookupError:
+                pass
+    except Exception:
+        pass
+    return killed
+
+
 @app.route('/api/live/stop', methods=['POST'])
 def api_live_stop():
     """停止交易引擎 — 支持停止任何方式启动的引擎进程"""
@@ -543,18 +621,29 @@ def api_live_stop():
             proc.send_signal(sig.SIGTERM)
             proc.wait(timeout=10)
             _engine_process["proc"] = None
-            return jsonify({"success": True, "message": "引擎已停止"})
+            # 同时清理可能的残留进程
+            orphans = _kill_all_engine_processes()
+            msg = "引擎已停止"
+            if orphans:
+                msg += f" (同时清理了 {len(orphans)} 个残留进程)"
+            return jsonify({"success": True, "message": msg})
         except subprocess.TimeoutExpired:
             proc.kill()
             _engine_process["proc"] = None
+            orphans = _kill_all_engine_processes()
             return jsonify({"success": True, "message": "引擎已强制停止"})
         except Exception as e:
             return jsonify({"success": False, "message": str(e)}), 500
 
-    # proc 为空 (Web 服务重启过, 但引擎仍在运行) → 通过 pgrep 检测并发送 SIGTERM
+    # proc 为空 (Web 服务重启过, 但引擎仍在运行) → 通过 PID 文件/pgrep 检测
     existing = _detect_engine_process()
     if not existing.get("running"):
+        # 兜底: 即使检测不到，也尝试清理残留进程
+        orphans = _kill_all_engine_processes()
         _engine_process["proc"] = None
+        if orphans:
+            return jsonify({"success": True,
+                            "message": f"清理了 {len(orphans)} 个残留引擎进程: {orphans}"})
         return jsonify({"success": False, "message": "引擎未在运行"})
 
     pid = existing["pid"]
@@ -567,13 +656,19 @@ def api_live_stop():
             check = _detect_engine_process()
             if not check.get("running"):
                 _engine_process["proc"] = None
-                return jsonify({"success": True, "message": f"引擎已停止 (PID={pid})"})
-        # 超时 → 强制 kill
-        os.kill(pid, sig.SIGKILL)
+                # 清理其他可能的残留进程
+                orphans = _kill_all_engine_processes()
+                msg = f"引擎已停止 (PID={pid})"
+                if orphans:
+                    msg += f" + 清理 {len(orphans)} 个残留进程"
+                return jsonify({"success": True, "message": msg})
+        # 超时 → 强制 kill 所有引擎进程
+        _kill_all_engine_processes()
         _engine_process["proc"] = None
         return jsonify({"success": True, "message": f"引擎已强制停止 (PID={pid})"})
     except ProcessLookupError:
         _engine_process["proc"] = None
+        _kill_all_engine_processes()
         return jsonify({"success": True, "message": f"引擎进程已不存在 (PID={pid})"})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
