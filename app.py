@@ -43,8 +43,11 @@ def check_auth():
     allowed_endpoints = ('login', 'static')
     if request.endpoint in allowed_endpoints:
         return
-    # 未登录则跳转到登录页
+    # 未登录
     if not session.get('logged_in'):
+        # API 请求返回 JSON 401（而非 HTML 重定向，避免前端 JSON 解析失败）
+        if request.path.startswith('/api/'):
+            return jsonify({"success": False, "error": "未登录", "login_required": True}), 401
         return redirect(url_for('login', next=request.url))
 
 

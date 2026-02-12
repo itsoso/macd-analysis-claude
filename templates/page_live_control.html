@@ -456,6 +456,16 @@ async function apiCall(url, options = {}) {
         headers: { 'Content-Type': 'application/json' },
         ...options
     });
+    // 会话过期 → 自动跳转登录
+    if (resp.status === 401) {
+        window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
+        throw new Error('会话已过期，正在跳转登录...');
+    }
+    // 非 JSON 响应（如意外的 HTML 重定向）
+    const ct = resp.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+        throw new Error('服务器返回了非 JSON 响应，可能需要重新登录');
+    }
     return await resp.json();
 }
 
