@@ -486,128 +486,30 @@ def _get_tf_score_at(tf_score_map, tf, dt):
 
 def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
     """
-    在指定时刻 dt 计算多周期加权共识评分
+    在指定时刻 dt 计算多周期加权共识评分。
+
+    委托给 multi_tf_consensus.fuse_tf_scores 统一实现,
+    保持与实盘引擎完全相同的融合逻辑。
 
     返回: (consensus_ss, consensus_bs, meta_dict)
-      - consensus_ss: 加权卖出分
-      - consensus_bs: 加权买入分
-      - meta_dict: 包含共振链、大周期信号等调节信息
-
-    调节规则:
-      1. 加权平均各TF的 ss/bs (大周期权重高)
-      2. 大小周期反向时: 信号衰减
-      3. 共振链(≥3级连续同向): 信号增强
     """
+    from multi_tf_consensus import fuse_tf_scores
+
+    # 从预计算索引中查找当前时刻各TF的分数
     tf_scores = {}
     for tf in decision_tfs:
         ss, bs = _get_tf_score_at(tf_score_map, tf, dt)
         tf_scores[tf] = (ss, bs)
 
-    total_weight = sum(_MTF_WEIGHT.get(tf, 5) for tf in decision_tfs)
-    if total_weight == 0:
-        return 0.0, 0.0, {}
-
-    # --- 1. 加权平均 ---
-    weighted_ss = sum(tf_scores[tf][0] * _MTF_WEIGHT.get(tf, 5) for tf in decision_tfs) / total_weight
-    weighted_bs = sum(tf_scores[tf][1] * _MTF_WEIGHT.get(tf, 5) for tf in decision_tfs) / total_weight
-
-    # --- 2. 大周期定调 (≥4h) ---
-    large_tfs = [tf for tf in decision_tfs if _MTF_MINUTES.get(tf, 0) >= 240]
-    small_tfs = [tf for tf in decision_tfs if _MTF_MINUTES.get(tf, 0) < 240]
-
-    large_ss_avg = 0; large_bs_avg = 0
-    if large_tfs:
-        large_w = sum(_MTF_WEIGHT.get(tf, 5) for tf in large_tfs)
-        large_ss_avg = sum(tf_scores[tf][0] * _MTF_WEIGHT.get(tf, 5) for tf in large_tfs) / large_w
-        large_bs_avg = sum(tf_scores[tf][1] * _MTF_WEIGHT.get(tf, 5) for tf in large_tfs) / large_w
-
-    small_ss_avg = 0; small_bs_avg = 0
-    if small_tfs:
-        small_w = sum(_MTF_WEIGHT.get(tf, 5) for tf in small_tfs)
-        small_ss_avg = sum(tf_scores[tf][0] * _MTF_WEIGHT.get(tf, 5) for tf in small_tfs) / small_w
-        small_bs_avg = sum(tf_scores[tf][1] * _MTF_WEIGHT.get(tf, 5) for tf in small_tfs) / small_w
-
-    # --- 3. 各TF方向判定 (用于共振链检测) ---
-    short_threshold = config.get('short_threshold', 25)
-    long_threshold = config.get('long_threshold', 40)
-    directions = []
-    for tf in sorted(decision_tfs, key=lambda t: _MTF_MINUTES.get(t, 0)):
-        ss, bs = tf_scores[tf]
-        if ss >= short_threshold and ss > bs * 1.3:
-            directions.append((tf, 'short'))
-        elif bs >= long_threshold and bs > ss * 1.3:
-            directions.append((tf, 'long'))
-        else:
-            directions.append((tf, 'hold'))
-
-    # --- 4. 共振链检测 ---
-    best_chain_len = 0
-    best_chain_dir = 'hold'
-    best_chain_has_4h = False
-
-    for target in ['long', 'short']:
-        chain = []
-        gap = 0
-        for tf, d in directions:
-            if d == target:
-                chain.append(tf)
-                gap = 0
-            elif d == 'hold' and chain and gap == 0:
-                gap += 1
-                continue
-            else:
-                if len(chain) > best_chain_len:
-                    best_chain_len = len(chain)
-                    best_chain_dir = target
-                    best_chain_has_4h = any(_MTF_MINUTES.get(t, 0) >= 240 for t in chain)
-                chain = []
-                gap = 0
-                if d == target:
-                    chain = [tf]
-        if len(chain) > best_chain_len:
-            best_chain_len = len(chain)
-            best_chain_dir = target
-            best_chain_has_4h = any(_MTF_MINUTES.get(t, 0) >= 240 for t in chain)
-
-    # --- 5. 应用调节因子 ---
-    boost = 1.0
-
-    # 5a. 大小周期反向 → 衰减
-    if large_tfs and small_tfs:
-        # 大周期看空 + 小周期看多 → 衰减买入
-        if large_ss_avg > large_bs_avg * 1.3 and small_bs_avg > small_ss_avg * 1.3:
-            weighted_bs *= 0.5  # 小周期多在大周期空的环境下减弱
-            weighted_ss *= 1.15  # 空方信号轻微增强
-        # 大周期看多 + 小周期看空 → 衰减卖出
-        elif large_bs_avg > large_ss_avg * 1.3 and small_ss_avg > small_bs_avg * 1.3:
-            weighted_ss *= 0.5
-            weighted_bs *= 1.15
-
-    # 5b. 共振链加成
-    if best_chain_len >= 3 and best_chain_has_4h:
-        chain_boost = 1.0 + best_chain_len * 0.08  # 3级+8%, 4级+16%, ...
-        if best_chain_dir == 'short':
-            weighted_ss *= chain_boost
-        else:
-            weighted_bs *= chain_boost
-    elif best_chain_len >= 2:
-        chain_boost = 1.0 + best_chain_len * 0.04  # 2级+8%
-        if best_chain_dir == 'short':
-            weighted_ss *= chain_boost
-        else:
-            weighted_bs *= chain_boost
-
-    meta = {
-        'chain_len': best_chain_len,
-        'chain_dir': best_chain_dir,
-        'chain_has_4h': best_chain_has_4h,
-        'large_ss': round(large_ss_avg, 1),
-        'large_bs': round(large_bs_avg, 1),
-        'small_ss': round(small_ss_avg, 1),
-        'small_bs': round(small_bs_avg, 1),
+    # 回测不需要 coverage 惩罚 (所有数据预先可用)
+    fuse_config = {
+        'short_threshold': config.get('short_threshold', 25),
+        'long_threshold': config.get('long_threshold', 40),
+        'coverage_min': 0.0,  # 回测中不启用 coverage 门控
     }
+    result = fuse_tf_scores(tf_scores, decision_tfs, fuse_config)
 
-    return float(weighted_ss), float(weighted_bs), meta
+    return result["weighted_ss"], result["weighted_bs"], result.get("meta", {})
 
 
 def run_strategy_multi_tf(primary_df, tf_score_map, decision_tfs, config,

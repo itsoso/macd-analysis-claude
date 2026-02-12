@@ -324,3 +324,293 @@ def _make_decision(ws, best_chain, large_sig, long_tfs, short_tfs, hold_tfs,
         "reason": f"全部{len(hold_tfs)}个周期观望, 市场无方向, 耐心等待",
         "actionable": False,
     }
+
+
+# ================================================================
+# 统一连续分数融合 (回测 + 实盘共用)
+# ================================================================
+
+def fuse_tf_scores(tf_scores, decision_tfs, config=None):
+    """
+    统一的多周期连续分数融合算法 — 回测与实盘共用一套逻辑。
+
+    替代旧实盘路径 (先离散化为 OPEN_LONG/SHORT 再加权) 和
+    旧回测路径 (optimize_six_book.calc_multi_tf_consensus 内联逻辑)。
+
+    参数:
+        tf_scores : dict[str, tuple[float, float]]
+            每个TF的 (sell_score, buy_score), 值域 0~100。
+            如果某个TF计算失败, 可以不包含在 tf_scores 中。
+        decision_tfs : list[str]
+            期望参与决策的TF列表 (用于计算 coverage)。
+        config : dict | None
+            可选配置, 支持的 key:
+              - short_threshold (default 25)
+              - long_threshold  (default 40)
+              - coverage_min    (default 0.5) — 低于此值时 fail-closed
+
+    返回:
+        dict — 结构:
+        {
+            "weighted_ss": float,
+            "weighted_bs": float,
+            "tf_scores":   {tf: {"ss": .., "bs": .., "dir": ..}},
+            "coverage":    float (0~1),
+            "decision":    {direction, strength, actionable, label, reason},
+            "meta":        {chain_len, chain_dir, chain_has_4h, large_ss, large_bs,
+                            small_ss, small_bs},
+            # 兼容旧 compute_weighted_consensus 格式
+            "long_tfs":  [...],
+            "short_tfs": [...],
+            "hold_tfs":  [...],
+            "weighted_scores": {...},
+            "resonance_chains": [...],
+            "large_tf_signal":  {...},
+            "direction": str,
+        }
+    """
+    config = config or {}
+    short_threshold = config.get('short_threshold', 25)
+    long_threshold = config.get('long_threshold', 40)
+    coverage_min = config.get('coverage_min', 0.5)
+
+    # ── 0. Coverage (有效TF占比) ──
+    available_tfs = [tf for tf in decision_tfs if tf in tf_scores]
+    target_weight = sum(TF_WEIGHT.get(tf, 5) for tf in decision_tfs)
+    actual_weight = sum(TF_WEIGHT.get(tf, 5) for tf in available_tfs)
+    coverage = actual_weight / target_weight if target_weight > 0 else 0.0
+
+    if not available_tfs:
+        return _empty_consensus(decision_tfs, coverage)
+
+    # ── 1. 加权平均 ss/bs ──
+    total_w = sum(TF_WEIGHT.get(tf, 5) for tf in available_tfs)
+    weighted_ss = sum(tf_scores[tf][0] * TF_WEIGHT.get(tf, 5)
+                      for tf in available_tfs) / total_w
+    weighted_bs = sum(tf_scores[tf][1] * TF_WEIGHT.get(tf, 5)
+                      for tf in available_tfs) / total_w
+
+    # ── 2. 每个TF的方向判定 (用于共振/决策矩阵) ──
+    sorted_tfs = sorted(available_tfs,
+                        key=lambda t: TF_MINUTES.get(t, 0))
+    directions = []          # [(tf, 'long'|'short'|'hold')]
+    long_tfs, short_tfs, hold_tfs = [], [], []
+    tf_detail = {}           # 用于输出
+
+    for tf in sorted_tfs:
+        ss, bs = tf_scores[tf]
+        if ss >= short_threshold and ss > bs * 1.3:
+            d = 'short'
+            short_tfs.append(tf)
+        elif bs >= long_threshold and bs > ss * 1.3:
+            d = 'long'
+            long_tfs.append(tf)
+        else:
+            d = 'hold'
+            hold_tfs.append(tf)
+        directions.append((tf, d))
+        tf_detail[tf] = {"ss": round(ss, 1), "bs": round(bs, 1), "dir": d}
+
+    # ── 3. 大/小周期分析 ──
+    large_tfs = [tf for tf in available_tfs
+                 if TF_MINUTES.get(tf, 0) >= LARGE_TF_THRESHOLD_MIN]
+    small_tfs = [tf for tf in available_tfs
+                 if TF_MINUTES.get(tf, 0) < LARGE_TF_THRESHOLD_MIN]
+
+    large_ss_avg = large_bs_avg = 0.0
+    if large_tfs:
+        lw = sum(TF_WEIGHT.get(tf, 5) for tf in large_tfs)
+        large_ss_avg = sum(tf_scores[tf][0] * TF_WEIGHT.get(tf, 5)
+                           for tf in large_tfs) / lw
+        large_bs_avg = sum(tf_scores[tf][1] * TF_WEIGHT.get(tf, 5)
+                           for tf in large_tfs) / lw
+
+    small_ss_avg = small_bs_avg = 0.0
+    if small_tfs:
+        sw = sum(TF_WEIGHT.get(tf, 5) for tf in small_tfs)
+        small_ss_avg = sum(tf_scores[tf][0] * TF_WEIGHT.get(tf, 5)
+                           for tf in small_tfs) / sw
+        small_bs_avg = sum(tf_scores[tf][1] * TF_WEIGHT.get(tf, 5)
+                           for tf in small_tfs) / sw
+
+    # ── 4. 大小周期反向衰减 (与回测一致) ──
+    if large_tfs and small_tfs:
+        # 大周期偏空 + 小周期偏多 → 衰减买入
+        if large_ss_avg > large_bs_avg * 1.3 and small_bs_avg > small_ss_avg * 1.3:
+            weighted_bs *= 0.5
+            weighted_ss *= 1.15
+        # 大周期偏多 + 小周期偏空 → 衰减卖出
+        elif large_bs_avg > large_ss_avg * 1.3 and small_ss_avg > small_bs_avg * 1.3:
+            weighted_ss *= 0.5
+            weighted_bs *= 1.15
+
+    # ── 5. 共振链检测 + 增强 (与回测一致) ──
+    best_chain_len = 0
+    best_chain_dir = 'hold'
+    best_chain_has_4h = False
+    best_chain_tfs = []
+
+    for target in ['long', 'short']:
+        chain = []
+        gap = 0
+        for tf, d in directions:
+            if d == target:
+                chain.append(tf)
+                gap = 0
+            elif d == 'hold' and chain and gap == 0:
+                gap += 1
+                continue
+            else:
+                if len(chain) > best_chain_len:
+                    best_chain_len = len(chain)
+                    best_chain_dir = target
+                    best_chain_has_4h = any(
+                        TF_MINUTES.get(t, 0) >= LARGE_TF_THRESHOLD_MIN for t in chain)
+                    best_chain_tfs = list(chain)
+                chain = []
+                gap = 0
+                if d == target:
+                    chain = [tf]
+        if len(chain) > best_chain_len:
+            best_chain_len = len(chain)
+            best_chain_dir = target
+            best_chain_has_4h = any(
+                TF_MINUTES.get(t, 0) >= LARGE_TF_THRESHOLD_MIN for t in chain)
+            best_chain_tfs = list(chain)
+
+    if best_chain_len >= 3 and best_chain_has_4h:
+        chain_boost = 1.0 + best_chain_len * 0.08
+        if best_chain_dir == 'short':
+            weighted_ss *= chain_boost
+        else:
+            weighted_bs *= chain_boost
+    elif best_chain_len >= 2:
+        chain_boost = 1.0 + best_chain_len * 0.04
+        if best_chain_dir == 'short':
+            weighted_ss *= chain_boost
+        else:
+            weighted_bs *= chain_boost
+
+    # ── 6. Coverage 惩罚 ──
+    if coverage < 1.0:
+        # 线性衰减: coverage=0.5 → 信号打5折
+        weighted_ss *= coverage
+        weighted_bs *= coverage
+
+    weighted_ss = float(weighted_ss)
+    weighted_bs = float(weighted_bs)
+
+    # ── 7. 生成决策 (复用决策矩阵) ──
+    # 构造兼容旧格式的 weighted_scores 和 large_tf_signal
+    long_score = sum(TF_WEIGHT.get(tf, 5) for tf in long_tfs)
+    short_score = sum(TF_WEIGHT.get(tf, 5) for tf in short_tfs)
+    long_pct = round(long_score / total_w * 100, 1) if total_w > 0 else 0
+    short_pct = round(short_score / total_w * 100, 1) if total_w > 0 else 0
+    net_score = round(long_pct - short_pct, 1)
+    weighted_scores = {
+        "long": long_pct, "short": short_pct, "net": net_score,
+        "long_raw": long_score, "short_raw": short_score,
+        "total_weight": total_w,
+    }
+
+    large_tf_signal = _compute_large_tf_signal(
+        [{"tf": tf, "action": ("OPEN_LONG" if d == "long"
+                                else "OPEN_SHORT" if d == "short"
+                                else "HOLD")}
+         for tf, d in directions
+         if TF_MINUTES.get(tf, 0) >= LARGE_TF_THRESHOLD_MIN]
+    )
+
+    small_long = [tf for tf, d in directions
+                  if d == 'long' and TF_MINUTES.get(tf, 0) < LARGE_TF_THRESHOLD_MIN]
+    small_short = [tf for tf, d in directions
+                   if d == 'short' and TF_MINUTES.get(tf, 0) < LARGE_TF_THRESHOLD_MIN]
+
+    best_chain_obj = None
+    if best_chain_len >= 2:
+        best_chain_obj = {
+            "direction": best_chain_dir,
+            "chain": best_chain_tfs,
+            "length": best_chain_len,
+            "has_4h_plus": best_chain_has_4h,
+            "weight": sum(TF_WEIGHT.get(t, 5) for t in best_chain_tfs),
+        }
+
+    resonance_chains = [best_chain_obj] if best_chain_obj else []
+
+    decision = _make_decision(
+        weighted_scores, best_chain_obj, large_tf_signal,
+        long_tfs, short_tfs, hold_tfs,
+        small_long, small_short, len(available_tfs),
+    )
+
+    # Coverage 不足时强制 fail-closed
+    if coverage < coverage_min:
+        decision = {
+            "direction": "hold",
+            "label": f"⛔ 覆盖不足 ({coverage:.0%} < {coverage_min:.0%})",
+            "strength": 0,
+            "reason": (f"仅 {len(available_tfs)}/{len(decision_tfs)} 个TF有数据, "
+                       f"覆盖率 {coverage:.0%}, 低于最低要求 {coverage_min:.0%}"),
+            "actionable": False,
+        }
+
+    meta = {
+        'chain_len': best_chain_len,
+        'chain_dir': best_chain_dir,
+        'chain_has_4h': best_chain_has_4h,
+        'large_ss': round(large_ss_avg, 1),
+        'large_bs': round(large_bs_avg, 1),
+        'small_ss': round(small_ss_avg, 1),
+        'small_bs': round(small_bs_avg, 1),
+    }
+
+    return {
+        # 连续分数 (回测直接用)
+        "weighted_ss": weighted_ss,
+        "weighted_bs": weighted_bs,
+        # 详细TF级分数
+        "tf_scores": tf_detail,
+        # Coverage
+        "coverage": round(coverage, 3),
+        # 决策 (实盘门控用)
+        "decision": decision,
+        "meta": meta,
+        # 兼容旧 compute_weighted_consensus 格式
+        "long_tfs": long_tfs,
+        "short_tfs": short_tfs,
+        "hold_tfs": hold_tfs,
+        "weighted_scores": weighted_scores,
+        "resonance_chains": resonance_chains,
+        "large_tf_signal": large_tf_signal,
+        "direction": decision["direction"],
+        # 兼容旧 key
+        "long": long_tfs,
+        "short": short_tfs,
+        "hold": hold_tfs,
+    }
+
+
+def _empty_consensus(decision_tfs, coverage):
+    """无可用TF时的空共识"""
+    return {
+        "weighted_ss": 0.0,
+        "weighted_bs": 0.0,
+        "tf_scores": {},
+        "coverage": round(coverage, 3),
+        "decision": {
+            "direction": "hold",
+            "label": "⛔ 无可用数据",
+            "strength": 0,
+            "reason": f"0/{len(decision_tfs)} 个TF有数据, 无法决策",
+            "actionable": False,
+        },
+        "meta": {},
+        "long_tfs": [], "short_tfs": [], "hold_tfs": [],
+        "weighted_scores": {"long": 0, "short": 0, "net": 0,
+                            "long_raw": 0, "short_raw": 0, "total_weight": 0},
+        "resonance_chains": [],
+        "large_tf_signal": {"direction": "neutral", "tfs": []},
+        "direction": "hold",
+        "long": [], "short": [], "hold": [],
+    }

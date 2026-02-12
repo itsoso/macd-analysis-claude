@@ -315,7 +315,7 @@
                 <button class="btn btn-outline btn-sm" id="autoDetectBtn" onclick="toggleAutoDetect()" style="margin-left:8px;">
                     ⏱️ <span id="autoDetectText">自动检测: 关</span>
                 </button>
-                <select id="autoDetectInterval" style="background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;">
+                <select id="autoDetectInterval" onchange="onAutoDetectIntervalChange()" style="background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;">
                     <option value="300">5分钟</option>
                     <option value="600">10分钟</option>
                     <option value="900" selected>15分钟</option>
@@ -700,6 +700,18 @@ function _startAutoDetect(intervalSec) {
             timerEl.textContent = `下次检测: ${m}:${s.toString().padStart(2, '0')}`;
         }
     }, 1000);
+}
+
+function onAutoDetectIntervalChange() {
+    // 如果自动检测正在运行, 用新间隔重启定时器
+    if (_autoDetectTimer) {
+        clearInterval(_autoDetectTimer);
+        clearInterval(_autoDetectCountdown);
+        _autoDetectTimer = null;
+        _autoDetectCountdown = null;
+        const intervalSec = parseInt(document.getElementById('autoDetectInterval').value) || 900;
+        _startAutoDetect(intervalSec);
+    }
 }
 
 function restoreAutoDetect() {
@@ -1179,11 +1191,25 @@ async function refreshStatus() {
                                 if (Object.keys(tfScores).length > 0) {
                                     tfScoresHtml = '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">';
                                     for (const [tf, score] of Object.entries(tfScores)) {
-                                        const sc = Number(score);
-                                        const c = sc > 0 ? '#22c55e' : sc < 0 ? '#ef4444' : '#64748b';
+                                        // 兼容两种格式:
+                                        // 1) 旧格式: tf_scores[tf] = number
+                                        // 2) 新格式: tf_scores[tf] = {ss, bs, dir}
+                                        let text = '--';
+                                        let c = '#64748b';
+                                        if (score && typeof score === 'object') {
+                                            const ssTf = Number(score.ss || 0);
+                                            const bsTf = Number(score.bs || 0);
+                                            const dirTf = score.dir || (bsTf > ssTf ? 'long' : ssTf > bsTf ? 'short' : 'hold');
+                                            c = dirTf === 'long' ? '#22c55e' : dirTf === 'short' ? '#ef4444' : '#64748b';
+                                            text = `bs ${bsTf.toFixed(1)} / ss ${ssTf.toFixed(1)}`;
+                                        } else {
+                                            const sc = Number(score || 0);
+                                            c = sc > 0 ? '#22c55e' : sc < 0 ? '#ef4444' : '#64748b';
+                                            text = `${sc > 0 ? '+' : ''}${sc.toFixed(1)}`;
+                                        }
                                         tfScoresHtml += `<span style="display:inline-block;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,0.05);font-size:11px;">
                                             <span style="color:var(--text-muted);">${tf}</span>
-                                            <span style="color:${c};font-weight:600;margin-left:3px;">${sc > 0 ? '+' : ''}${sc.toFixed(1)}</span>
+                                            <span style="color:${c};font-weight:600;margin-left:3px;">${text}</span>
                                         </span>`;
                                     }
                                     tfScoresHtml += '</div>';

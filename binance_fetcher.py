@@ -113,6 +113,17 @@ def fetch_binance_klines(symbol: str = "ETHUSDT",
     for col in ['open', 'high', 'low', 'close', 'volume', 'quote_volume']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
 
+    # ── 剔除未闭合的最后一根K线 ──
+    # close_time 是该K线的结束时间戳(ms), 如果 > 当前时间说明K线尚未收盘
+    now_ms = int(time.time() * 1000)
+    df['_close_time_ms'] = pd.to_numeric(df['close_time'], errors='coerce')
+    n_before = len(df)
+    df = df[df['_close_time_ms'] <= now_ms]
+    n_dropped = n_before - len(df)
+    if n_dropped > 0:
+        print(f"  剔除 {n_dropped} 根未闭合K线")
+    df = df.drop(columns=['_close_time_ms'])
+
     df = df[['open', 'high', 'low', 'close', 'volume', 'quote_volume']].copy()
     df = df[~df.index.duplicated(keep='first')]
     df = df.sort_index()

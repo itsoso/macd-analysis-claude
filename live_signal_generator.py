@@ -32,7 +32,7 @@ from bollinger_strategy import compute_bollinger_scores
 from volume_price_strategy import compute_volume_price_scores
 from kdj_strategy import compute_kdj_scores
 from signal_core import calc_fusion_score_six, compute_signals_six
-from multi_tf_consensus import compute_weighted_consensus
+from multi_tf_consensus import compute_weighted_consensus, fuse_tf_scores
 
 
 class SignalResult:
@@ -563,7 +563,10 @@ class LiveSignalGenerator:
 
     def compute_multi_tf_consensus(self, decision_tfs: List[str]) -> dict:
         """
-        并行计算多个时间框架的信号，并生成智能共识决策
+        并行计算多个时间框架的信号，用连续分数融合生成共识决策。
+
+        与回测引擎 (calc_multi_tf_consensus) 共用同一套融合算法
+        (fuse_tf_scores)，避免离散化信息损失。
 
         参数:
             decision_tfs: 参与决策的时间框架列表
@@ -591,8 +594,18 @@ class LiveSignalGenerator:
                 except Exception as e:
                     results.append({"tf": tf, "ok": False, "error": str(e)})
 
-        # 计算加权共识
-        consensus = compute_weighted_consensus(results, decision_tfs)
+        # ── 从各TF结果中提取连续分数 ──
+        tf_scores = {}
+        for r in results:
+            if r.get("ok") and "sell_score" in r and "buy_score" in r:
+                tf_scores[r["tf"]] = (r["sell_score"], r["buy_score"])
+
+        # ── 用统一融合算法计算共识 (与回测一致) ──
+        fuse_config = {
+            'short_threshold': self.config.short_threshold,
+            'long_threshold': self.config.long_threshold,
+        }
+        consensus = fuse_tf_scores(tf_scores, decision_tfs, fuse_config)
 
         elapsed = time.time() - start_time
         if self.logger:
@@ -601,7 +614,10 @@ class LiveSignalGenerator:
                 f"多周期共识完成 ({elapsed:.1f}s): "
                 f"{decision.get('label', '?')} "
                 f"strength={decision.get('strength', 0)} "
-                f"direction={decision.get('direction', '?')}"
+                f"direction={decision.get('direction', '?')} "
+                f"coverage={consensus.get('coverage', 0):.0%} "
+                f"fused_ss={consensus.get('weighted_ss', 0):.1f} "
+                f"fused_bs={consensus.get('weighted_bs', 0):.1f}"
             )
 
         return {

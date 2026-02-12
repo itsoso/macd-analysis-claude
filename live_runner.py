@@ -388,9 +388,20 @@ def cmd_test_signal_multi(args):
     print(f"  {'─' * 78}")
 
     # ================================================================
-    #   智能多周期加权共识算法
+    #   统一多周期连续分数融合 (与回测/实盘一致)
     # ================================================================
-    consensus = compute_weighted_consensus(results, timeframes)
+    tf_scores = {}
+    for r in results:
+        if r.get("ok") and "sell_score" in r and "buy_score" in r:
+            tf_scores[r["tf"]] = (r["sell_score"], r["buy_score"])
+    consensus = fuse_tf_scores(
+        tf_scores=tf_scores,
+        decision_tfs=timeframes,
+        config={
+            "short_threshold": config.strategy.short_threshold,
+            "long_threshold": config.strategy.long_threshold,
+        },
+    )
 
     # 打印共识报告
     print(f"\n  ═══ 多周期智能共识 ═══")
@@ -451,7 +462,7 @@ def cmd_test_signal_multi(args):
 
 # 从共享模块导入共识算法和常量
 from multi_tf_consensus import (
-    compute_weighted_consensus,
+    fuse_tf_scores,
     TF_ORDER as _TF_ORDER,
     TF_WEIGHT as _TF_WEIGHT,
     TF_MINUTES as _TF_MINUTES,

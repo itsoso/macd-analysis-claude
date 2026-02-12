@@ -283,11 +283,15 @@ class LiveTradingEngine:
                 # 8. 记录信号日志
                 log_extra = {}
                 if self._last_consensus:
-                    cd = self._last_consensus.get("consensus", {}).get("decision", {})
+                    cs = self._last_consensus.get("consensus", {})
+                    cd = cs.get("decision", {})
                     log_extra = {
                         "consensus_label": cd.get("label", ""),
                         "consensus_strength": cd.get("strength", 0),
                         "consensus_direction": cd.get("direction", ""),
+                        "fused_ss": round(cs.get("weighted_ss", 0), 1),
+                        "fused_bs": round(cs.get("weighted_bs", 0), 1),
+                        "coverage": cs.get("coverage", 0),
                     }
                 self.logger.log_signal(
                     sell_score=sig.sell_score,
@@ -364,10 +368,16 @@ class LiveTradingEngine:
             # 判断开仓方向是否与共识一致
             sig_direction = "long" if sig.action == "OPEN_LONG" else "short"
 
+            fused_ss = round(consensus.get("weighted_ss", 0), 1)
+            fused_bs = round(consensus.get("weighted_bs", 0), 1)
+            coverage = consensus.get("coverage", 0)
+
             self.logger.info(
                 f"[多周期门控] 单TF建议={sig.action} | "
                 f"共识={label} direction={direction} "
-                f"strength={strength} actionable={actionable}"
+                f"strength={strength} actionable={actionable} "
+                f"fused_ss={fused_ss} fused_bs={fused_bs} "
+                f"coverage={coverage:.0%}"
             )
 
             # 规则 1: 共识不可操作 → 阻止
@@ -405,11 +415,21 @@ class LiveTradingEngine:
             return sig
 
         except Exception as e:
-            # 多周期计算失败不阻止交易，降级为单TF模式
-            self.logger.warning(
-                f"[多周期门控] 计算异常，降级为单TF模式: {e}"
-            )
-            return sig
+            # 纸上/非执行模式: fail-open (不阻止交易, 降级为单TF)
+            # 执行交易模式: fail-closed (阻止开仓, 安全第一)
+            is_paper = (self.phase == TradingPhase.PAPER) or (not self.config.execute_trades)
+            if is_paper:
+                self.logger.warning(
+                    f"[多周期门控] 计算异常，降级为单TF模式 (paper): {e}"
+                )
+                return sig
+            else:
+                self.logger.error(
+                    f"[多周期门控] 计算异常，fail-closed 阻止开仓: {e}"
+                )
+                sig.action = "HOLD"
+                sig.reason = f"多周期计算异常 fail-closed: {e}"
+                return sig
 
     # ============================================================
     # 交易执行
@@ -554,6 +574,9 @@ class LiveTradingEngine:
                 "actionable": decision.get("actionable", False),
                 "tf_scores": tf_scores,
                 "decision_tfs": self._decision_tfs,
+                "weighted_ss": consensus.get("weighted_ss", 0),
+                "weighted_bs": consensus.get("weighted_bs", 0),
+                "coverage": consensus.get("coverage", 0),
             }
         self.positions[side] = pos
 
