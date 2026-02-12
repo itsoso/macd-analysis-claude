@@ -30,9 +30,10 @@ WORKERS=3        # gunicorn worker 数量
 GITHUB_REPO="git@github.com:itsoso/macd-analysis-claude.git"
 GITHUB_BRANCH="main"
 
-# SSH 连接参数
-SSH_CMD="ssh -p ${REMOTE_PORT} -o StrictHostKeyChecking=no ${REMOTE_USER}@${REMOTE_HOST}"
-SCP_CMD="scp -P ${REMOTE_PORT} -o StrictHostKeyChecking=no"
+# SSH 连接参数 (绕过 IdentityAgent 代理 / ProxyCommand，避免 banner exchange 超时)
+SSH_OPTS="-p ${REMOTE_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentityAgent=none -o ProxyCommand=none -o ConnectTimeout=15"
+SSH_CMD="ssh ${SSH_OPTS} ${REMOTE_USER}@${REMOTE_HOST}"
+SCP_CMD="scp -P ${REMOTE_PORT} -o StrictHostKeyChecking=no -o IdentityAgent=none -o ProxyCommand=none"
 
 # 本地项目路径
 LOCAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
