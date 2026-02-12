@@ -236,6 +236,11 @@ def page_book_kdj():
     return render_template('page_book_kdj.html', active_page='book-kdj')
 
 
+@app.route('/book/turtle')
+def page_book_turtle():
+    return render_template('page_book_turtle.html', active_page='book-turtle')
+
+
 @app.route('/strategy/six-book')
 def page_six_book():
     return render_template('page_six_book.html', active_page='six-book')
@@ -490,6 +495,20 @@ def api_backtest_30d_7d():
     return jsonify({'error': '未找到回测对比数据, 请先运行 python backtest_30d_7d.py'}), 404
 
 
+@app.route('/api/turtle_backtest')
+def api_turtle_backtest():
+    """运行海龟交易策略回测"""
+    try:
+        days = int(request.args.get('days', 60))
+        from turtle_strategy import main as turtle_main
+        result = turtle_main(trade_days=days)
+        if result:
+            return jsonify(result)
+        return jsonify({'error': '回测失败: 数据不足'}), 500
+    except Exception as e:
+        return jsonify({'error': f'回测异常: {str(e)}'}), 500
+
+
 # ======================================================
 #   实盘控制面板
 # ======================================================
@@ -565,6 +584,52 @@ def api_live_test_signal():
         })
     except subprocess.TimeoutExpired:
         return jsonify({"success": False, "output": "", "error": "超时 (120s)"}), 504
+    except Exception as e:
+        return jsonify({"success": False, "output": "", "error": str(e)}), 500
+
+
+@app.route('/api/live/test_signal_multi', methods=['POST'])
+def api_live_test_signal_multi():
+    """多时间框架并行信号检测"""
+    data = request.json or {}
+    timeframes = data.get('timeframes', ['15m', '30m', '1h', '4h', '8h'])
+
+    # 校验时间框架
+    valid_tfs = {'1m','3m','5m','10m','15m','30m','1h','2h','3h','4h',
+                 '6h','8h','12h','16h','24h','1d'}
+    timeframes = [tf for tf in timeframes if tf in valid_tfs]
+    if not timeframes:
+        return jsonify({"success": False, "error": "无有效的时间框架"}), 400
+
+    tf_str = ','.join(timeframes)
+    output_file = os.path.join(BASE_DIR, 'multi_signal_result.json')
+
+    try:
+        # 超时 = 90s (并行4线程, 单TF最慢~25s, 足够)
+        r = subprocess.run(
+            [sys.executable, 'live_runner.py', '--test-signal-multi',
+             '--timeframe', tf_str, '-o', output_file],
+            capture_output=True, text=True,
+            timeout=90, cwd=BASE_DIR
+        )
+
+        # 尝试读取结构化 JSON 结果
+        result_data = None
+        if os.path.exists(output_file):
+            try:
+                with open(output_file, 'r') as f:
+                    result_data = json.load(f)
+            except Exception:
+                pass
+
+        return jsonify({
+            "success": r.returncode == 0,
+            "output": r.stdout,
+            "error": r.stderr if r.returncode != 0 else "",
+            "data": result_data,
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({"success": False, "output": "", "error": "超时 (90s)"}), 504
     except Exception as e:
         return jsonify({"success": False, "output": "", "error": str(e)}), 500
 

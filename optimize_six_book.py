@@ -67,8 +67,20 @@ def fetch_multi_tf_data(timeframes=None, days=60):
     return data
 
 
-def compute_signals_six(df, tf, data_all):
-    """为指定时间框架计算六维信号(含KDJ)"""
+def compute_signals_six(df, tf, data_all, max_bars=0):
+    """为指定时间框架计算六维信号(含KDJ)
+
+    参数:
+        df: 主周期 DataFrame (已含指标)
+        tf: 时间框架字符串
+        data_all: 多周期数据 dict
+        max_bars: >0 时只保留尾部 max_bars 根K线用于计算，大幅降低耗时。
+                  0 = 不限制 (全量计算，用于回测)。
+    """
+    # ---- 尾部截断优化 ----
+    if max_bars > 0 and len(df) > max_bars:
+        df = df.iloc[-max_bars:].copy()
+
     signals = {}
 
     # 1. 背离信号(主周期)

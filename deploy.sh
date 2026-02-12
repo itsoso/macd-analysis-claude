@@ -88,6 +88,8 @@ SYNC_FILES=(
     "strategy_optimize.py"
     "strategy_15m.py"
     "strategy_timeframe_analysis.py"
+    # 海龟交易策略
+    "turtle_strategy.py"
     # 其他
     "main.py"
     "visualization.py"
@@ -138,6 +140,7 @@ JSON_FILES=(
     "timeframe_analysis_result.json"
     "timeframe_test_result.json"
     "volume_price_result.json"
+    "turtle_result.json"
 )
 
 # ============================================================
@@ -340,8 +343,8 @@ REMOTE_SCRIPT
 
 start_service() {
     log_step "启动服务..."
-    # 确保日志目录存在
-    $SSH_CMD "mkdir -p ${REMOTE_DIR}/logs"
+    # 确保日志目录和子目录都存在 (修复 gunicorn error.log 找不到的问题)
+    $SSH_CMD "mkdir -p ${REMOTE_DIR}/logs/live ${REMOTE_DIR}/logs/test"
     $SSH_CMD << REMOTE_SCRIPT
 systemctl restart ${SERVICE_NAME}
 sleep 2

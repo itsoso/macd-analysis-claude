@@ -246,6 +246,166 @@ def cmd_test_signal(args):
         print("  ❌ 信号计算失败")
 
 
+def _compute_single_tf(tf, base_config):
+    """在线程中计算单个时间框架的信号（供 cmd_test_signal_multi 并行调用）"""
+    import copy
+    from live_signal_generator import LiveSignalGenerator
+    from trading_logger import TradingLogger
+
+    t0 = time.time()
+    result = {"tf": tf, "ok": False, "elapsed": 0}
+    try:
+        cfg = copy.deepcopy(base_config)
+        cfg.strategy.timeframe = tf
+        logger = TradingLogger(log_dir="logs/test", name=f"test_{tf}")
+        gen = LiveSignalGenerator(cfg.strategy, logger)
+        gen.refresh_data(force=True)
+        sig = gen.compute_latest_signal()
+        if sig:
+            sig = gen.evaluate_action(sig)
+            result.update({
+                "ok": True,
+                "timestamp": sig.timestamp,
+                "price": float(sig.price),
+                "sell_score": round(float(sig.sell_score), 1),
+                "buy_score": round(float(sig.buy_score), 1),
+                "action": sig.action,
+                "reason": sig.reason,
+                "conflict": bool(sig.conflict),
+                "components": {k: round(float(v), 1) for k, v in sig.components.items()},
+                "bars": len(gen._df) if gen._df is not None else 0,
+            })
+        else:
+            result["error"] = "信号计算失败"
+    except Exception as e:
+        result["error"] = str(e)
+    result["elapsed"] = round(time.time() - t0, 1)
+    return result
+
+
+def cmd_test_signal_multi(args):
+    """多时间框架并行信号计算"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    print(BANNER)
+
+    # 解析目标时间框架
+    if args.timeframe:
+        timeframes = [t.strip() for t in args.timeframe.split(',') if t.strip()]
+    else:
+        timeframes = ['15m', '30m', '1h', '4h', '8h']
+
+    print(f"  多时间框架并行信号检测  ({len(timeframes)} 个周期)")
+    print(f"  周期: {', '.join(timeframes)}\n")
+
+    config = create_default_config(TradingPhase.PAPER)
+    opt_file = "optimize_six_book_result.json"
+    if os.path.exists(opt_file):
+        try:
+            config.strategy = StrategyConfig.from_optimize_result(opt_file)
+        except Exception:
+            pass
+
+    t_start = time.time()
+    results = []
+
+    # 并行计算（最多 4 个线程，避免 API 限流）
+    max_workers = min(4, len(timeframes))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_compute_single_tf, tf, config): tf
+            for tf in timeframes
+        }
+        for fut in as_completed(futures):
+            tf_name = futures[fut]
+            try:
+                r = fut.result(timeout=90)
+                results.append(r)
+                status = "✅" if r["ok"] else "❌"
+                print(f"  {status} {tf_name:>5s}  ({r['elapsed']:.1f}s)")
+            except Exception as e:
+                results.append({"tf": tf_name, "ok": False, "error": str(e), "elapsed": 0})
+                print(f"  ❌ {tf_name:>5s}  异常: {e}")
+
+    # 按原始顺序排列
+    tf_order = {tf: i for i, tf in enumerate(timeframes)}
+    results.sort(key=lambda r: tf_order.get(r["tf"], 999))
+
+    total_time = round(time.time() - t_start, 1)
+    print(f"\n  总耗时: {total_time}s (并行 {max_workers} 线程)")
+
+    # 打印汇总表
+    print(f"\n  {'─' * 78}")
+    print(f"  {'周期':>5s}  {'价格':>10s}  {'卖出分':>6s}  {'买入分':>6s}  {'动作':<12s}  {'原因'}")
+    print(f"  {'─' * 78}")
+
+    for r in results:
+        if r["ok"]:
+            action_display = r["action"]
+            if "LONG" in action_display:
+                action_display = f"🟢 {action_display}"
+            elif "SHORT" in action_display:
+                action_display = f"🔴 {action_display}"
+            else:
+                action_display = f"⚪ {action_display}"
+            print(f"  {r['tf']:>5s}  ${r['price']:>9.2f}  "
+                  f"{r['sell_score']:>6.1f}  {r['buy_score']:>6.1f}  "
+                  f"{action_display:<12s}  {r.get('reason', '')}")
+        else:
+            print(f"  {r['tf']:>5s}  {'--':>10s}  {'--':>6s}  {'--':>6s}  "
+                  f"{'❌ 失败':<12s}  {r.get('error', '')}")
+
+    print(f"  {'─' * 78}")
+
+    # 多空共识判断
+    long_tfs = [r["tf"] for r in results if r.get("ok") and "LONG" in r.get("action", "")]
+    short_tfs = [r["tf"] for r in results if r.get("ok") and "SHORT" in r.get("action", "")]
+    hold_tfs = [r["tf"] for r in results if r.get("ok") and r.get("action") == "HOLD"]
+
+    print(f"\n  ═══ 多周期共识 ═══")
+    if long_tfs:
+        print(f"  🟢 做多: {', '.join(long_tfs)} ({len(long_tfs)}/{len(results)})")
+    if short_tfs:
+        print(f"  🔴 做空: {', '.join(short_tfs)} ({len(short_tfs)}/{len(results)})")
+    if hold_tfs:
+        print(f"  ⚪ 观望: {', '.join(hold_tfs)} ({len(hold_tfs)}/{len(results)})")
+
+    n_ok = sum(1 for r in results if r["ok"])
+    if long_tfs and len(long_tfs) >= n_ok * 0.6:
+        print(f"  📊 共识: 多头共振 ({len(long_tfs)}/{n_ok} 周期看多)")
+    elif short_tfs and len(short_tfs) >= n_ok * 0.6:
+        print(f"  📊 共识: 空头共振 ({len(short_tfs)}/{n_ok} 周期看空)")
+    elif long_tfs and short_tfs:
+        print(f"  📊 共识: 多空分歧 — 建议观望")
+    else:
+        print(f"  📊 共识: 中性 — 无明确方向")
+
+    # JSON 输出（供 API 使用）
+    if args.output:
+        import json as _json
+        output = {
+            "timeframes": timeframes,
+            "results": results,
+            "consensus": {
+                "long": long_tfs,
+                "short": short_tfs,
+                "hold": hold_tfs,
+                "direction": (
+                    "long" if long_tfs and len(long_tfs) >= n_ok * 0.6
+                    else "short" if short_tfs and len(short_tfs) >= n_ok * 0.6
+                    else "conflict" if long_tfs and short_tfs
+                    else "neutral"
+                ),
+            },
+            "total_elapsed": total_time,
+        }
+        with open(args.output, 'w') as f:
+            _json.dump(output, f, ensure_ascii=False, indent=2)
+        print(f"\n  结果已保存: {args.output}")
+
+    return results
+
+
 def cmd_status(args):
     """查看引擎状态"""
     data_dir = args.data_dir or "data/live"
@@ -349,6 +509,7 @@ def main():
   python live_runner.py --phase paper --timeframe 4h
   python live_runner.py --config live_trading_config.json
   python live_runner.py --test-signal --timeframe 1h
+  python live_runner.py --test-signal-multi --timeframe 10m,15m,30m,1h,4h,8h
   python live_runner.py --generate-config
         """
     )
@@ -377,6 +538,8 @@ def main():
                        help="测试 API 连接")
     parser.add_argument("--test-signal", action="store_true",
                        help="测试信号计算")
+    parser.add_argument("--test-signal-multi", action="store_true",
+                       help="多时间框架并行信号检测 (--timeframe 逗号分隔)")
     parser.add_argument("--status", action="store_true",
                        help="查看引擎状态")
     parser.add_argument("--kill-switch", action="store_true",
@@ -397,6 +560,8 @@ def main():
         cmd_generate_config(args)
     elif args.test_connection:
         cmd_test_connection(args)
+    elif args.test_signal_multi:
+        cmd_test_signal_multi(args)
     elif args.test_signal:
         cmd_test_signal(args)
     elif args.status:

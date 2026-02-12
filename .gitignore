@@ -1,49 +1,32 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.venv/
-venv/
-env/
+*.pyo
 *.egg-info/
 dist/
 build/
+*.egg
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 日志
+logs/
+*.log
+
+# 数据缓存
+data/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 .DS_Store
 
-# Data & Output
-backtest_result.json
-backtest_multi.json
-global_strategy_result.json
-strategy_compare_result.json
-strategy_optimize_result.json
-strategy_enhanced_result.json
-strategy_futures_result.json
-strategy_futures_v2_result.json
-strategy_futures_v3_result.json
-strategy_futures_v4_result.json
-strategy_futures_v5_result.json
-strategy_futures_final_result.json
-divergence_analysis.png
-*.png
-*.csv
-
-# Environment
-.env
-*.log
-*.jsonl
-timeframe_test_result.json
-timeframe_analysis_result.json
-strategy_15m_result.json
-ma_strategy_result.json
-
-# Live trading
-logs/
-data/
-live_trading_config.json
+# 临时文件
+multi_signal_result.json
+gunicorn.pid

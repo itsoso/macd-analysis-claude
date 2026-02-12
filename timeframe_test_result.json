@@ -1,0 +1,307 @@
+{
+  "description": "多时间周期信号对比测试",
+  "combo_results": [
+    {
+      "name": "A: 当前(1h-8h)",
+      "alpha": 24.7,
+      "strategy_return": 6.4,
+      "max_drawdown": -1.94,
+      "total_trades": 5,
+      "fees": {
+        "spot_fees": 52.6,
+        "futures_fees": 68.44,
+        "funding_paid": 10.35,
+        "funding_received": 96.87,
+        "net_funding": 86.52,
+        "slippage_cost": 242.14,
+        "liquidation_fees": 0,
+        "total_fees": 131.4,
+        "total_costs": 373.53,
+        "fee_drag_pct": 0.19,
+        "gross_return_pct": 6.58
+      }
+    },
+    {
+      "name": "B: +15m",
+      "alpha": 24.7,
+      "strategy_return": 6.4,
+      "max_drawdown": -1.94,
+      "total_trades": 5,
+      "fees": {
+        "spot_fees": 52.6,
+        "futures_fees": 68.44,
+        "funding_paid": 10.35,
+        "funding_received": 96.87,
+        "net_funding": 86.52,
+        "slippage_cost": 242.14,
+        "liquidation_fees": 0,
+        "total_fees": 131.4,
+        "total_costs": 373.53,
+        "fee_drag_pct": 0.19,
+        "gross_return_pct": 6.58
+      }
+    },
+    {
+      "name": "C: +30m",
+      "alpha": 24.54,
+      "strategy_return": 6.23,
+      "max_drawdown": -1.41,
+      "total_trades": 7,
+      "fees": {
+        "spot_fees": 52.6,
+        "futures_fees": 140.55,
+        "funding_paid": 3.47,
+        "funding_received": 41.75,
+        "net_funding": 38.28,
+        "slippage_cost": 386.27,
+        "liquidation_fees": 0,
+        "total_fees": 196.61,
+        "total_costs": 582.88,
+        "fee_drag_pct": 0.29,
+        "gross_return_pct": 6.53
+      }
+    },
+    {
+      "name": "D: +15m+30m",
+      "alpha": 24.54,
+      "strategy_return": 6.23,
+      "max_drawdown": -1.41,
+      "total_trades": 7,
+      "fees": {
+        "spot_fees": 52.6,
+        "futures_fees": 140.55,
+        "funding_paid": 3.47,
+        "funding_received": 41.75,
+        "net_funding": 38.28,
+        "slippage_cost": 386.27,
+        "liquidation_fees": 0,
+        "total_fees": 196.61,
+        "total_costs": 582.88,
+        "fee_drag_pct": 0.29,
+        "gross_return_pct": 6.53
+      }
+    },
+    {
+      "name": "E: 短周期主导",
+      "alpha": 22.84,
+      "strategy_return": 4.53,
+      "max_drawdown": -1.31,
+      "total_trades": 5,
+      "fees": {
+        "spot_fees": 52.59,
+        "futures_fees": 46.27,
+        "funding_paid": 2.31,
+        "funding_received": 18.6,
+        "net_funding": 16.29,
+        "slippage_cost": 197.78,
+        "liquidation_fees": 0,
+        "total_fees": 101.17,
+        "total_costs": 298.95,
+        "fee_drag_pct": 0.15,
+        "gross_return_pct": 4.68
+      }
+    },
+    {
+      "name": "F: 长周期主导",
+      "alpha": 24.7,
+      "strategy_return": 6.4,
+      "max_drawdown": -1.94,
+      "total_trades": 5,
+      "fees": {
+        "spot_fees": 52.6,
+        "futures_fees": 68.44,
+        "funding_paid": 10.35,
+        "funding_received": 96.87,
+        "net_funding": 86.52,
+        "slippage_cost": 242.14,
+        "liquidation_fees": 0,
+        "total_fees": 131.4,
+        "total_costs": 373.53,
+        "fee_drag_pct": 0.19,
+        "gross_return_pct": 6.58
+      }
+    },
+    {
+      "name": "G: 全周期均衡",
+      "alpha": 23.62,
+      "strategy_return": 5.31,
+      "max_drawdown": -1.41,
+      "total_trades": 7,
+      "fees": {
+        "spot_fees": 52.6,
+        "futures_fees": 141.46,
+        "funding_paid": 3.47,
+        "funding_received": 35.11,
+        "net_funding": 31.64,
+        "slippage_cost": 388.09,
+        "liquidation_fees": 0,
+        "total_fees": 197.53,
+        "total_costs": 585.62,
+        "fee_drag_pct": 0.29,
+        "gross_return_pct": 5.61
+      }
+    },
+    {
+      "name": "H: 纯短周期",
+      "alpha": 21.95,
+      "strategy_return": 3.64,
+      "max_drawdown": -1.31,
+      "total_trades": 5,
+      "fees": {
+        "spot_fees": 52.59,
+        "futures_fees": 47.15,
+        "funding_paid": 2.4,
+        "funding_received": 9.55,
+        "net_funding": 7.15,
+        "slippage_cost": 199.54,
+        "liquidation_fees": 0,
+        "total_fees": 102.14,
+        "total_costs": 301.68,
+        "fee_drag_pct": 0.15,
+        "gross_return_pct": 3.79
+      }
+    },
+    {
+      "name": "I: 纯4h",
+      "alpha": 0.0,
+      "strategy_return": -18.31,
+      "max_drawdown": -23.1,
+      "total_trades": 0,
+      "fees": {
+        "spot_fees": 0,
+        "futures_fees": 0,
+        "funding_paid": 0,
+        "funding_received": 0,
+        "net_funding": 0,
+        "slippage_cost": 0,
+        "liquidation_fees": 0,
+        "total_fees": 0,
+        "total_costs": 0,
+        "fee_drag_pct": 0.0,
+        "gross_return_pct": -18.31
+      }
+    },
+    {
+      "name": "J: 纯8h",
+      "alpha": 37.12,
+      "strategy_return": 18.82,
+      "max_drawdown": -2.86,
+      "total_trades": 7,
+      "fees": {
+        "spot_fees": 52.6,
+        "futures_fees": 128.12,
+        "funding_paid": 47.06,
+        "funding_received": 385.37,
+        "net_funding": 338.32,
+        "slippage_cost": 361.44,
+        "liquidation_fees": 0,
+        "total_fees": 227.78,
+        "total_costs": 589.22,
+        "fee_drag_pct": 0.29,
+        "gross_return_pct": 19.11
+      }
+    },
+    {
+      "name": "K: 15m+4h共振",
+      "alpha": 12.79,
+      "strategy_return": -5.51,
+      "max_drawdown": -9.71,
+      "total_trades": 5,
+      "fees": {
+        "spot_fees": 43.95,
+        "futures_fees": 47.67,
+        "funding_paid": 0,
+        "funding_received": 4.73,
+        "net_funding": 4.73,
+        "slippage_cost": 183.29,
+        "liquidation_fees": 0,
+        "total_fees": 91.63,
+        "total_costs": 274.92,
+        "fee_drag_pct": 0.14,
+        "gross_return_pct": -5.38
+      }
+    },
+    {
+      "name": "L: 30m+4h共振",
+      "alpha": 26.71,
+      "strategy_return": 8.41,
+      "max_drawdown": -1.31,
+      "total_trades": 7,
+      "fees": {
+        "spot_fees": 52.59,
+        "futures_fees": 114.38,
+        "funding_paid": 9.33,
+        "funding_received": 74.31,
+        "net_funding": 64.98,
+        "slippage_cost": 333.94,
+        "liquidation_fees": 0,
+        "total_fees": 176.3,
+        "total_costs": 510.24,
+        "fee_drag_pct": 0.26,
+        "gross_return_pct": 8.66
+      }
+    }
+  ],
+  "ranking": [
+    {
+      "rank": 1,
+      "name": "J: 纯8h",
+      "alpha": 37.12
+    },
+    {
+      "rank": 2,
+      "name": "L: 30m+4h共振",
+      "alpha": 26.71
+    },
+    {
+      "rank": 3,
+      "name": "A: 当前(1h-8h)",
+      "alpha": 24.7
+    },
+    {
+      "rank": 4,
+      "name": "B: +15m",
+      "alpha": 24.7
+    },
+    {
+      "rank": 5,
+      "name": "F: 长周期主导",
+      "alpha": 24.7
+    },
+    {
+      "rank": 6,
+      "name": "C: +30m",
+      "alpha": 24.54
+    },
+    {
+      "rank": 7,
+      "name": "D: +15m+30m",
+      "alpha": 24.54
+    },
+    {
+      "rank": 8,
+      "name": "G: 全周期均衡",
+      "alpha": 23.62
+    },
+    {
+      "rank": 9,
+      "name": "E: 短周期主导",
+      "alpha": 22.84
+    },
+    {
+      "rank": 10,
+      "name": "H: 纯短周期",
+      "alpha": 21.95
+    },
+    {
+      "rank": 11,
+      "name": "K: 15m+4h共振",
+      "alpha": 12.79
+    },
+    {
+      "rank": 12,
+      "name": "I: 纯4h",
+      "alpha": 0.0
+    }
+  ]
+}

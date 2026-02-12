@@ -1,0 +1,523 @@
+{% extends "base.html" %}
+{% block title %}海龟交易法则 · 策略解析{% endblock %}
+{% block content %}
+<h1 class="page-title">🐢《海龟交易法则（第三版）》</h1>
+<p class="page-subtitle">柯蒂斯·费思 著 · 中信出版社 · 趋势跟踪 × 唐奇安通道 × ATR头寸管理 × 14章系统解读</p>
+
+<!-- 核心理念 -->
+<div class="card" style="border-left: 3px solid var(--accent-blue);">
+    <div class="card-title">📌 核心理念 — 海龟四大原则</div>
+    <p style="color: var(--text-secondary); line-height: 1.8;">
+        1983年,传奇交易大师理查德·丹尼斯招募了13人,用两周培训将他们变成出色的交易者,
+        年均复利<span class="key-concept">80%以上</span>。作者柯蒂斯·费思是其中最成功的一位,
+        4年内为丹尼斯赚取超过<span class="key-concept">3100万美元</span>。
+        <br><br>
+        <strong>四大核心原则:</strong>
+        <span class="key-concept">掌握优势</span> →
+        <span class="key-concept">管理风险</span> →
+        <span class="key-concept">坚定不移</span> →
+        <span class="key-concept">简单明了</span>
+        <br><br>
+        <strong>海龟秘诀:</strong> 重要的不是交易系统,而是交易者<strong>贯彻</strong>交易系统的能力。
+        所有海龟学了同样的方法,但结果天差地别——是<strong>心理纪律</strong>决定了成败。
+    </p>
+</div>
+
+<!-- 回测面板 -->
+<div class="card" id="backtest-panel" style="border-left: 3px solid var(--accent-green);">
+    <div class="card-title">📊 实时回测 · ETH/USDT 1H</div>
+    <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+        <button id="btn-run-backtest" onclick="runBacktest()" style="padding: 8px 20px; background: var(--accent-green); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">
+            🚀 运行海龟回测
+        </button>
+        <select id="sel-days" style="padding: 8px; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px;">
+            <option value="30">30天</option>
+            <option value="60" selected>60天</option>
+            <option value="90">90天</option>
+        </select>
+        <span id="bt-status" style="color: var(--text-secondary); line-height: 36px;">就绪</span>
+    </div>
+    <div id="bt-results" style="display: none;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 15px;">
+            <div class="stat-box"><span class="label">初始资金</span><span class="value" id="bt-init">-</span></div>
+            <div class="stat-box"><span class="label">最终权益</span><span class="value" id="bt-final">-</span></div>
+            <div class="stat-box"><span class="label">总收益率</span><span class="value" id="bt-return">-</span></div>
+            <div class="stat-box"><span class="label">最大回撤</span><span class="value" id="bt-dd">-</span></div>
+            <div class="stat-box"><span class="label">总交易</span><span class="value" id="bt-trades">-</span></div>
+            <div class="stat-box"><span class="label">胜率</span><span class="value" id="bt-wr">-</span></div>
+            <div class="stat-box"><span class="label">盈亏比</span><span class="value" id="bt-pf">-</span></div>
+            <div class="stat-box"><span class="label">平均R乘数</span><span class="value" id="bt-r">-</span></div>
+            <div class="stat-box"><span class="label">MAR比率</span><span class="value" id="bt-mar">-</span></div>
+            <div class="stat-box"><span class="label">连胜/连亏</span><span class="value" id="bt-streak">-</span></div>
+        </div>
+        <div id="bt-systems" style="margin-top:10px;"></div>
+        <div id="bt-recent-trades" style="margin-top:15px; max-height: 300px; overflow-y: auto;"></div>
+    </div>
+</div>
+
+<!-- 第一章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch1">1</div>
+        <div class="chapter-title">玩风险游戏的交易者</div>
+        <span class="badge">核心</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>交易者与投资者的区别:</strong> 投资者买实物(巴菲特买企业),交易者只关心价格——本质上买卖的是<span class="key-concept">风险</span>。</p>
+        <div class="principle-grid">
+            <div class="principle-card buy" style="background: var(--bg-secondary);">
+                <h3>💧 流动性风险</h3>
+                <p>
+                    无法买入或卖出的风险。帽客(做市商)赚取买卖价差,
+                    为市场提供流动性。套利者利用不同市场间的价差。
+                </p>
+            </div>
+            <div class="principle-card sell" style="background: var(--bg-secondary);">
+                <h3>📈 价格风险</h3>
+                <p>
+                    价格大幅上升或下跌的风险。投机者靠价格变化赚钱:
+                    先买后卖(做多),或先卖后买(卖空)。海龟们经营的就是价格风险。
+                </p>
+            </div>
+        </div>
+        <ul>
+            <li><strong>三类交易者:</strong> 对冲者(规避风险) / 帽客(赚取价差) / 投机者(承担价格风险)</li>
+            <li><strong>共同态度变化→价格变化:</strong> 卖者不愿以目前价格卖出,价格上涨;买者不愿接受目前价格,价格下跌</li>
+            <li><span class="key-concept">恐慌的自促作用:</span> 价格上升→帽客退出空头→更多买单→价格进一步上升→恐慌性平仓</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第二章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch2">2</div>
+        <div class="chapter-title">揭秘海龟思维</div>
+        <span class="badge green">核心 · 认知偏差</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>行为金融学:</strong> 人类在不确定环境中容易犯系统性错误。成功交易者理解这种现象并从中获利。</p>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px;">
+                <strong>⚠️ 损失厌恶</strong><br>
+                <span style="color:var(--text-secondary)">不赔钱远比赚钱重要。损失的心理影响是赢利的2倍。</span>
+            </div>
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px;">
+                <strong>⚠️ 沉没成本</strong><br>
+                <span style="color:var(--text-secondary)">更重视已花掉的钱。导致持有亏损头寸不止损。</span>
+            </div>
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px;">
+                <strong>⚠️ 处置效应</strong><br>
+                <span style="color:var(--text-secondary)">早早兑现利润,却让损失持续。无法赚大钱。</span>
+            </div>
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px;">
+                <strong>⚠️ 锚定效应</strong><br>
+                <span style="color:var(--text-secondary)">过度依赖近期价位作参考。"等回到X就卖"。</span>
+            </div>
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px;">
+                <strong>⚠️ 结果偏好</strong><br>
+                <span style="color:var(--text-secondary)">根据结果而非决策质量判断好坏。正确方法也可能赔钱。</span>
+            </div>
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px;">
+                <strong>⚠️ 近期偏好</strong><br>
+                <span style="color:var(--text-secondary)">更重视近期数据。导致在大趋势前放弃系统。</span>
+            </div>
+        </div>
+        <ul style="margin-top: 15px;">
+            <li><strong>四种市场状态:</strong> 稳定平静 / 稳定波动 / 平静趋势 / 波动趋势</li>
+            <li><span class="key-concept">海龟不预测市场</span>,而是寻找市场处于某种特定状态的指示信号</li>
+            <li><strong>趋势跟踪:</strong> 65%~70%的交易是赔钱的,但赢利的交易能弥补所有损失</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第三章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch3">3</div>
+        <div class="chapter-title">海龟培训课程</div>
+        <span class="badge green">核心 · 系统</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>核心系统 — 唐奇安通道突破法:</strong></p>
+        <div class="principle-grid">
+            <div class="principle-card buy" style="background: var(--bg-secondary);">
+                <h3>📐 系统1 (短期)</h3>
+                <p>
+                    <code>入市: 20日突破</code><br>
+                    <code>退出: 10日反向突破</code><br>
+                    <code>过滤: 上次突破盈利则忽略</code><br>
+                    <code>保障: 55日突破点入市</code><br>
+                </p>
+            </div>
+            <div class="principle-card sell" style="background: var(--bg-secondary);">
+                <h3>📐 系统2 (长期)</h3>
+                <p>
+                    <code>入市: 55日突破</code><br>
+                    <code>退出: 20日反向突破</code><br>
+                    <code>过滤: 无(所有突破有效)</code><br>
+                    <code>权重: 更大(捕捉大趋势)</code><br>
+                </p>
+            </div>
+        </div>
+        <ul>
+            <li><strong>N(ATR):</strong> 真实波动幅度均值,20日指数移动平均。用于统一不同市场的波动性</li>
+            <li><strong>头寸单位:</strong> 1ATR波动 = 账户净值的<span class="key-concept">1%</span></li>
+            <li><strong>止损:</strong> 入市价 ± <span class="key-concept">2N</span>,任何一笔交易风险不超过2%</li>
+            <li><strong>逐步建仓:</strong> 每突破<span class="key-concept">1/2N</span>添加一个单位,最多4个单位</li>
+            <li><strong>第一次实战:</strong> 只有作者一人满仓(12份合约),赚78000美元,是其他海龟3倍以上</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第四章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch4">4</div>
+        <div class="chapter-title">像海龟一样思考</div>
+        <span class="badge">心理</span>
+    </div>
+    <div class="chapter-content">
+        <div style="background: var(--bg-tertiary); padding: 15px; border-radius: 8px; border-left: 3px solid var(--accent-yellow);">
+            <strong>海龟思维三要素:</strong><br>
+            1. <strong>重要的是现在:</strong> 不对过去念念不忘,也不预测未来<br>
+            2. <strong>从概率角度思考:</strong> 不试图作出正确预测,使用概率有利的方法<br>
+            3. <strong>对交易结果负责:</strong> 不归咎于市场/经纪人/其他人
+        </div>
+        <ul style="margin-top: 12px;">
+            <li><strong>避免结果偏好:</strong> 连续赔10次仍坚持策略=做得很不错,只是运气差</li>
+            <li><strong>避免近期偏好:</strong> 可可市场连续17笔亏损后出现大趋势,朋友因近期偏好而错过</li>
+            <li><strong>R乘数:</strong> 赢利/风险投入。赔钱交易多但控制在1R,赚钱交易可达10R、20R、30R</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第五-六章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch5">5-6</div>
+        <div class="chapter-title">发现优势 & 寻找交易时机</div>
+        <span class="badge green">核心 · E-比率</span>
+    </div>
+    <div class="chapter-content">
+        <div class="principle-grid">
+            <div class="principle-card buy" style="background: var(--bg-secondary);">
+                <h3>📊 E-比率(优势比率)</h3>
+                <p>
+                    <code>MFE: 最大有利变动幅度</code><br>
+                    <code>MAE: 最大不利变动幅度</code><br>
+                    <code>E-比率 = avg(MFE/ATR) / avg(MAE/ATR)</code><br>
+                    >1.0 = 正优势, <1.0 = 负优势<br>
+                    20日突破的E70-比率 = 1.20
+                </p>
+            </div>
+            <div class="principle-card sell" style="background: var(--bg-secondary);">
+                <h3>🔄 趋势组合过滤器</h3>
+                <p>
+                    50日均线 > 300日均线: 只做多<br>
+                    50日均线 < 300日均线: 只做空<br>
+                    加入过滤器后E70-比率从1.20→<strong>1.33</strong><br>
+                    剔除了与长期趋势相违背的突破
+                </p>
+            </div>
+        </div>
+        <ul>
+            <li><strong>支撑与阻力:</strong> 来自锚定效应、近期偏好、处置效应三种认知偏差</li>
+            <li><strong>价格不稳定点:</strong> 接近支撑/阻力位时,价格不容易保持稳定,犯错代价降低</li>
+            <li><span class="key-concept">突破的优势:</span> 支撑/阻力刚被打破时的认知滞后=趋势跟踪者的机会</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第七-八章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch7">7-8</div>
+        <div class="chapter-title">风险衡量 & 资金管理</div>
+        <span class="badge green">核心 · 生存</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>四大风险:</strong></p>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px;">
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px; border-left: 3px solid #e74c3c;">
+                <strong>📉 衰落</strong><br><span style="color:var(--text-secondary)">连续损失使账户缩水。趋势系统衰落≈回报水平(30%回报→30%衰落)</span>
+            </div>
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px; border-left: 3px solid #f39c12;">
+                <strong>📊 低回报</strong><br><span style="color:var(--text-secondary)">回报不稳定。滚动一年期回报更能反映实际表现</span>
+            </div>
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px; border-left: 3px solid #e74c3c;">
+                <strong>💥 价格动荡</strong><br><span style="color:var(--text-secondary)">1987年股崩,作者一夜损失1100万美元。无法止损的噩梦</span>
+            </div>
+            <div style="background: var(--bg-tertiary); padding: 12px; border-radius: 8px; border-left: 3px solid #f39c12;">
+                <strong>💀 系统死亡</strong><br><span style="color:var(--text-secondary)">市场变化导致系统失效。趋势跟踪每隔几年被宣布"死亡"</span>
+            </div>
+        </div>
+        <ul style="margin-top: 15px;">
+            <li><strong>生存第一:</strong> 交易首要目标是<span class="key-concept">生存</span>。20%~30%年均回报+20年=1000万美元</li>
+            <li><strong>头寸单位限制:</strong> 单市场≤4单位,相关市场≤6单位,同方向总计≤10~12单位</li>
+            <li><strong>MAR比率:</strong> 年均回报率/最大衰落幅度,快速评估风险回报</li>
+            <li><strong>夏普比率的局限:</strong> 稳定≠低风险(LTCM/Amaranth崩溃前夏普很高)</li>
+            <li><strong>缩水规则:</strong> 损失初始账户10%→账户规模缩减20%</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第九-十章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch9">9-10</div>
+        <div class="chapter-title">海龟式积木 & 交易系统</div>
+        <span class="badge">系统对比</span>
+    </div>
+    <div class="chapter-content">
+        <p><strong>6个海龟式交易系统:</strong></p>
+        <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
+            <tr style="background: var(--bg-tertiary);">
+                <th style="padding: 8px; text-align: left; border-bottom: 1px solid var(--border);">系统</th>
+                <th style="padding: 8px; text-align: left; border-bottom: 1px solid var(--border);">类型</th>
+                <th style="padding: 8px; text-align: left; border-bottom: 1px solid var(--border);">特点</th>
+            </tr>
+            <tr><td style="padding: 6px;">ATR通道突破</td><td>波幅通道</td><td>ATR作为波动性指标</td></tr>
+            <tr style="background: var(--bg-tertiary);"><td style="padding: 6px;">布林格突破</td><td>波幅通道</td><td>标准差作为波动性指标</td></tr>
+            <tr><td style="padding: 6px;"><strong>唐奇安趋势★</strong></td><td>突破+趋势过滤</td><td>海龟核心系统</td></tr>
+            <tr style="background: var(--bg-tertiary);"><td style="padding: 6px;">定时退出唐奇安</td><td>突破+定时退出</td><td>避免趋势衰竭</td></tr>
+            <tr><td style="padding: 6px;">双重移动均线</td><td>均线交叉</td><td>始终在市场中</td></tr>
+            <tr style="background: var(--bg-tertiary);"><td style="padding: 6px;">三重移动均线</td><td>均线+趋势过滤</td><td>方向须符合大趋势</td></tr>
+        </table>
+        <ul>
+            <li><strong>积木哲学:</strong> 所有积木都可以调整速度,用任何积木搭建的系统不会有太大区别</li>
+            <li><strong>忠告:</strong> 与其寻找完美指标,不如把时间花在<span class="key-concept">简单系统的执行</span>上</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第十一-十二章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch11">11-12</div>
+        <div class="chapter-title">历史测试的谎言 & 统计学基础</div>
+        <span class="badge">方法论</span>
+    </div>
+    <div class="chapter-content">
+        <ul>
+            <li><strong>交易者效应:</strong> 某策略被太多人使用→市场调整→策略失效</li>
+            <li><strong>随机效应:</strong> 好系统在随机测试中也可能表现不佳</li>
+            <li><strong>最优化矛盾:</strong> 过度优化参数→在历史数据上完美→实战中失败</li>
+            <li><strong>过度拟合:</strong> 参数太多、太精确=拟合噪声而非信号</li>
+            <li><strong>稳健性检验:</strong> 稳健夏普比率、蒙特卡洛检验、样本代表性</li>
+            <li><span class="key-concept">关键原则:</span> 简单的系统更稳健,复杂=脆弱</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 第十三-十四章 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num ch13">13-14</div>
+        <div class="chapter-title">防卫系统 & 掌控心魔</div>
+        <span class="badge">心理</span>
+    </div>
+    <div class="chapter-content">
+        <div class="principle-grid">
+            <div class="principle-card buy" style="background: var(--bg-secondary);">
+                <h3>🛡️ 稳健策略两大特征</h3>
+                <p>
+                    1. 分散化: 多个不同市场<br>
+                    2. 多系统: 使用不同的交易系统<br>
+                    <br>
+                    趋势跟踪+反趋势 组合<br>
+                    可以平滑收益曲线
+                </p>
+            </div>
+            <div class="principle-card sell" style="background: var(--bg-secondary);">
+                <h3>🧠 克服心魔</h3>
+                <p>
+                    <strong>克服自负:</strong> 不要因为一次大胜就膨胀<br>
+                    <strong>谦虚为上:</strong> 市场永远比你聪明<br>
+                    <strong>坚定不移:</strong> 逆境时坚持系统<br>
+                    <strong>面对现实:</strong> 果断改变,接受失败
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 附录: 原版法则 -->
+<div class="chapter">
+    <div class="chapter-header">
+        <div class="chapter-num" style="background: #e74c3c;">附</div>
+        <div class="chapter-title">原版海龟交易法则 (完整版)</div>
+        <span class="badge green">附录 · 完整规则</span>
+    </div>
+    <div class="chapter-content">
+        <div style="background: var(--bg-tertiary); padding: 15px; border-radius: 8px; font-family: monospace; line-height: 2;">
+            <strong>头寸规模:</strong><br>
+            &nbsp;&nbsp;N = ATR(20日指数移动平均)<br>
+            &nbsp;&nbsp;单位规模 = 账户净值×1% / (N × 合约大小)<br>
+            &nbsp;&nbsp;限制: 单市场≤4单位, 相关市场≤6单位, 总计≤10~12单位<br>
+            <br>
+            <strong>入市:</strong><br>
+            &nbsp;&nbsp;系统1: 价格突破20日最高/最低点 → 入市1单位<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;过滤: 上次突破盈利 → 忽略 → 55日突破保障<br>
+            &nbsp;&nbsp;系统2: 价格突破55日最高/最低点 → 入市1单位 (无过滤)<br>
+            &nbsp;&nbsp;逐步建仓: 每突破1/2N → 加1单位 → 最多4单位<br>
+            <br>
+            <strong>止损:</strong><br>
+            &nbsp;&nbsp;标准: 入市价 ± 2N (单笔风险≤2%)<br>
+            &nbsp;&nbsp;备选(双重损失): 入市价 ± 1/2N (单笔风险≤0.5%)<br>
+            &nbsp;&nbsp;加仓时调整: 所有单位止损点 = 最新单位入市价 ± 2N<br>
+            <br>
+            <strong>退出:</strong><br>
+            &nbsp;&nbsp;系统1: 价格发生10日反向突破 → 退出全部<br>
+            &nbsp;&nbsp;系统2: 价格发生20日反向突破 → 退出全部<br>
+            <br>
+            <strong>战术:</strong><br>
+            &nbsp;&nbsp;使用限价单(非市价单) / 急变市场保持冷静<br>
+            &nbsp;&nbsp;买强卖弱 / 同类市场选最强做多、最弱做空<br>
+        </div>
+    </div>
+</div>
+
+<!-- 代码实现 -->
+<div class="card" style="border-left: 3px solid var(--accent-yellow);">
+    <div class="card-title">💻 代码实现 · turtle_strategy.py</div>
+    <p style="color: var(--text-secondary);">完整实现了海龟交易法则的核心组件:</p>
+    <ul>
+        <li><code>compute_atr()</code> — N值(ATR)计算,20日真实波动幅度均值</li>
+        <li><code>compute_donchian_channels()</code> — 唐奇安通道(入市+退出通道)</li>
+        <li><code>compute_trend_filter()</code> — 趋势组合过滤器(50/200均线)</li>
+        <li><code>detect_breakout()</code> — 突破检测(系统1: 20日, 系统2: 55日)</li>
+        <li><code>check_previous_breakout_result()</code> — 系统1过滤规则</li>
+        <li><code>compute_position_size()</code> — ATR头寸单位规模计算</li>
+        <li><code>compute_turtle_scores()</code> — 评分系统(适配六书融合框架)</li>
+        <li><code>TurtleBacktester</code> — 完整回测引擎(双系统+止损+逐步建仓)</li>
+    </ul>
+</div>
+
+<!-- 融合思考 -->
+<div class="card" style="border-left: 3px solid #9b59b6;">
+    <div class="card-title">🔮 七书融合思考</div>
+    <p style="color: var(--text-secondary); line-height: 1.8;">
+        海龟交易法则与前六书的互补关系:
+    </p>
+    <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
+        <tr style="background: var(--bg-tertiary);">
+            <th style="padding: 8px; text-align: left; border-bottom: 1px solid var(--border);">维度</th>
+            <th style="padding: 8px; text-align: left; border-bottom: 1px solid var(--border);">六书已有</th>
+            <th style="padding: 8px; text-align: left; border-bottom: 1px solid var(--border);">海龟新增</th>
+        </tr>
+        <tr><td style="padding: 6px;"><strong>趋势判断</strong></td><td>MA/BOLL/背离</td><td>唐奇安通道突破 + 趋势过滤器</td></tr>
+        <tr style="background: var(--bg-tertiary);"><td style="padding: 6px;"><strong>入场时机</strong></td><td>评分阈值触发</td><td>N日新高/新低突破(精确入市点)</td></tr>
+        <tr><td style="padding: 6px;"><strong>仓位管理</strong></td><td>固定比例</td><td>ATR标准化头寸 + 逐步建仓</td></tr>
+        <tr style="background: var(--bg-tertiary);"><td style="padding: 6px;"><strong>风险控制</strong></td><td>止损/止盈百分比</td><td>N倍ATR动态止损 + 总风险限制</td></tr>
+        <tr><td style="padding: 6px;"><strong>退出策略</strong></td><td>反向信号</td><td>反向通道突破(系统化退出)</td></tr>
+        <tr style="background: var(--bg-tertiary);"><td style="padding: 6px;"><strong>心理框架</strong></td><td>技术面分析</td><td>概率思维 + 正期望值 + 纪律执行</td></tr>
+    </table>
+    <p style="color: var(--accent-blue); margin-top: 10px;">
+        <strong>融合方案:</strong> 海龟信号作为第7维加入融合评分系统。突破入市信号可作为<strong>入场确认器</strong>,
+        ATR动态止损可<strong>升级现有固定止损</strong>,逐步建仓逻辑可<strong>优化仓位管理</strong>。
+        海龟的趋势过滤器与MA策略形成<strong>双重趋势验证</strong>。
+    </p>
+</div>
+
+<style>
+.stat-box { background: var(--bg-tertiary); padding: 10px; border-radius: 8px; text-align: center; }
+.stat-box .label { display: block; color: var(--text-secondary); font-size: 12px; margin-bottom: 4px; }
+.stat-box .value { display: block; color: var(--text-primary); font-weight: bold; font-size: 16px; }
+.chapter { margin-bottom: 20px; }
+.chapter-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.chapter-num { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: white; font-size: 14px; flex-shrink: 0; }
+.ch1 { background: #3498db; } .ch2 { background: #2ecc71; } .ch3 { background: #e67e22; }
+.ch4 { background: #9b59b6; } .ch5 { background: #1abc9c; } .ch7 { background: #e74c3c; }
+.ch9 { background: #f39c12; } .ch11 { background: #34495e; } .ch13 { background: #16a085; }
+.chapter-title { font-size: 18px; font-weight: bold; color: var(--text-primary); }
+.chapter-content { background: var(--bg-secondary); padding: 15px; border-radius: 8px; }
+.chapter-content ul { margin: 8px 0; padding-left: 20px; }
+.chapter-content li { color: var(--text-secondary); margin: 4px 0; line-height: 1.6; }
+.badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; background: var(--accent-blue); color: white; }
+.badge.green { background: var(--accent-green); }
+.key-concept { color: var(--accent-blue); font-weight: bold; }
+.principle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; margin: 10px 0; }
+.principle-card { padding: 12px; border-radius: 8px; }
+.principle-card h3 { margin: 0 0 8px 0; font-size: 15px; }
+.principle-card p { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+</style>
+
+<script>
+function runBacktest() {
+    const btn = document.getElementById('btn-run-backtest');
+    const status = document.getElementById('bt-status');
+    const days = document.getElementById('sel-days').value;
+    
+    btn.disabled = true;
+    btn.textContent = '⏳ 运行中...';
+    status.textContent = '正在获取数据并回测...';
+    
+    fetch(`/api/turtle_backtest?days=${days}`)
+        .then(r => r.json())
+        .then(data => {
+            btn.disabled = false;
+            btn.textContent = '🚀 运行海龟回测';
+            
+            if (data.error) {
+                status.textContent = '❌ ' + data.error;
+                return;
+            }
+            
+            status.textContent = '✅ 完成 ' + (data.run_time || '');
+            document.getElementById('bt-results').style.display = 'block';
+            
+            document.getElementById('bt-init').textContent = '$' + Number(data.initial_capital).toLocaleString();
+            document.getElementById('bt-final').textContent = '$' + Number(data.final_equity).toLocaleString();
+            
+            const ret = data.total_return_pct;
+            const retEl = document.getElementById('bt-return');
+            retEl.textContent = (ret >= 0 ? '+' : '') + ret + '%';
+            retEl.style.color = ret >= 0 ? 'var(--accent-green)' : '#e74c3c';
+            
+            document.getElementById('bt-dd').textContent = data.max_drawdown_pct + '%';
+            document.getElementById('bt-trades').textContent = data.total_trades;
+            document.getElementById('bt-wr').textContent = data.win_rate_pct + '%';
+            document.getElementById('bt-pf').textContent = data.profit_factor;
+            document.getElementById('bt-r').textContent = data.avg_r_multiple;
+            document.getElementById('bt-mar').textContent = data.mar_ratio;
+            document.getElementById('bt-streak').textContent = data.max_consecutive_wins + ' / ' + data.max_consecutive_losses;
+            
+            // 系统分布
+            let sysHtml = '<strong>系统分布:</strong><br>';
+            if (data.system_stats) {
+                for (const [name, stats] of Object.entries(data.system_stats)) {
+                    const wr = stats.count > 0 ? (stats.wins / stats.count * 100).toFixed(0) : 0;
+                    const pnl = stats.total_pnl;
+                    sysHtml += `<span style="margin-right:15px;">${name}: ${stats.count}笔, 胜率${wr}%, ` +
+                        `<span style="color:${pnl>=0?'var(--accent-green)':'#e74c3c'}">${pnl>=0?'+':''}$${Number(pnl).toLocaleString(undefined,{maximumFractionDigits:0})}</span></span>`;
+                }
+            }
+            document.getElementById('bt-systems').innerHTML = sysHtml;
+            
+            // 近期交易
+            if (data.trades && data.trades.length > 0) {
+                let html = '<strong>近期交易:</strong><table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;">';
+                html += '<tr style="background:var(--bg-tertiary);"><th style="padding:4px;">方向</th><th>系统</th><th>单位</th><th>入场</th><th>出场</th><th>净盈亏</th><th>R倍数</th><th>原因</th></tr>';
+                data.trades.slice(-20).reverse().forEach(t => {
+                    const color = t.net_pnl >= 0 ? 'var(--accent-green)' : '#e74c3c';
+                    html += `<tr><td style="padding:3px;color:${t.direction=='long'?'var(--accent-green)':'#e74c3c'}">${t.direction=='long'?'多':'空'}</td>`;
+                    html += `<td>${t.system}</td><td>${t.units}</td>`;
+                    html += `<td>$${Number(t.avg_entry).toFixed(1)}</td>`;
+                    html += `<td>$${Number(t.exit_price).toFixed(1)}</td>`;
+                    html += `<td style="color:${color}">${t.net_pnl>=0?'+':''}$${Number(t.net_pnl).toFixed(0)}</td>`;
+                    html += `<td>${Number(t.r_multiple).toFixed(2)}</td>`;
+                    html += `<td style="color:var(--text-secondary)">${t.exit_reason}</td></tr>`;
+                });
+                html += '</table>';
+                document.getElementById('bt-recent-trades').innerHTML = html;
+            }
+        })
+        .catch(err => {
+            btn.disabled = false;
+            btn.textContent = '🚀 运行海龟回测';
+            status.textContent = '❌ 请求失败: ' + err;
+        });
+}
+</script>
+{% endblock %}

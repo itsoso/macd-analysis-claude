@@ -71,6 +71,13 @@ class LiveSignalGenerator:
     复用 optimize_six_book.py 中的信号计算逻辑
     """
 
+    # 各时间框架推荐最大回看天数(避免数据量过大导致计算超时)
+    _MAX_LOOKBACK_DAYS = {
+        '1m': 2, '3m': 3, '5m': 5, '10m': 7, '15m': 15,
+        '30m': 25, '1h': 60, '2h': 60, '4h': 90,
+        '8h': 120, '12h': 120, '1d': 180,
+    }
+
     def __init__(self, config, logger=None):
         """
         config: StrategyConfig 实例
@@ -79,7 +86,11 @@ class LiveSignalGenerator:
         self.logger = logger
         self.symbol = config.symbol
         self.timeframe = config.timeframe
-        self.lookback_days = config.lookback_days
+        # 根据 timeframe 自动限制 lookback_days，防止小周期数据过多
+        max_days = self._MAX_LOOKBACK_DAYS.get(
+            config.timeframe, config.lookback_days
+        )
+        self.lookback_days = min(config.lookback_days, max_days)
 
         # 缓存数据
         self._df: Optional[pd.DataFrame] = None
@@ -152,9 +163,10 @@ class LiveSignalGenerator:
                 except Exception:
                     pass  # 8h数据失败不影响主信号
 
-            # 计算六维信号
+            # 计算六维信号 (限制最多1500根K线，避免小周期超时)
             self._signals = compute_signals_six(
-                df, self.timeframe, self._data_all
+                df, self.timeframe, self._data_all,
+                max_bars=1500
             )
 
             self._last_refresh = now
