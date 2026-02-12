@@ -25,6 +25,7 @@ STRATEGY_FUTURES_V2_FILE = os.path.join(BASE_DIR, 'strategy_futures_v2_result.js
 STRATEGY_FUTURES_V3_FILE = os.path.join(BASE_DIR, 'strategy_futures_v3_result.json')
 STRATEGY_FUTURES_V4_FILE = os.path.join(BASE_DIR, 'strategy_futures_v4_result.json')
 STRATEGY_FUTURES_V5_FILE = os.path.join(BASE_DIR, 'strategy_futures_v5_result.json')
+STRATEGY_FUTURES_FINAL_FILE = os.path.join(BASE_DIR, 'strategy_futures_final_result.json')
 
 
 def load_json(path):
@@ -136,6 +137,15 @@ def api_strategy_futures_v5():
     if data:
         return jsonify(data)
     return jsonify({'error': '未找到Phase5数据, 请先运行 python strategy_futures_v5.py'}), 404
+
+
+@app.route('/api/strategy_futures_final')
+def api_strategy_futures_final():
+    """返回合约策略Phase 6+7+8终极优化结果"""
+    data = load_json(STRATEGY_FUTURES_FINAL_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({'error': '未找到终极优化数据, 请先运行 python strategy_futures_final.py'}), 404
 
 
 if __name__ == '__main__':
