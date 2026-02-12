@@ -37,3 +37,5 @@ divergence_analysis.png
 # Environment
 .env
 *.log
+timeframe_test_result.json
+timeframe_analysis_result.json

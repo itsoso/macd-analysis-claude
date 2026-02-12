@@ -26,6 +26,7 @@ STRATEGY_FUTURES_V3_FILE = os.path.join(BASE_DIR, 'strategy_futures_v3_result.js
 STRATEGY_FUTURES_V4_FILE = os.path.join(BASE_DIR, 'strategy_futures_v4_result.json')
 STRATEGY_FUTURES_V5_FILE = os.path.join(BASE_DIR, 'strategy_futures_v5_result.json')
 STRATEGY_FUTURES_FINAL_FILE = os.path.join(BASE_DIR, 'strategy_futures_final_result.json')
+TIMEFRAME_ANALYSIS_FILE = os.path.join(BASE_DIR, 'timeframe_analysis_result.json')
 
 
 def load_json(path):
@@ -146,6 +147,15 @@ def api_strategy_futures_final():
     if data:
         return jsonify(data)
     return jsonify({'error': '未找到终极优化数据, 请先运行 python strategy_futures_final.py'}), 404
+
+
+@app.route('/api/timeframe_analysis')
+def api_timeframe_analysis():
+    """返回多时间周期信号价值分析结果"""
+    data = load_json(TIMEFRAME_ANALYSIS_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({'error': '未找到时间周期分析数据, 请先运行 python strategy_timeframe_analysis.py'}), 404
 
 
 if __name__ == '__main__':

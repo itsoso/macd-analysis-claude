@@ -1596,6 +1596,69 @@
                 </div>
                 <div class="card" id="ftfinal-conclusion"></div>
             </div>
+
+            <!-- ====== 多时间周期信号价值分析 ====== -->
+            <div id="tf-analysis-section" style="display:none;">
+                <div class="card" style="margin-top:24px;">
+                    <div class="card-title">多时间周期信号价值分析
+                        <span class="badge" style="background:rgba(168,85,247,0.15);color:#a855f7;">TIMEFRAME</span>
+                    </div>
+                    <div style="background:rgba(168,85,247,0.06);border-radius:8px;padding:14px 18px;margin-bottom:16px;border-left:3px solid #a855f7;">
+                        <div style="font-weight:600;color:#a855f7;margin-bottom:6px;">核心问题: 10分钟/15分钟/30分钟信号是否有用?</div>
+                        <div style="font-size:13px;color:var(--text-secondary);line-height:1.7;">
+                            当前系统使用 1h~8h 五个周期, 权重: 4h=1.0 > 6h=0.85 > 2h=0.7 > 8h=0.5 > 1h=0.3<br>
+                            本分析测试 15m~8h 所有周期的单独效果和组合效果, 找出最有价值的信号来源
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 单一周期效果 -->
+                <div class="card">
+                    <div class="card-title">各单一周期信号的独立效果</div>
+                    <div id="tf-single-bar" style="width:100%;min-height:300px;"></div>
+                    <div class="trade-table-wrap" style="max-height:none;margin-top:16px;">
+                        <table id="tf-single-table"><thead><tr><th>周期</th><th>α(%)</th><th>策略收益(%)</th><th>最大回撤(%)</th><th>交易笔数</th><th>信号点数</th><th>费用($)</th></tr></thead><tbody id="tf-single-body"></tbody></table>
+                    </div>
+                </div>
+
+                <!-- 周期组合排名 -->
+                <div class="card">
+                    <div class="card-title">不同周期组合的α排名</div>
+                    <div id="tf-combo-bar" style="width:100%;min-height:400px;"></div>
+                    <div class="trade-table-wrap" style="max-height:none;margin-top:16px;">
+                        <table id="tf-combo-table"><thead><tr><th>排名</th><th>组合名称</th><th>α(%)</th><th>策略收益(%)</th><th>最大回撤(%)</th><th>交易笔数</th></tr></thead><tbody id="tf-combo-body"></tbody></table>
+                    </div>
+                </div>
+
+                <!-- 信号时间线 -->
+                <div class="card">
+                    <div class="card-title">信号检测速度 (各周期何时检测到ETH顶部)</div>
+                    <div id="tf-timing-chart" style="width:100%;min-height:280px;"></div>
+                    <div id="tf-timing-detail" style="margin-top:12px;"></div>
+                </div>
+
+                <!-- 信号值矩阵热力图 -->
+                <div class="card">
+                    <div class="card-title">信号值矩阵 (关键时间点各周期信号强度)</div>
+                    <div id="tf-matrix-content"></div>
+                </div>
+
+                <!-- 核心发现 -->
+                <div class="card">
+                    <div class="card-title">核心发现与建议</div>
+                    <div id="tf-findings-content"></div>
+                </div>
+
+                <!-- 最佳策略交易明细 -->
+                <div class="card">
+                    <div class="card-title">最佳组合的交易明细</div>
+                    <div class="trade-table-wrap" style="max-height:500px;">
+                        <table id="tf-trades-table"><thead><tr><th>#</th><th>时间</th><th>操作</th><th>方向</th><th>价格($)</th><th>决策依据</th></tr></thead><tbody id="tf-trades-body"></tbody></table>
+                    </div>
+                </div>
+
+                <div class="card" id="tf-conclusion"></div>
+            </div>
         </div>
 
         <!-- ====== 策略优化对比 ====== -->
@@ -3083,6 +3146,11 @@
             const resF = await fetch('/api/strategy_futures_final');
             if (resF.ok) { renderFuturesFinal(await resF.json()); }
         } catch(e) {}
+        // 加载多时间周期分析
+        try {
+            const resTF = await fetch('/api/timeframe_analysis');
+            if (resTF.ok) { renderTimeframeAnalysis(await resTF.json()); }
+        } catch(e) {}
     }
 
     function renderFuturesPage(data) {
@@ -4002,6 +4070,223 @@
                     <span>真实前向回测: α=+${(best.alpha||0).toFixed(0)}% — 这才是实盘可预期的收益水平</span>
                 </div>
             </div>`;
+    }
+
+    function renderTimeframeAnalysis(data) {
+        const section = document.getElementById('tf-analysis-section');
+        if (!section) return;
+        section.style.display = 'block';
+
+        // 1. 单一周期柱状图
+        const singleResults = data.single_timeframe_results || [];
+        const singleContainer = document.getElementById('tf-single-bar');
+        if (singleContainer && singleResults.length > 0) {
+            const chart = LightweightCharts.createChart(singleContainer, {
+                width: singleContainer.clientWidth, height: 300,
+                layout: { background: { color: 'transparent' }, textColor: getComputedStyle(document.body).getPropertyValue('--text-primary').trim() || '#d1d5db' },
+                grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
+            });
+            const series = chart.addHistogramSeries({ color: '#a855f7' });
+            series.setData(singleResults.map((r, i) => ({
+                time: `2026-01-${String(i + 1).padStart(2, '0')}`,
+                value: r.alpha,
+                color: r.alpha >= 30 ? '#22c55e' : r.alpha >= 20 ? '#3b82f6' : r.alpha >= 10 ? '#f59e0b' : r.alpha > 0 ? '#ef4444' : '#6b7280',
+            })));
+            // labels
+            const labels = singleResults.map((r, i) => ({
+                time: `2026-01-${String(i + 1).padStart(2, '0')}`,
+                position: 'aboveBar', color: '#fff', shape: 'circle',
+                text: `${r.timeframe}: ${r.alpha >= 0 ? '+' : ''}${r.alpha.toFixed(1)}%`,
+            }));
+            chart.timeScale().fitContent();
+            new ResizeObserver(() => chart.applyOptions({ width: singleContainer.clientWidth })).observe(singleContainer);
+        }
+
+        // 单一周期表格
+        const singleBody = document.getElementById('tf-single-body');
+        if (singleBody) {
+            const sorted = [...singleResults].sort((a, b) => b.alpha - a.alpha);
+            singleBody.innerHTML = sorted.map((r, i) => {
+                const best = i === 0;
+                return `<tr style="${best ? 'background:rgba(34,197,94,0.08);' : ''}">
+                    <td><b>${r.timeframe}</b>${best ? ' ★' : ''}</td>
+                    <td class="${r.alpha >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r.alpha >= 0 ? '+' : ''}${r.alpha.toFixed(2)}%</td>
+                    <td class="${r.strategy_return >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r.strategy_return >= 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</td>
+                    <td>${r.max_drawdown.toFixed(2)}%</td>
+                    <td>${r.total_trades}</td>
+                    <td>${r.signal_count}</td>
+                    <td>$${(r.fees || 0).toFixed(0)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 2. 周期组合排名柱状图
+        const ranking = data.ranking || [];
+        const comboBar = document.getElementById('tf-combo-bar');
+        if (comboBar && ranking.length > 0) {
+            const chart2 = LightweightCharts.createChart(comboBar, {
+                width: comboBar.clientWidth, height: 400,
+                layout: { background: { color: 'transparent' }, textColor: getComputedStyle(document.body).getPropertyValue('--text-primary').trim() || '#d1d5db' },
+                grid: { vertLines: { color: 'rgba(255,255,255,0.04)' }, horzLines: { color: 'rgba(255,255,255,0.04)' } },
+            });
+            const s2 = chart2.addHistogramSeries({ color: '#a855f7' });
+            s2.setData(ranking.map((r, i) => ({
+                time: `2026-02-${String(i + 1).padStart(2, '0')}`,
+                value: r.alpha,
+                color: r.rank === 1 ? '#22c55e' : r.rank <= 3 ? '#3b82f6' : r.alpha > 0 ? '#8b5cf6' : '#6b7280',
+            })));
+            chart2.timeScale().fitContent();
+            new ResizeObserver(() => chart2.applyOptions({ width: comboBar.clientWidth })).observe(comboBar);
+        }
+
+        // 组合排名表格
+        const comboBody = document.getElementById('tf-combo-body');
+        const comboResults = data.combo_results || [];
+        if (comboBody) {
+            const sortedCombo = [...comboResults].sort((a, b) => b.alpha - a.alpha);
+            comboBody.innerHTML = sortedCombo.map((r, i) => {
+                const best = i === 0;
+                const cls = r.name.startsWith('A:') ? 'background:rgba(59,130,246,0.08);' : '';
+                return `<tr style="${best ? 'background:rgba(34,197,94,0.08);' : cls}">
+                    <td><b>#${i + 1}</b>${best ? ' ★' : ''}</td>
+                    <td>${r.name}${r.name.startsWith('A:') ? ' (当前)' : ''}</td>
+                    <td class="${r.alpha >= 0 ? 'pnl-pos' : 'pnl-neg'}"><b>${r.alpha >= 0 ? '+' : ''}${r.alpha.toFixed(2)}%</b></td>
+                    <td class="${r.strategy_return >= 0 ? 'pnl-pos' : 'pnl-neg'}">${r.strategy_return >= 0 ? '+' : ''}${r.strategy_return.toFixed(2)}%</td>
+                    <td>${r.max_drawdown.toFixed(2)}%</td>
+                    <td>${r.total_trades}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        // 3. 信号时间线
+        const timing = data.signal_timing || [];
+        const timingDetail = document.getElementById('tf-timing-detail');
+        if (timingDetail && timing.length > 0) {
+            const peak = data.eth_peak || {};
+            let html = `<div style="background:var(--bg-hover);border-radius:8px;padding:14px;margin-bottom:12px;">
+                <b>ETH顶部:</b> ${(peak.time || '').substring(0, 16)} @$${(peak.price || 0).toLocaleString()}<br>
+                <span style="font-size:13px;color:var(--text-secondary);">各周期首次发出顶部信号(top≥3)的时间和速度</span>
+            </div>`;
+            html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">';
+            timing.forEach(t => {
+                const hours = Math.abs(t.hours_vs_peak);
+                const early = t.early;
+                const color = early ? '#22c55e' : t.hours_vs_peak === 0 ? '#f59e0b' : hours < 100 ? '#3b82f6' : hours < 300 ? '#f59e0b' : '#ef4444';
+                const label = t.first_signal_time ? `${early ? '提前' : '延迟'} ${hours.toFixed(0)}h` : '无信号';
+                html += `<div style="background:var(--bg-hover);border-radius:8px;padding:12px;border-left:3px solid ${color};">
+                    <div style="font-weight:700;font-size:16px;color:${color};">${t.timeframe}</div>
+                    <div style="font-size:13px;color:var(--text-secondary);">${label}</div>
+                    ${t.first_signal_time ? `<div style="font-size:12px;color:var(--text-muted);">强度=${t.signal_strength.toFixed(1)}</div>` : ''}
+                    ${t.first_signal_time ? `<div style="font-size:11px;color:var(--text-muted);">${t.first_signal_time.substring(0, 16)}</div>` : ''}
+                </div>`;
+            });
+            html += '</div>';
+            timingDetail.innerHTML = html;
+        }
+
+        // 4. 信号矩阵热力图
+        const matrix = data.signal_matrix || [];
+        const matrixEl = document.getElementById('tf-matrix-content');
+        if (matrixEl && matrix.length > 0) {
+            const tfs = ['15m', '30m', '1h', '2h', '4h', '6h', '8h'];
+            let html = '<div class="trade-table-wrap" style="max-height:none;"><table style="font-size:13px;"><thead><tr>';
+            html += '<th style="min-width:140px;">时间</th><th>说明</th>';
+            tfs.forEach(tf => { html += `<th style="text-align:center;">${tf}</th>`; });
+            html += '</tr></thead><tbody>';
+            matrix.forEach(row => {
+                html += `<tr><td style="font-family:monospace;font-size:12px;">${row.time}</td><td>${row.description}</td>`;
+                tfs.forEach(tf => {
+                    const sig = (row.signals || {})[tf] || { top: 0, bottom: 0 };
+                    const top = sig.top || 0;
+                    const bot = sig.bottom || 0;
+                    let bg = 'transparent';
+                    let text = '--';
+                    if (top > 0) {
+                        const intensity = Math.min(top / 100, 1);
+                        bg = `rgba(239,68,68,${0.1 + intensity * 0.4})`;
+                        text = `<span style="color:#ef4444;">▼${top.toFixed(0)}</span>`;
+                    } else if (bot > 0) {
+                        const intensity = Math.min(bot / 100, 1);
+                        bg = `rgba(34,197,94,${0.1 + intensity * 0.4})`;
+                        text = `<span style="color:#22c55e;">▲${bot.toFixed(0)}</span>`;
+                    }
+                    html += `<td style="text-align:center;background:${bg};">${text}</td>`;
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table></div>';
+            matrixEl.innerHTML = html;
+        }
+
+        // 5. 核心发现
+        const findings = data.findings || [];
+        const findingsEl = document.getElementById('tf-findings-content');
+        if (findingsEl && findings.length > 0) {
+            const icons = ['🔴', '🟢', '🟡', '🔵', '⚡', '✅'];
+            findingsEl.innerHTML = findings.map((f, i) => {
+                const icon = icons[i] || '📌';
+                return `<div style="background:var(--bg-hover);border-radius:8px;padding:14px;margin-bottom:10px;">
+                    <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${icon} 发现${i + 1}: ${f.title}</div>
+                    <div style="font-size:13px;color:var(--text-secondary);line-height:1.6;">${f.detail}</div>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:4px;font-style:italic;">证据: ${f.evidence}</div>
+                </div>`;
+            }).join('');
+        }
+
+        // 6. 最佳策略交易明细
+        const best = [...comboResults].sort((a, b) => b.alpha - a.alpha)[0];
+        const tradesBody = document.getElementById('tf-trades-body');
+        if (tradesBody && best && best.trades) {
+            tradesBody.innerHTML = best.trades.map((t, i) => `
+                <tr>
+                    <td>${i + 1}</td>
+                    <td style="font-family:monospace;font-size:12px;">${(t.time || '').substring(0, 16)}</td>
+                    <td><span style="color:${t.action === 'OPEN_SHORT' ? '#ef4444' : t.action === 'CLOSE_SHORT' ? '#22c55e' : '#f59e0b'};">${t.action}</span></td>
+                    <td>${t.direction}</td>
+                    <td>$${(t.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td style="font-size:12px;">${t.reason || ''}</td>
+                </tr>
+            `).join('');
+        }
+
+        // 7. 结论
+        const conclusion = data.conclusion || {};
+        const conclusionEl = document.getElementById('tf-conclusion');
+        if (conclusionEl) {
+            const curr = data.current_weights || {};
+            const rec = conclusion.recommended_weights || {};
+            conclusionEl.innerHTML = `
+                <div class="card-title">分析结论</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+                    <div style="background:rgba(239,68,68,0.06);border-radius:8px;padding:14px;border-left:3px solid #ef4444;">
+                        <b style="color:#ef4444;">当前权重 (有问题)</b>
+                        <div style="font-size:13px;margin-top:6px;font-family:monospace;">
+                            ${Object.entries(curr).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}: ${v}`).join(' > ')}
+                        </div>
+                        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+                            4h权重最高但30天内0信号, 8h最有效但权重仅0.5
+                        </div>
+                    </div>
+                    <div style="background:rgba(34,197,94,0.06);border-radius:8px;padding:14px;border-left:3px solid #22c55e;">
+                        <b style="color:#22c55e;">建议权重</b>
+                        <div style="font-size:13px;margin-top:6px;font-family:monospace;">
+                            ${Object.entries(rec).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}: ${v}`).join(' > ')}
+                        </div>
+                        <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+                            8h权重提升到1.0, 4h降至0.3, 可选加入30m(0.3)
+                        </div>
+                    </div>
+                </div>
+                <div style="background:var(--bg-hover);border-radius:8px;padding:14px;">
+                    <b>${conclusion.summary || ''}</b>
+                    <div style="margin-top:8px;font-size:13px;color:var(--text-secondary);">
+                        当前系统α: <b>+${(conclusion.current_alpha || 0).toFixed(2)}%</b>
+                        &nbsp;|&nbsp; 最佳组合(${conclusion.best_combo_name || ''}): <b style="color:#22c55e;">+${(conclusion.best_combo_alpha || 0).toFixed(2)}%</b>
+                    </div>
+                    ${conclusion.caveat ? `<div style="margin-top:8px;font-size:12px;color:#f59e0b;">⚠ ${conclusion.caveat}</div>` : ''}
+                </div>
+            `;
+        }
     }
     </script>
 </body>
