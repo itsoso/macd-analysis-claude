@@ -12,7 +12,7 @@
 - **前端**: Jinja2 模板 + 原生 JS（无框架）
 - **数据**: Binance API (ETH/USDT K线)
 - **部署**: Gunicorn + Nginx + systemd
-- **服务器**: 阿里云 47.236.39.215:22222
+- **服务器**: 阿里云 47.237.191.17:22222
 - **域名**: https://invest.executor.life
 - **GitHub**: git@github.com:itsoso/macd-analysis-claude.git
 
@@ -40,7 +40,7 @@
 ## 服务器信息
 
 ```
-IP:          47.236.39.215
+IP:          47.237.191.17
 SSH端口:     22222
 用户:        root
 项目路径:    /opt/macd-analysis
@@ -86,7 +86,7 @@ GitHub仓库:  git@github.com:itsoso/macd-analysis-claude.git
 git add -A && git commit -m "your message" && git push origin main
 
 # 2. SSH 登录服务器
-ssh -p 22222 root@47.236.39.215
+ssh -p 22222 root@47.237.191.17
 
 # 3. 服务器上: 拉取最新代码并重启
 cd /opt/macd-analysis
@@ -102,7 +102,7 @@ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5100/
 ### 方式三: 一行命令远程部署
 
 ```bash
-ssh -p 22222 root@47.236.39.215 "cd /opt/macd-analysis && git pull origin main && systemctl restart macd-analysis"
+ssh -p 22222 root@47.237.191.17 "cd /opt/macd-analysis && git pull origin main && systemctl restart macd-analysis"
 ```
 
 ### 方式四: 阿里云控制台 VNC 部署（SSH 不通时的备选方案）
@@ -131,7 +131,7 @@ cd /opt/macd-analysis && git pull origin main && systemctl restart macd-analysis
 
 **已配置的绕过措施**:
 - `deploy.sh` 中 SSH 已添加 `-o IdentityAgent=none -o ProxyCommand=none`
-- `~/.ssh/config` 中已添加 `47.236.39.215` 的专用 Host 配置
+- `~/.ssh/config` 中已添加 `47.237.191.17` 的专用 Host 配置
 
 **如果仍然超时**:
 1. 确认不是 VPN/代理问题: 尝试关闭 VPN 后重试
