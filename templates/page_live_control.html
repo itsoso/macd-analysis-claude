@@ -444,10 +444,12 @@
         <div class="ctrl-card">
             <h3>💰 绩效统计</h3>
             <div class="info-grid" id="perfGrid">
-                <div class="info-item"><div class="label">总盈亏</div><div class="value" id="p_pnl">--</div></div>
+                <div class="info-item"><div class="label">未实现盈亏</div><div class="value" id="p_unrealized">--</div></div>
+                <div class="info-item"><div class="label">已实现盈亏</div><div class="value" id="p_pnl">--</div></div>
                 <div class="info-item"><div class="label">胜率</div><div class="value" id="p_winrate">--</div></div>
                 <div class="info-item"><div class="label">总手续费</div><div class="value" id="p_fees">--</div></div>
                 <div class="info-item"><div class="label">峰值权益</div><div class="value" id="p_peak">--</div></div>
+                <div class="info-item"><div class="label">当前权益</div><div class="value" id="p_equity">--</div></div>
             </div>
         </div>
     </div>
@@ -1084,21 +1086,52 @@ async function refreshStatus() {
 
         // 持仓信息 - 兼容 dict (engine_state.json) 和 array (日志) 格式
         let posDisplay = '无';
+        let posDetail = '';
         const positions = eng.positions;
         if (positions) {
             if (Array.isArray(positions)) {
-                // 日志来源: [{side, entry_price, qty, pnl}]
                 posDisplay = positions.length > 0
                     ? positions.map(p => p.side + ' $' + Number(p.entry_price).toFixed(2)).join(', ')
                     : '无';
             } else {
-                // engine_state 来源: {symbol: {side, entry_price, ...}}
-                const posList = Object.keys(positions);
-                posDisplay = posList.length > 0 ? posList.join(', ') : '无';
+                const posList = Object.entries(positions);
+                if (posList.length > 0) {
+                    posDisplay = posList.map(([k]) => k.toUpperCase()).join(', ');
+                    posDetail = posList.map(([k, p]) => {
+                        const side = (p.side || k).toUpperCase();
+                        const icon = side.includes('LONG') ? '🟢' : '🔴';
+                        const entry = Number(p.entry_price || 0).toFixed(2);
+                        const qty = Number(p.quantity || 0).toFixed(4);
+                        const margin = Number(p.margin || 0).toFixed(2);
+                        const lev = p.leverage || '-';
+                        const bars = p.bars_held || 0;
+                        const maxPnl = p.max_pnl_ratio != null ? (Number(p.max_pnl_ratio) * 100).toFixed(2) + '%' : '--';
+                        const tp1 = p.partial_tp_1_done ? '✅' : '⬜';
+                        const tp2 = p.partial_tp_2_done ? '✅' : '⬜';
+                        const entryTime = p.entry_time || '--';
+                        return `<div style="background:var(--bg-secondary);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px;line-height:1.8;">
+                            <div style="font-weight:700;font-size:13px;margin-bottom:4px;">${icon} ${side} · ${lev}x杠杆</div>
+                            <div>入场价: <b>$${entry}</b> · 数量: <b>${qty}</b> ETH · 保证金: $${margin}</div>
+                            <div>入场时间: ${entryTime} · 持仓K线: ${bars}</div>
+                            <div>最高盈利比: ${maxPnl} · 分段止盈: ${tp1}① ${tp2}②</div>
+                        </div>`;
+                    }).join('');
+                } else {
+                    posDisplay = '无';
+                }
             }
         }
-        document.getElementById('s_positions').textContent = posDisplay;
+        document.getElementById('s_positions').innerHTML = posDisplay;
         document.getElementById('positionDisplay').textContent = '持仓: ' + posDisplay;
+
+        // 持仓详情面板
+        let detailEl = document.getElementById('positionDetail');
+        if (!detailEl) {
+            detailEl = document.createElement('div');
+            detailEl.id = 'positionDetail';
+            document.getElementById('statusGrid').parentElement.appendChild(detailEl);
+        }
+        detailEl.innerHTML = posDetail;
 
         // 权益显示 (状态栏)
         if (equity != null) {
@@ -1129,8 +1162,21 @@ async function refreshStatus() {
             document.getElementById('riskStatus').textContent = '风控: 正常';
         }
 
-        // 绩效 (从 risk state 和 performance 综合读取)
+        // 绩效 (从 risk state / performance / engine_state 综合读取)
         const perf = data.performance || {};
+
+        // 未实现盈亏 (从 engine_state)
+        const unrealizedPnl = eng.unrealized_pnl;
+        const unrealEl = document.getElementById('p_unrealized');
+        if (unrealizedPnl != null) {
+            unrealEl.textContent = (unrealizedPnl >= 0 ? '+' : '') + '$' + Number(unrealizedPnl).toFixed(2);
+            unrealEl.className = 'value ' + (unrealizedPnl >= 0 ? 'green' : 'red');
+        } else {
+            unrealEl.textContent = '$0.00';
+            unrealEl.className = 'value';
+        }
+
+        // 已实现盈亏
         const totalPnl = risk.total_pnl ?? perf.total_pnl;
         document.getElementById('p_pnl').textContent = totalPnl != null ? '$' + Number(totalPnl).toFixed(2) : '$0.00';
         document.getElementById('p_pnl').className = 'value ' + ((totalPnl||0) >= 0 ? 'green' : 'red');
@@ -1142,6 +1188,16 @@ async function refreshStatus() {
         document.getElementById('p_fees').textContent = fees != null ? '$' + Number(fees).toFixed(2) : '$0.00';
         const peak = risk.peak_equity ?? perf.peak_equity;
         document.getElementById('p_peak').textContent = peak != null ? '$' + Number(peak).toFixed(2) : '--';
+
+        // 当前权益
+        const eqEl = document.getElementById('p_equity');
+        if (equity != null) {
+            eqEl.textContent = '$' + Number(equity).toFixed(2);
+            const eqChg = equity - 100000;
+            eqEl.className = 'value ' + (eqChg >= 0 ? 'green' : 'red');
+        } else {
+            eqEl.textContent = '--';
+        }
 
     } catch(e) {
         console.error('Status refresh failed:', e);
