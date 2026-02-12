@@ -728,4 +728,20 @@ if __name__ == '__main__':
     print("  五书融合: 背离+均线+蜡烛图+布林带+量价")
     print("  访问: http://127.0.0.1:5000")
     print("=" * 60 + "\n")
-    app.run(debug=True, port=5000)
+    # 排除引擎产生的日志/数据文件，防止 reloader 因这些文件变化而反复重启 Flask，
+    # 导致 _engine_process 内存引用丢失、Web UI 误判引擎已停止。
+    # 线上用 gunicorn 没有 reloader，不受此影响。
+    app.run(
+        debug=True,
+        port=5000,
+        exclude_patterns=[
+            '**/logs/**',
+            '**/data/**',
+            '**/*.log',
+            '**/*.jsonl',
+            '**/*.pyc',
+            '**/__pycache__/**',
+            '**/backtest_*_result.json',
+            '**/optimize_*_result.json',
+        ],
+    )
