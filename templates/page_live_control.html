@@ -145,7 +145,7 @@
     .action-short { color: var(--accent-red); font-weight: 700; }
     .action-hold { color: var(--text-muted); }
     .consensus-box {
-        margin-top: 14px; padding: 12px 16px; border-radius: 8px;
+        margin-top: 14px; padding: 16px 20px; border-radius: 10px;
         background: var(--bg-secondary); border: 1px solid var(--border);
         font-size: 14px; font-weight: 600;
     }
@@ -153,6 +153,59 @@
     .consensus-box.short { border-color: var(--accent-red); color: var(--accent-red); }
     .consensus-box.neutral { border-color: var(--text-muted); color: var(--text-secondary); }
     .consensus-box.conflict { border-color: var(--accent-yellow); color: var(--accent-yellow); }
+    .consensus-box.hold { border-color: var(--text-muted); color: var(--text-secondary); }
+
+    /* 智能共识面板 */
+    .consensus-decision {
+        font-size: 18px; font-weight: 700; margin-bottom: 10px;
+        display: flex; align-items: center; gap: 8px;
+    }
+    .consensus-strength {
+        margin: 10px 0; display: flex; align-items: center; gap: 10px;
+    }
+    .strength-bar-bg {
+        flex: 1; height: 10px; background: rgba(255,255,255,0.06);
+        border-radius: 5px; overflow: hidden; max-width: 240px;
+    }
+    .strength-bar-fill {
+        height: 100%; border-radius: 5px; transition: width 0.6s ease;
+    }
+    .strength-bar-fill.long { background: linear-gradient(90deg, #00d68f, #00ff99); }
+    .strength-bar-fill.short { background: linear-gradient(90deg, #ff4d6a, #ff6b8a); }
+    .strength-bar-fill.hold { background: linear-gradient(90deg, #888, #aaa); }
+    .strength-label { font-size: 13px; font-weight: 700; min-width: 48px; }
+
+    .consensus-reason {
+        font-size: 12px; font-weight: 400; color: var(--text-secondary);
+        margin-top: 8px; line-height: 1.6; padding: 8px 10px;
+        background: rgba(255,255,255,0.03); border-radius: 6px;
+    }
+    .consensus-detail-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+        margin-top: 12px; font-size: 12px; font-weight: 400;
+    }
+    @media (max-width: 700px) { .consensus-detail-grid { grid-template-columns: 1fr; } }
+    .detail-card {
+        padding: 10px 12px; border-radius: 8px;
+        background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+    }
+    .detail-card .detail-title {
+        font-size: 11px; font-weight: 600; color: var(--text-muted);
+        text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;
+    }
+    .detail-card .detail-value {
+        color: var(--text-primary); font-weight: 500;
+    }
+    .resonance-chain {
+        display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+        margin-top: 4px;
+    }
+    .resonance-chain .chain-tf {
+        padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600;
+    }
+    .resonance-chain .chain-tf.long { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+    .resonance-chain .chain-tf.short { background: rgba(255,77,106,0.15); color: var(--accent-red); }
+    .resonance-chain .chain-arrow { color: var(--text-muted); font-size: 10px; }
 
     .tab-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
     .tab-btn {
@@ -416,6 +469,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+        saveActiveTab(btn.dataset.tab);
         // 切换到日志 Tab 时自动加载
         if (btn.dataset.tab === 'logs') refreshLogs();
         // 切换到状态 Tab 时自动刷新
@@ -472,10 +526,81 @@ async function apiCall(url, options = {}) {
 // ============================================================
 // 操作函数
 // ============================================================
+// ============================================================
+// localStorage 持久化
+// ============================================================
+const LS_KEY_TFS = 'lc_selected_tfs';
+const LS_KEY_RESULT = 'lc_last_result';
+const LS_KEY_TAB = 'lc_active_tab';
+
+function saveTFSelection() {
+    const tfs = [];
+    document.querySelectorAll('#tfCheckboxes input').forEach(cb => {
+        if (cb.checked) tfs.push(cb.value);
+    });
+    try { localStorage.setItem(LS_KEY_TFS, JSON.stringify(tfs)); } catch(e) {}
+}
+
+function restoreTFSelection() {
+    try {
+        const saved = localStorage.getItem(LS_KEY_TFS);
+        if (!saved) return;
+        const tfs = JSON.parse(saved);
+        if (!Array.isArray(tfs)) return;
+        document.querySelectorAll('#tfCheckboxes input').forEach(cb => {
+            const checked = tfs.includes(cb.value);
+            cb.checked = checked;
+            cb.closest('.tf-chip').classList.toggle('checked', checked);
+        });
+    } catch(e) {}
+}
+
+function saveLastResult(data) {
+    try {
+        const payload = { data, ts: Date.now() };
+        localStorage.setItem(LS_KEY_RESULT, JSON.stringify(payload));
+    } catch(e) {}
+}
+
+function restoreLastResult() {
+    try {
+        const saved = localStorage.getItem(LS_KEY_RESULT);
+        if (!saved) return;
+        const { data, ts } = JSON.parse(saved);
+        if (!data || !data.results) return;
+        // 结果超过 30 分钟则不恢复
+        if (Date.now() - ts > 30 * 60 * 1000) return;
+        renderMultiSignalResult(data);
+        // 显示恢复提示
+        const ago = Math.round((Date.now() - ts) / 1000);
+        const agoText = ago < 60 ? `${ago}秒前` : `${Math.round(ago/60)}分钟前`;
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:11px;color:var(--text-muted);margin-top:4px;text-align:right;';
+        hint.textContent = `📌 上次检测结果 (${agoText})`;
+        document.getElementById('signalConsensus')?.appendChild(hint);
+    } catch(e) {}
+}
+
+function saveActiveTab(tabName) {
+    try { localStorage.setItem(LS_KEY_TAB, tabName); } catch(e) {}
+}
+
+function restoreActiveTab() {
+    try {
+        const saved = localStorage.getItem(LS_KEY_TAB);
+        if (!saved) return;
+        const btn = document.querySelector(`.tab-btn[data-tab="${saved}"]`);
+        if (btn) btn.click();
+    } catch(e) {}
+}
+
+// ============================================================
+
 function toggleTFChip(label) {
     const cb = label.querySelector('input');
     cb.checked = !cb.checked;
     label.classList.toggle('checked', cb.checked);
+    saveTFSelection();
 }
 
 function selectAllTF(checked) {
@@ -483,6 +608,7 @@ function selectAllTF(checked) {
         cb.checked = checked;
         cb.closest('.tf-chip').classList.toggle('checked', checked);
     });
+    saveTFSelection();
 }
 
 function getSelectedTFs() {
@@ -513,6 +639,7 @@ async function testSignalMulti() {
 
         if (data.data && data.data.results) {
             renderMultiSignalResult(data.data);
+            saveLastResult(data.data);
         }
         // 同时显示文本输出（可折叠）
         if (data.output) {
@@ -563,34 +690,114 @@ function renderMultiSignalResult(data) {
         tbody.appendChild(tr);
     }
 
-    // 渲染共识
+    // ═══ 渲染智能共识面板 ═══
     const c = data.consensus || {};
-    const longN = (c.long || []).length;
-    const shortN = (c.short || []).length;
-    const holdN = (c.hold || []).length;
+    const dec = c.decision || {};
+    const ws = c.weighted_scores || {};
+    const chains = c.resonance_chains || [];
+    const largeSig = c.large_tf_signal || {};
     const totalN = data.results.filter(r => r.ok).length;
 
-    let consensusHTML = '';
-    let consensusClass = 'neutral';
-    if (c.direction === 'long') {
-        consensusClass = 'long';
-        consensusHTML = `🟢 多头共振 — ${longN}/${totalN} 个周期看多 (${(c.long||[]).join(', ')})`;
-    } else if (c.direction === 'short') {
-        consensusClass = 'short';
-        consensusHTML = `🔴 空头共振 — ${shortN}/${totalN} 个周期看空 (${(c.short||[]).join(', ')})`;
-    } else if (c.direction === 'conflict') {
-        consensusClass = 'conflict';
-        consensusHTML = `⚠️ 多空分歧 — 做多: ${(c.long||[]).join(',')} | 做空: ${(c.short||[]).join(',')} | 观望: ${(c.hold||[]).join(',')}`;
-    } else {
-        consensusClass = 'neutral';
-        consensusHTML = `⚪ 中性 — 无明确方向 (观望 ${holdN}/${totalN})`;
+    // 决策方向 → CSS class
+    const dir = dec.direction || 'hold';
+    let consensusClass = dir === 'long' ? 'long' : dir === 'short' ? 'short' : 'neutral';
+    if (dec.label && dec.label.includes('分歧')) consensusClass = 'conflict';
+    if (dec.label && dec.label.includes('反向')) consensusClass = 'conflict';
+
+    // 强度条颜色
+    const barClass = dir === 'long' ? 'long' : dir === 'short' ? 'short' : 'hold';
+    const strength = dec.strength || 0;
+
+    let html = '';
+
+    // 1. 决策标题
+    html += `<div class="consensus-decision">${dec.label || '⚪ 无信号'}</div>`;
+
+    // 2. 强度条
+    html += `<div class="consensus-strength">
+        <span style="font-size:12px;color:var(--text-muted);">信号强度</span>
+        <div class="strength-bar-bg">
+            <div class="strength-bar-fill ${barClass}" style="width:${strength}%"></div>
+        </div>
+        <span class="strength-label" style="color:${strength >= 50 ? (dir==='long'?'var(--accent-green)':'var(--accent-red)') : 'var(--text-muted)'}">${strength}/100</span>
+    </div>`;
+
+    // 3. 理由
+    if (dec.reason) {
+        html += `<div class="consensus-reason">📝 ${dec.reason}</div>`;
     }
 
-    consensusHTML += `<div style="font-size:12px;font-weight:400;color:var(--text-muted);margin-top:6px;">
-        总耗时 ${data.total_elapsed}s · 共 ${totalN} 个周期</div>`;
+    // 4. 详细面板 (2x2 grid)
+    html += `<div class="consensus-detail-grid">`;
+
+    // 4a. 加权得分
+    html += `<div class="detail-card">
+        <div class="detail-title">加权得分</div>
+        <div class="detail-value">
+            <span style="color:var(--accent-green)">多 ${(ws.long||0).toFixed(1)}</span>
+            <span style="color:var(--text-muted);margin:0 6px">|</span>
+            <span style="color:var(--accent-red)">空 ${(ws.short||0).toFixed(1)}</span>
+            <span style="color:var(--text-muted);margin:0 6px">|</span>
+            <span style="color:${(ws.net||0) > 0 ? 'var(--accent-green)' : (ws.net||0) < 0 ? 'var(--accent-red)' : 'var(--text-muted)'}">
+                净 ${(ws.net||0) > 0 ? '+' : ''}${(ws.net||0).toFixed(1)}
+            </span>
+        </div>
+    </div>`;
+
+    // 4b. 大周期定调
+    const lgDir = largeSig.direction || 'neutral';
+    const lgIcon = lgDir === 'long' ? '🟢' : lgDir === 'short' ? '🔴' : lgDir === 'conflict' ? '⚠️' : '⚪';
+    const lgLabel = lgDir === 'long' ? '看多' : lgDir === 'short' ? '看空' : lgDir === 'conflict' ? '冲突' : '中性';
+    html += `<div class="detail-card">
+        <div class="detail-title">大周期 (≥4h) 定调</div>
+        <div class="detail-value">${lgIcon} ${lgLabel}
+            ${(largeSig.tfs||[]).length ? `<span style="font-size:11px;color:var(--text-muted);margin-left:6px">(${(largeSig.tfs||[]).join(', ')})</span>` : ''}
+        </div>
+    </div>`;
+
+    // 4c. 多空分布
+    const longTFs = c.long_tfs || c.long || [];
+    const shortTFs = c.short_tfs || c.short || [];
+    const holdTFs = c.hold_tfs || c.hold || [];
+    html += `<div class="detail-card">
+        <div class="detail-title">多空分布</div>
+        <div class="detail-value" style="font-size:12px;line-height:1.6">
+            ${longTFs.length ? `<div>🟢 做多: <span style="color:var(--accent-green)">${longTFs.join(', ')}</span> (${longTFs.length})</div>` : ''}
+            ${shortTFs.length ? `<div>🔴 做空: <span style="color:var(--accent-red)">${shortTFs.join(', ')}</span> (${shortTFs.length})</div>` : ''}
+            ${holdTFs.length ? `<div>⚪ 观望: <span style="color:var(--text-muted)">${holdTFs.join(', ')}</span> (${holdTFs.length})</div>` : ''}
+        </div>
+    </div>`;
+
+    // 4d. 共振链
+    html += `<div class="detail-card">
+        <div class="detail-title">共振链检测</div>
+        <div class="detail-value">`;
+    if (chains.length === 0) {
+        html += `<span style="color:var(--text-muted);font-size:12px">未检测到连续共振</span>`;
+    } else {
+        for (const ch of chains.slice(0, 3)) {
+            const chIcon = ch.direction === 'long' ? '🟢' : '🔴';
+            html += `<div class="resonance-chain">${chIcon} `;
+            ch.chain.forEach((tf, i) => {
+                if (i > 0) html += `<span class="chain-arrow">→</span>`;
+                html += `<span class="chain-tf ${ch.direction}">${tf}</span>`;
+            });
+            html += ` <span style="font-size:10px;color:var(--text-muted);margin-left:4px">(${ch.length}级${ch.has_4h_plus ? ', 含大周期' : ''})</span>`;
+            html += `</div>`;
+        }
+    }
+    html += `</div></div>`;
+
+    html += `</div>`;  // close detail-grid
+
+    // 5. 底部 meta
+    html += `<div style="font-size:11px;font-weight:400;color:var(--text-muted);margin-top:12px;display:flex;justify-content:space-between;align-items:center;">
+        <span>总耗时 ${data.total_elapsed}s · 共 ${totalN} 个周期</span>
+        <span>${dec.actionable ? '✅ 可操作' : '⏸️ 暂不操作'}</span>
+    </div>`;
 
     consensusEl.className = `consensus-box ${consensusClass}`;
-    consensusEl.innerHTML = consensusHTML;
+    consensusEl.innerHTML = html;
 }
 
 /* 保留单TF测试（兼容旧逻辑） */
@@ -843,7 +1050,10 @@ function autoRefreshLogs() {
     }
 }
 
-// 初始加载状态
+// 初始加载: 恢复持久化状态
+restoreTFSelection();
+restoreLastResult();
+restoreActiveTab();
 refreshStatus();
 setInterval(refreshStatus, 30000); // 每30秒刷新状态
 </script>
