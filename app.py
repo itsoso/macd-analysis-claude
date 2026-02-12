@@ -835,6 +835,7 @@ def api_live_start():
         p = subprocess.Popen(
             cmd, cwd=BASE_DIR,
             stdout=log_file, stderr=subprocess.STDOUT,
+            start_new_session=True,   # 脱离 gunicorn 进程树，Web 服务重启不影响引擎
         )
         _engine_process["proc"] = p
         _engine_process["phase"] = phase
@@ -851,21 +852,48 @@ def api_live_start():
 
 @app.route('/api/live/stop', methods=['POST'])
 def api_live_stop():
-    """停止交易引擎"""
-    import signal as sig  # 避免与 flask 冲突
+    """停止交易引擎 — 支持停止任何方式启动的引擎进程"""
+    import signal as sig
+
+    # 优先用内存中的 proc 对象
     proc = _engine_process.get("proc")
-    if proc is None or proc.poll() is not None:
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.send_signal(sig.SIGTERM)
+            proc.wait(timeout=10)
+            _engine_process["proc"] = None
+            return jsonify({"success": True, "message": "引擎已停止"})
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            _engine_process["proc"] = None
+            return jsonify({"success": True, "message": "引擎已强制停止"})
+        except Exception as e:
+            return jsonify({"success": False, "message": str(e)}), 500
+
+    # proc 为空 (Web 服务重启过, 但引擎仍在运行) → 通过 pgrep 检测并发送 SIGTERM
+    existing = _detect_engine_process()
+    if not existing.get("running"):
+        _engine_process["proc"] = None
         return jsonify({"success": False, "message": "引擎未在运行"})
 
+    pid = existing["pid"]
     try:
-        proc.send_signal(sig.SIGTERM)
-        proc.wait(timeout=10)
+        os.kill(pid, sig.SIGTERM)
+        # 等待最多10秒
+        import time
+        for _ in range(20):
+            time.sleep(0.5)
+            check = _detect_engine_process()
+            if not check.get("running"):
+                _engine_process["proc"] = None
+                return jsonify({"success": True, "message": f"引擎已停止 (PID={pid})"})
+        # 超时 → 强制 kill
+        os.kill(pid, sig.SIGKILL)
         _engine_process["proc"] = None
-        return jsonify({"success": True, "message": "引擎已停止"})
-    except subprocess.TimeoutExpired:
-        proc.kill()
+        return jsonify({"success": True, "message": f"引擎已强制停止 (PID={pid})"})
+    except ProcessLookupError:
         _engine_process["proc"] = None
-        return jsonify({"success": True, "message": "引擎已强制停止"})
+        return jsonify({"success": True, "message": f"引擎进程已不存在 (PID={pid})"})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
