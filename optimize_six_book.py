@@ -155,16 +155,27 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
 
     record_interval = max(1, len(primary_df) // 500)
 
+    # ── 延迟信号: 上一根K线产生的信号, 记录在 pending_* 中,
+    #    在下一根K线的 open 价执行。消除 same-bar execution bias。
+    pending_ss = 0.0
+    pending_bs = 0.0
+    has_pending_signal = False
+
     for idx in range(warmup, len(primary_df)):
         dt = primary_df.index[idx]
         price = primary_df['close'].iloc[idx]
+        # 交易执行价 = 当前 bar 的 open (模拟"收到上根信号后在下根开盘执行")
+        exec_price = primary_df['open'].iloc[idx]
 
         if start_dt and dt < start_dt:
             if idx % record_interval == 0:
                 eng.record_history(dt, price)
+            # 预热阶段也要生成信号供下一根使用(但不交易)
+            pending_ss, pending_bs = score_provider(idx, dt, price)
+            has_pending_signal = True
             continue
 
-        # 记录强平前的仓位状态
+        # 记录强平前的仓位状态 (强平用实时价格, 不受信号延迟影响)
         had_short_before_liq = eng.futures_short is not None
         had_long_before_liq = eng.futures_long is not None
         eng.check_liquidation(price, dt)
@@ -197,7 +208,15 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
         if long_cd > 0: long_cd -= 1
         if spot_cd > 0: spot_cd -= 1
 
-        ss, bs = score_provider(idx, dt, price)
+        # ── 使用上一根 bar 的信号做决策 (消除 same-bar bias) ──
+        # 如果还没有 pending 信号(第一根交易bar), 使用前一根 bar 的信号
+        if not has_pending_signal and idx > warmup:
+            pending_ss, pending_bs = score_provider(idx - 1,
+                                                     primary_df.index[idx - 1],
+                                                     primary_df['close'].iloc[idx - 1])
+            has_pending_signal = True
+
+        ss, bs = (pending_ss, pending_bs) if has_pending_signal else (0.0, 0.0)
 
         in_conflict = False
         if ss > 0 and bs > 0:
@@ -236,17 +255,17 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                     actual_short_tp = short_tp * 0.7
                     actual_long_tp = long_tp * 0.7
 
-        # 卖出现货
-        if ss >= sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * price > 500:
-            eng.spot_sell(price, dt, sell_pct, f"卖出 SS={ss:.0f}")
+        # 卖出现货 (用 exec_price 执行, 即本bar open)
+        if ss >= sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500:
+            eng.spot_sell(exec_price, dt, sell_pct, f"卖出 SS={ss:.0f}")
             spot_cd = spot_cooldown
 
-        # 开空
+        # 开空 (用 exec_price 执行, 即本bar open)
         sell_dom = (ss > bs * 1.5) if bs > 0 else True
         if short_cd == 0 and ss >= short_threshold and not eng.futures_short and sell_dom:
             margin = eng.available_margin() * margin_use
             actual_lev = min(lev if ss >= 50 else min(lev, 3) if ss >= 35 else 2, eng.max_leverage)
-            eng.open_short(price, dt, margin, actual_lev, f"开空 {actual_lev}x")
+            eng.open_short(exec_price, dt, margin, actual_lev, f"开空 {actual_lev}x")
             short_max_pnl = 0; short_bars = 0; short_cd = cooldown
             short_just_opened = True; short_partial_done = False; short_partial2_done = False
 
@@ -316,17 +335,17 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
         elif eng.futures_short and short_just_opened:
             short_bars = 1
 
-        # 买入现货
+        # 买入现货 (用 exec_price 执行, 即本bar open)
         if bs >= buy_threshold and spot_cd == 0 and not in_conflict and eng.available_usdt() > 500:
-            eng.spot_buy(price, dt, eng.available_usdt() * 0.25, f"买入 BS={bs:.0f}")
+            eng.spot_buy(exec_price, dt, eng.available_usdt() * 0.25, f"买入 BS={bs:.0f}")
             spot_cd = spot_cooldown
 
-        # 开多
+        # 开多 (用 exec_price 执行, 即本bar open)
         buy_dom = (bs > ss * 1.5) if ss > 0 else True
         if long_cd == 0 and bs >= long_threshold and not eng.futures_long and buy_dom:
             margin = eng.available_margin() * margin_use
             actual_lev = min(lev if bs >= 50 else min(lev, 3) if bs >= 35 else 2, eng.max_leverage)
-            eng.open_long(price, dt, margin, actual_lev, f"开多 {actual_lev}x")
+            eng.open_long(exec_price, dt, margin, actual_lev, f"开多 {actual_lev}x")
             long_max_pnl = 0; long_bars = 0; long_cd = cooldown
             long_just_opened = True; long_partial_done = False; long_partial2_done = False
 
@@ -398,6 +417,10 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
 
         if idx % record_interval == 0:
             eng.record_history(dt, price)
+
+        # ── 在当前 bar 收盘后计算信号, 供下一根 bar 执行 ──
+        pending_ss, pending_bs = score_provider(idx, dt, price)
+        has_pending_signal = True
 
     # 期末平仓
     last_price = primary_df['close'].iloc[-1]

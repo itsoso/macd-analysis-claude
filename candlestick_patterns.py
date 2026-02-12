@@ -211,14 +211,12 @@ def detect_hanging_man(df, i):
         trend = trend_at(df, i)
         if trend == 'up':
             score = 45
-            # Nison强调: 上吊线需要验证
-            if i + 1 < len(df):
-                next_c = df['close'].iloc[i + 1]
-                body_low = df['body_low'].iloc[i]
-                if next_c < body_low:
-                    score = 70  # 获得验证
-            # 阴线上吊更看跌
+            # 移除未来函数: 不再引用 i+1 验证, 改为用当前 bar 自身信息增强
+            # 阴线上吊本身就是验证信号(收盘低于开盘)
             if df['is_bear'].iloc[i]:
+                score = 65  # 阴线上吊可靠性更高
+            # 长下影 + 短实体比例越极端, 信号越强
+            if lower >= body * 3:
                 score += 5
             return {'name': '上吊线', 'score': -score, 'reliability': 'medium',
                     'type': 'bearish_reversal'}
@@ -267,11 +265,13 @@ def detect_inverted_hammer(df, i):
         trend = trend_at(df, i)
         if trend == 'down':
             score = 40
-            if i + 1 < len(df):
-                next_c = df['close'].iloc[i + 1]
-                body_high = df['body_high'].iloc[i]
-                if next_c > body_high:
-                    score = 60  # 获得验证
+            # 移除未来函数: 不再引用 i+1 验证, 改为用当前 bar 自身信息增强
+            # 阳线倒锤子本身就是看涨信号(收盘高于开盘)
+            if df['is_bull'].iloc[i]:
+                score = 55  # 阳线倒锤子可靠性更高
+            # 长上影 + 短实体比例越极端, 信号越强
+            if upper >= body * 3:
+                score += 5
             return {'name': '倒锤子线', 'score': score, 'reliability': 'low',
                     'type': 'bullish_reversal'}
     return None

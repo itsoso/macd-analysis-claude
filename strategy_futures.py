@@ -363,8 +363,12 @@ class FuturesEngine:
         bh_eth = self.initial_eth_value / first_price
         bh_total = self.initial_usdt + bh_eth * last_price
 
-        # Max drawdown
-        totals = [h['total'] for h in self.history]
+        # Max drawdown — 只计算交易窗口内 (main_df 时间范围) 的回撤,
+        # 避免预热期(warmup)历史数据对回撤计算的污染
+        trade_start = main_df.index[0].isoformat()
+        window_history = [h for h in self.history if h['time'] >= trade_start]
+        totals = [h['total'] for h in window_history]
+        # 如果交易窗口内没有 history 记录, 用 initial_total 做基准
         peak = totals[0] if totals else initial_total
         max_dd = 0
         for t in totals:

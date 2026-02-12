@@ -12,6 +12,11 @@ import json
 import sys
 import os
 import time
+import argparse
+import socket
+import tempfile
+import fcntl
+from contextlib import contextmanager
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -40,11 +45,59 @@ def fetch_data_for_tf(tf, days):
     return None
 
 
-def main():
+def _clean_json(obj):
+    if isinstance(obj, dict):
+        return {k: _clean_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clean_json(v) for v in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.ndarray,)):
+        return obj.tolist()
+    if isinstance(obj, (pd.Timestamp, datetime)):
+        return str(obj)
+    return obj
+
+
+def _atomic_dump_json(path, data):
+    """原子写入 JSON，避免并发写导致半文件。"""
+    path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_multi_tf_", suffix=".json", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(_clean_json(data), f, ensure_ascii=False, default=str, indent=2)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+@contextmanager
+def _file_lock(lock_path):
+    """进程级排它锁，避免同机并发回测写冲突。"""
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    with open(lock_path, "w", encoding="utf-8") as lockf:
+        fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+
+
+def main(args):
+    runner = args.runner
+    host = socket.gethostname()
+    pid = os.getpid()
+    run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{runner}_{pid}"
+
     print("=" * 120)
     print("  多周期联合决策 · 60天/30天/7天 真实回测对比")
     print("  数据源: 币安 ETH/USDT 真实K线 · 含手续费/滑点/资金费率")
     print("  融合算法: fuse_tf_scores (回测/实盘统一)")
+    print(f"  运行标识: {run_id} ({runner}@{host})")
     print("=" * 120)
 
     # ======================================================
@@ -360,21 +413,6 @@ def main():
     # ======================================================
     # 保存结果
     # ======================================================
-    def clean_json(obj):
-        if isinstance(obj, dict):
-            return {k: clean_json(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [clean_json(v) for v in obj]
-        elif isinstance(obj, (np.integer,)):
-            return int(obj)
-        elif isinstance(obj, (np.floating,)):
-            return float(obj)
-        elif isinstance(obj, (np.ndarray,)):
-            return obj.tolist()
-        elif isinstance(obj, (pd.Timestamp, datetime)):
-            return str(obj)
-        return obj
-
     def _format_period_results(results_list):
         return [{
             'rank': i + 1,
@@ -408,6 +446,12 @@ def main():
         'run_time': datetime.now().isoformat(),
         'data_source': '币安 ETH/USDT 真实K线',
         'fusion_algorithm': 'fuse_tf_scores (回测/实盘统一)',
+        'run_meta': {
+            'run_id': run_id,
+            'runner': runner,
+            'host': host,
+            'pid': pid,
+        },
         'base_config': {
             'best_single_tf': best_tf,
             'best_single_alpha': best_alpha,
@@ -433,15 +477,78 @@ def main():
     if summary:
         output['summary'] = summary
 
-    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            'backtest_multi_tf_30d_7d_result.json')
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    results_dir = os.path.abspath(args.results_dir or os.path.join(base_dir, "data", "backtests"))
+    latest_path = os.path.join(results_dir, "backtest_multi_tf_30d_7d_result.json")
+    runs_dir = os.path.join(results_dir, "multi_tf_60_30_7_runs")
+    snapshot_path = os.path.join(runs_dir, f"{run_id}.json")
+    index_path = os.path.join(runs_dir, "index.json")
+    lock_path = os.path.join(results_dir, ".multi_tf_60_30_7.lock")
 
-    with open(out_path, 'w', encoding='utf-8') as f:
-        json.dump(clean_json(output), f, ensure_ascii=False, default=str, indent=2)
+    with _file_lock(lock_path):
+        _atomic_dump_json(snapshot_path, output)
 
-    print(f"\n结果已保存: {out_path}")
+        index_data = []
+        if os.path.exists(index_path):
+            try:
+                with open(index_path, "r", encoding="utf-8") as f:
+                    index_data = json.load(f)
+            except Exception:
+                index_data = []
+
+        record = {
+            "run_id": run_id,
+            "run_time": output["run_time"],
+            "runner": runner,
+            "host": host,
+            "pid": pid,
+            "snapshot_file": os.path.basename(snapshot_path),
+            "top_60d": {
+                "combo": f"{r60[0]['combo_name']}@{r60[0]['primary_tf']}" if r60 else "-",
+                "alpha": r60[0]["alpha"] if r60 else 0,
+            },
+            "top_30d": {
+                "combo": f"{r30[0]['combo_name']}@{r30[0]['primary_tf']}" if r30 else "-",
+                "alpha": r30[0]["alpha"] if r30 else 0,
+            },
+            "top_7d": {
+                "combo": f"{r7[0]['combo_name']}@{r7[0]['primary_tf']}" if r7 else "-",
+                "alpha": r7[0]["alpha"] if r7 else 0,
+            },
+        }
+        index_data = [record] + [x for x in index_data if x.get("run_id") != run_id]
+        index_data = index_data[:200]
+        _atomic_dump_json(index_path, index_data)
+
+        output["recent_runs"] = index_data[:20]
+        if not args.no_update_latest:
+            _atomic_dump_json(latest_path, output)
+
+    print(f"\n结果已保存(最新): {latest_path}")
+    print(f"结果已归档(快照): {snapshot_path}")
     return output
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(
+        description="多周期联合决策 60/30/7 回测 (冲突安全写入)",
+    )
+    parser.add_argument(
+        "--runner",
+        type=str,
+        default=os.environ.get("BACKTEST_RUNNER", "local"),
+        help="回测执行来源标识 (如 local / online / claude / codex)",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "backtests"),
+        help="结果输出目录 (默认 data/backtests)",
+    )
+    parser.add_argument(
+        "--no-update-latest",
+        action="store_true",
+        help="仅生成快照和索引，不覆盖最新结果文件",
+    )
+    cli_args = parser.parse_args()
+    main(cli_args)
