@@ -608,12 +608,12 @@ def api_live_test_signal_multi():
     output_file = os.path.join(BASE_DIR, 'multi_signal_result.json')
 
     try:
-        # 超时 = 90s (并行4线程, 单TF最慢~25s, 足够)
+        # 超时 = 300s (线上服务器配置较低, 9个周期可能需要2-4分钟)
         r = subprocess.run(
             [sys.executable, 'live_runner.py', '--test-signal-multi',
              '--timeframe', tf_str, '-o', output_file],
             capture_output=True, text=True,
-            timeout=90, cwd=BASE_DIR
+            timeout=300, cwd=BASE_DIR
         )
 
         # 尝试读取结构化 JSON 结果
@@ -632,7 +632,7 @@ def api_live_test_signal_multi():
             "data": result_data,
         })
     except subprocess.TimeoutExpired:
-        return jsonify({"success": False, "output": "", "error": "超时 (90s)"}), 504
+        return jsonify({"success": False, "output": "", "error": "超时 (300s)"}), 504
     except Exception as e:
         return jsonify({"success": False, "output": "", "error": str(e)}), 500
 

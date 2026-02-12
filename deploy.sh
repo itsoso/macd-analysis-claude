@@ -187,7 +187,7 @@ server {
 
         # 超时设置
         proxy_connect_timeout 60s;
-        proxy_read_timeout 120s;
+        proxy_read_timeout 360s;
         proxy_send_timeout 60s;
 
         # 缓冲设置
