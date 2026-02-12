@@ -196,9 +196,18 @@ def cmd_test_connection(args):
         # 获取价格
         try:
             price = om.get_current_price(config.strategy.symbol)
-            print(f"  📊 {config.strategy.symbol}: ${price:.2f}")
-        except Exception:
-            pass
+            if not price or price <= 0:
+                # fallback: 直接从 Binance 公开 API 获取(无需密钥)
+                from binance_fetcher import fetch_binance_klines
+                klines = fetch_binance_klines(config.strategy.symbol, '1h', days=1)
+                if klines is not None and len(klines) > 0:
+                    price = float(klines['close'].iloc[-1])
+            if price and price > 0:
+                print(f"  📊 {config.strategy.symbol}: ${price:.2f}")
+            else:
+                print(f"  📊 {config.strategy.symbol}: 价格获取失败")
+        except Exception as e:
+            print(f"  📊 {config.strategy.symbol}: 价格获取失败 ({e})")
     else:
         print("\n  ❌ API 连接失败")
 
