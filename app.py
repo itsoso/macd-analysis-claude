@@ -254,6 +254,11 @@ def page_optimize_six_book():
     return render_template('page_optimize_six_book.html', active_page='optimize-six-book')
 
 
+@app.route('/strategy/multi-tf-backtest')
+def page_multi_tf_backtest():
+    return render_template('page_multi_tf_backtest.html', active_page='multi-tf-backtest')
+
+
 @app.route('/strategy/six-book-deep-dive')
 def page_six_book_deep_dive():
     return render_template('page_six_book_deep_dive.html', active_page='six-book-deep-dive')

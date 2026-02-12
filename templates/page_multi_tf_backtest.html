@@ -1,0 +1,525 @@
+{% extends "base.html" %}
+{% block title %}多周期联合决策回测 — 加权共识 + 共振链{% endblock %}
+{% block content %}
+<h1 class="page-title">多周期联合决策回测</h1>
+<p class="page-subtitle">加权共识 + 共振链检测 + 大小周期定调 · 多种TF组合方案 × 多个主时间框架</p>
+
+<div id="mtf-loading" class="loading">
+    <div class="spinner"></div> 加载多周期联合决策回测结果...
+</div>
+
+<div id="mtf-content" style="display:none;">
+
+<!-- 核心对比卡片 -->
+<div class="stats-grid" id="mtf-hero"></div>
+
+<!-- 单TF最优 vs 多TF最优 对比 -->
+<div class="card" style="border-left: 4px solid var(--accent-blue);">
+    <div class="card-title">🆚 单周期最优 vs 多周期联合决策最优</div>
+    <div id="mtf-vs"></div>
+</div>
+
+<!-- 算法说明 -->
+<div class="card">
+    <div class="card-title">🧠 多周期联合决策算法</div>
+    <div class="algo-grid">
+        <div class="algo-card">
+            <div class="algo-icon">⚖️</div>
+            <div class="algo-title">加权共识</div>
+            <div class="algo-desc">大周期权重远高于小周期<br>24h=28, 4h=15, 1h=8, 15m=3<br>归一化得分 0~100</div>
+        </div>
+        <div class="algo-card">
+            <div class="algo-icon">🔗</div>
+            <div class="algo-title">共振链检测</div>
+            <div class="algo-desc">扫描相邻TF连续同向链<br>如 1h→4h→8h→12h<br>≥3级且含4h+时增强信号</div>
+        </div>
+        <div class="algo-card">
+            <div class="algo-icon">🏔️</div>
+            <div class="algo-title">大周期定调</div>
+            <div class="algo-desc">≥4h 的周期单独统计<br>作为趋势方向基调<br>大小反向时信号衰减50%</div>
+        </div>
+        <div class="algo-card">
+            <div class="algo-icon">📊</div>
+            <div class="algo-title">决策矩阵</div>
+            <div class="algo-desc">大小同向+共振链 → 增强<br>大小反向 → 衰减<br>综合得分驱动开仓/平仓</div>
+        </div>
+    </div>
+</div>
+
+<!-- 全部多TF组合结果表 -->
+<div class="card">
+    <div class="card-title">📋 全部多周期组合回测结果</div>
+    <p style="color:var(--text-secondary);font-size:13px;margin-bottom:12px;">
+        6种TF组合方案 × 3个主时间框架 = 18种配置，按Alpha排序
+    </p>
+    <div style="overflow-x:auto;">
+        <table class="data-table" id="mtf-table">
+            <thead>
+                <tr>
+                    <th>排名</th>
+                    <th>组合方案</th>
+                    <th>主TF</th>
+                    <th>参与周期</th>
+                    <th>Alpha (α)</th>
+                    <th>策略收益</th>
+                    <th>买持收益</th>
+                    <th>最大回撤</th>
+                    <th>交易次数</th>
+                    <th>vs 单TF</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 各主TF对比柱状图 -->
+<div class="card">
+    <div class="card-title">📊 各主时间框架 Alpha 对比</div>
+    <div id="mtf-chart"></div>
+</div>
+
+<!-- 方案分析 -->
+<div class="card" style="border-left: 4px solid var(--accent-green);">
+    <div class="card-title">💡 方案分析与建议</div>
+    <div id="mtf-analysis"></div>
+</div>
+
+<!-- 权重表 -->
+<div class="card">
+    <div class="card-title">📐 各时间框架权重配置</div>
+    <div id="mtf-weights"></div>
+</div>
+
+<!-- 单TF基准对比 -->
+<div class="card">
+    <div class="card-title">📊 单周期基准性能 (作为对比基线)</div>
+    <div style="overflow-x:auto;">
+        <table class="data-table" id="baseline-table">
+            <thead>
+                <tr>
+                    <th>时间框架</th>
+                    <th>Alpha (α)</th>
+                    <th>策略收益</th>
+                    <th>买持收益</th>
+                    <th>最大回撤</th>
+                    <th>交易次数</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+
+</div>
+
+<style>
+.algo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-top: 12px;
+}
+.algo-card {
+    background: var(--bg-hover);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    border: 1px solid var(--border-subtle);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.algo-card:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+.algo-icon { font-size: 2em; margin-bottom: 8px; }
+.algo-title { font-weight: 700; font-size: 1.05em; margin-bottom: 6px; }
+.algo-desc { font-size: 0.82em; color: var(--text-secondary); line-height: 1.7; }
+
+.vs-grid {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 20px;
+    align-items: center;
+    margin: 20px 0;
+}
+.vs-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+    border: 2px solid var(--border-subtle);
+}
+.vs-card.single { border-color: #888; }
+.vs-card.multi { border-color: var(--accent-blue); box-shadow: 0 0 20px rgba(74,158,255,0.15); }
+.vs-arrow { font-size: 2em; color: var(--accent-blue); font-weight: bold; }
+.vs-label { font-size: 0.85em; color: var(--text-dim); margin-bottom: 8px; }
+.vs-alpha { font-size: 2em; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+.vs-detail { margin-top: 12px; font-size: 0.85em; color: var(--text-secondary); line-height: 1.8; }
+.improvement-badge {
+    display: inline-block;
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 1em;
+    margin-top: 10px;
+}
+.improvement-badge.positive { background: linear-gradient(135deg, #00d68f, #00b077); color: #000; }
+.improvement-badge.negative { background: rgba(255,255,255,0.1); color: var(--text-secondary); }
+
+.bar-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 0.9em;
+}
+.bar-label {
+    min-width: 180px;
+    text-align: right;
+    font-weight: 500;
+    color: var(--text-secondary);
+    font-size: 0.85em;
+}
+.bar-track {
+    flex: 1;
+    height: 22px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+.bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.6s ease;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    font-size: 0.78em;
+    font-weight: 700;
+    color: #000;
+    white-space: nowrap;
+}
+.bar-fill.green { background: linear-gradient(90deg, #00d68f, #00ff99); }
+.bar-fill.blue { background: linear-gradient(90deg, #4a9eff, #6bb3ff); }
+.bar-fill.orange { background: linear-gradient(90deg, #ffaa00, #ffcc44); }
+.bar-fill.red { background: linear-gradient(90deg, #ff4d6a, #ff6b8a); }
+
+.weight-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+}
+.weight-item {
+    text-align: center;
+    padding: 12px 8px;
+    border-radius: 8px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-subtle);
+}
+.weight-tf { font-weight: 700; font-size: 1em; }
+.weight-val { font-size: 0.85em; color: var(--text-secondary); margin-top: 4px; }
+.weight-bar {
+    height: 4px;
+    border-radius: 2px;
+    margin-top: 6px;
+    background: rgba(255,255,255,0.08);
+}
+.weight-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent-blue);
+}
+
+.analysis-item {
+    padding: 12px 16px;
+    background: var(--bg-hover);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    border-left: 3px solid var(--accent-blue);
+    font-size: 0.92em;
+    line-height: 1.7;
+    color: var(--text-secondary);
+}
+.analysis-item strong { color: var(--text-primary); }
+
+@media (max-width: 768px) {
+    .vs-grid { grid-template-columns: 1fr; }
+    .vs-arrow { transform: rotate(90deg); text-align: center; }
+    .algo-grid { grid-template-columns: 1fr 1fr; }
+}
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const resp = await fetch('/api/optimize_six_book');
+        if (!resp.ok) throw new Error('API返回错误');
+        const data = await resp.json();
+        renderMultiTF(data);
+    } catch(e) {
+        document.getElementById('mtf-loading').innerHTML =
+            '<p style="color:var(--accent-red)">加载失败: ' + e.message +
+            '<br><small>请先运行 python optimize_six_book.py 生成回测数据</small></p>';
+    }
+});
+
+function renderMultiTF(data) {
+    document.getElementById('mtf-loading').style.display = 'none';
+    document.getElementById('mtf-content').style.display = 'block';
+
+    const multiResults = data.multi_tf_results || [];
+    const multiBest = data.multi_tf_best || {};
+    const singleBest = data.global_best || {};
+    const baselines = data.baseline_by_tf || [];
+    const singleAlpha = singleBest.alpha || 0;
+
+    if (multiResults.length === 0) {
+        document.getElementById('mtf-content').innerHTML =
+            '<div class="card"><p style="color:var(--text-secondary);text-align:center;padding:40px;">暂无多周期联合决策回测数据。请重新运行 optimize_six_book.py 以生成 Phase E 数据。</p></div>';
+        return;
+    }
+
+    // ═══ Hero Stats ═══
+    const vs = (multiBest.alpha || 0) - singleAlpha;
+    const multiWin = vs > 0;
+    document.getElementById('mtf-hero').innerHTML = `
+        <div class="stat-card">
+            <div class="stat-label">🏆 多周期最优 Alpha</div>
+            <div class="stat-value" style="color:var(--accent-blue);font-size:1.8em;">+${(multiBest.alpha||0).toFixed(2)}%</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">📐 最优方案</div>
+            <div class="stat-value" style="font-size:1.1em;">${multiBest.combo_name || '-'} @ ${multiBest.primary_tf || '-'}</div>
+        </div>
+        <div class="stat-card ${multiWin ? 'positive' : ''}">
+            <div class="stat-label">vs 单TF最优 (${singleBest.tf || '?'} +${singleAlpha.toFixed(1)}%)</div>
+            <div class="stat-value" style="color:${vs >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};">
+                ${vs >= 0 ? '+' : ''}${vs.toFixed(2)}%
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">📉 最优回撤</div>
+            <div class="stat-value" style="color:var(--accent-red);">${(multiBest.max_drawdown||0).toFixed(2)}%</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">🔄 交易次数</div>
+            <div class="stat-value">${multiBest.total_trades || 0}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">📊 参与周期</div>
+            <div class="stat-value" style="font-size:0.95em;">${(multiBest.decision_tfs || []).join(', ')}</div>
+        </div>
+    `;
+
+    // ═══ VS comparison ═══
+    document.getElementById('mtf-vs').innerHTML = `
+        <div class="vs-grid">
+            <div class="vs-card single">
+                <div class="vs-label">单周期最优 (${singleBest.tf || '-'})</div>
+                <div class="vs-alpha" style="color:var(--accent-green);">+${singleAlpha.toFixed(2)}%</div>
+                <div class="vs-detail">
+                    参数: ${singleBest.tag || '-'}<br>
+                    策略收益: +${(singleBest.strategy_return||0).toFixed(2)}%<br>
+                    回撤: ${(singleBest.max_drawdown||0).toFixed(2)}%<br>
+                    交易: ${singleBest.total_trades||0}次
+                </div>
+            </div>
+            <div class="vs-arrow">→</div>
+            <div class="vs-card multi">
+                <div class="vs-label">多周期联合决策 (${multiBest.combo_name||'-'} @ ${multiBest.primary_tf||'-'})</div>
+                <div class="vs-alpha" style="color:var(--accent-blue);">+${(multiBest.alpha||0).toFixed(2)}%</div>
+                <div class="vs-detail">
+                    参与TFs: ${(multiBest.decision_tfs||[]).join(', ')}<br>
+                    策略收益: +${(multiBest.strategy_return||0).toFixed(2)}%<br>
+                    回撤: ${(multiBest.max_drawdown||0).toFixed(2)}%<br>
+                    交易: ${multiBest.total_trades||0}次
+                </div>
+                <div class="improvement-badge ${vs >= 0 ? 'positive' : 'negative'}">
+                    ${vs >= 0 ? '多周期更优 +' : ''}${vs.toFixed(2)}%
+                    ${vs < 0 ? ' · 但回撤更低更稳健' : ''}
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top:16px;padding:14px 18px;background:var(--bg-hover);border-radius:10px;font-size:0.88em;color:var(--text-secondary);line-height:1.8;">
+            <strong style="color:var(--text-primary);">核心差异:</strong><br>
+            📊 交易频率: 单TF ${singleBest.total_trades||0}次 → 多TF ${multiBest.total_trades||0}次
+            (${multiBest.total_trades < singleBest.total_trades ? '减少' + Math.round((1 - multiBest.total_trades / singleBest.total_trades) * 100) + '%' : '增加'})<br>
+            📉 最大回撤: ${(singleBest.max_drawdown||0).toFixed(2)}% → ${(multiBest.max_drawdown||0).toFixed(2)}%
+            (${Math.abs(multiBest.max_drawdown) < Math.abs(singleBest.max_drawdown) ? '✅ 更稳健' : '回撤略增'})<br>
+            💡 多周期共识通过过滤噪音信号提高了每笔交易的质量，适合实盘风控更严格的场景
+        </div>
+    `;
+
+    // ═══ Results table ═══
+    const tbody = document.querySelector('#mtf-table tbody');
+    multiResults.forEach((r, i) => {
+        const tr = document.createElement('tr');
+        const vsVal = r.alpha - singleAlpha;
+        const isBest = i < 3;
+        if (isBest) tr.style.background = 'rgba(74,158,255,0.06)';
+        const star = i === 0 ? ' 🏆' : i < 3 ? ' ⭐' : '';
+        tr.innerHTML = `
+            <td style="font-weight:700;">#${r.rank}${star}</td>
+            <td style="font-weight:600;">${r.combo_name}</td>
+            <td><code>${r.primary_tf}</code></td>
+            <td style="font-size:0.82em;max-width:200px;color:var(--text-secondary);">${(r.decision_tfs||[]).join(', ')}</td>
+            <td style="color:var(--accent-green);font-weight:700;">+${r.alpha.toFixed(2)}%</td>
+            <td>+${r.strategy_return.toFixed(2)}%</td>
+            <td>${(r.buy_hold_return||0).toFixed(2)}%</td>
+            <td style="color:var(--accent-red);">${r.max_drawdown.toFixed(2)}%</td>
+            <td>${r.total_trades}</td>
+            <td style="color:${vsVal >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};font-weight:600;">
+                ${vsVal >= 0 ? '+' : ''}${vsVal.toFixed(2)}%
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    // ═══ Bar chart ═══
+    const maxAlpha = Math.max(...multiResults.map(r => r.alpha), singleAlpha);
+    const colors = ['green', 'blue', 'orange'];
+    let chartHtml = '';
+
+    // Add single TF baseline
+    const singlePct = Math.max(5, (singleAlpha / maxAlpha) * 100);
+    chartHtml += `<div class="bar-row">
+        <span class="bar-label">🏅 单TF最优 (${singleBest.tf})</span>
+        <div class="bar-track">
+            <div class="bar-fill red" style="width:${singlePct}%">+${singleAlpha.toFixed(1)}%</div>
+        </div>
+    </div>`;
+    chartHtml += '<div style="height:8px;"></div>';
+
+    // Group by combo_name
+    const comboGroups = {};
+    multiResults.forEach(r => {
+        if (!comboGroups[r.combo_name]) comboGroups[r.combo_name] = [];
+        comboGroups[r.combo_name].push(r);
+    });
+
+    Object.entries(comboGroups).forEach(([name, items]) => {
+        items.forEach((r, ci) => {
+            const pct = Math.max(5, (r.alpha / maxAlpha) * 100);
+            const color = colors[ci % colors.length];
+            chartHtml += `<div class="bar-row">
+                <span class="bar-label">${name} @ ${r.primary_tf}</span>
+                <div class="bar-track">
+                    <div class="bar-fill ${color}" style="width:${pct}%">+${r.alpha.toFixed(1)}%</div>
+                </div>
+            </div>`;
+        });
+        chartHtml += '<div style="height:6px;"></div>';
+    });
+
+    document.getElementById('mtf-chart').innerHTML = chartHtml;
+
+    // ═══ Analysis ═══
+    let analysisHtml = '';
+
+    // Find best per primary TF
+    const byPTF = {};
+    multiResults.forEach(r => {
+        if (!byPTF[r.primary_tf] || r.alpha > byPTF[r.primary_tf].alpha) {
+            byPTF[r.primary_tf] = r;
+        }
+    });
+
+    analysisHtml += `<div class="analysis-item">
+        <strong>🏆 最佳主时间框架:</strong> 在相同的多TF组合下，
+        ${Object.entries(byPTF).sort((a,b) => b[1].alpha - a[1].alpha)
+            .map(([tf, r]) => `<strong>${tf}</strong> (α=${r.alpha.toFixed(1)}%)`)
+            .join(' > ')}。
+        主TF越快(1h)，决策频率越高、交易机会更多；主TF越慢(4h)，信号更稳但机会更少。
+    </div>`;
+
+    // Find best combo
+    const byCombo = {};
+    multiResults.forEach(r => {
+        if (!byCombo[r.combo_name] || r.alpha > byCombo[r.combo_name].alpha) {
+            byCombo[r.combo_name] = r;
+        }
+    });
+
+    const sortedCombos = Object.entries(byCombo).sort((a,b) => b[1].alpha - a[1].alpha);
+    analysisHtml += `<div class="analysis-item">
+        <strong>🏆 最佳TF组合:</strong>
+        ${sortedCombos.map(([name, r]) => `<strong>${name}</strong> (α=${r.alpha.toFixed(1)}%)`).join(' > ')}。
+    </div>`;
+
+    // Drawdown analysis
+    const minDD = multiResults.reduce((best, r) => Math.abs(r.max_drawdown) < Math.abs(best.max_drawdown) ? r : best);
+    analysisHtml += `<div class="analysis-item">
+        <strong>🛡️ 最低回撤:</strong> ${minDD.combo_name} @ ${minDD.primary_tf}，
+        回撤仅 ${minDD.max_drawdown.toFixed(2)}%，Alpha ${minDD.alpha.toFixed(2)}%。
+        ${Math.abs(minDD.max_drawdown) < Math.abs(singleBest.max_drawdown) ?
+            '比单TF最优回撤更低，风控更优秀。' : ''}
+    </div>`;
+
+    // Trade frequency
+    const minTrades = multiResults.reduce((best, r) => r.total_trades < best.total_trades ? r : best);
+    analysisHtml += `<div class="analysis-item">
+        <strong>📉 最低交易频率:</strong> ${minTrades.combo_name} @ ${minTrades.primary_tf}，
+        仅 ${minTrades.total_trades} 次交易 (单TF: ${singleBest.total_trades}次)，
+        每笔交易平均贡献 α=${(minTrades.alpha / Math.max(1, minTrades.total_trades)).toFixed(2)}%。
+        高质量低频交易更适合实盘操作。
+    </div>`;
+
+    analysisHtml += `<div class="analysis-item" style="border-color:var(--accent-green);">
+        <strong>💡 实盘建议:</strong>
+        多周期联合决策的核心优势不在于绝对Alpha更高，而在于：
+        <strong>更少的交易次数</strong>(降低手续费和滑点)、
+        <strong>更低的回撤</strong>(更好的资金曲线)、
+        <strong>更高的单笔质量</strong>(只在多TF共识时入场)。
+        建议实盘采用 <strong>${multiBest.combo_name} @ ${multiBest.primary_tf}</strong> 配置，
+        兼顾收益和风控。
+    </div>`;
+
+    document.getElementById('mtf-analysis').innerHTML = analysisHtml;
+
+    // ═══ Weights ═══
+    const weights = {
+        '10m': 2, '15m': 3, '30m': 5, '1h': 8, '2h': 10, '3h': 12,
+        '4h': 15, '6h': 18, '8h': 20, '12h': 22, '16h': 25, '24h': 28
+    };
+    const maxW = 28;
+    let wHtml = '<div class="weight-grid">';
+    for (const [tf, w] of Object.entries(weights)) {
+        const pct = (w / maxW * 100).toFixed(0);
+        const isLarge = w >= 15;
+        wHtml += `<div class="weight-item" ${isLarge ? 'style="border-color:var(--accent-blue);"' : ''}>
+            <div class="weight-tf" ${isLarge ? 'style="color:var(--accent-blue);"' : ''}>${tf}</div>
+            <div class="weight-val">权重 ${w}</div>
+            <div class="weight-bar"><div class="weight-bar-fill" style="width:${pct}%"></div></div>
+        </div>`;
+    }
+    wHtml += '</div>';
+    wHtml += `<p style="margin-top:12px;font-size:0.82em;color:var(--text-dim);">
+        ≥4h 的周期(蓝色边框)被视为"大周期"，在共识算法中拥有趋势定调权。
+        24h 的权重(28)约等于 9 个 15m(3) 的权重。
+    </p>`;
+    document.getElementById('mtf-weights').innerHTML = wHtml;
+
+    // ═══ Baseline table ═══
+    const blBody = document.querySelector('#baseline-table tbody');
+    const topTfs = data.top_timeframes || [];
+    const sortedBL = [...baselines].sort((a, b) => b.alpha - a.alpha);
+    sortedBL.forEach(b => {
+        const isTop = topTfs.includes(b.tf);
+        const tr = document.createElement('tr');
+        if (isTop) tr.style.background = 'rgba(255,215,0,0.04)';
+        tr.innerHTML = `
+            <td>${isTop ? '⭐ ' : ''}${b.tf}</td>
+            <td style="color:${b.alpha >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'};font-weight:600;">
+                ${b.alpha >= 0 ? '+' : ''}${b.alpha.toFixed(2)}%
+            </td>
+            <td>${b.strategy_return >= 0 ? '+' : ''}${b.strategy_return.toFixed(2)}%</td>
+            <td>${b.buy_hold_return >= 0 ? '+' : ''}${b.buy_hold_return.toFixed(2)}%</td>
+            <td style="color:var(--accent-red);">${b.max_drawdown.toFixed(2)}%</td>
+            <td>${b.total_trades}</td>
+        `;
+        blBody.appendChild(tr);
+    });
+}
+</script>
+{% endblock %}
