@@ -32,13 +32,17 @@
 .timeline { position: relative; }
 .tl-row { display: flex; align-items: stretch; min-height: 40px; border-bottom: 1px solid var(--border); font-size: 0.78rem; transition: background 0.15s; }
 .tl-row:hover { background: rgba(91,138,245,0.06); }
-.tl-date { width: 90px; flex-shrink: 0; padding: 8px 6px; color: var(--text-muted); font-size: 0.75rem; display: flex; align-items: center; }
-.tl-price { width: 80px; flex-shrink: 0; padding: 8px 4px; display: flex; align-items: center; justify-content: flex-end; }
-.tl-bar { flex: 0 0 150px; display: flex; align-items: center; padding: 4px 8px; gap: 6px; }
-.tl-pnl { width: 100px; flex-shrink: 0; padding: 8px 6px; text-align: right; font-weight: 600; display: flex; align-items: center; justify-content: flex-end; }
-.tl-total { width: 110px; flex-shrink: 0; padding: 8px 6px; text-align: right; display: flex; align-items: center; justify-content: flex-end; font-size: 0.76rem; }
-.tl-dd { width: 80px; flex-shrink: 0; padding: 8px 6px; text-align: right; display: flex; align-items: center; justify-content: flex-end; font-size: 0.72rem; }
-.tl-trade { flex: 1; padding: 8px 6px; font-size: 0.72rem; display: flex; align-items: center; flex-wrap: wrap; gap: 3px; }
+.tl-date { width: 82px; flex-shrink: 0; padding: 8px 4px; color: var(--text-muted); font-size: 0.73rem; display: flex; align-items: center; }
+.tl-price { width: 72px; flex-shrink: 0; padding: 8px 3px; display: flex; align-items: center; justify-content: flex-end; font-size: 0.75rem; }
+.tl-assets { width: 160px; flex-shrink: 0; padding: 6px 6px; display: flex; flex-direction: column; justify-content: center; gap: 1px; font-size: 0.68rem; }
+.tl-assets .a-row { display: flex; justify-content: space-between; }
+.tl-assets .a-label { color: var(--text-muted); }
+.tl-assets .a-val { font-weight: 600; text-align: right; }
+.tl-bar { flex: 0 0 140px; display: flex; align-items: center; padding: 4px 6px; gap: 4px; }
+.tl-pnl { width: 90px; flex-shrink: 0; padding: 8px 4px; text-align: right; font-weight: 600; display: flex; align-items: center; justify-content: flex-end; }
+.tl-total { width: 100px; flex-shrink: 0; padding: 8px 4px; text-align: right; display: flex; align-items: center; justify-content: flex-end; font-size: 0.76rem; }
+.tl-dd { width: 70px; flex-shrink: 0; padding: 8px 4px; text-align: right; display: flex; align-items: center; justify-content: flex-end; font-size: 0.72rem; }
+.tl-trade { flex: 1; padding: 8px 4px; font-size: 0.72rem; display: flex; align-items: center; flex-wrap: wrap; gap: 3px; }
 
 .pos-long { background: rgba(34,197,94,0.08); border-left: 3px solid var(--green); }
 .pos-short { background: rgba(239,68,68,0.08); border-left: 3px solid var(--red); }
@@ -188,13 +192,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             <input id="dateSearch" placeholder="日期如 2025-03" style="width:120px;">
         </div>
         <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px;">
-            日期 | ETH价格 | 持仓 | 未实现PnL | 账户总值 | 回撤 | 当日交易
+            日期 | ETH价格 | USDT/ETH持仓 | 合约持仓 | 未实现PnL | 账户总值 | 回撤 | 当日交易
         </div>
         <div class="timeline scroll-y" id="timeline">
             <div class="tl-header">
                 <div class="tl-date">日期</div>
                 <div class="tl-price">ETH价格</div>
-                <div class="tl-bar">持仓状态</div>
+                <div class="tl-assets">USDT / ETH资产</div>
+                <div class="tl-bar">合约持仓</div>
                 <div class="tl-pnl">未实现PnL</div>
                 <div class="tl-total">账户总值</div>
                 <div class="tl-dd">回撤</div>
@@ -411,9 +416,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             const ddWidth = Math.min(100, ddPct * 3);
             const retCls = cls(d.return_pct);
 
+            // USDT / ETH 资产明细
+            const usdt = d.usdt || 0;
+            const ethVal = d.spot_eth_value || 0;
+            const frozenM = d.frozen_margin || 0;
+            const ethQty = d.eth_price > 0 ? (ethVal / d.eth_price) : 0;
+
             rows += `<div class="tl-row ${posClass}">
                 <div class="tl-date">${d.date}</div>
                 <div class="tl-price">$${fv(d.eth_price)}</div>
+                <div class="tl-assets">
+                    <div class="a-row"><span class="a-label">USDT</span><span class="a-val">${fc(usdt)}</span></div>
+                    <div class="a-row"><span class="a-label">ETH</span><span class="a-val" style="color:var(--orange)">${ethQty.toFixed(2)} (${fc(ethVal)})</span></div>
+                    ${frozenM > 0 ? '<div class="a-row"><span class="a-label">冻结</span><span class="a-val" style="color:var(--purple)">'+fc(frozenM)+'</span></div>' : ''}
+                </div>
                 <div class="tl-bar">${posHtml}</div>
                 <div class="tl-pnl">${pnlHtml}</div>
                 <div class="tl-total"><span class="${retCls}">${fc(d.total_value)}</span></div>
