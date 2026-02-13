@@ -586,11 +586,13 @@ def main(args):
     # ======================================================
     # 计算信号
     # ======================================================
-    print(f"\n[2/4] 计算六维信号...")
+    # ⚠️ 必须使用 max_bars=0 全量计算！
+    # max_bars>0 会截断df导致信号与K线idx严重错位(100%不一致)
+    print(f"\n[2/4] 计算六维信号 (全量, max_bars=0)...")
     all_signals = {}
     for tf in available_tfs:
-        print(f"  计算 {tf} 信号...")
-        all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=2000)
+        print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")
+        all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=0)
     print(f"  信号计算完成: {len(all_signals)} 个TF")
 
     tf_hours = {

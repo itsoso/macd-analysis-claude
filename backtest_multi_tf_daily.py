@@ -89,11 +89,17 @@ DEFAULT_CONFIG = {
     'kdj_reverse_mult': 0.70,
     'kdj_gate_threshold': 10,
     'veto_dampen': 0.30,
-    'use_live_gate': False,
+    # ── 实盘口径对齐（与 backtest_multi_tf_date_range_db.py 一致）──
+    'use_live_gate': True,
     'consensus_min_strength': 40,
-    'coverage_min': 0.0,
-    'use_regime_aware': False,
-    'use_protections': False,
+    'coverage_min': 0.5,
+    'use_regime_aware': True,
+    'use_protections': True,
+    'prot_loss_streak_limit': 3,
+    'prot_loss_streak_cooldown_bars': 24,
+    'prot_daily_loss_limit_pct': 0.03,
+    'prot_global_dd_limit_pct': 0.12,
+    'prot_close_on_global_halt': True,
 }
 
 TF_HOURS = {
@@ -302,11 +308,14 @@ def main():
     print(f"  决策TFs: {', '.join(decision_tfs)}")
 
     # ── 2. 计算信号 ──
-    print(f"\n[2/4] 计算六维信号...")
+    # ⚠️ 必须使用 max_bars=0 全量计算！
+    # max_bars>0 会截断df到尾部N根，但 _build_tf_score_index 用全量df的idx
+    # 去 .iloc 索引截断后的信号Series，导致严重错位（100%不一致）。
+    print(f"\n[2/4] 计算六维信号 (全量, max_bars=0)...")
     all_signals = {}
     for tf in available_tfs:
-        print(f"  计算 {tf} 信号...")
-        all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=2000)
+        print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")
+        all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=0)
     print(f"  信号计算完成: {len(all_signals)} 个TF")
 
     # ── 3. 构建评分索引 ──
