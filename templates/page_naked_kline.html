@@ -1,0 +1,347 @@
+{% extends "base.html" %}
+{% block title %}裸K线交易法 · 许佳聪{% endblock %}
+{% block content %}
+<style>
+:root {
+    --bg-page: #0f1117;
+    --bg-card: #1a1d28;
+    --bg-card2: #22263a;
+    --border: #2a2e42;
+    --text: #e8e8f0;
+    --text-muted: #8b8fa8;
+    --accent: #5b8af5;
+    --green: #22c55e;
+    --red: #ef4444;
+    --orange: #f59e0b;
+    --purple: #a78bfa;
+    --cyan: #06b6d4;
+}
+.nk-page { padding: 20px; max-width: 1400px; margin: 0 auto; color: var(--text); }
+.nk-header { text-align: center; margin-bottom: 32px; }
+.nk-header h1 { font-size: 2rem; font-weight: 700; margin-bottom: 8px; }
+.nk-header h1 span { color: var(--accent); }
+.nk-header .sub { color: var(--text-muted); font-size: 0.95rem; }
+.nk-meta { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 16px 0; }
+.nk-badge { background: var(--bg-card2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; font-size: 0.82rem; }
+.nk-badge b { color: var(--accent); margin-right: 4px; }
+
+/* 卡片 */
+.nk-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 20px; }
+.nk-card .title { font-size: 1.1rem; font-weight: 600; margin-bottom: 12px; }
+.nk-card .icon { margin-right: 6px; }
+
+/* 指标卡片组 */
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin: 16px 0; }
+.metric-item { background: var(--bg-card2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; text-align: center; }
+.metric-item .label { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; }
+.metric-item .val { font-size: 1.3rem; font-weight: 700; }
+.metric-item .val.pos { color: var(--green); }
+.metric-item .val.neg { color: var(--red); }
+.metric-item .val.neu { color: var(--orange); }
+
+/* 章节 */
+.ch-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; }
+.ch-item { background: var(--bg-card2); border-left: 3px solid var(--accent); border-radius: 0 10px 10px 0; padding: 14px 18px; }
+.ch-item .ch-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 6px; color: var(--cyan); }
+.ch-item .ch-summary { font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 8px; }
+.ch-item .ch-code { font-size: 0.75rem; color: var(--purple); font-style: italic; }
+.ch-item ul { margin: 6px 0 0 16px; font-size: 0.8rem; color: var(--text); }
+.ch-item ul li { margin-bottom: 3px; }
+
+/* 表格 */
+.dt { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.dt th { background: var(--bg-card2); position: sticky; top: 0; padding: 8px 6px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); font-size: 0.75rem; }
+.dt td { padding: 6px; border-bottom: 1px solid var(--border); }
+.dt .center { text-align: center; }
+.dt tr:hover { background: rgba(91,138,245,0.06); }
+
+/* 图表区 */
+.chart-box { width: 100%; height: 350px; background: var(--bg-card2); border-radius: 10px; margin: 12px 0; position: relative; }
+
+/* 信号日历 */
+.signal-day { display: inline-block; width: 16px; height: 16px; border-radius: 3px; margin: 1px; cursor: pointer; }
+.signal-day.long { background: var(--green); }
+.signal-day.short { background: var(--red); }
+.signal-day.none { background: var(--bg-card2); border: 1px solid var(--border); }
+.signal-day:hover { opacity: 0.8; transform: scale(1.3); }
+
+/* loading */
+.loading { text-align: center; padding: 60px; color: var(--text-muted); }
+.loading .spin { display: inline-block; width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 12px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+details summary { cursor: pointer; }
+details summary:hover { color: var(--accent); }
+</style>
+
+<div class="nk-page" id="nk-root">
+    <div class="loading">
+        <div class="spin"></div>
+        <div>加载裸K线回测数据...</div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    const root = document.getElementById('nk-root');
+    let data;
+    try {
+        const resp = await fetch('/api/naked_kline_backtest');
+        if (!resp.ok) throw new Error('未找到回测数据，请先运行 python backtest_naked_kline.py');
+        data = await resp.json();
+    } catch (e) {
+        root.innerHTML = `<div class="loading" style="color:var(--red)">❌ ${e.message}</div>`;
+        return;
+    }
+    if (data.error) {
+        root.innerHTML = `<div class="loading" style="color:var(--red)">❌ ${data.error}</div>`;
+        return;
+    }
+
+    const m = data.run_meta || {};
+    const s = data.summary || {};
+    const book = data.book_analysis || {};
+    const daily = data.daily_records || [];
+    const trades = data.trade_details || [];
+    const equity = data.equity_curve || [];
+    const patterns = data.pattern_stats || [];
+    const sigSummary = data.signal_summary || {};
+
+    const fv = v => v != null ? (typeof v === 'number' ? v.toFixed(2) : v) : '-';
+    const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu';
+
+    // ══════ Header ══════
+    let html = `
+    <div class="nk-header">
+        <h1>📖 <span>裸K线交易法</span> · 许佳聪</h1>
+        <div class="sub">纯价格行为(Price Action)策略 · 零指标 · ETH/USDT 日线合约回测</div>
+        <div class="nk-meta">
+            <span class="nk-badge"><b>📅</b> ${m.start_date || ''} ~ ${m.end_date || ''}</span>
+            <span class="nk-badge"><b>💰</b> 初始 $${(m.initial_capital||100000).toLocaleString()}</span>
+            <span class="nk-badge"><b>⚡</b> ${m.leverage||3}x 杠杆</span>
+            <span class="nk-badge"><b>🎯</b> 单笔风险 ${((m.risk_per_trade||0.02)*100).toFixed(0)}%</span>
+            <span class="nk-badge"><b>🖥️</b> ${m.runner||''} @ ${m.host||''}</span>
+            <span class="nk-badge"><b>🕐</b> ${m.run_time||''}</span>
+        </div>
+    </div>`;
+
+    // ══════ 回测汇总 ══════
+    html += `<div class="nk-card"><div class="title"><span class="icon">📊</span> 回测结果汇总</div>
+    <div class="metric-grid">
+        <div class="metric-item"><div class="label">总收益率</div><div class="val ${cls(s.total_return_pct)}">${fv(s.total_return_pct)}%</div></div>
+        <div class="metric-item"><div class="label">年化收益率</div><div class="val ${cls(s.annual_return_pct)}">${fv(s.annual_return_pct)}%</div></div>
+        <div class="metric-item"><div class="label">最大回撤</div><div class="val neg">${fv(s.max_drawdown_pct)}%</div></div>
+        <div class="metric-item"><div class="label">总交易次数</div><div class="val neu">${s.total_trades || 0}</div></div>
+        <div class="metric-item"><div class="label">胜率</div><div class="val ${s.win_rate_pct >= 50 ? 'pos' : 'neg'}">${fv(s.win_rate_pct)}%</div></div>
+        <div class="metric-item"><div class="label">盈亏比</div><div class="val ${s.profit_factor >= 1.5 ? 'pos' : 'neu'}">${fv(s.profit_factor)}</div></div>
+        <div class="metric-item"><div class="label">期末资金</div><div class="val">${s.final_capital ? '$'+s.final_capital.toLocaleString() : '-'}</div></div>
+        <div class="metric-item"><div class="label">平均盈利</div><div class="val pos">$${fv(s.avg_win)}</div></div>
+        <div class="metric-item"><div class="label">平均亏损</div><div class="val neg">$${fv(s.avg_loss)}</div></div>
+        <div class="metric-item"><div class="label">总手续费</div><div class="val">${s.total_fees ? '$'+s.total_fees.toLocaleString() : '-'}</div></div>
+        <div class="metric-item"><div class="label">总滑点</div><div class="val">${s.total_slippage ? '$'+s.total_slippage.toLocaleString() : '-'}</div></div>
+        <div class="metric-item"><div class="label">资金费率</div><div class="val">${s.total_funding ? '$'+s.total_funding.toLocaleString() : '-'}</div></div>
+    </div></div>`;
+
+    // ══════ 资金曲线 ══════
+    html += `<div class="nk-card">
+        <div class="title"><span class="icon">📈</span> 资金曲线 & ETH 价格</div>
+        <div class="chart-box"><canvas id="equityChart"></canvas></div>
+    </div>`;
+
+    // ══════ 信号热力图 ══════
+    html += `<div class="nk-card">
+        <div class="title"><span class="icon">🗓️</span> 每日信号热力图</div>
+        <div style="margin-bottom:8px;font-size:0.8rem;color:var(--text-muted)">
+            <span style="display:inline-block;width:14px;height:14px;background:var(--green);border-radius:3px;vertical-align:middle;margin-right:4px"></span> 做多信号 &nbsp;
+            <span style="display:inline-block;width:14px;height:14px;background:var(--red);border-radius:3px;vertical-align:middle;margin-right:4px"></span> 做空信号 &nbsp;
+            <span style="display:inline-block;width:14px;height:14px;background:var(--bg-card2);border:1px solid var(--border);border-radius:3px;vertical-align:middle;margin-right:4px"></span> 无信号
+        </div>
+        <div id="signal-heatmap" style="line-height:0;"></div>
+    </div>`;
+
+    // ══════ 形态信号统计 ══════
+    html += `<div class="nk-card">
+        <div class="title"><span class="icon">🔍</span> 信号检测统计</div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;">`;
+    const sigByPat = sigSummary.by_pattern || {};
+    Object.entries(sigByPat).forEach(([p, n]) => {
+        const nameMap = {
+            'pin_bar_bullish': '看涨Pin Bar', 'pin_bar_bearish': '看跌Pin Bar',
+            'inside_bar': '内包线', 'engulfing_bullish': '看涨吞没',
+            'engulfing_bearish': '看跌吞没', 'fakey_bullish': '看涨Fakey',
+            'fakey_bearish': '看跌Fakey', 'two_bar_reversal_bullish': '看涨双K反转',
+            'two_bar_reversal_bearish': '看跌双K反转',
+        };
+        html += `<span class="nk-badge"><b>${nameMap[p]||p}</b> ${n}个</span>`;
+    });
+    html += `</div>`;
+
+    // 形态交易统计表
+    if (patterns.length > 0) {
+        html += `<table class="dt"><thead><tr>
+            <th>形态</th><th class="center">交易次数</th><th class="center">胜</th>
+            <th class="center">负</th><th class="center">胜率</th><th class="center">总PnL</th>
+            <th class="center">平均PnL</th>
+        </tr></thead><tbody>`;
+        patterns.forEach(p => {
+            html += `<tr>
+                <td>${p.name}</td><td class="center">${p.total}</td>
+                <td class="center" style="color:var(--green)">${p.wins}</td>
+                <td class="center" style="color:var(--red)">${p.losses}</td>
+                <td class="center">${fv(p.win_rate)}%</td>
+                <td class="center ${cls(p.total_pnl)}">${fv(p.total_pnl)}</td>
+                <td class="center ${cls(p.avg_pnl)}">${fv(p.avg_pnl)}</td>
+            </tr>`;
+        });
+        html += '</tbody></table>';
+    }
+    html += `</div>`;
+
+    // ══════ 章节解读 ══════
+    if (book.chapters && book.chapters.length) {
+        html += `<div class="nk-card">
+            <div class="title"><span class="icon">📚</span> 《裸K线交易法》章节解读与代码映射</div>
+            <div style="margin-bottom:12px;font-size:0.88rem;color:var(--text-muted);line-height:1.6;">
+                <b>核心理念:</b> ${book.core_philosophy || ''}
+            </div>
+            <div class="ch-list">`;
+        book.chapters.forEach(ch => {
+            html += `<div class="ch-item">
+                <div class="ch-title">${ch.chapter}</div>
+                <div class="ch-summary">${ch.summary}</div>
+                <ul>${(ch.key_points||[]).map(k => `<li>${k}</li>`).join('')}</ul>
+                <div class="ch-code">💻 ${ch.code_mapping}</div>
+            </div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    // ══════ 每日信号明细表 ══════
+    html += `<div class="nk-card">
+        <details>
+            <summary class="title" style="cursor:pointer"><span class="icon">📋</span> 每日信号 & 持仓明细 (${daily.length} 天)</summary>
+            <div style="overflow-x:auto;margin-top:12px;max-height:600px;overflow-y:auto;">
+                <table class="dt"><thead><tr>
+                    <th>日期</th><th>ETH价格</th><th>趋势</th><th>信号</th>
+                    <th>持仓方向</th><th>未实现PnL</th><th>账户总值</th><th>收益率</th>
+                </tr></thead><tbody>`;
+    daily.forEach(d => {
+        const p = d.position;
+        const trendIcon = d.trend === 'up' ? '🟢' : d.trend === 'down' ? '🔴' : '🟡';
+        html += `<tr>
+            <td>${d.date}</td>
+            <td>$${fv(d.open)}</td>
+            <td>${trendIcon} ${d.trend}</td>
+            <td style="font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis">${d.signal || '-'}</td>
+            <td>${p ? (p.direction==='long'?'🟢多':'🔴空') : '-'}</td>
+            <td class="${p ? cls(p.unrealized_pnl) : ''}">${p ? '$'+fv(p.unrealized_pnl) : '-'}</td>
+            <td>$${d.total_value.toLocaleString()}</td>
+            <td class="${cls(d.return_pct)}">${fv(d.return_pct)}%</td>
+        </tr>`;
+    });
+    html += '</tbody></table></div></details></div>';
+
+    // ══════ 交易明细 ══════
+    html += `<div class="nk-card">
+        <details>
+            <summary class="title" style="cursor:pointer"><span class="icon">💹</span> 完整交易记录 (${trades.length} 笔)</summary>
+            <div style="overflow-x:auto;margin-top:12px;max-height:600px;overflow-y:auto;">
+                <table class="dt" style="font-size:0.72rem;white-space:nowrap;"><thead><tr>
+                    <th>#</th><th>时间</th><th>操作</th><th>方向</th>
+                    <th class="center">市场价</th><th class="center">成交价</th>
+                    <th class="center">数量</th><th class="center">名义价值</th>
+                    <th class="center">保证金</th><th class="center">杠杆</th>
+                    <th class="center">手续费</th><th class="center">滑点</th>
+                    <th class="center">PnL</th>
+                    <th class="center">账户总值</th><th class="center">平仓原因</th>
+                </tr></thead><tbody>`;
+    trades.forEach((t, i) => {
+        const pnlCls = t.pnl > 0 ? 'color:var(--green)' : t.pnl < 0 ? 'color:var(--red)' : '';
+        html += `<tr>
+            <td>${i+1}</td>
+            <td>${t.time}</td>
+            <td style="font-weight:600;${t.action==='OPEN'?'color:var(--cyan)':'color:var(--orange)'}">${t.action}</td>
+            <td>${t.direction==='long'?'🟢多':'🔴空'}</td>
+            <td class="center">$${fv(t.market_price)}</td>
+            <td class="center">$${fv(t.exec_price)}</td>
+            <td class="center">${fv(t.quantity)}</td>
+            <td class="center">$${fv(t.notional_value)}</td>
+            <td class="center">$${fv(t.margin)}</td>
+            <td class="center">${t.leverage}x</td>
+            <td class="center">$${fv(t.fee)}</td>
+            <td class="center">$${fv(t.slippage_cost)}</td>
+            <td class="center" style="${pnlCls};font-weight:600">$${fv(t.pnl)}</td>
+            <td class="center">$${t.after_total ? t.after_total.toLocaleString() : '-'}</td>
+            <td style="font-size:0.7rem">${t.close_reason||t.pattern||''}</td>
+        </tr>`;
+    });
+    html += '</tbody></table></div></details></div>';
+
+    root.innerHTML = html;
+
+    // ══════ 绘制资金曲线 ══════
+    if (equity.length > 0) {
+        const labels = equity.map(e => e.date);
+        const equityData = equity.map(e => e.total);
+        const priceData = equity.map(e => e.price);
+
+        new Chart(document.getElementById('equityChart'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: '账户总值 (USDT)',
+                        data: equityData,
+                        borderColor: '#5b8af5',
+                        backgroundColor: 'rgba(91,138,245,0.08)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2,
+                        yAxisID: 'y',
+                    },
+                    {
+                        label: 'ETH/USDT 价格',
+                        data: priceData,
+                        borderColor: '#f59e0b',
+                        borderWidth: 1.5,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderDash: [4, 2],
+                        yAxisID: 'y1',
+                    },
+                ],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { labels: { color: '#8b8fa8', font: { size: 11 } } },
+                },
+                scales: {
+                    x: { ticks: { color: '#8b8fa8', maxTicksLimit: 15, font: { size: 10 } }, grid: { color: 'rgba(42,46,66,0.5)' } },
+                    y: { position: 'left', ticks: { color: '#5b8af5', font: { size: 10 } }, grid: { color: 'rgba(42,46,66,0.3)' } },
+                    y1: { position: 'right', ticks: { color: '#f59e0b', font: { size: 10 } }, grid: { drawOnChartArea: false } },
+                },
+            },
+        });
+    }
+
+    // ══════ 信号热力图 ══════
+    const heatmap = document.getElementById('signal-heatmap');
+    if (heatmap && daily.length > 0) {
+        let hmHtml = '';
+        daily.forEach(d => {
+            let cls = 'none';
+            if (d.signal && d.signal.includes('long')) cls = 'long';
+            else if (d.signal && d.signal.includes('short')) cls = 'short';
+            hmHtml += `<span class="signal-day ${cls}" title="${d.date}: ${d.signal || '无信号'}"></span>`;
+        });
+        heatmap.innerHTML = hmHtml;
+    }
+});
+</script>
+{% endblock %}

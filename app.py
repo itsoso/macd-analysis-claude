@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, render_template, jsonify, request, redirect, url_for, session
 from werkzeug.security import generate_password_hash, check_password_hash
+from date_range_report import load_latest_report_from_db
 from web_routes import register_page_routes, register_result_api_routes
 
 app = Flask(__name__)
@@ -104,6 +105,8 @@ KDJ_FILE = os.path.join(BASE_DIR, 'kdj_result.json')
 OPTIMIZE_SIX_BOOK_FILE = os.path.join(BASE_DIR, 'optimize_six_book_result.json')
 BACKTEST_30D_7D_FILE = os.path.join(BASE_DIR, 'backtest_30d_7d_result.json')
 MULTI_TF_BACKTEST_30D_7D_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'backtest_multi_tf_30d_7d_result.json')
+MULTI_TF_DATE_RANGE_DB_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'multi_tf_date_range_reports.db')
+NAKED_KLINE_BACKTEST_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'naked_kline_backtest_result.json')
 
 RESULT_FILE_PATHS = {
     'BACKTEST_FILE': BACKTEST_FILE,
@@ -131,6 +134,7 @@ RESULT_FILE_PATHS = {
     'OPTIMIZE_SIX_BOOK_FILE': OPTIMIZE_SIX_BOOK_FILE,
     'BACKTEST_30D_7D_FILE': BACKTEST_30D_7D_FILE,
     'MULTI_TF_BACKTEST_30D_7D_FILE': MULTI_TF_BACKTEST_30D_7D_FILE,
+    'NAKED_KLINE_BACKTEST_FILE': NAKED_KLINE_BACKTEST_FILE,
 }
 
 
@@ -146,6 +150,50 @@ def load_json(path):
 # ======================================================
 register_page_routes(app)
 register_result_api_routes(app, load_json=load_json, result_paths=RESULT_FILE_PATHS)
+
+
+@app.route('/api/multi_tf_date_range_report')
+def api_multi_tf_date_range_report():
+    """读取多周期固定区间回测(DB)的最新结果。"""
+    data = load_latest_report_from_db(MULTI_TF_DATE_RANGE_DB_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({
+        "error": "未找到区间回测数据，请先运行 python backtest_multi_tf_date_range_db.py",
+        "db_path": MULTI_TF_DATE_RANGE_DB_FILE,
+    }), 404
+
+
+# ── 裸K线交易法 · 逐日盈亏 (从 DB 读取) ──
+NAKED_KLINE_DB_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'naked_kline_backtest.db')
+
+
+@app.route('/api/naked_kline_daily')
+def api_naked_kline_daily():
+    """从 SQLite DB 加载裸K线策略最新回测的逐日盈亏数据。"""
+    from naked_kline_db import load_latest_run
+    data = load_latest_run(NAKED_KLINE_DB_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({
+        "error": "未找到裸K线回测数据，请先运行 python backtest_naked_kline.py",
+    }), 404
+
+
+# ── 多周期联合决策 · 逐日盈亏 (从 DB 读取) ──
+MULTI_TF_DAILY_DB_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'multi_tf_daily_backtest.db')
+
+
+@app.route('/api/multi_tf_daily')
+def api_multi_tf_daily():
+    """从 SQLite DB 加载多周期联合决策最新回测的逐日盈亏数据。"""
+    from multi_tf_daily_db import load_latest_run
+    data = load_latest_run(MULTI_TF_DAILY_DB_FILE)
+    if data:
+        return jsonify(data)
+    return jsonify({
+        "error": "未找到多周期逐日回测数据，请先运行 python backtest_multi_tf_daily.py",
+    }), 404
 
 
 # ======================================================

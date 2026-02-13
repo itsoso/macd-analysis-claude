@@ -24,6 +24,7 @@ import json
 import sys
 import os
 import time
+import re
 from datetime import datetime
 from itertools import product
 
@@ -84,16 +85,304 @@ def calc_fusion_score_six(signals, df, idx, dt, config):
     return _calc_fusion_score_six_core(signals, df, idx, dt, config)
 
 
+_PNL_RE = re.compile(r"PnL=([+-]?\d+(?:\.\d+)?)")
+_LIQ_LOSS_RE = re.compile(r"损失([+-]?\d+(?:\.\d+)?)")
+
+
+def _extract_realized_pnl_from_trade(trade):
+    """
+    从成交记录中提取平仓已实现盈亏(USDT)。
+    返回 None 表示该成交不计入连亏统计。
+    """
+    action = str(trade.get('action', ''))
+    reason = str(trade.get('reason', ''))
+    pnl_field = trade.get('pnl', None)
+    if action in ('CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED') and pnl_field is not None:
+        try:
+            return float(pnl_field)
+        except (TypeError, ValueError):
+            pass
+    if action in ('CLOSE_LONG', 'CLOSE_SHORT'):
+        m = _PNL_RE.search(reason)
+        if m:
+            return float(m.group(1))
+        return None
+    if action == 'LIQUIDATED':
+        m = _LIQ_LOSS_RE.search(reason)
+        if m:
+            return -abs(float(m.group(1)))
+        return -abs(float(trade.get('fee', 0.0) or 0.0))
+    return None
+
+
+def _init_protection_state(config, initial_equity):
+    enabled = bool(config.get('use_protections', False))
+    return {
+        'enabled': enabled,
+        'daily_date': None,
+        'daily_start_equity': float(initial_equity),
+        'daily_locked': False,
+        'daily_pnl_pct': 0.0,
+        'equity_peak': float(initial_equity),
+        'drawdown_from_peak_pct': 0.0,
+        'global_halt': False,
+        'entry_block_until_idx': -1,
+        'loss_streak': 0,
+        'stats': {
+            'daily_lock_count': 0,
+            'streak_lock_count': 0,
+            'global_halt_triggered': 0,
+            'blocked_bars': 0,
+            'max_loss_streak': 0,
+            'blocked_reason_counts': {},
+        },
+    }
+
+
+def _update_protection_risk_state(state, dt, equity, idx, config):
+    if not state.get('enabled', False):
+        return state
+
+    day = pd.Timestamp(dt).date().isoformat()
+    if state.get('daily_date') != day:
+        state['daily_date'] = day
+        state['daily_start_equity'] = float(equity)
+        state['daily_locked'] = False
+
+    daily_start = float(state.get('daily_start_equity', equity) or equity)
+    if daily_start > 0:
+        state['daily_pnl_pct'] = (float(equity) - daily_start) / daily_start
+    else:
+        state['daily_pnl_pct'] = 0.0
+
+    daily_limit = float(config.get('prot_daily_loss_limit_pct', 0.03))
+    if not state.get('daily_locked', False) and state['daily_pnl_pct'] <= -daily_limit:
+        state['daily_locked'] = True
+        state['stats']['daily_lock_count'] += 1
+
+    state['equity_peak'] = max(float(state.get('equity_peak', equity) or equity), float(equity))
+    peak = float(state['equity_peak']) if float(state['equity_peak']) > 0 else float(equity)
+    if peak > 0:
+        state['drawdown_from_peak_pct'] = (float(equity) - peak) / peak
+    else:
+        state['drawdown_from_peak_pct'] = 0.0
+
+    global_dd_limit = float(config.get('prot_global_dd_limit_pct', 0.12))
+    if (not state.get('global_halt', False)) and state['drawdown_from_peak_pct'] <= -global_dd_limit:
+        state['global_halt'] = True
+        state['stats']['global_halt_triggered'] += 1
+
+    return state
+
+
+def _apply_loss_streak_protection(state, pnl, idx, config):
+    if not state.get('enabled', False) or pnl is None:
+        return state
+
+    if float(pnl) < 0:
+        state['loss_streak'] = int(state.get('loss_streak', 0)) + 1
+    else:
+        state['loss_streak'] = 0
+
+    state['stats']['max_loss_streak'] = max(
+        int(state['stats'].get('max_loss_streak', 0)),
+        int(state['loss_streak']),
+    )
+
+    streak_limit = int(config.get('prot_loss_streak_limit', 3))
+    cooldown_bars = int(config.get('prot_loss_streak_cooldown_bars', 24))
+    if state['loss_streak'] >= streak_limit:
+        state['entry_block_until_idx'] = max(
+            int(state.get('entry_block_until_idx', -1)),
+            int(idx) + cooldown_bars,
+        )
+        state['stats']['streak_lock_count'] += 1
+        state['loss_streak'] = 0
+
+    return state
+
+
+def _protection_entry_allowed(state, idx):
+    if not state.get('enabled', False):
+        return True, None
+    if state.get('global_halt', False):
+        return False, 'global_halt'
+    if state.get('daily_locked', False):
+        return False, 'daily_loss_limit'
+    if int(idx) <= int(state.get('entry_block_until_idx', -1)):
+        return False, 'loss_streak_cooldown'
+    return True, None
+
+
+def _compute_regime_controls(primary_df, idx, config):
+    """
+    根据当前市场状态动态调整阈值与风险参数。
+    仅使用 <= idx 的历史数据, 防止未来函数。
+    """
+    base = {
+        'sell_threshold': float(config.get('sell_threshold', 18)),
+        'buy_threshold': float(config.get('buy_threshold', 25)),
+        'short_threshold': float(config.get('short_threshold', 25)),
+        'long_threshold': float(config.get('long_threshold', 40)),
+        'close_short_bs': float(config.get('close_short_bs', 40)),
+        'close_long_ss': float(config.get('close_long_ss', 40)),
+        'lev': int(config.get('lev', 5)),
+        'margin_use': float(config.get('margin_use', 0.70)),
+        'regime_label': 'static',
+    }
+    if not config.get('use_regime_aware', False):
+        return base
+
+    lookback = int(config.get('regime_lookback_bars', 48))
+    atr_bars = int(config.get('regime_atr_bars', 14))
+    if idx < max(20, lookback):
+        return base
+
+    start = max(0, idx - lookback + 1)
+    win = primary_df.iloc[start:idx + 1]
+    if len(win) < 20:
+        return base
+
+    close = win['close']
+    price = float(primary_df['close'].iloc[idx]) if idx < len(primary_df) else float(close.iloc[-1])
+    if price <= 0:
+        return base
+
+    returns = close.pct_change().dropna()
+    if len(returns) < 8:
+        return base
+    vol = float(returns.std())
+
+    # 价格趋势强度: 快慢均值差 / 当前价
+    ma_fast = float(close.tail(min(12, len(close))).mean())
+    ma_slow = float(close.tail(min(48, len(close))).mean())
+    trend = (ma_fast - ma_slow) / price
+    abs_trend = abs(trend)
+
+    # ATR 百分比
+    atr_start = max(0, idx - atr_bars)
+    h = primary_df['high'].iloc[atr_start:idx + 1]
+    l = primary_df['low'].iloc[atr_start:idx + 1]
+    c_prev = primary_df['close'].shift(1).iloc[atr_start:idx + 1]
+    min_len = min(len(h), len(l), len(c_prev))
+    atr_pct = 0.0
+    if min_len > 2:
+        tr = pd.Series(
+            [
+                max(hi - lo, abs(hi - cp), abs(lo - cp))
+                for hi, lo, cp in zip(h.tail(min_len), l.tail(min_len), c_prev.tail(min_len))
+            ]
+        )
+        atr_pct = float(tr.mean() / price) if price > 0 else 0.0
+
+    vol_high = float(config.get('regime_vol_high', 0.020))
+    vol_low = float(config.get('regime_vol_low', 0.007))
+    trend_strong = float(config.get('regime_trend_strong', 0.015))
+    trend_weak = float(config.get('regime_trend_weak', 0.006))
+    atr_high = float(config.get('regime_atr_high', 0.018))
+
+    high_vol = vol >= vol_high or atr_pct >= atr_high
+    low_vol = vol <= vol_low and atr_pct <= atr_high * 0.7
+    strong_trend = abs_trend >= trend_strong
+    weak_trend = abs_trend <= trend_weak
+
+    short_mult = 1.0
+    long_mult = 1.0
+    close_mult = 1.0
+    risk_mult = 1.0
+    regime_label = 'neutral'
+
+    # 波动大且趋势弱: 提高入场门槛 + 降杠杆 + 提前退出
+    if high_vol and weak_trend:
+        short_mult *= 1.22
+        long_mult *= 1.22
+        close_mult *= 0.90
+        risk_mult *= 0.58
+        regime_label = 'high_vol_choppy'
+    elif high_vol:
+        short_mult *= 1.12
+        long_mult *= 1.12
+        close_mult *= 0.95
+        risk_mult *= 0.75
+        regime_label = 'high_vol'
+    elif low_vol and strong_trend:
+        short_mult *= 0.95
+        long_mult *= 0.95
+        close_mult *= 1.05
+        regime_label = 'low_vol_trend'
+    elif strong_trend:
+        short_mult *= 0.98
+        long_mult *= 0.98
+        regime_label = 'trend'
+
+    # 趋势方向倾斜: 顺势更易进场, 逆势更难
+    if trend >= trend_weak:
+        long_mult *= 0.88
+        short_mult *= 1.10
+    elif trend <= -trend_weak:
+        short_mult *= 0.88
+        long_mult *= 1.10
+
+    def _clip(v, base_v, lo=0.75, hi=1.45):
+        return float(np.clip(v, base_v * lo, base_v * hi))
+
+    short_threshold = _clip(base['short_threshold'] * short_mult, base['short_threshold'])
+    long_threshold = _clip(base['long_threshold'] * long_mult, base['long_threshold'])
+    sell_threshold = _clip(base['sell_threshold'] * short_mult, base['sell_threshold'], lo=0.80, hi=1.40)
+    buy_threshold = _clip(base['buy_threshold'] * long_mult, base['buy_threshold'], lo=0.80, hi=1.40)
+    close_short_bs = _clip(base['close_short_bs'] * close_mult, base['close_short_bs'], lo=0.75, hi=1.25)
+    close_long_ss = _clip(base['close_long_ss'] * close_mult, base['close_long_ss'], lo=0.75, hi=1.25)
+
+    lev = int(max(1, min(base['lev'], round(base['lev'] * risk_mult))))
+    margin_use = float(np.clip(base['margin_use'] * risk_mult, 0.10, base['margin_use']))
+
+    return {
+        'sell_threshold': sell_threshold,
+        'buy_threshold': buy_threshold,
+        'short_threshold': short_threshold,
+        'long_threshold': long_threshold,
+        'close_short_bs': close_short_bs,
+        'close_long_ss': close_long_ss,
+        'lev': lev,
+        'margin_use': margin_use,
+        'regime_label': regime_label,
+        'regime_metrics': {
+            'vol': vol,
+            'atr_pct': atr_pct,
+            'trend': trend,
+            'high_vol': high_vol,
+            'strong_trend': strong_trend,
+        },
+    }
+
+
 # ======================================================
 #   通用回测引擎(六书版)
 # ======================================================
-def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provider):
+def _run_strategy_core(
+    primary_df,
+    config,
+    primary_tf,
+    trade_days,
+    score_provider,
+    trade_start_dt=None,
+    trade_end_dt=None,
+):
     """统一交易执行循环: 单TF/多TF共用。"""
     eng = FuturesEngine(config.get('name', 'opt'), max_leverage=config.get('max_lev', 5))
 
-    start_dt = None
-    # 始终按 trade_days 截窗。此前 trade_days==60 不截窗会夸大 60 天回测收益。
-    if trade_days and trade_days > 0:
+    def _norm_ts(ts):
+        if ts is None:
+            return None
+        v = pd.Timestamp(ts)
+        if v.tz is not None:
+            v = v.tz_localize(None)
+        return v
+
+    start_dt = _norm_ts(trade_start_dt)
+    end_dt = _norm_ts(trade_end_dt)
+    # 未显式指定起始时间时，按 trade_days 截窗。
+    if start_dt is None and trade_days and trade_days > 0:
         start_dt = primary_df.index[-1] - pd.Timedelta(days=trade_days)
 
     init_idx = 0
@@ -161,9 +450,14 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
     pending_ss = 0.0
     pending_bs = 0.0
     has_pending_signal = False
+    prot_state = _init_protection_state(config, eng.total_value(primary_df['close'].iloc[init_idx]))
+    global_halt_closed = False
+    trade_cursor = 0
 
     for idx in range(warmup, len(primary_df)):
         dt = primary_df.index[idx]
+        if end_dt is not None and dt > end_dt:
+            break
         price = primary_df['close'].iloc[idx]
         # 交易执行价 = 当前 bar 的 open (模拟"收到上根信号后在下根开盘执行")
         exec_price = primary_df['open'].iloc[idx]
@@ -208,6 +502,28 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
         if short_cd > 0: short_cd -= 1
         if long_cd > 0: long_cd -= 1
         if spot_cd > 0: spot_cd -= 1
+
+        # 组合层风控: 日内亏损预算 + 全局回撤停机 + 连亏冷却
+        _update_protection_risk_state(prot_state, dt, eng.total_value(price), idx, config)
+        if (
+            prot_state.get('enabled', False)
+            and prot_state.get('global_halt', False)
+            and not global_halt_closed
+            and config.get('prot_close_on_global_halt', True)
+        ):
+            if eng.futures_short:
+                eng.close_short(exec_price, dt, "全局停机平空")
+                short_bars = 0
+            if eng.futures_long:
+                eng.close_long(exec_price, dt, "全局停机平多")
+                long_bars = 0
+            global_halt_closed = True
+
+        can_open_risk, blocked_reason = _protection_entry_allowed(prot_state, idx)
+        if prot_state.get('enabled', False) and not can_open_risk:
+            prot_state['stats']['blocked_bars'] += 1
+            brc = prot_state['stats'].setdefault('blocked_reason_counts', {})
+            brc[blocked_reason] = int(brc.get(blocked_reason, 0)) + 1
 
         # ── 使用上一根 bar 的信号做决策 (消除 same-bar bias) ──
         # 如果还没有 pending 信号(第一根交易bar), 使用前一根 bar 的信号
@@ -256,16 +572,27 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                     actual_short_tp = short_tp * 0.7
                     actual_long_tp = long_tp * 0.7
 
+        # Regime-aware 动态阈值与风险控制 (仅使用历史数据)
+        regime_ctl = _compute_regime_controls(primary_df, idx, config)
+        cur_sell_threshold = float(regime_ctl['sell_threshold'])
+        cur_buy_threshold = float(regime_ctl['buy_threshold'])
+        cur_short_threshold = float(regime_ctl['short_threshold'])
+        cur_long_threshold = float(regime_ctl['long_threshold'])
+        cur_close_short_bs = float(regime_ctl['close_short_bs'])
+        cur_close_long_ss = float(regime_ctl['close_long_ss'])
+        cur_lev = int(regime_ctl['lev'])
+        cur_margin_use = float(regime_ctl['margin_use'])
+
         # 卖出现货 (用 exec_price 执行, 即本bar open)
-        if ss >= sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500:
+        if ss >= cur_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500:
             eng.spot_sell(exec_price, dt, sell_pct, f"卖出 SS={ss:.0f}")
             spot_cd = spot_cooldown
 
         # 开空 (用 exec_price 执行, 即本bar open)
         sell_dom = (ss > bs * 1.5) if bs > 0 else True
-        if short_cd == 0 and ss >= short_threshold and not eng.futures_short and sell_dom:
-            margin = eng.available_margin() * margin_use
-            actual_lev = min(lev if ss >= 50 else min(lev, 3) if ss >= 35 else 2, eng.max_leverage)
+        if short_cd == 0 and ss >= cur_short_threshold and not eng.futures_short and sell_dom and can_open_risk:
+            margin = eng.available_margin() * cur_margin_use
+            actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
             eng.open_short(exec_price, dt, margin, actual_lev, f"开空 {actual_lev}x")
             short_max_pnl = 0; short_bars = 0; short_cd = cooldown
             short_just_opened = True; short_partial_done = False; short_partial2_done = False
@@ -281,6 +608,7 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                 partial_qty = old_qty * partial_tp_1_pct
                 actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)  # 空头平仓买入, 价格偏高
                 partial_pnl = (eng.futures_short.entry_price - actual_close_p) * partial_qty
+                _entry_p = eng.futures_short.entry_price
                 margin_released = eng.futures_short.margin * partial_tp_1_pct
                 eng.usdt += margin_released + partial_pnl
                 eng.frozen_margin -= margin_released  # 修复: 释放冻结保证金
@@ -291,8 +619,13 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                 eng.futures_short.quantity = old_qty - partial_qty
                 eng.futures_short.margin *= (1 - partial_tp_1_pct)
                 short_partial_done = True
-                eng.trades.append({'time': str(dt), 'action': '分段止盈空',
-                    'price': price, 'pnl': partial_pnl, 'reason': f'分段TP1 +{pnl_r*100:.0f}%'})
+                eng._record_trade(dt, price, 'PARTIAL_TP', 'short', partial_qty,
+                    partial_qty * actual_close_p, fee,
+                    eng.futures_short.leverage if eng.futures_short else 0,
+                    f'分段TP1空 +{pnl_r*100:.0f}%',
+                    exec_price=actual_close_p, slippage_cost=slippage_cost,
+                    pnl=partial_pnl, entry_price=_entry_p,
+                    margin_released=margin_released, partial_ratio=partial_tp_1_pct)
 
             # 二段止盈 (含滑点 + 修复frozen_margin泄漏, 使用elif避免同bar双触发)
             elif use_partial_tp_2 and short_partial_done and not short_partial2_done and pnl_r >= partial_tp_2:
@@ -300,6 +633,7 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                 partial_qty = old_qty * partial_tp_2_pct
                 actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)
                 partial_pnl = (eng.futures_short.entry_price - actual_close_p) * partial_qty
+                _entry_p = eng.futures_short.entry_price
                 margin_released = eng.futures_short.margin * partial_tp_2_pct
                 eng.usdt += margin_released + partial_pnl
                 eng.frozen_margin -= margin_released
@@ -310,8 +644,13 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                 eng.futures_short.quantity = old_qty - partial_qty
                 eng.futures_short.margin *= (1 - partial_tp_2_pct)
                 short_partial2_done = True
-                eng.trades.append({'time': str(dt), 'action': '分段止盈空2',
-                    'price': price, 'pnl': partial_pnl, 'reason': f'分段TP2 +{pnl_r*100:.0f}%'})
+                eng._record_trade(dt, price, 'PARTIAL_TP', 'short', partial_qty,
+                    partial_qty * actual_close_p, fee,
+                    eng.futures_short.leverage if eng.futures_short else 0,
+                    f'分段TP2空 +{pnl_r*100:.0f}%',
+                    exec_price=actual_close_p, slippage_cost=slippage_cost,
+                    pnl=partial_pnl, entry_price=_entry_p,
+                    margin_released=margin_released, partial_ratio=partial_tp_2_pct)
 
             if pnl_r >= actual_short_tp:
                 eng.close_short(price, dt, f"止盈 +{pnl_r*100:.0f}%")
@@ -322,30 +661,32 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                     if pnl_r < short_max_pnl * trail_pullback:
                         eng.close_short(price, dt, "追踪止盈")
                         short_max_pnl = 0; short_cd = cooldown; short_bars = 0
-                if eng.futures_short and bs >= config.get('close_short_bs', 40):
+                if eng.futures_short and bs >= cur_close_short_bs:
                     bs_dom = (ss < bs * 0.7) if bs > 0 else True
                     if bs_dom:
-                        eng.close_short(price, dt, f"反向平空 BS={bs:.0f}")
+                        # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
+                        eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}")
                         short_max_pnl = 0; short_cd = cooldown * 3; short_bars = 0
                 if eng.futures_short and pnl_r < actual_short_sl:
                     eng.close_short(price, dt, f"止损 {pnl_r*100:.0f}%")
                     short_max_pnl = 0; short_cd = cooldown * 4; short_bars = 0
                 if eng.futures_short and short_bars >= short_max_hold:
-                    eng.close_short(price, dt, "超时")
+                    # 超时平仓为主观决策, 用 exec_price
+                    eng.close_short(exec_price, dt, "超时")
                     short_max_pnl = 0; short_cd = cooldown; short_bars = 0
         elif eng.futures_short and short_just_opened:
             short_bars = 1
 
         # 买入现货 (用 exec_price 执行, 即本bar open)
-        if bs >= buy_threshold and spot_cd == 0 and not in_conflict and eng.available_usdt() > 500:
+        if bs >= cur_buy_threshold and spot_cd == 0 and not in_conflict and eng.available_usdt() > 500 and can_open_risk:
             eng.spot_buy(exec_price, dt, eng.available_usdt() * 0.25, f"买入 BS={bs:.0f}")
             spot_cd = spot_cooldown
 
         # 开多 (用 exec_price 执行, 即本bar open)
         buy_dom = (bs > ss * 1.5) if ss > 0 else True
-        if long_cd == 0 and bs >= long_threshold and not eng.futures_long and buy_dom:
-            margin = eng.available_margin() * margin_use
-            actual_lev = min(lev if bs >= 50 else min(lev, 3) if bs >= 35 else 2, eng.max_leverage)
+        if long_cd == 0 and bs >= cur_long_threshold and not eng.futures_long and buy_dom and can_open_risk:
+            margin = eng.available_margin() * cur_margin_use
+            actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
             eng.open_long(exec_price, dt, margin, actual_lev, f"开多 {actual_lev}x")
             long_max_pnl = 0; long_bars = 0; long_cd = cooldown
             long_just_opened = True; long_partial_done = False; long_partial2_done = False
@@ -361,6 +702,7 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                 partial_qty = old_qty * partial_tp_1_pct
                 actual_close_p = price * (1 - FuturesEngine.SLIPPAGE)  # 多头平仓卖出, 价格偏低
                 partial_pnl = (actual_close_p - eng.futures_long.entry_price) * partial_qty
+                _entry_p = eng.futures_long.entry_price
                 margin_released = eng.futures_long.margin * partial_tp_1_pct
                 eng.usdt += margin_released + partial_pnl
                 eng.frozen_margin -= margin_released  # 修复: 释放冻结保证金
@@ -371,8 +713,13 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                 eng.futures_long.quantity = old_qty - partial_qty
                 eng.futures_long.margin *= (1 - partial_tp_1_pct)
                 long_partial_done = True
-                eng.trades.append({'time': str(dt), 'action': '分段止盈多',
-                    'price': price, 'pnl': partial_pnl, 'reason': f'分段TP1 +{pnl_r*100:.0f}%'})
+                eng._record_trade(dt, price, 'PARTIAL_TP', 'long', partial_qty,
+                    partial_qty * actual_close_p, fee,
+                    eng.futures_long.leverage if eng.futures_long else 0,
+                    f'分段TP1多 +{pnl_r*100:.0f}%',
+                    exec_price=actual_close_p, slippage_cost=slippage_cost,
+                    pnl=partial_pnl, entry_price=_entry_p,
+                    margin_released=margin_released, partial_ratio=partial_tp_1_pct)
 
             # 二段止盈 (含滑点 + 修复frozen_margin泄漏, 使用elif避免同bar双触发)
             elif use_partial_tp_2 and long_partial_done and not long_partial2_done and pnl_r >= partial_tp_2:
@@ -380,6 +727,7 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                 partial_qty = old_qty * partial_tp_2_pct
                 actual_close_p = price * (1 - FuturesEngine.SLIPPAGE)
                 partial_pnl = (actual_close_p - eng.futures_long.entry_price) * partial_qty
+                _entry_p = eng.futures_long.entry_price
                 margin_released = eng.futures_long.margin * partial_tp_2_pct
                 eng.usdt += margin_released + partial_pnl
                 eng.frozen_margin -= margin_released
@@ -390,8 +738,13 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                 eng.futures_long.quantity = old_qty - partial_qty
                 eng.futures_long.margin *= (1 - partial_tp_2_pct)
                 long_partial2_done = True
-                eng.trades.append({'time': str(dt), 'action': '分段止盈多2',
-                    'price': price, 'pnl': partial_pnl, 'reason': f'分段TP2 +{pnl_r*100:.0f}%'})
+                eng._record_trade(dt, price, 'PARTIAL_TP', 'long', partial_qty,
+                    partial_qty * actual_close_p, fee,
+                    eng.futures_long.leverage if eng.futures_long else 0,
+                    f'分段TP2多 +{pnl_r*100:.0f}%',
+                    exec_price=actual_close_p, slippage_cost=slippage_cost,
+                    pnl=partial_pnl, entry_price=_entry_p,
+                    margin_released=margin_released, partial_ratio=partial_tp_2_pct)
 
             if pnl_r >= actual_long_tp:
                 eng.close_long(price, dt, f"止盈 +{pnl_r*100:.0f}%")
@@ -402,19 +755,28 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
                     if pnl_r < long_max_pnl * trail_pullback:
                         eng.close_long(price, dt, "追踪止盈")
                         long_max_pnl = 0; long_cd = cooldown; long_bars = 0
-                if eng.futures_long and ss >= config.get('close_long_ss', 40):
+                if eng.futures_long and ss >= cur_close_long_ss:
                     ss_dom = (bs < ss * 0.7) if bs > 0 else True
                     if ss_dom:
-                        eng.close_long(price, dt, f"反向平多 SS={ss:.0f}")
+                        # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
+                        eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}")
                         long_max_pnl = 0; long_cd = cooldown * 3; long_bars = 0
                 if eng.futures_long and pnl_r < actual_long_sl:
                     eng.close_long(price, dt, f"止损 {pnl_r*100:.0f}%")
                     long_max_pnl = 0; long_cd = cooldown * 4; long_bars = 0
                 if eng.futures_long and long_bars >= long_max_hold:
-                    eng.close_long(price, dt, "超时")
+                    # 超时平仓为主观决策, 用 exec_price
+                    eng.close_long(exec_price, dt, "超时")
                     long_max_pnl = 0; long_cd = cooldown; long_bars = 0
         elif eng.futures_long and long_just_opened:
             long_bars = 1
+
+        if len(eng.trades) > trade_cursor:
+            if prot_state.get('enabled', False):
+                for tr in eng.trades[trade_cursor:]:
+                    pnl = _extract_realized_pnl_from_trade(tr)
+                    _apply_loss_streak_protection(prot_state, pnl, idx, config)
+            trade_cursor = len(eng.trades)
 
         if idx % record_interval == 0:
             eng.record_history(dt, price)
@@ -423,28 +785,76 @@ def _run_strategy_core(primary_df, config, primary_tf, trade_days, score_provide
         pending_ss, pending_bs = score_provider(idx, dt, price)
         has_pending_signal = True
 
-    # 期末平仓
-    last_price = primary_df['close'].iloc[-1]
-    last_dt = primary_df.index[-1]
+    # 期末平仓: 若指定 end_dt，则在 end_dt 所在窗口结束价结算。
+    settle_df = primary_df
+    if end_dt is not None:
+        settle_df = primary_df[primary_df.index <= end_dt]
+        if len(settle_df) == 0:
+            settle_df = primary_df.iloc[[0]]
+    last_price = settle_df['close'].iloc[-1]
+    last_dt = settle_df.index[-1]
     if eng.futures_short:
         eng.close_short(last_price, last_dt, "期末平仓")
     if eng.futures_long:
         eng.close_long(last_price, last_dt, "期末平仓")
 
-    if start_dt:
-        trade_df = primary_df[primary_df.index >= start_dt]
-        if len(trade_df) > 1:
-            return eng.get_result(trade_df)
-    return eng.get_result(primary_df)
+    trade_df = primary_df
+    if start_dt is not None:
+        trade_df = trade_df[trade_df.index >= start_dt]
+    if end_dt is not None:
+        trade_df = trade_df[trade_df.index <= end_dt]
+
+    if len(trade_df) > 1:
+        result = eng.get_result(trade_df)
+        if prot_state.get('enabled', False):
+            result['protections'] = {
+                **prot_state.get('stats', {}),
+                'daily_locked': bool(prot_state.get('daily_locked', False)),
+                'global_halt': bool(prot_state.get('global_halt', False)),
+                'loss_streak': int(prot_state.get('loss_streak', 0)),
+                'entry_block_until_idx': int(prot_state.get('entry_block_until_idx', -1)),
+                'daily_pnl_pct': round(float(prot_state.get('daily_pnl_pct', 0.0)) * 100, 2),
+                'drawdown_from_peak_pct': round(float(prot_state.get('drawdown_from_peak_pct', 0.0)) * 100, 2),
+            }
+        return result
+
+    result = eng.get_result(primary_df)
+    if prot_state.get('enabled', False):
+        result['protections'] = {
+            **prot_state.get('stats', {}),
+            'daily_locked': bool(prot_state.get('daily_locked', False)),
+            'global_halt': bool(prot_state.get('global_halt', False)),
+            'loss_streak': int(prot_state.get('loss_streak', 0)),
+            'entry_block_until_idx': int(prot_state.get('entry_block_until_idx', -1)),
+            'daily_pnl_pct': round(float(prot_state.get('daily_pnl_pct', 0.0)) * 100, 2),
+            'drawdown_from_peak_pct': round(float(prot_state.get('drawdown_from_peak_pct', 0.0)) * 100, 2),
+        }
+    return result
 
 
-def run_strategy(df, signals, config, tf='1h', trade_days=30):
+def run_strategy(
+    df,
+    signals,
+    config,
+    tf='1h',
+    trade_days=30,
+    trade_start_dt=None,
+    trade_end_dt=None,
+):
     """在指定时间框架上运行六书策略回测。"""
 
     def _single_tf_score(idx, dt, _price):
         return calc_fusion_score_six(signals, df, idx, dt, config)
 
-    return _run_strategy_core(df, config, tf, trade_days, _single_tf_score)
+    return _run_strategy_core(
+        df,
+        config,
+        tf,
+        trade_days,
+        _single_tf_score,
+        trade_start_dt=trade_start_dt,
+        trade_end_dt=trade_end_dt,
+    )
 
 
 # ======================================================
@@ -568,8 +978,16 @@ def _apply_live_parity_gate(ss, bs, meta, config):
     return max(float(ss), short_threshold), 0.0
 
 
-def run_strategy_multi_tf(primary_df, tf_score_map, decision_tfs, config,
-                          primary_tf='1h', trade_days=30):
+def run_strategy_multi_tf(
+    primary_df,
+    tf_score_map,
+    decision_tfs,
+    config,
+    primary_tf='1h',
+    trade_days=30,
+    trade_start_dt=None,
+    trade_end_dt=None,
+):
     """多周期联合决策回测引擎。"""
 
     def _multi_tf_score(_idx, dt, _price):
@@ -583,6 +1001,8 @@ def run_strategy_multi_tf(primary_df, tf_score_map, decision_tfs, config,
         primary_tf=primary_tf,
         trade_days=trade_days,
         score_provider=_multi_tf_score,
+        trade_start_dt=trade_start_dt,
+        trade_end_dt=trade_end_dt,
     )
 
 

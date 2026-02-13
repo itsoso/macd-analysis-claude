@@ -133,6 +133,13 @@ def register_page_routes(app):
             active_page='multi-tf-backtest-30d-7d',
         )
 
+    @app.route('/strategy/multi-tf-date-range-report')
+    def page_multi_tf_date_range_report():
+        return render_template(
+            'page_multi_tf_date_range_report.html',
+            active_page='multi-tf-date-range-report',
+        )
+
     @app.route('/strategy/six-book-deep-dive')
     def page_six_book_deep_dive():
         return render_template('page_six_book_deep_dive.html', active_page='six-book-deep-dive')
@@ -152,3 +159,15 @@ def register_page_routes(app):
     @app.route('/strategy/backtest')
     def page_backtest():
         return render_template('page_backtest.html', active_page='backtest')
+
+    @app.route('/strategy/naked-kline')
+    def page_naked_kline():
+        return render_template('page_naked_kline.html', active_page='naked-kline')
+
+    @app.route('/strategy/naked-kline-daily')
+    def page_naked_kline_daily():
+        return render_template('page_naked_kline_daily.html', active_page='naked-kline-daily')
+
+    @app.route('/strategy/multi-tf-daily')
+    def page_multi_tf_daily():
+        return render_template('page_multi_tf_daily.html', active_page='multi-tf-daily')

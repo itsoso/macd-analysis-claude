@@ -71,27 +71,34 @@ class TestFuturesPosition:
 
     def test_liquidation_long(self):
         pos = FuturesPosition('long', 2000, 1, 5, 400)
-        # margin=400, 维持保证金=400*0.05=20, 强平条件: margin+pnl < 20
-        # pnl = (price-2000)*1, 需 400 + (p-2000) < 20 → p < 1620
-        assert pos.is_liquidated(1619)
-        assert not pos.is_liquidated(1621)
+        # 修正: 维持保证金 = notional * 0.05 = qty * price * 0.05
+        # 强平条件: margin + pnl < qty * price * 0.05
+        # 400 + (p - 2000) * 1 < 1 * p * 0.05
+        # 400 + p - 2000 < 0.05p  →  0.95p < 1600  →  p < 1684.21
+        assert pos.is_liquidated(1680)
+        assert not pos.is_liquidated(1690)
 
     def test_liquidation_short(self):
         pos = FuturesPosition('short', 2000, 1, 5, 400)
-        # pnl = (2000-price)*1, 需 400 + (2000-p) < 20 → p > 2380
-        assert pos.is_liquidated(2381)
-        assert not pos.is_liquidated(2379)
+        # 维持保证金 = qty * price * 0.05
+        # 400 + (2000 - p) * 1 < 1 * p * 0.05
+        # 2400 - p < 0.05p  →  2400 < 1.05p  →  p > 2285.71
+        assert pos.is_liquidated(2290)
+        assert not pos.is_liquidated(2280)
 
     def test_liquidation_price_long(self):
         pos = FuturesPosition('long', 2000, 1, 5, 400)
         liq_p = pos.liquidation_price()
-        # loss_limit = 400 * 0.95 = 380, liq = 2000 - 380/1 = 1620
-        assert liq_p == pytest.approx(1620, rel=1e-6)
+        # P = (qty*entry - margin) / (qty*(1-mr))
+        # P = (1*2000 - 400) / (1*(1-0.05)) = 1600/0.95 ≈ 1684.21
+        assert liq_p == pytest.approx(1684.2105, rel=1e-4)
 
     def test_liquidation_price_short(self):
         pos = FuturesPosition('short', 2000, 1, 5, 400)
         liq_p = pos.liquidation_price()
-        assert liq_p == pytest.approx(2380, rel=1e-6)
+        # P = (qty*entry + margin) / (qty*(1+mr))
+        # P = (1*2000 + 400) / (1*(1+0.05)) = 2400/1.05 ≈ 2285.71
+        assert liq_p == pytest.approx(2285.7143, rel=1e-4)
 
 
 # ======================================================

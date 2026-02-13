@@ -123,8 +123,12 @@ function render(data) {
     const fm = data.fee_model || {};
     const bc = data.base_config || {};
     const baselines = data.single_tf_baselines || {};
+    const realism = data.realism || {};
     const runMeta = data.run_meta || {};
     const recentRuns = data.recent_runs || [];
+    const wf = data.walk_forward || {};
+    const wfRankings = wf.rankings || [];
+    const wfWindows = wf.windows || [];
 
     const root = document.getElementById('root');
     root.innerHTML = '';
@@ -150,6 +154,9 @@ function render(data) {
                 <span class="badge-item">滑点 ${fm.slippage||'0.1%'}</span>
                 ${runMeta.runner ? `<span class="badge-item">来源: ${runMeta.runner}</span>` : ''}
                 ${runMeta.host ? `<span class="badge-item">主机: ${runMeta.host}</span>` : ''}
+                ${realism.regime_aware ? `<span class="badge-item">Regime-aware: ON</span>` : ''}
+                ${realism.protections ? `<span class="badge-item">Protections: ON</span>` : ''}
+                ${wf.enabled ? `<span class="badge-item">WF: ${wf.windows_built || 0}窗 (${wf.train_days||90}D/${wf.test_days||7}D)</span>` : ''}
                 <span class="badge-item">${data.run_time ? new Date(data.run_time).toLocaleString('zh-CN') : ''}</span>
             </div>
         </div>
@@ -220,6 +227,42 @@ function render(data) {
         });
         runHtml += '</tbody></table></div>';
         root.innerHTML += runHtml;
+    }
+
+    if (wfRankings.length) {
+        let wfHtml = `<div class="sec-title"><span class="icon">🧪</span> Walk-Forward 稳健榜</div>`;
+        wfHtml += '<div style="overflow-x:auto"><table class="dt"><thead><tr>';
+        wfHtml += '<th>#</th><th>组合</th><th>决策TFs</th><th class="center">命中窗口</th><th class="center">Avg Alpha</th><th class="center">Min Alpha</th><th class="center">Avg 回撤</th><th class="center">胜率</th><th class="center">稳健分</th>';
+        wfHtml += '</tr></thead><tbody>';
+        wfRankings.slice(0, 10).forEach((r, idx) => {
+            const tfs = (r.decision_tfs || []).join(', ');
+            wfHtml += `<tr ${idx === 0 ? 'class="gold"' : ''}>
+                <td>${idx + 1}</td>
+                <td><strong>${r.combo || '-'}</strong></td>
+                <td style="font-size:0.75rem;color:var(--text-muted)">${tfs}</td>
+                <td class="center">${r.windows || 0}</td>
+                <td class="center ${num(r.avg_alpha)>=0?'pos':'neg'}">${fv(r.avg_alpha)}%</td>
+                <td class="center ${num(r.min_alpha)>=0?'pos':'neg'}">${fv(r.min_alpha)}%</td>
+                <td class="center neg">${num(r.avg_mdd).toFixed(2)}%</td>
+                <td class="center">${(num(r.win_rate) * 100).toFixed(1)}%</td>
+                <td class="center ${num(r.robust_score)>=0?'pos':'neg'}">${num(r.robust_score).toFixed(2)}</td>
+            </tr>`;
+        });
+        wfHtml += '</tbody></table></div>';
+
+        if (wfWindows.length) {
+            const windowLines = wfWindows.map(w => {
+                const st = w.test_start ? new Date(w.test_start).toLocaleDateString('zh-CN') : '-';
+                const et = w.test_end ? new Date(w.test_end).toLocaleDateString('zh-CN') : '-';
+                const top = w.top_combo ? `${w.top_combo.combo} (${fv(w.top_combo.alpha)}%)` : '-';
+                return `<li><strong>${w.window_id}</strong>: ${st} ~ ${et} · TOP ${top}</li>`;
+            }).join('');
+            wfHtml += `<div class="insight-box" style="margin-top:12px;">
+                <h4>窗口记录</h4>
+                <ul>${windowLines}</ul>
+            </div>`;
+        }
+        root.innerHTML += wfHtml;
     }
 
     // ── Single TF Baselines ──
@@ -409,6 +452,7 @@ function render(data) {
     }).sort((a, b) => b.minAlpha - a.minAlpha);
 
     const bestStable = stableRows[0];
+    const bestWf = wfRankings[0];
     const avgDecay = num(s60.avg_alpha) - num(s7.avg_alpha);
     const bestDecay = num(s60.best_alpha) - num(s7.best_alpha);
     const regimeHint = avgDecay > 80
@@ -429,11 +473,90 @@ function render(data) {
                         ? `在三窗口都进入 TOP5 的最佳组合是 <code>${bestStable.key}</code>，Alpha 为 ${fv(bestStable.a60)}% / ${fv(bestStable.a30)}% / ${fv(bestStable.a7)}%。`
                         : '当前没有组合同时进入 60/30/7 三窗口 TOP5，建议优先筛选 30天和7天都为正且回撤更小的组合。'
                 }</li>
+                <li><strong>WF稳健榜</strong>: ${
+                    bestWf
+                        ? `滚动验证第一名为 <code>${bestWf.combo}</code>，Avg Alpha=${fv(bestWf.avg_alpha)}%，Min Alpha=${fv(bestWf.min_alpha)}%，胜率 ${(num(bestWf.win_rate) * 100).toFixed(1)}%。`
+                        : '未生成 walk-forward 结果（可能已禁用或历史数据不足）。'
+                }</li>
                 <li><strong>相对单TF</strong>: 大多数组合的 <code>vs单TF</code> 为正，说明多周期门控在当前样本中提升了同主TF下的超额收益。</li>
                 <li><strong>实盘建议</strong>: 若偏稳健，优先考虑 30天和7天同为正且回撤更小的组合；若偏趋势，参考 60天领先组合并加严仓位与止损约束。</li>
             </ul>
         </div>
     `;
+
+    // ── 交易明细（TOP1 组合的完整交易记录）──
+    const tradeDetailPeriods = [
+        { label: '60天', results: r60 },
+        { label: '30天', results: r30 },
+        { label: '7天', results: r7 },
+    ];
+    let tdHtml = `<div class="sec-title"><span class="icon">📋</span> TOP 组合交易明细（人工 Review）</div>`;
+    tdHtml += '<div style="margin-bottom:12px;color:var(--text-muted);font-size:0.8rem">仅展示各窗口 TOP1 组合的全量交易记录，含时间、价格、数量、费用、PnL、仓位快照等。</div>';
+
+    tradeDetailPeriods.forEach(p => {
+        const top = p.results[0];
+        if (!top || !top.trade_details || !top.trade_details.length) return;
+        const trades = top.trade_details;
+        const comboKey = `${top.combo_name}@${top.primary_tf}`;
+        tdHtml += `<details style="margin-bottom:18px;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">`;
+        tdHtml += `<summary style="cursor:pointer;font-weight:600;font-size:0.95rem;">📊 ${p.label} · ${comboKey} — ${trades.length} 笔交易 (α=${fv(top.alpha)}%)</summary>`;
+        tdHtml += `<div style="overflow-x:auto;margin-top:12px;">`;
+        tdHtml += `<table class="dt" style="font-size:0.72rem;white-space:nowrap;">`;
+        tdHtml += `<thead><tr>
+            <th>#</th><th>时间</th><th>操作</th><th>方向</th>
+            <th class="center">市场价</th><th class="center">成交价</th>
+            <th class="center">数量</th><th class="center">名义价值</th>
+            <th class="center">保证金</th><th class="center">杠杆</th>
+            <th class="center">手续费</th><th class="center">滑点</th>
+            <th class="center">PnL</th><th class="center">入场价</th>
+            <th class="center">账户总值</th><th class="center">可用USDT</th>
+            <th>原因</th>
+        </tr></thead><tbody>`;
+        trades.forEach((t, i) => {
+            const actionCls = {
+                'OPEN_SHORT': 'neg', 'OPEN_LONG': 'pos',
+                'CLOSE_SHORT': 'pos', 'CLOSE_LONG': 'neg',
+                'SPOT_BUY': 'pos', 'SPOT_SELL': 'neg',
+                'PARTIAL_TP': 'pos', 'LIQUIDATED': 'neg',
+            }[t.action] || '';
+            const pnlCls = (t.pnl || 0) >= 0 ? 'pos' : 'neg';
+            const timeStr = t.time ? t.time.replace('T', ' ').slice(0, 19) : '-';
+            const n = v => v != null ? Number(v) : 0;
+            tdHtml += `<tr>
+                <td>${i + 1}</td>
+                <td>${timeStr}</td>
+                <td class="${actionCls}" style="font-weight:600">${t.action || '-'}</td>
+                <td>${t.direction || '-'}</td>
+                <td class="center">${n(t.market_price).toFixed(2)}</td>
+                <td class="center">${n(t.exec_price).toFixed(2)}</td>
+                <td class="center">${n(t.quantity).toFixed(4)}</td>
+                <td class="center">${n(t.notional_value).toFixed(0)}</td>
+                <td class="center">${t.margin ? n(t.margin).toFixed(0) : '-'}</td>
+                <td class="center">${t.leverage || '-'}x</td>
+                <td class="center">${n(t.fee).toFixed(2)}</td>
+                <td class="center">${n(t.slippage_cost).toFixed(2)}</td>
+                <td class="center ${pnlCls}">${t.pnl != null ? n(t.pnl).toFixed(0) : '-'}</td>
+                <td class="center">${t.entry_price ? n(t.entry_price).toFixed(2) : '-'}</td>
+                <td class="center">${n(t.after_total).toFixed(0)}</td>
+                <td class="center">${n(t.after_available).toFixed(0)}</td>
+                <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${t.reason||''}">${t.reason || '-'}</td>
+            </tr>`;
+        });
+        tdHtml += '</tbody></table></div>';
+        // 交易汇总
+        const opens = trades.filter(t => t.action && t.action.startsWith('OPEN'));
+        const closes = trades.filter(t => t.action && (t.action.startsWith('CLOSE') || t.action === 'PARTIAL_TP'));
+        const totalFees = trades.reduce((s, t) => s + (t.fee || 0) + (t.slippage_cost || 0), 0);
+        const totalPnl = closes.reduce((s, t) => s + (t.pnl || 0), 0);
+        const wins = closes.filter(t => (t.pnl || 0) > 0).length;
+        const losses = closes.filter(t => (t.pnl || 0) < 0).length;
+        tdHtml += `<div style="margin-top:8px;padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:6px;font-size:0.78rem;color:var(--text-secondary)">`;
+        tdHtml += `📈 开仓 ${opens.length} 次 · 平仓 ${closes.length} 次 · 盈利 ${wins} 次 · 亏损 ${losses} 次 · 胜率 ${closes.length > 0 ? (wins / closes.length * 100).toFixed(0) : '-'}%`;
+        tdHtml += ` · 累计PnL <span class="${totalPnl>=0?'pos':'neg'}">${totalPnl>=0?'+':''}${totalPnl.toFixed(0)}</span>`;
+        tdHtml += ` · 累计费用 ${totalFees.toFixed(0)}`;
+        tdHtml += `</div></details>`;
+    });
+    root.innerHTML += tdHtml;
 }
 
 // ── Helpers ──

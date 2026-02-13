@@ -29,6 +29,7 @@ _RESULT_API_SPECS = [
     ("api_optimize_six_book", "/api/optimize_six_book", "OPTIMIZE_SIX_BOOK_FILE", "未找到六书优化数据, 请先运行 python optimize_six_book.py"),
     ("api_backtest_30d_7d", "/api/backtest_30d_7d", "BACKTEST_30D_7D_FILE", "未找到回测对比数据, 请先运行 python backtest_30d_7d.py"),
     ("api_multi_tf_backtest_30d_7d", "/api/multi_tf_backtest_30d_7d", "MULTI_TF_BACKTEST_30D_7D_FILE", "未找到多周期回测数据, 请先运行 python backtest_multi_tf_30d_7d.py"),
+    ("api_naked_kline_backtest", "/api/naked_kline_backtest", "NAKED_KLINE_BACKTEST_FILE", "未找到裸K线回测数据, 请先运行 python backtest_naked_kline.py"),
 ]
 
 

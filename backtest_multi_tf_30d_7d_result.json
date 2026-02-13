@@ -1,7 +1,47 @@
 {
-  "description": "多周期联合决策 · 30天 vs 7天 真实回测对比",
-  "run_time": "2026-02-12T23:02:23.830645",
+  "description": "多周期联合决策 · 60天/30天/7天 真实回测对比 (统一fuse_tf_scores)",
+  "run_time": "2026-02-13T09:55:29.245740",
   "data_source": "币安 ETH/USDT 真实K线",
+  "fusion_algorithm": "fuse_tf_scores (回测/实盘统一)",
+  "run_meta": {
+    "run_id": "20260213_094425_codex_p2_40363",
+    "runner": "codex_p2",
+    "host": "baokundeMacBook-Pro.local",
+    "pid": 40363
+  },
+  "realism": {
+    "conservative_risk": true,
+    "strict_oos": true,
+    "live_gate": true,
+    "regime_aware": true,
+    "regime_lookback_bars": 48,
+    "regime_vol_high": 0.02,
+    "regime_vol_low": 0.007,
+    "regime_trend_strong": 0.015,
+    "regime_trend_weak": 0.006,
+    "regime_atr_high": 0.018,
+    "consensus_min_strength": 40,
+    "coverage_min": 0.5,
+    "walk_forward": true,
+    "wf_train_days": 90,
+    "wf_test_days": 7,
+    "wf_step_days": 7,
+    "wf_windows": 4,
+    "wf_min_windows": 3,
+    "train_days": 60,
+    "oos_candidates": 5,
+    "oos_selection": {
+      "mode": "strict_oos",
+      "ref_tf": "1h",
+      "train_days": 60,
+      "test_days": 60,
+      "candidates": 5,
+      "selected_tag": "组合A_最佳模式+SL+TP+分段",
+      "selected_alpha_train": 7.83,
+      "selected_mdd_train": -10.19,
+      "selected_objective_train": 7.83
+    }
+  },
   "base_config": {
     "best_single_tf": "1h",
     "best_single_alpha": 149.89,
@@ -14,54 +54,77 @@
     "liquidation_fee": "0.5%"
   },
   "single_tf_baselines": {
-    "30": {
+    "60": {
       "1h": {
-        "alpha": 89.47,
-        "strategy_return": 70.55,
-        "buy_hold_return": -18.92,
-        "max_drawdown": -20.13,
-        "total_trades": 55
+        "alpha": 28.63,
+        "strategy_return": 10.07,
+        "buy_hold_return": -18.56,
+        "max_drawdown": -6.55,
+        "total_trades": 90
       },
       "2h": {
-        "alpha": 58.18,
-        "strategy_return": 39.26,
-        "buy_hold_return": -18.92,
-        "max_drawdown": -20.92,
-        "total_trades": 116
+        "alpha": 18.53,
+        "strategy_return": 0.32,
+        "buy_hold_return": -18.21,
+        "max_drawdown": -7.73,
+        "total_trades": 161
       },
       "4h": {
-        "alpha": 64.62,
-        "strategy_return": 45.7,
-        "buy_hold_return": -18.92,
-        "max_drawdown": -20.52,
-        "total_trades": 78
+        "alpha": 19.64,
+        "strategy_return": 1.43,
+        "buy_hold_return": -18.21,
+        "max_drawdown": -3.88,
+        "total_trades": 102
+      }
+    },
+    "30": {
+      "1h": {
+        "alpha": 28.07,
+        "strategy_return": 7.15,
+        "buy_hold_return": -20.92,
+        "max_drawdown": -6.55,
+        "total_trades": 49
+      },
+      "2h": {
+        "alpha": 29.27,
+        "strategy_return": 8.56,
+        "buy_hold_return": -20.72,
+        "max_drawdown": -4.88,
+        "total_trades": 77
+      },
+      "4h": {
+        "alpha": 19.82,
+        "strategy_return": -0.9,
+        "buy_hold_return": -20.72,
+        "max_drawdown": -3.89,
+        "total_trades": 54
       }
     },
     "7": {
       "1h": {
-        "alpha": 18.17,
-        "strategy_return": 18.64,
-        "buy_hold_return": 0.47,
-        "max_drawdown": -39.58,
-        "total_trades": 20
+        "alpha": 4.8,
+        "strategy_return": 6.48,
+        "buy_hold_return": 1.67,
+        "max_drawdown": -5.56,
+        "total_trades": 16
       },
       "2h": {
-        "alpha": -4.01,
-        "strategy_return": -3.54,
-        "buy_hold_return": 0.46,
-        "max_drawdown": -39.2,
-        "total_trades": 31
+        "alpha": 4.54,
+        "strategy_return": 7.85,
+        "buy_hold_return": 3.31,
+        "max_drawdown": -5.0,
+        "total_trades": 24
       },
       "4h": {
-        "alpha": 2.24,
-        "strategy_return": 2.71,
-        "buy_hold_return": 0.46,
-        "max_drawdown": -36.46,
-        "total_trades": 19
+        "alpha": -0.55,
+        "strategy_return": 2.76,
+        "buy_hold_return": 3.31,
+        "max_drawdown": -4.04,
+        "total_trades": 14
       }
     }
   },
-  "results_30d": [
+  "results_60d": [
     {
       "rank": 1,
       "combo_name": "均衡搭配",
@@ -72,17 +135,88 @@
         "4h",
         "12h"
       ],
-      "alpha": 113.39,
-      "strategy_return": 94.47,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.13,
-      "total_trades": 60,
+      "alpha": 40.62,
+      "strategy_return": 22.06,
+      "buy_hold_return": -18.56,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 22.06,
+      "max_drawdown": -1.29,
+      "total_trades": 48,
       "liquidations": 0,
-      "total_cost": 5571.26,
-      "vs_single_tf": 23.92
+      "total_cost": 1653.39,
+      "vs_single_tf": 11.99
     },
     {
       "rank": 2,
+      "combo_name": "中大周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 39.66,
+      "strategy_return": 21.1,
+      "buy_hold_return": -18.56,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 21.1,
+      "max_drawdown": -4.54,
+      "total_trades": 81,
+      "liquidations": 0,
+      "total_cost": 2993.44,
+      "vs_single_tf": 11.03
+    },
+    {
+      "rank": 3,
+      "combo_name": "核心周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 39.65,
+      "strategy_return": 21.09,
+      "buy_hold_return": -18.56,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 21.09,
+      "max_drawdown": -2.07,
+      "total_trades": 52,
+      "liquidations": 0,
+      "total_cost": 1811.34,
+      "vs_single_tf": 11.02
+    },
+    {
+      "rank": 4,
+      "combo_name": "全周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 38.89,
+      "strategy_return": 20.33,
+      "buy_hold_return": -18.56,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 20.33,
+      "max_drawdown": -3.96,
+      "total_trades": 63,
+      "liquidations": 0,
+      "total_cost": 2259.28,
+      "vs_single_tf": 10.26
+    },
+    {
+      "rank": 5,
       "combo_name": "大周期(≥1h)",
       "primary_tf": "1h",
       "decision_tfs": [
@@ -93,122 +227,83 @@
         "12h",
         "24h"
       ],
-      "alpha": 107.98,
-      "strategy_return": 89.06,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.13,
-      "total_trades": 60,
+      "alpha": 38.41,
+      "strategy_return": 19.85,
+      "buy_hold_return": -18.56,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 19.85,
+      "max_drawdown": -3.73,
+      "total_trades": 76,
       "liquidations": 0,
-      "total_cost": 4829.11,
-      "vs_single_tf": 18.51
-    },
-    {
-      "rank": 3,
-      "combo_name": "全周期",
-      "primary_tf": "1h",
-      "decision_tfs": [
-        "15m",
-        "30m",
-        "1h",
-        "2h",
-        "4h",
-        "8h",
-        "12h",
-        "24h"
-      ],
-      "alpha": 106.94,
-      "strategy_return": 88.02,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.13,
-      "total_trades": 60,
-      "liquidations": 0,
-      "total_cost": 5412.97,
-      "vs_single_tf": 17.47
-    },
-    {
-      "rank": 4,
-      "combo_name": "中大周期",
-      "primary_tf": "1h",
-      "decision_tfs": [
-        "1h",
-        "2h",
-        "4h",
-        "8h",
-        "12h"
-      ],
-      "alpha": 101.34,
-      "strategy_return": 82.42,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.13,
-      "total_trades": 62,
-      "liquidations": 0,
-      "total_cost": 5769.35,
-      "vs_single_tf": 11.87
-    },
-    {
-      "rank": 5,
-      "combo_name": "核心周期",
-      "primary_tf": "1h",
-      "decision_tfs": [
-        "30m",
-        "1h",
-        "4h",
-        "8h",
-        "24h"
-      ],
-      "alpha": 99.77,
-      "strategy_return": 80.85,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.13,
-      "total_trades": 46,
-      "liquidations": 0,
-      "total_cost": 3686.24,
-      "vs_single_tf": 10.3
+      "total_cost": 2766.39,
+      "vs_single_tf": 9.78
     },
     {
       "rank": 6,
-      "combo_name": "全周期",
-      "primary_tf": "4h",
+      "combo_name": "核心周期",
+      "primary_tf": "2h",
       "decision_tfs": [
-        "15m",
         "30m",
         "1h",
-        "2h",
         "4h",
         "8h",
-        "12h",
         "24h"
       ],
-      "alpha": 97.33,
-      "strategy_return": 78.41,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.52,
-      "total_trades": 52,
+      "alpha": 34.94,
+      "strategy_return": 16.73,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 16.73,
+      "max_drawdown": -1.86,
+      "total_trades": 49,
       "liquidations": 0,
-      "total_cost": 4388.64,
-      "vs_single_tf": 32.71
+      "total_cost": 1430.37,
+      "vs_single_tf": 16.41
     },
     {
       "rank": 7,
       "combo_name": "均衡搭配",
-      "primary_tf": "4h",
+      "primary_tf": "2h",
       "decision_tfs": [
         "15m",
         "1h",
         "4h",
         "12h"
       ],
-      "alpha": 96.61,
-      "strategy_return": 77.69,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.52,
-      "total_trades": 53,
+      "alpha": 34.7,
+      "strategy_return": 16.49,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 16.49,
+      "max_drawdown": -1.65,
+      "total_trades": 44,
       "liquidations": 0,
-      "total_cost": 4853.13,
-      "vs_single_tf": 31.99
+      "total_cost": 1390.69,
+      "vs_single_tf": 16.17
     },
     {
       "rank": 8,
+      "combo_name": "快慢双层",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 33.74,
+      "strategy_return": 15.17,
+      "buy_hold_return": -18.56,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 15.17,
+      "max_drawdown": -1.06,
+      "total_trades": 40,
+      "liquidations": 0,
+      "total_cost": 1138.78,
+      "vs_single_tf": 5.11
+    },
+    {
+      "rank": 9,
       "combo_name": "全周期",
       "primary_tf": "2h",
       "decision_tfs": [
@@ -221,39 +316,42 @@
         "12h",
         "24h"
       ],
-      "alpha": 95.61,
-      "strategy_return": 76.69,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.92,
-      "total_trades": 54,
+      "alpha": 33.23,
+      "strategy_return": 15.02,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 15.02,
+      "max_drawdown": -4.07,
+      "total_trades": 60,
       "liquidations": 0,
-      "total_cost": 4601.86,
-      "vs_single_tf": 37.43
-    },
-    {
-      "rank": 9,
-      "combo_name": "中大周期",
-      "primary_tf": "4h",
-      "decision_tfs": [
-        "1h",
-        "2h",
-        "4h",
-        "8h",
-        "12h"
-      ],
-      "alpha": 94.32,
-      "strategy_return": 75.4,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.52,
-      "total_trades": 54,
-      "liquidations": 0,
-      "total_cost": 4797.13,
-      "vs_single_tf": 29.7
+      "total_cost": 1931.93,
+      "vs_single_tf": 14.7
     },
     {
       "rank": 10,
-      "combo_name": "大周期(≥1h)",
+      "combo_name": "均衡搭配",
       "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 31.97,
+      "strategy_return": 13.76,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 13.76,
+      "max_drawdown": -2.09,
+      "total_trades": 42,
+      "liquidations": 0,
+      "total_cost": 1120.71,
+      "vs_single_tf": 12.33
+    },
+    {
+      "rank": 11,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "2h",
       "decision_tfs": [
         "1h",
         "2h",
@@ -262,53 +360,37 @@
         "12h",
         "24h"
       ],
-      "alpha": 92.14,
-      "strategy_return": 73.22,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.52,
-      "total_trades": 50,
+      "alpha": 31.85,
+      "strategy_return": 13.64,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 13.64,
+      "max_drawdown": -3.25,
+      "total_trades": 76,
       "liquidations": 0,
-      "total_cost": 4447.91,
-      "vs_single_tf": 27.52
-    },
-    {
-      "rank": 11,
-      "combo_name": "均衡搭配",
-      "primary_tf": "2h",
-      "decision_tfs": [
-        "15m",
-        "1h",
-        "4h",
-        "12h"
-      ],
-      "alpha": 91.61,
-      "strategy_return": 72.69,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.92,
-      "total_trades": 53,
-      "liquidations": 0,
-      "total_cost": 4863.54,
-      "vs_single_tf": 33.43
+      "total_cost": 2619.76,
+      "vs_single_tf": 13.32
     },
     {
       "rank": 12,
-      "combo_name": "核心周期",
+      "combo_name": "快慢双层",
       "primary_tf": "2h",
       "decision_tfs": [
+        "15m",
         "30m",
-        "1h",
         "4h",
-        "8h",
         "24h"
       ],
-      "alpha": 88.91,
-      "strategy_return": 69.98,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.92,
-      "total_trades": 48,
+      "alpha": 30.57,
+      "strategy_return": 12.36,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 12.36,
+      "max_drawdown": -1.2,
+      "total_trades": 37,
       "liquidations": 0,
-      "total_cost": 3998.73,
-      "vs_single_tf": 30.73
+      "total_cost": 1015.05,
+      "vs_single_tf": 12.04
     },
     {
       "rank": 13,
@@ -321,17 +403,40 @@
         "8h",
         "12h"
       ],
-      "alpha": 82.1,
-      "strategy_return": 63.18,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.92,
-      "total_trades": 55,
+      "alpha": 30.43,
+      "strategy_return": 12.22,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 12.22,
+      "max_drawdown": -4.0,
+      "total_trades": 78,
       "liquidations": 0,
-      "total_cost": 4901.77,
-      "vs_single_tf": 23.92
+      "total_cost": 2746.53,
+      "vs_single_tf": 11.9
     },
     {
       "rank": 14,
+      "combo_name": "快慢双层",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 29.06,
+      "strategy_return": 10.85,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 10.85,
+      "max_drawdown": -1.74,
+      "total_trades": 37,
+      "liquidations": 0,
+      "total_cost": 1014.89,
+      "vs_single_tf": 9.42
+    },
+    {
+      "rank": 15,
       "combo_name": "核心周期",
       "primary_tf": "4h",
       "decision_tfs": [
@@ -341,17 +446,272 @@
         "8h",
         "24h"
       ],
-      "alpha": 80.63,
-      "strategy_return": 61.71,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.52,
-      "total_trades": 48,
+      "alpha": 28.32,
+      "strategy_return": 10.11,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 10.11,
+      "max_drawdown": -2.55,
+      "total_trades": 45,
       "liquidations": 0,
-      "total_cost": 4132.78,
-      "vs_single_tf": 16.01
+      "total_cost": 1264.19,
+      "vs_single_tf": 8.68
     },
     {
-      "rank": 15,
+      "rank": 16,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 26.09,
+      "strategy_return": 7.88,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 7.88,
+      "max_drawdown": -5.3,
+      "total_trades": 70,
+      "liquidations": 0,
+      "total_cost": 2120.76,
+      "vs_single_tf": 6.45
+    },
+    {
+      "rank": 17,
+      "combo_name": "全周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 25.86,
+      "strategy_return": 7.65,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 7.65,
+      "max_drawdown": -4.38,
+      "total_trades": 59,
+      "liquidations": 0,
+      "total_cost": 1714.72,
+      "vs_single_tf": 6.22
+    },
+    {
+      "rank": 18,
+      "combo_name": "中大周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 25.83,
+      "strategy_return": 7.62,
+      "buy_hold_return": -18.21,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 7.62,
+      "max_drawdown": -5.51,
+      "total_trades": 72,
+      "liquidations": 0,
+      "total_cost": 2189.8,
+      "vs_single_tf": 6.19
+    }
+  ],
+  "results_30d": [
+    {
+      "rank": 1,
+      "combo_name": "全周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 40.71,
+      "strategy_return": 19.79,
+      "buy_hold_return": -20.92,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 19.79,
+      "max_drawdown": -1.45,
+      "total_trades": 33,
+      "liquidations": 0,
+      "total_cost": 1006.1,
+      "vs_single_tf": 12.64
+    },
+    {
+      "rank": 2,
+      "combo_name": "核心周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 40.65,
+      "strategy_return": 19.72,
+      "buy_hold_return": -20.92,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 19.72,
+      "max_drawdown": -1.45,
+      "total_trades": 33,
+      "liquidations": 0,
+      "total_cost": 977.19,
+      "vs_single_tf": 12.58
+    },
+    {
+      "rank": 3,
+      "combo_name": "中大周期",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 39.94,
+      "strategy_return": 19.02,
+      "buy_hold_return": -20.92,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 19.02,
+      "max_drawdown": -1.45,
+      "total_trades": 33,
+      "liquidations": 0,
+      "total_cost": 954.45,
+      "vs_single_tf": 11.87
+    },
+    {
+      "rank": 4,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 39.88,
+      "strategy_return": 18.96,
+      "buy_hold_return": -20.92,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 18.96,
+      "max_drawdown": -1.45,
+      "total_trades": 33,
+      "liquidations": 0,
+      "total_cost": 923.66,
+      "vs_single_tf": 11.81
+    },
+    {
+      "rank": 5,
+      "combo_name": "均衡搭配",
+      "primary_tf": "1h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 37.23,
+      "strategy_return": 16.31,
+      "buy_hold_return": -20.92,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 16.31,
+      "max_drawdown": -1.45,
+      "total_trades": 30,
+      "liquidations": 0,
+      "total_cost": 914.72,
+      "vs_single_tf": 9.16
+    },
+    {
+      "rank": 6,
+      "combo_name": "全周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 36.14,
+      "strategy_return": 15.43,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 15.43,
+      "max_drawdown": -1.29,
+      "total_trades": 30,
+      "liquidations": 0,
+      "total_cost": 734.56,
+      "vs_single_tf": 6.87
+    },
+    {
+      "rank": 7,
+      "combo_name": "核心周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 35.95,
+      "strategy_return": 15.23,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 15.23,
+      "max_drawdown": -1.29,
+      "total_trades": 30,
+      "liquidations": 0,
+      "total_cost": 704.51,
+      "vs_single_tf": 6.68
+    },
+    {
+      "rank": 8,
+      "combo_name": "均衡搭配",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 34.64,
+      "strategy_return": 13.93,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 13.93,
+      "max_drawdown": -1.29,
+      "total_trades": 29,
+      "liquidations": 0,
+      "total_cost": 820.57,
+      "vs_single_tf": 5.37
+    },
+    {
+      "rank": 9,
       "combo_name": "大周期(≥1h)",
       "primary_tf": "2h",
       "decision_tfs": [
@@ -362,14 +722,151 @@
         "12h",
         "24h"
       ],
-      "alpha": 80.57,
-      "strategy_return": 61.64,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.92,
-      "total_trades": 52,
+      "alpha": 33.51,
+      "strategy_return": 12.79,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 12.79,
+      "max_drawdown": -1.29,
+      "total_trades": 31,
       "liquidations": 0,
-      "total_cost": 4485.47,
-      "vs_single_tf": 22.39
+      "total_cost": 796.64,
+      "vs_single_tf": 4.24
+    },
+    {
+      "rank": 10,
+      "combo_name": "中大周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 32.99,
+      "strategy_return": 12.27,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 12.27,
+      "max_drawdown": -1.29,
+      "total_trades": 31,
+      "liquidations": 0,
+      "total_cost": 786.12,
+      "vs_single_tf": 3.72
+    },
+    {
+      "rank": 11,
+      "combo_name": "均衡搭配",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha": 32.88,
+      "strategy_return": 12.16,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 12.16,
+      "max_drawdown": -1.35,
+      "total_trades": 27,
+      "liquidations": 0,
+      "total_cost": 642.46,
+      "vs_single_tf": 13.06
+    },
+    {
+      "rank": 12,
+      "combo_name": "全周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 31.96,
+      "strategy_return": 11.25,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 11.25,
+      "max_drawdown": -1.14,
+      "total_trades": 31,
+      "liquidations": 0,
+      "total_cost": 795.3,
+      "vs_single_tf": 12.14
+    },
+    {
+      "rank": 13,
+      "combo_name": "核心周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": 31.8,
+      "strategy_return": 11.08,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 11.08,
+      "max_drawdown": -1.14,
+      "total_trades": 29,
+      "liquidations": 0,
+      "total_cost": 750.83,
+      "vs_single_tf": 11.98
+    },
+    {
+      "rank": 14,
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha": 31.77,
+      "strategy_return": 11.06,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 11.06,
+      "max_drawdown": -1.14,
+      "total_trades": 31,
+      "liquidations": 0,
+      "total_cost": 796.67,
+      "vs_single_tf": 11.95
+    },
+    {
+      "rank": 15,
+      "combo_name": "中大周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": 31.24,
+      "strategy_return": 10.53,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 10.53,
+      "max_drawdown": -1.21,
+      "total_trades": 31,
+      "liquidations": 0,
+      "total_cost": 830.54,
+      "vs_single_tf": 11.42
     },
     {
       "rank": 16,
@@ -381,36 +878,19 @@
         "4h",
         "24h"
       ],
-      "alpha": 74.93,
-      "strategy_return": 56.01,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.13,
-      "total_trades": 44,
+      "alpha": 30.09,
+      "strategy_return": 9.17,
+      "buy_hold_return": -20.92,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 9.17,
+      "max_drawdown": -1.45,
+      "total_trades": 22,
       "liquidations": 0,
-      "total_cost": 2544.92,
-      "vs_single_tf": -14.54
+      "total_cost": 555.34,
+      "vs_single_tf": 2.02
     },
     {
       "rank": 17,
-      "combo_name": "快慢双层",
-      "primary_tf": "4h",
-      "decision_tfs": [
-        "15m",
-        "30m",
-        "4h",
-        "24h"
-      ],
-      "alpha": 63.71,
-      "strategy_return": 44.79,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.52,
-      "total_trades": 42,
-      "liquidations": 0,
-      "total_cost": 2712.54,
-      "vs_single_tf": -0.91
-    },
-    {
-      "rank": 18,
       "combo_name": "快慢双层",
       "primary_tf": "2h",
       "decision_tfs": [
@@ -419,40 +899,65 @@
         "4h",
         "24h"
       ],
-      "alpha": 62.89,
-      "strategy_return": 43.97,
-      "buy_hold_return": -18.92,
-      "max_drawdown": -20.92,
-      "total_trades": 42,
+      "alpha": 30.08,
+      "strategy_return": 9.36,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 9.36,
+      "max_drawdown": -1.29,
+      "total_trades": 22,
       "liquidations": 0,
-      "total_cost": 2888.33,
-      "vs_single_tf": 4.71
+      "total_cost": 538.67,
+      "vs_single_tf": 0.81
+    },
+    {
+      "rank": 18,
+      "combo_name": "快慢双层",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 29.93,
+      "strategy_return": 9.22,
+      "buy_hold_return": -20.72,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 9.22,
+      "max_drawdown": -1.21,
+      "total_trades": 22,
+      "liquidations": 0,
+      "total_cost": 538.99,
+      "vs_single_tf": 10.11
     }
   ],
   "results_7d": [
     {
       "rank": 1,
       "combo_name": "均衡搭配",
-      "primary_tf": "2h",
+      "primary_tf": "1h",
       "decision_tfs": [
         "15m",
         "1h",
         "4h",
         "12h"
       ],
-      "alpha": 15.78,
-      "strategy_return": 16.24,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.71,
-      "total_trades": 21,
+      "alpha": 6.89,
+      "strategy_return": 8.56,
+      "buy_hold_return": 1.67,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 8.56,
+      "max_drawdown": -1.73,
+      "total_trades": 12,
       "liquidations": 0,
-      "total_cost": 1247.93,
-      "vs_single_tf": 19.79
+      "total_cost": 344.67,
+      "vs_single_tf": 2.09
     },
     {
       "rank": 2,
       "combo_name": "全周期",
-      "primary_tf": "2h",
+      "primary_tf": "1h",
       "decision_tfs": [
         "15m",
         "30m",
@@ -463,38 +968,42 @@
         "12h",
         "24h"
       ],
-      "alpha": 15.5,
-      "strategy_return": 15.97,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.68,
-      "total_trades": 17,
+      "alpha": 2.93,
+      "strategy_return": 4.6,
+      "buy_hold_return": 1.67,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 4.6,
+      "max_drawdown": -0.82,
+      "total_trades": 14,
       "liquidations": 0,
-      "total_cost": 1251.57,
-      "vs_single_tf": 19.51
+      "total_cost": 380.16,
+      "vs_single_tf": -1.87
     },
     {
       "rank": 3,
       "combo_name": "均衡搭配",
-      "primary_tf": "4h",
+      "primary_tf": "2h",
       "decision_tfs": [
         "15m",
         "1h",
         "4h",
         "12h"
       ],
-      "alpha": 15.5,
-      "strategy_return": 15.96,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.46,
-      "total_trades": 21,
+      "alpha": 2.79,
+      "strategy_return": 6.1,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 6.1,
+      "max_drawdown": -1.7,
+      "total_trades": 10,
       "liquidations": 0,
-      "total_cost": 1236.71,
-      "vs_single_tf": 13.26
+      "total_cost": 303.73,
+      "vs_single_tf": -1.75
     },
     {
       "rank": 4,
       "combo_name": "核心周期",
-      "primary_tf": "4h",
+      "primary_tf": "1h",
       "decision_tfs": [
         "30m",
         "1h",
@@ -502,63 +1011,64 @@
         "8h",
         "24h"
       ],
-      "alpha": 15.46,
-      "strategy_return": 15.93,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.46,
-      "total_trades": 15,
+      "alpha": 2.66,
+      "strategy_return": 4.33,
+      "buy_hold_return": 1.67,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 4.33,
+      "max_drawdown": -0.82,
+      "total_trades": 14,
       "liquidations": 0,
-      "total_cost": 910.46,
-      "vs_single_tf": 13.22
+      "total_cost": 380.67,
+      "vs_single_tf": -2.14
     },
     {
       "rank": 5,
-      "combo_name": "全周期",
+      "combo_name": "均衡搭配",
       "primary_tf": "4h",
       "decision_tfs": [
         "15m",
-        "30m",
         "1h",
-        "2h",
         "4h",
-        "8h",
-        "12h",
-        "24h"
+        "12h"
       ],
-      "alpha": 15.46,
-      "strategy_return": 15.93,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.46,
-      "total_trades": 15,
+      "alpha": 2.35,
+      "strategy_return": 5.66,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 5.66,
+      "max_drawdown": -2.63,
+      "total_trades": 7,
       "liquidations": 0,
-      "total_cost": 910.46,
-      "vs_single_tf": 13.22
+      "total_cost": 209.95,
+      "vs_single_tf": 2.9
     },
     {
       "rank": 6,
-      "combo_name": "大周期(≥1h)",
+      "combo_name": "核心周期",
       "primary_tf": "2h",
       "decision_tfs": [
+        "30m",
         "1h",
-        "2h",
         "4h",
         "8h",
-        "12h",
         "24h"
       ],
-      "alpha": 15.46,
-      "strategy_return": 15.92,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.68,
-      "total_trades": 17,
+      "alpha": 1.52,
+      "strategy_return": 4.83,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 4.83,
+      "max_drawdown": -0.8,
+      "total_trades": 14,
       "liquidations": 0,
-      "total_cost": 1422.37,
-      "vs_single_tf": 19.47
+      "total_cost": 298.23,
+      "vs_single_tf": -3.02
     },
     {
       "rank": 7,
       "combo_name": "全周期",
-      "primary_tf": "1h",
+      "primary_tf": "2h",
       "decision_tfs": [
         "15m",
         "30m",
@@ -569,58 +1079,104 @@
         "12h",
         "24h"
       ],
-      "alpha": 15.28,
-      "strategy_return": 15.75,
-      "buy_hold_return": 0.47,
-      "max_drawdown": -36.09,
-      "total_trades": 17,
+      "alpha": 1.44,
+      "strategy_return": 4.75,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 4.75,
+      "max_drawdown": -0.8,
+      "total_trades": 14,
       "liquidations": 0,
-      "total_cost": 1246.53,
-      "vs_single_tf": -2.89
+      "total_cost": 297.99,
+      "vs_single_tf": -3.1
     },
     {
       "rank": 8,
-      "combo_name": "大周期(≥1h)",
+      "combo_name": "快慢双层",
       "primary_tf": "1h",
       "decision_tfs": [
-        "1h",
-        "2h",
+        "15m",
+        "30m",
         "4h",
-        "8h",
-        "12h",
         "24h"
       ],
-      "alpha": 15.28,
-      "strategy_return": 15.75,
-      "buy_hold_return": 0.47,
-      "max_drawdown": -36.09,
-      "total_trades": 17,
+      "alpha": 0.0,
+      "strategy_return": 1.67,
+      "buy_hold_return": 1.67,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 1.67,
+      "max_drawdown": -5.52,
+      "total_trades": 0,
       "liquidations": 0,
-      "total_cost": 1246.53,
-      "vs_single_tf": -2.89
+      "total_cost": 0,
+      "vs_single_tf": -4.8
     },
     {
       "rank": 9,
-      "combo_name": "中大周期",
-      "primary_tf": "1h",
+      "combo_name": "快慢双层",
+      "primary_tf": "2h",
       "decision_tfs": [
-        "1h",
-        "2h",
+        "15m",
+        "30m",
         "4h",
-        "8h",
-        "12h"
+        "24h"
       ],
-      "alpha": 15.27,
-      "strategy_return": 15.74,
-      "buy_hold_return": 0.47,
-      "max_drawdown": -36.09,
-      "total_trades": 19,
+      "alpha": 0.0,
+      "strategy_return": 3.31,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 3.31,
+      "max_drawdown": -5.03,
+      "total_trades": 0,
       "liquidations": 0,
-      "total_cost": 1796.22,
-      "vs_single_tf": -2.9
+      "total_cost": 0,
+      "vs_single_tf": -4.54
     },
     {
       "rank": 10,
+      "combo_name": "快慢双层",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha": 0.0,
+      "strategy_return": 3.31,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 3.31,
+      "max_drawdown": -5.23,
+      "total_trades": 0,
+      "liquidations": 0,
+      "total_cost": 0,
+      "vs_single_tf": 0.55
+    },
+    {
+      "rank": 11,
+      "combo_name": "核心周期",
+      "primary_tf": "4h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha": -0.01,
+      "strategy_return": 3.3,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 3.3,
+      "max_drawdown": -1.23,
+      "total_trades": 11,
+      "liquidations": 0,
+      "total_cost": 256.62,
+      "vs_single_tf": 0.54
+    },
+    {
+      "rank": 12,
       "combo_name": "大周期(≥1h)",
       "primary_tf": "4h",
       "decision_tfs": [
@@ -631,19 +1187,21 @@
         "12h",
         "24h"
       ],
-      "alpha": 15.2,
-      "strategy_return": 15.66,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.48,
-      "total_trades": 17,
+      "alpha": -0.11,
+      "strategy_return": 3.2,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 3.2,
+      "max_drawdown": -0.6,
+      "total_trades": 11,
       "liquidations": 0,
-      "total_cost": 1417.23,
-      "vs_single_tf": 12.96
+      "total_cost": 253.91,
+      "vs_single_tf": 0.44
     },
     {
-      "rank": 11,
+      "rank": 13,
       "combo_name": "中大周期",
-      "primary_tf": "2h",
+      "primary_tf": "4h",
       "decision_tfs": [
         "1h",
         "2h",
@@ -651,78 +1209,44 @@
         "8h",
         "12h"
       ],
-      "alpha": 15.07,
-      "strategy_return": 15.53,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.68,
-      "total_trades": 19,
+      "alpha": -0.11,
+      "strategy_return": 3.2,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 3.2,
+      "max_drawdown": -0.6,
+      "total_trades": 11,
       "liquidations": 0,
-      "total_cost": 1809.29,
-      "vs_single_tf": 19.08
-    },
-    {
-      "rank": 12,
-      "combo_name": "均衡搭配",
-      "primary_tf": "1h",
-      "decision_tfs": [
-        "15m",
-        "1h",
-        "4h",
-        "12h"
-      ],
-      "alpha": 14.54,
-      "strategy_return": 15.01,
-      "buy_hold_return": 0.47,
-      "max_drawdown": -36.09,
-      "total_trades": 23,
-      "liquidations": 0,
-      "total_cost": 1638.36,
-      "vs_single_tf": -3.63
-    },
-    {
-      "rank": 13,
-      "combo_name": "核心周期",
-      "primary_tf": "2h",
-      "decision_tfs": [
-        "30m",
-        "1h",
-        "4h",
-        "8h",
-        "24h"
-      ],
-      "alpha": 14.07,
-      "strategy_return": 14.54,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.68,
-      "total_trades": 17,
-      "liquidations": 0,
-      "total_cost": 1260.04,
-      "vs_single_tf": 18.08
+      "total_cost": 253.91,
+      "vs_single_tf": 0.44
     },
     {
       "rank": 14,
-      "combo_name": "核心周期",
+      "combo_name": "大周期(≥1h)",
       "primary_tf": "1h",
       "decision_tfs": [
-        "30m",
         "1h",
+        "2h",
         "4h",
         "8h",
+        "12h",
         "24h"
       ],
-      "alpha": 13.9,
-      "strategy_return": 14.37,
-      "buy_hold_return": 0.47,
-      "max_drawdown": -36.09,
-      "total_trades": 17,
+      "alpha": -1.31,
+      "strategy_return": 0.36,
+      "buy_hold_return": 1.67,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 0.36,
+      "max_drawdown": -0.84,
+      "total_trades": 13,
       "liquidations": 0,
-      "total_cost": 1253.42,
-      "vs_single_tf": -4.27
+      "total_cost": 381.53,
+      "vs_single_tf": -6.11
     },
     {
       "rank": 15,
       "combo_name": "中大周期",
-      "primary_tf": "4h",
+      "primary_tf": "1h",
       "decision_tfs": [
         "1h",
         "2h",
@@ -730,89 +1254,1014 @@
         "8h",
         "12h"
       ],
-      "alpha": 6.69,
-      "strategy_return": 7.15,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -36.48,
-      "total_trades": 18,
+      "alpha": -1.31,
+      "strategy_return": 0.36,
+      "buy_hold_return": 1.67,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 0.36,
+      "max_drawdown": -0.84,
+      "total_trades": 13,
       "liquidations": 0,
-      "total_cost": 1447.8,
-      "vs_single_tf": 4.45
+      "total_cost": 381.53,
+      "vs_single_tf": -6.11
     },
     {
       "rank": 16,
-      "combo_name": "快慢双层",
-      "primary_tf": "1h",
+      "combo_name": "大周期(≥1h)",
+      "primary_tf": "2h",
       "decision_tfs": [
-        "15m",
-        "30m",
+        "1h",
+        "2h",
         "4h",
+        "8h",
+        "12h",
         "24h"
       ],
-      "alpha": 5.07,
-      "strategy_return": 5.54,
-      "buy_hold_return": 0.47,
-      "max_drawdown": -38.36,
-      "total_trades": 20,
+      "alpha": -1.6,
+      "strategy_return": 1.71,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 1.71,
+      "max_drawdown": -0.38,
+      "total_trades": 13,
       "liquidations": 0,
-      "total_cost": 784.98,
-      "vs_single_tf": -13.1
+      "total_cost": 286.86,
+      "vs_single_tf": -6.14
     },
     {
       "rank": 17,
-      "combo_name": "快慢双层",
+      "combo_name": "中大周期",
+      "primary_tf": "2h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha": -1.6,
+      "strategy_return": 1.71,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 1.71,
+      "max_drawdown": -0.38,
+      "total_trades": 13,
+      "liquidations": 0,
+      "total_cost": 286.86,
+      "vs_single_tf": -6.14
+    },
+    {
+      "rank": 18,
+      "combo_name": "全周期",
       "primary_tf": "4h",
       "decision_tfs": [
         "15m",
         "30m",
+        "1h",
+        "2h",
         "4h",
+        "8h",
+        "12h",
         "24h"
       ],
-      "alpha": 4.83,
-      "strategy_return": 5.29,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -38.17,
-      "total_trades": 18,
+      "alpha": -1.83,
+      "strategy_return": 1.49,
+      "buy_hold_return": 3.31,
+      "cash_hold_return": 0.0,
+      "alpha_vs_cash": 1.49,
+      "max_drawdown": -1.35,
+      "total_trades": 12,
       "liquidations": 0,
-      "total_cost": 782.95,
-      "vs_single_tf": 2.59
+      "total_cost": 294.98,
+      "vs_single_tf": -1.28
+    }
+  ],
+  "robust_rankings": [
+    {
+      "combo": "均衡搭配@1h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha_60d": 40.62,
+      "alpha_30d": 37.23,
+      "alpha_7d": 6.89,
+      "avg_alpha": 28.25,
+      "min_alpha": 6.89,
+      "max_alpha": 40.62,
+      "alpha_spread": 33.73,
+      "avg_mdd": -1.49,
+      "avg_trades": 30.0,
+      "robust_score": 1.83
     },
     {
-      "rank": 18,
-      "combo_name": "快慢双层",
-      "primary_tf": "2h",
+      "combo": "均衡搭配@2h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha_60d": 34.7,
+      "alpha_30d": 34.64,
+      "alpha_7d": 2.79,
+      "avg_alpha": 24.04,
+      "min_alpha": 2.79,
+      "max_alpha": 34.7,
+      "alpha_spread": 31.91,
+      "avg_mdd": -1.55,
+      "avg_trades": 27.7,
+      "robust_score": -2.0
+    },
+    {
+      "combo": "均衡搭配@4h",
+      "decision_tfs": [
+        "15m",
+        "1h",
+        "4h",
+        "12h"
+      ],
+      "alpha_60d": 31.97,
+      "alpha_30d": 32.88,
+      "alpha_7d": 2.35,
+      "avg_alpha": 22.4,
+      "min_alpha": 2.35,
+      "max_alpha": 32.88,
+      "alpha_spread": 30.53,
+      "avg_mdd": -2.02,
+      "avg_trades": 25.3,
+      "robust_score": -2.23
+    },
+    {
+      "combo": "全周期@1h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha_60d": 38.89,
+      "alpha_30d": 40.71,
+      "alpha_7d": 2.93,
+      "avg_alpha": 27.51,
+      "min_alpha": 2.93,
+      "max_alpha": 40.71,
+      "alpha_spread": 37.78,
+      "avg_mdd": -2.08,
+      "avg_trades": 36.7,
+      "robust_score": -2.74
+    },
+    {
+      "combo": "核心周期@1h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha_60d": 39.65,
+      "alpha_30d": 40.65,
+      "alpha_7d": 2.66,
+      "avg_alpha": 27.65,
+      "min_alpha": 2.66,
+      "max_alpha": 40.65,
+      "alpha_spread": 37.99,
+      "avg_mdd": -1.45,
+      "avg_trades": 33.0,
+      "robust_score": -3.04
+    },
+    {
+      "combo": "核心周期@2h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha_60d": 34.94,
+      "alpha_30d": 35.95,
+      "alpha_7d": 1.52,
+      "avg_alpha": 24.14,
+      "min_alpha": 1.52,
+      "max_alpha": 35.95,
+      "alpha_spread": 34.43,
+      "avg_mdd": -1.32,
+      "avg_trades": 31.0,
+      "robust_score": -3.64
+    },
+    {
+      "combo": "全周期@2h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha_60d": 33.23,
+      "alpha_30d": 36.14,
+      "alpha_7d": 1.44,
+      "avg_alpha": 23.6,
+      "min_alpha": 1.44,
+      "max_alpha": 36.14,
+      "alpha_spread": 34.7,
+      "avg_mdd": -2.05,
+      "avg_trades": 34.7,
+      "robust_score": -3.77
+    },
+    {
+      "combo": "快慢双层@4h",
       "decision_tfs": [
         "15m",
         "30m",
         "4h",
         "24h"
       ],
-      "alpha": 4.76,
-      "strategy_return": 5.23,
-      "buy_hold_return": 0.46,
-      "max_drawdown": -38.68,
-      "total_trades": 19,
-      "liquidations": 0,
-      "total_cost": 786.47,
-      "vs_single_tf": 8.77
+      "alpha_60d": 29.06,
+      "alpha_30d": 29.93,
+      "alpha_7d": 0.0,
+      "avg_alpha": 19.66,
+      "min_alpha": 0.0,
+      "max_alpha": 29.93,
+      "alpha_spread": 29.93,
+      "avg_mdd": -2.73,
+      "avg_trades": 19.7,
+      "robust_score": -4.49
+    },
+    {
+      "combo": "快慢双层@2h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha_60d": 30.57,
+      "alpha_30d": 30.08,
+      "alpha_7d": 0.0,
+      "avg_alpha": 20.22,
+      "min_alpha": 0.0,
+      "max_alpha": 30.57,
+      "alpha_spread": 30.57,
+      "avg_mdd": -2.51,
+      "avg_trades": 19.7,
+      "robust_score": -4.59
+    },
+    {
+      "combo": "核心周期@4h",
+      "decision_tfs": [
+        "30m",
+        "1h",
+        "4h",
+        "8h",
+        "24h"
+      ],
+      "alpha_60d": 28.32,
+      "alpha_30d": 31.8,
+      "alpha_7d": -0.01,
+      "avg_alpha": 20.04,
+      "min_alpha": -0.01,
+      "max_alpha": 31.8,
+      "alpha_spread": 31.81,
+      "avg_mdd": -1.64,
+      "avg_trades": 28.3,
+      "robust_score": -4.78
+    },
+    {
+      "combo": "中大周期@4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha_60d": 25.83,
+      "alpha_30d": 31.24,
+      "alpha_7d": -0.11,
+      "avg_alpha": 18.99,
+      "min_alpha": -0.11,
+      "max_alpha": 31.24,
+      "alpha_spread": 31.35,
+      "avg_mdd": -2.44,
+      "avg_trades": 38.0,
+      "robust_score": -4.81
+    },
+    {
+      "combo": "大周期(≥1h)@4h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha_60d": 26.09,
+      "alpha_30d": 31.77,
+      "alpha_7d": -0.11,
+      "avg_alpha": 19.25,
+      "min_alpha": -0.11,
+      "max_alpha": 31.77,
+      "alpha_spread": 31.88,
+      "avg_mdd": -2.35,
+      "avg_trades": 37.3,
+      "robust_score": -4.89
+    },
+    {
+      "combo": "快慢双层@1h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "4h",
+        "24h"
+      ],
+      "alpha_60d": 33.74,
+      "alpha_30d": 30.09,
+      "alpha_7d": 0.0,
+      "avg_alpha": 21.28,
+      "min_alpha": 0.0,
+      "max_alpha": 33.74,
+      "alpha_spread": 33.74,
+      "avg_mdd": -2.68,
+      "avg_trades": 20.7,
+      "robust_score": -5.06
+    },
+    {
+      "combo": "中大周期@2h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha_60d": 30.43,
+      "alpha_30d": 32.99,
+      "alpha_7d": -1.6,
+      "avg_alpha": 20.61,
+      "min_alpha": -1.6,
+      "max_alpha": 32.99,
+      "alpha_spread": 34.59,
+      "avg_mdd": -1.89,
+      "avg_trades": 40.7,
+      "robust_score": -6.79
+    },
+    {
+      "combo": "大周期(≥1h)@2h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha_60d": 31.85,
+      "alpha_30d": 33.51,
+      "alpha_7d": -1.6,
+      "avg_alpha": 21.25,
+      "min_alpha": -1.6,
+      "max_alpha": 33.51,
+      "alpha_spread": 35.11,
+      "avg_mdd": -1.64,
+      "avg_trades": 40.0,
+      "robust_score": -6.87
+    },
+    {
+      "combo": "全周期@4h",
+      "decision_tfs": [
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha_60d": 25.86,
+      "alpha_30d": 31.96,
+      "alpha_7d": -1.83,
+      "avg_alpha": 18.66,
+      "min_alpha": -1.83,
+      "max_alpha": 31.96,
+      "alpha_spread": 33.79,
+      "avg_mdd": -2.29,
+      "avg_trades": 34.0,
+      "robust_score": -6.9
+    },
+    {
+      "combo": "大周期(≥1h)@1h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h",
+        "24h"
+      ],
+      "alpha_60d": 38.41,
+      "alpha_30d": 39.88,
+      "alpha_7d": -1.31,
+      "avg_alpha": 25.66,
+      "min_alpha": -1.31,
+      "max_alpha": 39.88,
+      "alpha_spread": 41.19,
+      "avg_mdd": -2.01,
+      "avg_trades": 40.7,
+      "robust_score": -7.49
+    },
+    {
+      "combo": "中大周期@1h",
+      "decision_tfs": [
+        "1h",
+        "2h",
+        "4h",
+        "8h",
+        "12h"
+      ],
+      "alpha_60d": 39.66,
+      "alpha_30d": 39.94,
+      "alpha_7d": -1.31,
+      "avg_alpha": 26.1,
+      "min_alpha": -1.31,
+      "max_alpha": 39.94,
+      "alpha_spread": 41.25,
+      "avg_mdd": -2.28,
+      "avg_trades": 42.3,
+      "robust_score": -7.5
     }
   ],
+  "walk_forward": {
+    "enabled": true,
+    "train_days": 90,
+    "test_days": 7,
+    "step_days": 7,
+    "windows_requested": 4,
+    "min_windows": 3,
+    "windows": [
+      {
+        "window_id": "wf_1",
+        "train_start": "2025-10-18T00:00:00",
+        "train_end": "2026-01-16T00:00:00",
+        "test_start": "2026-01-16T00:00:00",
+        "test_end": "2026-01-23T00:00:00",
+        "selected_tag": "组合A_最佳模式+SL+TP+分段",
+        "selected_objective_train": 8.79,
+        "top_combo": {
+          "combo": "均衡搭配@1h",
+          "alpha": 9.33
+        }
+      },
+      {
+        "window_id": "wf_2",
+        "train_start": "2025-10-25T00:00:00",
+        "train_end": "2026-01-23T00:00:00",
+        "test_start": "2026-01-23T00:00:00",
+        "test_end": "2026-01-30T00:00:00",
+        "selected_tag": "组合A_最佳模式+SL+TP+分段",
+        "selected_objective_train": 2.98,
+        "top_combo": {
+          "combo": "全周期@2h",
+          "alpha": 6.75
+        }
+      },
+      {
+        "window_id": "wf_3",
+        "train_start": "2025-11-01T00:00:00",
+        "train_end": "2026-01-30T00:00:00",
+        "test_start": "2026-01-30T00:00:00",
+        "test_end": "2026-02-06T00:00:00",
+        "selected_tag": "组合A_最佳模式+SL+TP+分段",
+        "selected_objective_train": 5.2,
+        "top_combo": {
+          "combo": "核心周期@1h",
+          "alpha": 23.31
+        }
+      },
+      {
+        "window_id": "wf_4",
+        "train_start": "2025-11-08T00:00:00",
+        "train_end": "2026-02-06T00:00:00",
+        "test_start": "2026-02-06T00:00:00",
+        "test_end": "2026-02-13T00:00:00",
+        "selected_tag": "组合A_最佳模式+SL+TP+分段",
+        "selected_objective_train": 20.75,
+        "top_combo": {
+          "combo": "均衡搭配@1h",
+          "alpha": 6.89
+        }
+      }
+    ],
+    "rankings": [
+      {
+        "combo": "均衡搭配@1h",
+        "decision_tfs": [
+          "15m",
+          "1h",
+          "4h",
+          "12h"
+        ],
+        "windows": 4,
+        "avg_alpha": 10.69,
+        "min_alpha": 5.81,
+        "max_alpha": 20.74,
+        "std_alpha": 5.94,
+        "alpha_spread": 14.93,
+        "avg_mdd": -0.77,
+        "win_rate": 1.0,
+        "avg_trades": 13.0,
+        "robust_score": 7.94
+      },
+      {
+        "combo": "均衡搭配@2h",
+        "decision_tfs": [
+          "15m",
+          "1h",
+          "4h",
+          "12h"
+        ],
+        "windows": 4,
+        "avg_alpha": 9.6,
+        "min_alpha": 2.79,
+        "max_alpha": 19.93,
+        "std_alpha": 6.36,
+        "alpha_spread": 17.14,
+        "avg_mdd": -0.81,
+        "win_rate": 1.0,
+        "avg_trades": 12.5,
+        "robust_score": 4.53
+      },
+      {
+        "combo": "均衡搭配@4h",
+        "decision_tfs": [
+          "15m",
+          "1h",
+          "4h",
+          "12h"
+        ],
+        "windows": 4,
+        "avg_alpha": 8.89,
+        "min_alpha": 2.35,
+        "max_alpha": 18.42,
+        "std_alpha": 5.92,
+        "alpha_spread": 16.07,
+        "avg_mdd": -1.14,
+        "win_rate": 1.0,
+        "avg_trades": 11.8,
+        "robust_score": 4.37
+      },
+      {
+        "combo": "全周期@1h",
+        "decision_tfs": [
+          "15m",
+          "30m",
+          "1h",
+          "2h",
+          "4h",
+          "8h",
+          "12h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 10.26,
+        "min_alpha": 2.93,
+        "max_alpha": 23.31,
+        "std_alpha": 7.83,
+        "alpha_spread": 20.38,
+        "avg_mdd": -0.54,
+        "win_rate": 1.0,
+        "avg_trades": 14.2,
+        "robust_score": 3.76
+      },
+      {
+        "combo": "核心周期@1h",
+        "decision_tfs": [
+          "30m",
+          "1h",
+          "4h",
+          "8h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 10.19,
+        "min_alpha": 2.66,
+        "max_alpha": 23.31,
+        "std_alpha": 7.9,
+        "alpha_spread": 20.65,
+        "avg_mdd": -0.54,
+        "win_rate": 1.0,
+        "avg_trades": 14.2,
+        "robust_score": 3.44
+      },
+      {
+        "combo": "核心周期@2h",
+        "decision_tfs": [
+          "30m",
+          "1h",
+          "4h",
+          "8h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 9.81,
+        "min_alpha": 1.52,
+        "max_alpha": 22.42,
+        "std_alpha": 7.72,
+        "alpha_spread": 20.9,
+        "avg_mdd": -0.58,
+        "win_rate": 1.0,
+        "avg_trades": 14.2,
+        "robust_score": 2.34
+      },
+      {
+        "combo": "全周期@2h",
+        "decision_tfs": [
+          "15m",
+          "30m",
+          "1h",
+          "2h",
+          "4h",
+          "8h",
+          "12h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 9.79,
+        "min_alpha": 1.44,
+        "max_alpha": 22.42,
+        "std_alpha": 7.75,
+        "alpha_spread": 20.98,
+        "avg_mdd": -0.58,
+        "win_rate": 1.0,
+        "avg_trades": 14.2,
+        "robust_score": 2.24
+      },
+      {
+        "combo": "快慢双层@4h",
+        "decision_tfs": [
+          "15m",
+          "30m",
+          "4h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 8.21,
+        "min_alpha": 0.0,
+        "max_alpha": 18.01,
+        "std_alpha": 6.46,
+        "alpha_spread": 18.01,
+        "avg_mdd": -1.71,
+        "win_rate": 0.75,
+        "avg_trades": 9.2,
+        "robust_score": 0.11
+      },
+      {
+        "combo": "快慢双层@2h",
+        "decision_tfs": [
+          "15m",
+          "30m",
+          "4h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 8.62,
+        "min_alpha": 0.0,
+        "max_alpha": 19.45,
+        "std_alpha": 7.0,
+        "alpha_spread": 19.45,
+        "avg_mdd": -1.55,
+        "win_rate": 0.75,
+        "avg_trades": 9.2,
+        "robust_score": -0.24
+      },
+      {
+        "combo": "快慢双层@1h",
+        "decision_tfs": [
+          "15m",
+          "30m",
+          "4h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 8.63,
+        "min_alpha": 0.0,
+        "max_alpha": 20.26,
+        "std_alpha": 7.4,
+        "alpha_spread": 20.26,
+        "avg_mdd": -1.69,
+        "win_rate": 0.75,
+        "avg_trades": 9.2,
+        "robust_score": -0.49
+      },
+      {
+        "combo": "核心周期@4h",
+        "decision_tfs": [
+          "30m",
+          "1h",
+          "4h",
+          "8h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 9.04,
+        "min_alpha": -0.01,
+        "max_alpha": 20.99,
+        "std_alpha": 7.61,
+        "alpha_spread": 21.0,
+        "avg_mdd": -0.77,
+        "win_rate": 0.75,
+        "avg_trades": 13.5,
+        "robust_score": -0.66
+      },
+      {
+        "combo": "大周期(≥1h)@4h",
+        "decision_tfs": [
+          "1h",
+          "2h",
+          "4h",
+          "8h",
+          "12h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 9.0,
+        "min_alpha": -0.11,
+        "max_alpha": 20.99,
+        "std_alpha": 7.65,
+        "alpha_spread": 21.1,
+        "avg_mdd": -0.62,
+        "win_rate": 0.75,
+        "avg_trades": 13.5,
+        "robust_score": -0.78
+      },
+      {
+        "combo": "中大周期@4h",
+        "decision_tfs": [
+          "1h",
+          "2h",
+          "4h",
+          "8h",
+          "12h"
+        ],
+        "windows": 4,
+        "avg_alpha": 8.93,
+        "min_alpha": -0.11,
+        "max_alpha": 20.99,
+        "std_alpha": 7.67,
+        "alpha_spread": 21.1,
+        "avg_mdd": -0.63,
+        "win_rate": 0.75,
+        "avg_trades": 13.5,
+        "robust_score": -0.79
+      },
+      {
+        "combo": "大周期(≥1h)@1h",
+        "decision_tfs": [
+          "1h",
+          "2h",
+          "4h",
+          "8h",
+          "12h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 9.2,
+        "min_alpha": -1.31,
+        "max_alpha": 23.31,
+        "std_alpha": 8.96,
+        "alpha_spread": 24.62,
+        "avg_mdd": -0.55,
+        "win_rate": 0.75,
+        "avg_trades": 14.0,
+        "robust_score": -2.86
+      },
+      {
+        "combo": "中大周期@1h",
+        "decision_tfs": [
+          "1h",
+          "2h",
+          "4h",
+          "8h",
+          "12h"
+        ],
+        "windows": 4,
+        "avg_alpha": 9.2,
+        "min_alpha": -1.31,
+        "max_alpha": 23.31,
+        "std_alpha": 8.96,
+        "alpha_spread": 24.62,
+        "avg_mdd": -0.55,
+        "win_rate": 0.75,
+        "avg_trades": 14.0,
+        "robust_score": -2.86
+      },
+      {
+        "combo": "全周期@4h",
+        "decision_tfs": [
+          "15m",
+          "30m",
+          "1h",
+          "2h",
+          "4h",
+          "8h",
+          "12h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 8.57,
+        "min_alpha": -1.83,
+        "max_alpha": 20.99,
+        "std_alpha": 8.18,
+        "alpha_spread": 22.82,
+        "avg_mdd": -0.8,
+        "win_rate": 0.75,
+        "avg_trades": 13.8,
+        "robust_score": -2.88
+      },
+      {
+        "combo": "大周期(≥1h)@2h",
+        "decision_tfs": [
+          "1h",
+          "2h",
+          "4h",
+          "8h",
+          "12h",
+          "24h"
+        ],
+        "windows": 4,
+        "avg_alpha": 9.04,
+        "min_alpha": -1.6,
+        "max_alpha": 22.42,
+        "std_alpha": 8.63,
+        "alpha_spread": 24.02,
+        "avg_mdd": -0.47,
+        "win_rate": 0.75,
+        "avg_trades": 14.0,
+        "robust_score": -2.95
+      },
+      {
+        "combo": "中大周期@2h",
+        "decision_tfs": [
+          "1h",
+          "2h",
+          "4h",
+          "8h",
+          "12h"
+        ],
+        "windows": 4,
+        "avg_alpha": 9.04,
+        "min_alpha": -1.6,
+        "max_alpha": 22.42,
+        "std_alpha": 8.63,
+        "alpha_spread": 24.02,
+        "avg_mdd": -0.47,
+        "win_rate": 0.75,
+        "avg_trades": 14.0,
+        "robust_score": -2.95
+      }
+    ],
+    "windows_built": 4,
+    "ref_tf": "1h"
+  },
   "summary": {
-    "30d": {
-      "avg_alpha": 90.6,
-      "best_alpha": 113.39,
-      "worst_alpha": 62.89,
+    "60d": {
+      "avg_alpha": 32.99,
+      "best_alpha": 40.62,
+      "worst_alpha": 25.83,
       "profitable_count": 18,
       "total_count": 18,
-      "avg_trades": 51.9
+      "avg_trades": 57.2
+    },
+    "30d": {
+      "avg_alpha": 34.52,
+      "best_alpha": 40.71,
+      "worst_alpha": 29.93,
+      "profitable_count": 18,
+      "total_count": 18,
+      "avg_trades": 29.3
     },
     "7d": {
-      "avg_alpha": 12.95,
-      "best_alpha": 15.78,
-      "worst_alpha": 4.76,
-      "profitable_count": 18,
+      "avg_alpha": 0.71,
+      "best_alpha": 6.89,
+      "worst_alpha": -1.83,
+      "profitable_count": 7,
       "total_count": 18,
-      "avg_trades": 18.2
+      "avg_trades": 10.1
     }
-  }
+  },
+  "recent_runs": [
+    {
+      "run_id": "20260213_094425_codex_p2_40363",
+      "run_time": "2026-02-13T09:55:29.245740",
+      "runner": "codex_p2",
+      "host": "baokundeMacBook-Pro.local",
+      "pid": 40363,
+      "snapshot_file": "20260213_094425_codex_p2_40363.json",
+      "top_60d": {
+        "combo": "均衡搭配@1h",
+        "alpha": 40.62
+      },
+      "top_30d": {
+        "combo": "全周期@1h",
+        "alpha": 40.71
+      },
+      "top_7d": {
+        "combo": "均衡搭配@1h",
+        "alpha": 6.89
+      }
+    },
+    {
+      "run_id": "20260213_022700_codex_p1_34658",
+      "run_time": "2026-02-13T02:33:06.780680",
+      "runner": "codex_p1",
+      "host": "baokundeMacBook-Pro.local",
+      "pid": 34658,
+      "snapshot_file": "20260213_022700_codex_p1_34658.json",
+      "top_60d": {
+        "combo": "均衡搭配@1h",
+        "alpha": 45.57
+      },
+      "top_30d": {
+        "combo": "均衡搭配@1h",
+        "alpha": 42.93
+      },
+      "top_7d": {
+        "combo": "核心周期@1h",
+        "alpha": 9.91
+      }
+    },
+    {
+      "run_id": "20260213_021624_codex_p0p1_72178",
+      "run_time": "2026-02-13T02:19:49.644916",
+      "runner": "codex_p0p1",
+      "host": "baokundeMacBook-Pro.local",
+      "pid": 72178,
+      "snapshot_file": "20260213_021624_codex_p0p1_72178.json",
+      "top_60d": {
+        "combo": "均衡搭配@1h",
+        "alpha": 45.57
+      },
+      "top_30d": {
+        "combo": "均衡搭配@1h",
+        "alpha": 42.93
+      },
+      "top_7d": {
+        "combo": "核心周期@1h",
+        "alpha": 9.91
+      }
+    },
+    {
+      "run_id": "20260213_015835_codex_fix_84119",
+      "run_time": "2026-02-13T02:03:13.593331",
+      "runner": "codex_fix",
+      "host": "baokundeMacBook-Pro.local",
+      "pid": 84119,
+      "snapshot_file": "20260213_015835_codex_fix_84119.json",
+      "top_60d": {
+        "combo": "快慢双层@1h",
+        "alpha": 44.49
+      },
+      "top_30d": {
+        "combo": "大周期(≥1h)@1h",
+        "alpha": 39.72
+      },
+      "top_7d": {
+        "combo": "大周期(≥1h)@1h",
+        "alpha": 9.65
+      }
+    },
+    {
+      "run_id": "20260213_011513_codex_local_83287",
+      "run_time": "2026-02-13T01:19:11.030854",
+      "runner": "codex_local",
+      "host": "baokundeMacBook-Pro.local",
+      "pid": 83287,
+      "snapshot_file": "20260213_011513_codex_local_83287.json",
+      "top_60d": {
+        "combo": "中大周期@2h",
+        "alpha": 189.88
+      },
+      "top_30d": {
+        "combo": "大周期(≥1h)@1h",
+        "alpha": 118.42
+      },
+      "top_7d": {
+        "combo": "中大周期@1h",
+        "alpha": 26.97
+      }
+    }
+  ]
 }

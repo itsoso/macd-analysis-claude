@@ -31,6 +31,78 @@ from optimize_six_book import (
 from strategy_futures import FuturesEngine
 
 
+TRADE_RECORD_FIELDS = [
+    "time",
+    "action",
+    "direction",
+    "market_price",
+    "exec_price",
+    "quantity",
+    "notional_value",
+    "fee",
+    "slippage_cost",
+    "total_cost",
+    "leverage",
+    "margin",
+    "margin_released",
+    "pnl",
+    "entry_price",
+    "partial_ratio",
+    "after_usdt",
+    "after_spot_eth",
+    "after_frozen_margin",
+    "after_total",
+    "after_available",
+    "has_long",
+    "has_short",
+    "long_entry",
+    "long_qty",
+    "short_entry",
+    "short_qty",
+    "cum_spot_fees",
+    "cum_futures_fees",
+    "cum_funding_paid",
+    "cum_slippage",
+    "reason",
+]
+
+
+def _normalize_trade_record(trade):
+    """统一交易记录 schema，保证人工 review 字段齐全。"""
+    row = {k: trade.get(k) for k in TRADE_RECORD_FIELDS}
+    for k, v in trade.items():
+        if k not in row:
+            row[k] = v
+    return row
+
+
+def _format_period_results_export(results_list, include_full_trades=True):
+    out = []
+    for i, r in enumerate(results_list):
+        row = {
+            "rank": i + 1,
+            "combo_name": r["combo_name"],
+            "primary_tf": r["primary_tf"],
+            "decision_tfs": r["decision_tfs"],
+            "alpha": r["alpha"],
+            "strategy_return": r["strategy_return"],
+            "buy_hold_return": r["buy_hold_return"],
+            "cash_hold_return": r.get("cash_hold_return", 0.0),
+            "alpha_vs_cash": r.get("alpha_vs_cash", r["strategy_return"]),
+            "max_drawdown": r["max_drawdown"],
+            "total_trades": r["total_trades"],
+            "liquidations": r.get("liquidations", 0),
+            "total_cost": r.get("total_cost", 0),
+            "vs_single_tf": r.get("vs_single_tf", 0),
+            "protections": r.get("protections", {}),
+            "trade_count": len(r.get("trade_details", []) or []),
+        }
+        if include_full_trades:
+            row["trade_details"] = [_normalize_trade_record(t) for t in (r.get("trade_details", []) or [])]
+        out.append(row)
+    return out
+
+
 def fetch_data_for_tf(tf, days):
     """获取指定时间框架和天数的数据"""
     fetch_days = days + 30
@@ -87,15 +159,18 @@ def _file_lock(lock_path):
             fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
 
 
-def _slice_train_window(df, test_days=60, train_days=60):
+def _slice_train_window(df, test_days=60, train_days=60, purge_days=7):
     """
     样本外切片: 训练集使用测试窗口之前的区间，严格不与测试窗口重叠。
+    purge_days: 训练与测试之间的隔离期，防止指标滞后造成的信息泄露。
     """
     if df is None or len(df) == 0:
         return df
     test_start = df.index[-1] - pd.Timedelta(days=test_days)
-    train_start = test_start - pd.Timedelta(days=train_days)
-    sliced = df[(df.index >= train_start) & (df.index < test_start)].copy()
+    # 在训练和测试之间留一个 purge 间隔, 防止指标 lag 泄露
+    train_end = test_start - pd.Timedelta(days=purge_days)
+    train_start = train_end - pd.Timedelta(days=train_days)
+    sliced = df[(df.index >= train_start) & (df.index < train_end)].copy()
     return sliced
 
 
@@ -124,6 +199,95 @@ def _scale_runtime_config(base_config, primary_tf, tf_hours, name):
     config["cooldown"] = max(1, int(config.get("cooldown", 4) / tf_h))
     config["spot_cooldown"] = max(2, int(config.get("spot_cooldown", 12) / tf_h))
     return config
+
+
+def _build_walk_forward_windows(df, train_days=90, test_days=7, step_days=7, windows=4):
+    """
+    构建滚动 walk-forward 窗口:
+      train: [train_start, train_end)
+      test:  [test_start, test_end]
+    """
+    if df is None or len(df) == 0 or windows <= 0:
+        return []
+
+    end_dt = df.index[-1]
+    out = []
+    for step in range(windows - 1, -1, -1):
+        test_end = end_dt - pd.Timedelta(days=step * step_days)
+        test_start = test_end - pd.Timedelta(days=test_days)
+        train_end = test_start
+        train_start = train_end - pd.Timedelta(days=train_days)
+        if train_start < df.index[0]:
+            continue
+        out.append(
+            {
+                "window_id": f"wf_{len(out) + 1}",
+                "train_start": train_start,
+                "train_end": train_end,
+                "test_start": test_start,
+                "test_end": test_end,
+            }
+        )
+    return out
+
+
+def _summarize_walk_forward_rankings(window_rows, min_windows=2):
+    """聚合 walk-forward 每窗结果，输出稳健组合排名。"""
+    buckets = {}
+    for row in window_rows:
+        key = f"{row['combo_name']}@{row['primary_tf']}|{'+'.join(row['decision_tfs'])}"
+        if key not in buckets:
+            buckets[key] = {
+                "combo": f"{row['combo_name']}@{row['primary_tf']}",
+                "decision_tfs": row["decision_tfs"],
+                "alphas": [],
+                "mdds": [],
+                "trades": [],
+                "windows": [],
+            }
+        buckets[key]["alphas"].append(float(row["alpha"]))
+        buckets[key]["mdds"].append(float(row["max_drawdown"]))
+        buckets[key]["trades"].append(int(row["total_trades"]))
+        buckets[key]["windows"].append(row["window_id"])
+
+    rankings = []
+    for item in buckets.values():
+        if len(item["alphas"]) < int(min_windows):
+            continue
+        alphas = item["alphas"]
+        mdds = item["mdds"]
+        avg_alpha = float(np.mean(alphas))
+        min_alpha = float(np.min(alphas))
+        max_alpha = float(np.max(alphas))
+        std_alpha = float(np.std(alphas))
+        spread = max_alpha - min_alpha
+        avg_mdd = float(np.mean(mdds))
+        win_rate = float(np.mean([1.0 if a > 0 else 0.0 for a in alphas]))
+        avg_trades = float(np.mean(item["trades"]))
+
+        # 稳健性优先: 保底收益 > 跨窗波动 > 回撤惩罚
+        score = min_alpha - std_alpha * 0.4 - spread * 0.1 - max(0.0, abs(avg_mdd) - 15.0) * 0.25
+        score += win_rate * 6.0
+
+        rankings.append(
+            {
+                "combo": item["combo"],
+                "decision_tfs": item["decision_tfs"],
+                "windows": len(item["alphas"]),
+                "avg_alpha": round(avg_alpha, 2),
+                "min_alpha": round(min_alpha, 2),
+                "max_alpha": round(max_alpha, 2),
+                "std_alpha": round(std_alpha, 2),
+                "alpha_spread": round(spread, 2),
+                "avg_mdd": round(avg_mdd, 2),
+                "win_rate": round(win_rate, 4),
+                "avg_trades": round(avg_trades, 1),
+                "robust_score": round(score, 2),
+            }
+        )
+
+    rankings.sort(key=lambda x: x["robust_score"], reverse=True)
+    return rankings
 
 
 def _select_oos_base_config(
@@ -160,6 +324,28 @@ def _select_oos_base_config(
             break
 
     candidates.append(dict(fallback_config))
+
+    # ── 增加通用"非优化"候选配置, 降低对优化期数据的依赖 ──
+    generic_candidates = [
+        # 保守组: 低杠杆、低仓位
+        {"tag": "generic_conservative", "lev": 2, "max_lev": 2, "margin_use": 0.30,
+         "short_threshold": 30, "long_threshold": 45, "sell_threshold": 22,
+         "buy_threshold": 30, "close_short_bs": 45, "close_long_ss": 45,
+         "short_sl": -0.15, "long_sl": -0.10, "short_tp": 0.40, "long_tp": 0.25},
+        # 中性组: 中等阈值
+        {"tag": "generic_moderate", "lev": 3, "max_lev": 3, "margin_use": 0.50,
+         "short_threshold": 25, "long_threshold": 40, "sell_threshold": 18,
+         "buy_threshold": 25, "close_short_bs": 40, "close_long_ss": 40,
+         "short_sl": -0.20, "long_sl": -0.12, "short_tp": 0.50, "long_tp": 0.30},
+        # 高门槛组: 信号要求更高
+        {"tag": "generic_high_bar", "lev": 2, "max_lev": 2, "margin_use": 0.40,
+         "short_threshold": 35, "long_threshold": 50, "sell_threshold": 25,
+         "buy_threshold": 35, "close_short_bs": 50, "close_long_ss": 50,
+         "short_sl": -0.18, "long_sl": -0.10, "short_tp": 0.45, "long_tp": 0.30},
+    ]
+    for gc in generic_candidates:
+        merged_gc = {**fallback_config, **gc}
+        candidates.append(merged_gc)
 
     # 去重
     seen = set()
@@ -210,12 +396,26 @@ def _select_oos_base_config(
 
     scored.sort(key=lambda x: x["objective"], reverse=True)
     best = scored[0]
+
+    # 检查选中配置是否来自通用候选 (无数据泄露风险) 还是优化候选 (可能泄露)
+    selected_tag = best.get("tag", "")
+    is_generic = selected_tag.startswith("generic_")
+    contamination_risk = "none" if is_generic else "medium"
+    contamination_note = (
+        "选中配置来自通用(非优化)候选，无数据泄露" if is_generic else
+        "选中配置来自优化候选，参数可能在测试期[T-30,T]上过拟合。"
+        "OOS训练[T-120,T-60)已做初步过滤，但不能完全消除偏差。"
+    )
+
     meta = {
         "mode": "strict_oos",
         "ref_tf": ref_tf,
         "train_days": train_days,
         "test_days": test_days,
+        "purge_days": 7,
         "candidates": len(scored),
+        "contamination_risk": contamination_risk,
+        "contamination_note": contamination_note,
         "selected_tag": best["tag"],
         "selected_alpha_train": round(best["alpha"], 2),
         "selected_mdd_train": round(best["max_drawdown"], 2),
@@ -232,6 +432,9 @@ def main(args):
     use_oos = not args.disable_oos
     use_conservative = not args.disable_conservative
     use_live_gate = not args.disable_live_gate
+    use_regime_aware = not args.disable_regime_aware
+    use_protections = not args.disable_protections
+    include_full_trades = not args.no_record_full_trades
 
     print("=" * 120)
     print("  多周期联合决策 · 60天/30天/7天 真实回测对比")
@@ -239,7 +442,11 @@ def main(args):
     print("  融合算法: fuse_tf_scores (回测/实盘统一)")
     print(f"  现实约束: conservative={'ON' if use_conservative else 'OFF'} "
           f"| strict_oos={'ON' if use_oos else 'OFF'} "
-          f"| live_gate={'ON' if use_live_gate else 'OFF'}")
+          f"| live_gate={'ON' if use_live_gate else 'OFF'} "
+          f"| regime_aware={'ON' if use_regime_aware else 'OFF'} "
+          f"| protections={'ON' if use_protections else 'OFF'} "
+          f"| full_trades={'ON' if include_full_trades else 'OFF'} "
+          f"| walk_forward={'ON' if not args.disable_walk_forward else 'OFF'}")
     print(f"  运行标识: {run_id} ({runner}@{host})")
     print("=" * 120)
 
@@ -328,6 +535,21 @@ def main(args):
         'use_live_gate': use_live_gate,
         'consensus_min_strength': args.consensus_min_strength,
         'coverage_min': args.coverage_min,
+        # P2: 市场分层自适应阈值/风险
+        'use_regime_aware': use_regime_aware,
+        'regime_lookback_bars': args.regime_lookback_bars,
+        'regime_vol_high': args.regime_vol_high,
+        'regime_vol_low': args.regime_vol_low,
+        'regime_trend_strong': args.regime_trend_strong,
+        'regime_trend_weak': args.regime_trend_weak,
+        'regime_atr_high': args.regime_atr_high,
+        # P3: 组合层保护
+        'use_protections': use_protections,
+        'prot_loss_streak_limit': args.prot_loss_streak_limit,
+        'prot_loss_streak_cooldown_bars': args.prot_loss_streak_cooldown_bars,
+        'prot_daily_loss_limit_pct': args.prot_daily_loss_limit_pct,
+        'prot_global_dd_limit_pct': args.prot_global_dd_limit_pct,
+        'prot_close_on_global_halt': not args.disable_prot_close_on_halt,
     }
     if use_conservative:
         f12_base = _apply_conservative_risk(f12_base)
@@ -338,7 +560,8 @@ def main(args):
     print(f"\n[1/4] 获取数据 (时间框架: {', '.join(all_tfs_needed)})...")
 
     all_data = {}
-    history_days = 60 + max(args.train_days, 30)
+    # 60天测试 + train_days训练 + 7天purge + 30天缓冲(指标预热)
+    history_days = 60 + max(args.train_days, 30) + 7 + 30
     for tf in all_tfs_needed:
         print(f"  获取 {tf} 数据 ({history_days}天 + 30天缓冲)...")
         df = fetch_data_for_tf(tf, history_days)
@@ -509,6 +732,9 @@ def main(args):
                     'total_cost': fees.get('total_costs', 0),
                     'fees': fees,
                     'vs_single_tf': round(vs_single, 2),
+                    'protections': r.get('protections', {}),
+                    # 完整交易明细 (每笔含时间/价格/数量/费用/PnL/仓位快照)
+                    'trade_details': r.get('trades', []),
                 }
                 period_results.append(entry)
 
@@ -519,6 +745,10 @@ def main(args):
                       f"{r['total_trades']:>5} {vs_single:>+9.2f}%{marker}")
 
         period_results.sort(key=lambda x: x['alpha'], reverse=True)
+        # 只保留 TOP5 组合的交易明细, 其余清空以控制文件大小
+        for _i, _entry in enumerate(period_results):
+            if _i >= 5:
+                _entry['trade_details'] = []
         all_period_results[days] = period_results
 
         # 汇总
@@ -578,22 +808,10 @@ def main(args):
     # 保存结果
     # ======================================================
     def _format_period_results(results_list):
-        return [{
-            'rank': i + 1,
-            'combo_name': r['combo_name'],
-            'primary_tf': r['primary_tf'],
-            'decision_tfs': r['decision_tfs'],
-            'alpha': r['alpha'],
-            'strategy_return': r['strategy_return'],
-            'buy_hold_return': r['buy_hold_return'],
-            'cash_hold_return': r.get('cash_hold_return', 0.0),
-            'alpha_vs_cash': r.get('alpha_vs_cash', r['strategy_return']),
-            'max_drawdown': r['max_drawdown'],
-            'total_trades': r['total_trades'],
-            'liquidations': r.get('liquidations', 0),
-            'total_cost': r.get('total_cost', 0),
-            'vs_single_tf': r.get('vs_single_tf', 0),
-        } for i, r in enumerate(results_list)]
+        return _format_period_results_export(
+            results_list,
+            include_full_trades=include_full_trades,
+        )
 
     def _period_summary(results_list):
         if not results_list:
@@ -670,6 +888,139 @@ def main(args):
                   f"{rr['alpha_60d']:>+7.2f}% {rr['alpha_30d']:>+7.2f}% {rr['alpha_7d']:>+7.2f}% "
                   f"{rr['min_alpha']:>+7.2f}% {rr['alpha_spread']:>7.2f} {rr['robust_score']:>7.2f}")
 
+    walk_forward = {
+        "enabled": not args.disable_walk_forward,
+        "train_days": args.wf_train_days,
+        "test_days": args.wf_test_days,
+        "step_days": args.wf_step_days,
+        "windows_requested": args.wf_windows,
+        "min_windows": args.wf_min_windows,
+        "windows": [],
+        "rankings": [],
+    }
+    if walk_forward["enabled"] and primary_tf_candidates:
+        wf_ref_tf = best_tf if best_tf in available_tfs else primary_tf_candidates[0]
+        wf_windows = _build_walk_forward_windows(
+            all_data[wf_ref_tf],
+            train_days=args.wf_train_days,
+            test_days=args.wf_test_days,
+            step_days=args.wf_step_days,
+            windows=args.wf_windows,
+        )
+        walk_forward["windows_built"] = len(wf_windows)
+        walk_forward["ref_tf"] = wf_ref_tf
+
+        if not wf_windows:
+            print("\n  [WF] 窗口不足，跳过 walk-forward。可增加抓取历史或降低训练窗口。")
+        else:
+            print(f"\n  === Walk-Forward 滚动验证 ({len(wf_windows)}窗) ===")
+            wf_rows = []
+            for w in wf_windows:
+                window_data = {}
+                for tf, df in all_data.items():
+                    sliced = df[df.index <= w["test_end"]].copy()
+                    if len(sliced) > 120:
+                        window_data[tf] = sliced
+
+                wf_available_tfs = list(window_data.keys())
+                wf_primary_tfs = [tf for tf in primary_tf_candidates if tf in wf_available_tfs]
+                wf_combos = [
+                    (name, [tf for tf in tfs if tf in wf_available_tfs])
+                    for name, tfs in multi_tf_combos
+                ]
+                wf_combos = [(name, tfs) for name, tfs in wf_combos if len(tfs) >= 2]
+
+                if wf_ref_tf not in wf_available_tfs or not wf_primary_tfs or not wf_combos:
+                    continue
+
+                selected_cfg, wf_oos_meta = _select_oos_base_config(
+                    opt_result=opt_result,
+                    all_data=window_data,
+                    test_days=args.wf_test_days,
+                    train_days=args.wf_train_days,
+                    tf_hours=tf_hours,
+                    fallback_config=f12_base,
+                    ref_tf=wf_ref_tf,
+                    top_n=args.oos_candidates,
+                    conservative=use_conservative,
+                )
+                wf_score_index = _build_tf_score_index(
+                    window_data, all_signals, wf_available_tfs, selected_cfg
+                )
+
+                window_rows = []
+                for combo_name, combo_tfs in wf_combos:
+                    for ptf in wf_primary_tfs:
+                        cfg = _scale_runtime_config(
+                            selected_cfg,
+                            ptf,
+                            tf_hours,
+                            f"wf_{w['window_id']}_{combo_name}@{ptf}",
+                        )
+                        r = run_strategy_multi_tf(
+                            window_data[ptf],
+                            wf_score_index,
+                            combo_tfs,
+                            cfg,
+                            primary_tf=ptf,
+                            trade_days=args.wf_test_days,
+                        )
+                        row = {
+                            "window_id": w["window_id"],
+                            "combo_name": combo_name,
+                            "primary_tf": ptf,
+                            "decision_tfs": combo_tfs,
+                            "alpha": float(r["alpha"]),
+                            "max_drawdown": float(r["max_drawdown"]),
+                            "total_trades": int(r["total_trades"]),
+                        }
+                        wf_rows.append(row)
+                        window_rows.append(row)
+
+                window_rows.sort(key=lambda x: x["alpha"], reverse=True)
+                top_row = window_rows[0] if window_rows else None
+                walk_forward["windows"].append(
+                    {
+                        "window_id": w["window_id"],
+                        "train_start": w["train_start"].isoformat(),
+                        "train_end": w["train_end"].isoformat(),
+                        "test_start": w["test_start"].isoformat(),
+                        "test_end": w["test_end"].isoformat(),
+                        "selected_tag": wf_oos_meta.get("selected_tag"),
+                        "selected_objective_train": wf_oos_meta.get("selected_objective_train"),
+                        "top_combo": (
+                            {
+                                "combo": f"{top_row['combo_name']}@{top_row['primary_tf']}",
+                                "alpha": round(top_row["alpha"], 2),
+                            }
+                            if top_row
+                            else None
+                        ),
+                    }
+                )
+                if top_row:
+                    print(
+                        f"  {w['window_id']}: "
+                        f"{w['test_start'].date()}~{w['test_end'].date()} "
+                        f"TOP={top_row['combo_name']}@{top_row['primary_tf']} "
+                        f"α={top_row['alpha']:+.2f}%"
+                    )
+
+            wf_rankings = _summarize_walk_forward_rankings(
+                wf_rows, min_windows=args.wf_min_windows
+            )
+            walk_forward["rankings"] = wf_rankings[:50]
+            if wf_rankings:
+                print("\n  --- WF 稳健组合榜 TOP10 ---")
+                print(f"  {'排名':>4} {'组合':<28} {'窗数':>4} {'Avgα':>8} {'Minα':>8} {'WinRate':>8} {'Score':>8}")
+                print("  " + "-" * 84)
+                for i, rr in enumerate(wf_rankings[:10]):
+                    print(
+                        f"  #{i+1:>3} {rr['combo']:<28} {rr['windows']:>4} "
+                        f"{rr['avg_alpha']:>+7.2f}% {rr['min_alpha']:>+7.2f}% "
+                        f"{rr['win_rate'] * 100:>7.1f}% {rr['robust_score']:>7.2f}"
+                    )
+
     output = {
         'description': '多周期联合决策 · 60天/30天/7天 真实回测对比 (统一fuse_tf_scores)',
         'run_time': datetime.now().isoformat(),
@@ -685,8 +1036,28 @@ def main(args):
             'conservative_risk': use_conservative,
             'strict_oos': use_oos,
             'live_gate': use_live_gate,
+            'regime_aware': use_regime_aware,
+            'record_full_trades': include_full_trades,
+            'regime_lookback_bars': args.regime_lookback_bars,
+            'regime_vol_high': args.regime_vol_high,
+            'regime_vol_low': args.regime_vol_low,
+            'regime_trend_strong': args.regime_trend_strong,
+            'regime_trend_weak': args.regime_trend_weak,
+            'regime_atr_high': args.regime_atr_high,
+            'protections': use_protections,
+            'prot_loss_streak_limit': args.prot_loss_streak_limit,
+            'prot_loss_streak_cooldown_bars': args.prot_loss_streak_cooldown_bars,
+            'prot_daily_loss_limit_pct': args.prot_daily_loss_limit_pct,
+            'prot_global_dd_limit_pct': args.prot_global_dd_limit_pct,
+            'prot_close_on_global_halt': not args.disable_prot_close_on_halt,
             'consensus_min_strength': args.consensus_min_strength,
             'coverage_min': args.coverage_min,
+            'walk_forward': not args.disable_walk_forward,
+            'wf_train_days': args.wf_train_days,
+            'wf_test_days': args.wf_test_days,
+            'wf_step_days': args.wf_step_days,
+            'wf_windows': args.wf_windows,
+            'wf_min_windows': args.wf_min_windows,
             'train_days': args.train_days,
             'oos_candidates': args.oos_candidates,
             'oos_selection': oos_meta,
@@ -702,11 +1073,13 @@ def main(args):
             'funding_rate': '±0.01%/8h',
             'liquidation_fee': '0.5%',
         },
+        'trade_record_fields': TRADE_RECORD_FIELDS,
         'single_tf_baselines': single_tf_baselines,
         'results_60d': _format_period_results(r60),
         'results_30d': _format_period_results(r30),
         'results_7d': _format_period_results(r7),
         'robust_rankings': robust_rankings[:30],
+        'walk_forward': walk_forward,
     }
 
     summary = {}
@@ -813,6 +1186,96 @@ if __name__ == '__main__':
         help="多周期共识最低强度(实盘口径默认 40)",
     )
     parser.add_argument(
+        "--regime-lookback-bars",
+        type=int,
+        default=48,
+        help="regime-aware 判定窗口 bars (默认 48)",
+    )
+    parser.add_argument(
+        "--regime-vol-high",
+        type=float,
+        default=0.020,
+        help="regime-aware 高波动阈值 (默认 0.020)",
+    )
+    parser.add_argument(
+        "--regime-vol-low",
+        type=float,
+        default=0.007,
+        help="regime-aware 低波动阈值 (默认 0.007)",
+    )
+    parser.add_argument(
+        "--regime-trend-strong",
+        type=float,
+        default=0.015,
+        help="regime-aware 强趋势阈值 (默认 0.015)",
+    )
+    parser.add_argument(
+        "--regime-trend-weak",
+        type=float,
+        default=0.006,
+        help="regime-aware 弱趋势阈值 (默认 0.006)",
+    )
+    parser.add_argument(
+        "--regime-atr-high",
+        type=float,
+        default=0.018,
+        help="regime-aware ATR高波动阈值 (默认 0.018)",
+    )
+    parser.add_argument(
+        "--prot-loss-streak-limit",
+        type=int,
+        default=3,
+        help="P3保护: 连续亏损达到该次数后触发冷却 (默认 3)",
+    )
+    parser.add_argument(
+        "--prot-loss-streak-cooldown-bars",
+        type=int,
+        default=24,
+        help="P3保护: 连亏冷却bars数 (默认 24)",
+    )
+    parser.add_argument(
+        "--prot-daily-loss-limit-pct",
+        type=float,
+        default=0.03,
+        help="P3保护: 日内亏损上限(占当日开盘权益比例, 默认 0.03)",
+    )
+    parser.add_argument(
+        "--prot-global-dd-limit-pct",
+        type=float,
+        default=0.12,
+        help="P3保护: 组合峰值回撤停机阈值(默认 0.12)",
+    )
+    parser.add_argument(
+        "--wf-train-days",
+        type=int,
+        default=90,
+        help="walk-forward 训练窗口天数 (默认 90)",
+    )
+    parser.add_argument(
+        "--wf-test-days",
+        type=int,
+        default=7,
+        help="walk-forward 验证窗口天数 (默认 7)",
+    )
+    parser.add_argument(
+        "--wf-step-days",
+        type=int,
+        default=7,
+        help="walk-forward 滚动步长天数 (默认 7)",
+    )
+    parser.add_argument(
+        "--wf-windows",
+        type=int,
+        default=4,
+        help="walk-forward 评估窗口个数 (默认 4)",
+    )
+    parser.add_argument(
+        "--wf-min-windows",
+        type=int,
+        default=3,
+        help="进入WF稳健榜的最少窗口命中数 (默认 3)",
+    )
+    parser.add_argument(
         "--disable-oos",
         action="store_true",
         help="关闭严格样本外筛选 (默认开启)",
@@ -826,6 +1289,31 @@ if __name__ == '__main__':
         "--disable-live-gate",
         action="store_true",
         help="关闭实盘口径门控(actionable/direction/strength/coverage)",
+    )
+    parser.add_argument(
+        "--disable-regime-aware",
+        action="store_true",
+        help="关闭regime-aware动态阈值与风险控制(默认开启)",
+    )
+    parser.add_argument(
+        "--disable-protections",
+        action="store_true",
+        help="关闭P3组合保护(连亏冷却/日内风险预算/全局停机)",
+    )
+    parser.add_argument(
+        "--disable-prot-close-on-halt",
+        action="store_true",
+        help="触发全局停机后不强制平掉当前合约仓位",
+    )
+    parser.add_argument(
+        "--no-record-full-trades",
+        action="store_true",
+        help="不在结果JSON中记录每笔交易全量明细(默认记录)",
+    )
+    parser.add_argument(
+        "--disable-walk-forward",
+        action="store_true",
+        help="关闭walk-forward滚动验证(默认开启)",
     )
     parser.add_argument(
         "--no-update-latest",

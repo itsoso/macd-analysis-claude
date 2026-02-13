@@ -56,20 +56,37 @@ class FuturesPosition:
         return self.unrealized_pnl
 
     def is_liquidated(self, current_price, maintenance_rate=0.05):
-        """检查是否触发强平"""
+        """检查是否触发强平
+        币安规则: 维持保证金 = 名义价值 × 维持保证金率
+        (之前错误地用 margin × rate, 导致强平门槛过低, 虚高收益)
+        """
         pnl = self.calc_pnl(current_price)
         # 保证金 + 未实现盈亏 < 维持保证金
         remaining = self.margin + pnl
-        maintenance = self.margin * maintenance_rate
+        # 维持保证金 = 名义价值 × 维持保证金率 (币安标准)
+        notional = self.quantity * current_price
+        maintenance = notional * maintenance_rate
         return remaining < maintenance
 
     def liquidation_price(self, maintenance_rate=0.05):
-        """计算强平价格"""
-        loss_limit = self.margin * (1 - maintenance_rate)
+        """计算强平价格
+        解方程: margin + pnl = notional * maintenance_rate
+        多头: margin + (P - entry) * qty = P * qty * mr  →  P = (margin + entry*qty) / (qty*(1+mr))  不对
+        实际: remaining = margin + pnl, maintenance = qty * P * mr
+        多头: margin + (P - entry)*qty = qty*P*mr  →  P*(qty - qty*mr) = qty*entry - margin  →  P = (qty*entry - margin) / (qty*(1-mr))
+        空头: margin + (entry - P)*qty = qty*P*mr  →  P*(qty + qty*mr) = qty*entry + margin  →  P = (qty*entry + margin) / (qty*(1+mr))
+        """
+        qty = self.quantity
+        entry = self.entry_price
+        mr = maintenance_rate
         if self.direction == 'long':
-            return self.entry_price - loss_limit / self.quantity
+            denom = qty * (1 - mr)
+            if denom <= 0:
+                return 0
+            return (qty * entry - self.margin) / denom
         else:
-            return self.entry_price + loss_limit / self.quantity
+            denom = qty * (1 + mr)
+            return (qty * entry + self.margin) / denom
 
 
 class FuturesEngine:
@@ -138,23 +155,68 @@ class FuturesEngine:
         return self.usdt + spot_val + futures_pnl
 
     def _record_trade(self, dt, price, action, direction, quantity, value,
-                      fee, leverage, reason):
+                      fee, leverage, reason, *,
+                      exec_price=None, slippage_cost=0.0, margin=0.0,
+                      pnl=0.0, entry_price=0.0, margin_released=0.0,
+                      partial_ratio=0.0):
+        """记录完整交易明细，供人工 review。
+
+        Parameters
+        ----------
+        price : float          市场中间价 (K线 close / open)
+        exec_price : float     含滑点的实际成交价
+        slippage_cost : float  滑点成本
+        margin : float         本笔动用保证金
+        pnl : float            已实现盈亏 (平仓/强平时)
+        entry_price : float    开仓时入场价 (平仓时回填)
+        margin_released : float 平仓释放的保证金
+        partial_ratio : float  分段止盈比例 (0=全仓)
+        """
         self.trades.append({
+            # 时间
             'time': dt.isoformat(),
-            'action': action,
-            'direction': direction,
-            'price': round(price, 2),
-            'quantity': round(quantity, 4),
-            'value': round(value, 2),
-            'fee': round(fee, 2),
+            # 操作分类
+            'action': action,         # SPOT_BUY/SPOT_SELL/OPEN_LONG/CLOSE_LONG/
+                                      # OPEN_SHORT/CLOSE_SHORT/LIQUIDATED/PARTIAL_TP
+            'direction': direction,   # long / short
+            # 价格
+            'market_price': round(price, 4),
+            'exec_price': round(exec_price or price, 4),
+            # 数量与金额
+            'quantity': round(quantity, 6),
+            'notional_value': round(value, 2),       # 名义价值
+            # 费用明细
+            'fee': round(fee, 4),
+            'slippage_cost': round(slippage_cost, 4),
+            'total_cost': round(fee + slippage_cost, 4),
+            # 杠杆与保证金
             'leverage': leverage,
-            'usdt_after': round(self.usdt, 2),
-            'spot_eth': round(self.spot_eth, 4),
-            'frozen_margin': round(self.frozen_margin, 2),
-            'total': round(self.total_value(price), 2),
+            'margin': round(margin, 2),
+            'margin_released': round(margin_released, 2),
+            # 盈亏
+            'pnl': round(pnl, 2),
+            'entry_price': round(entry_price, 4) if entry_price else None,
+            'partial_ratio': round(partial_ratio, 4) if partial_ratio else None,
+            # 交易后账户快照
+            'after_usdt': round(self.usdt, 2),
+            'after_spot_eth': round(self.spot_eth, 6),
+            'after_frozen_margin': round(self.frozen_margin, 2),
+            'after_total': round(self.total_value(price), 2),
+            'after_available': round(self.available_usdt(), 2),
+            # 仓位快照
+            'has_long': bool(self.futures_long),
+            'has_short': bool(self.futures_short),
+            'long_entry': round(self.futures_long.entry_price, 4) if self.futures_long else None,
+            'long_qty': round(self.futures_long.quantity, 6) if self.futures_long else None,
+            'short_entry': round(self.futures_short.entry_price, 4) if self.futures_short else None,
+            'short_qty': round(self.futures_short.quantity, 6) if self.futures_short else None,
+            # 累计费用
+            'cum_spot_fees': round(self.total_spot_fees, 2),
+            'cum_futures_fees': round(self.total_futures_fees, 2),
+            'cum_funding_paid': round(self.total_funding_paid, 2),
+            'cum_slippage': round(self.total_slippage_cost, 2),
+            # 原因
             'reason': reason,
-            'long_pos': bool(self.futures_long),
-            'short_pos': bool(self.futures_short),
         })
 
     # === 现货操作 ===
@@ -172,7 +234,8 @@ class FuturesEngine:
         self.spot_eth += qty
         self.total_spot_fees += fee
         self.total_slippage_cost += slippage_cost
-        self._record_trade(dt, price, 'SPOT_BUY', 'long', qty, invest, fee, 1, reason)
+        self._record_trade(dt, price, 'SPOT_BUY', 'long', qty, invest, fee, 1, reason,
+                           exec_price=actual_p, slippage_cost=slippage_cost)
 
     def spot_sell(self, price, dt, ratio, reason):
         """现货卖出ETH"""
@@ -188,7 +251,9 @@ class FuturesEngine:
         self.spot_eth -= qty
         self.total_spot_fees += fee
         self.total_slippage_cost += slippage_cost
-        self._record_trade(dt, price, 'SPOT_SELL', 'long', qty, revenue, fee, 1, reason)
+        self._record_trade(dt, price, 'SPOT_SELL', 'long', qty, revenue, fee, 1, reason,
+                           exec_price=actual_p, slippage_cost=slippage_cost,
+                           pnl=revenue - fee)
 
     # === 合约操作 ===
     def open_long(self, price, dt, margin, leverage, reason):
@@ -211,7 +276,9 @@ class FuturesEngine:
         self.total_slippage_cost += slippage_cost
         self.futures_long = FuturesPosition('long', actual_p, qty, leverage, margin)
         self._record_trade(dt, price, 'OPEN_LONG', 'long', qty, notional, fee,
-                           leverage, reason)
+                           leverage, reason,
+                           exec_price=actual_p, slippage_cost=slippage_cost,
+                           margin=margin)
 
     def close_long(self, price, dt, reason):
         """平多仓"""
@@ -223,15 +290,21 @@ class FuturesEngine:
         notional = actual_p * pos.quantity
         fee = notional * self.TAKER_FEE
         slippage_cost = pos.quantity * price * self.SLIPPAGE
+        entry_price = pos.entry_price
+        margin_released = pos.margin
+        lev = pos.leverage
+        qty = pos.quantity
         # 修正: margin已在usdt内(只是被frozen), 平仓只需加PnL减fee
         self.usdt += pnl - fee
         self.frozen_margin -= pos.margin
         self.total_futures_fees += fee
         self.total_slippage_cost += slippage_cost
-        self._record_trade(dt, price, 'CLOSE_LONG', 'long', pos.quantity,
-                           notional, fee, pos.leverage,
-                           f"{reason} PnL={pnl:+.0f}")
         self.futures_long = None
+        self._record_trade(dt, price, 'CLOSE_LONG', 'long', qty,
+                           notional, fee, lev, reason,
+                           exec_price=actual_p, slippage_cost=slippage_cost,
+                           pnl=pnl, entry_price=entry_price,
+                           margin_released=margin_released)
 
     def open_short(self, price, dt, margin, leverage, reason):
         """开空仓"""
@@ -253,7 +326,9 @@ class FuturesEngine:
         self.total_slippage_cost += slippage_cost
         self.futures_short = FuturesPosition('short', actual_p, qty, leverage, margin)
         self._record_trade(dt, price, 'OPEN_SHORT', 'short', qty, notional, fee,
-                           leverage, reason)
+                           leverage, reason,
+                           exec_price=actual_p, slippage_cost=slippage_cost,
+                           margin=margin)
 
     def close_short(self, price, dt, reason):
         """平空仓"""
@@ -265,15 +340,21 @@ class FuturesEngine:
         notional = actual_p * pos.quantity
         fee = notional * self.TAKER_FEE
         slippage_cost = pos.quantity * price * self.SLIPPAGE
+        entry_price = pos.entry_price
+        margin_released = pos.margin
+        lev = pos.leverage
+        qty = pos.quantity
         # 修正: margin已在usdt内(只是被frozen), 平仓只需加PnL减fee
         self.usdt += pnl - fee
         self.frozen_margin -= pos.margin
         self.total_futures_fees += fee
         self.total_slippage_cost += slippage_cost
-        self._record_trade(dt, price, 'CLOSE_SHORT', 'short', pos.quantity,
-                           notional, fee, pos.leverage,
-                           f"{reason} PnL={pnl:+.0f}")
         self.futures_short = None
+        self._record_trade(dt, price, 'CLOSE_SHORT', 'short', qty,
+                           notional, fee, lev, reason,
+                           exec_price=actual_p, slippage_cost=slippage_cost,
+                           pnl=pnl, entry_price=entry_price,
+                           margin_released=margin_released)
 
     def check_liquidation(self, price, dt):
         """检查强平(含清算手续费)"""
@@ -282,30 +363,42 @@ class FuturesEngine:
             notional = pos.quantity * price
             liq_fee = notional * self.LIQUIDATION_FEE
             loss = pos.margin + liq_fee
+            entry_price = pos.entry_price
+            lev = pos.leverage
+            qty = pos.quantity
+            margin_lost = pos.margin
             # 修正: 强平时margin被没收, 必须从usdt中扣除
             self.usdt -= pos.margin + liq_fee
             self.frozen_margin -= pos.margin
             self.total_liquidation_fees += liq_fee
             self.total_futures_fees += liq_fee
-            self._record_trade(dt, price, 'LIQUIDATED', 'long',
-                               pos.quantity, notional, liq_fee,
-                               pos.leverage, f"多仓强平,损失{loss:.0f}(含清算费{liq_fee:.0f})")
             self.futures_long = None
+            self._record_trade(dt, price, 'LIQUIDATED', 'long',
+                               qty, notional, liq_fee, lev,
+                               f"多仓强平,损失{loss:.0f}(含清算费{liq_fee:.0f})",
+                               pnl=-loss, entry_price=entry_price,
+                               margin_released=0)
 
         if self.futures_short and self.futures_short.is_liquidated(price):
             pos = self.futures_short
             notional = pos.quantity * price
             liq_fee = notional * self.LIQUIDATION_FEE
             loss = pos.margin + liq_fee
+            entry_price = pos.entry_price
+            lev = pos.leverage
+            qty = pos.quantity
+            margin_lost = pos.margin
             # 修正: 强平时margin被没收, 必须从usdt中扣除
             self.usdt -= pos.margin + liq_fee
             self.frozen_margin -= pos.margin
             self.total_liquidation_fees += liq_fee
             self.total_futures_fees += liq_fee
-            self._record_trade(dt, price, 'LIQUIDATED', 'short',
-                               pos.quantity, notional, liq_fee,
-                               pos.leverage, f"空仓强平,损失{loss:.0f}(含清算费{liq_fee:.0f})")
             self.futures_short = None
+            self._record_trade(dt, price, 'LIQUIDATED', 'short',
+                               qty, notional, liq_fee, lev,
+                               f"空仓强平,损失{loss:.0f}(含清算费{liq_fee:.0f})",
+                               pnl=-loss, entry_price=entry_price,
+                               margin_released=0)
 
     def charge_funding(self, price, dt):
         """收取资金费率(每8小时)

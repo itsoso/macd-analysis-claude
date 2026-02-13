@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}多周期区间回测(DB){% endblock %}
+
+{% block extra_styles %}
+.hero { margin-bottom: 20px; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(135deg, rgba(74,158,255,0.10), rgba(168,85,247,0.10)); }
+.hero h1 { font-size: 1.3rem; margin: 0 0 8px 0; }
+.hero .meta { color: var(--text-secondary); font-size: 0.9rem; line-height: 1.7; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.kpi { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.kpi .k { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 6px; }
+.kpi .v { font-size: 1.2rem; font-weight: 700; }
+.chart-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.chart-title { font-size: 0.95rem; color: var(--text-primary); margin-bottom: 10px; }
+.line-wrap { width: 100%; height: 260px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.02); position: relative; }
+.line-wrap svg { width: 100%; height: 100%; display: block; }
+.x-axis { display:flex; justify-content: space-between; align-items:center; gap: 8px; margin-top: 8px; color: var(--text-muted); font-size: 0.75rem; }
+.x-axis .tick { display:flex; flex-direction: column; align-items:center; gap: 4px; min-width: 60px; }
+.x-axis .tick:first-child { align-items:flex-start; }
+.x-axis .tick:last-child { align-items:flex-end; }
+.x-axis .mark { width: 1px; height: 8px; background: rgba(255,255,255,0.15); }
+.bar-wrap { height: 180px; display: flex; align-items: flex-end; gap: 2px; border: 1px solid var(--border); border-radius: 8px; padding: 8px; overflow: hidden; background: rgba(255,255,255,0.02); }
+.bar { flex: 1; min-width: 1px; border-radius: 2px 2px 0 0; opacity: 0.92; }
+.bar.pos { background: rgba(0,214,143,0.85); }
+.bar.neg { background: rgba(255,77,106,0.85); }
+.section { margin-top: 18px; }
+.section h3 { font-size: 1rem; margin-bottom: 10px; }
+.scroll-table { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+.small { font-size: 0.82rem; color: var(--text-muted); }
+{% endblock %}
+
+{% block content %}
+<div id="root">
+    <div class="loading"><div class="spinner"></div>加载区间回测(DB)数据...</div>
+</div>
+
+<script>
+const fmtPct = (v) => `${Number(v || 0).toFixed(2)}%`;
+const fmtNum = (v) => Number(v || 0).toLocaleString('zh-CN', {maximumFractionDigits: 2});
+const clsPnL = (v) => Number(v || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
+
+function makeLinePath(values, width, height, pad=20) {
+    if (!values.length) return '';
+    const minV = Math.min(...values), maxV = Math.max(...values);
+    const span = (maxV - minV) || 1;
+    return values.map((v, i) => {
+        const x = pad + (i * (width - pad * 2) / Math.max(1, values.length - 1));
+        const y = height - pad - ((v - minV) * (height - pad * 2) / span);
+        return `${i === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }).join(' ');
+}
+
+function renderCharts(daily) {
+    const equity = daily.map(x => Number(x.total || 0));
+    const pnl = daily.map(x => Number(x.daily_pnl || 0));
+    const linePath = makeLinePath(equity, 1000, 260, 16);
+    const firstDate = daily.length ? (daily[0].date || '') : '';
+    const midDate = daily.length ? (daily[Math.floor((daily.length - 1) / 2)].date || '') : '';
+    const lastDate = daily.length ? (daily[daily.length - 1].date || '') : '';
+    const root = document.getElementById('charts');
+    const maxAbs = Math.max(1, ...pnl.map(v => Math.abs(v)));
+    const bars = pnl.map(v => {
+        const h = Math.max(2, Math.round(Math.abs(v) / maxAbs * 150));
+        const c = v >= 0 ? 'pos' : 'neg';
+        return `<div class="bar ${c}" style="height:${h}px" title="${v.toFixed(2)}"></div>`;
+    }).join('');
+    root.innerHTML = `
+      <div class="chart-card">
+        <div class="chart-title">每日总权益曲线</div>
+        <div class="line-wrap">
+          <svg viewBox="0 0 1000 260" preserveAspectRatio="none">
+            <path d="${linePath}" stroke="#4a9eff" stroke-width="2.2" fill="none"></path>
+          </svg>
+        </div>
+        <div class="x-axis" aria-label="equity-x-axis">
+          <div class="tick"><div class="mark"></div><div>${firstDate}</div></div>
+          <div class="tick"><div class="mark"></div><div>${midDate}</div></div>
+          <div class="tick"><div class="mark"></div><div>${lastDate}</div></div>
+        </div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">每日盈亏柱状图</div>
+        <div class="bar-wrap">${bars}</div>
+        <div class="x-axis" aria-label="pnl-x-axis">
+          <div class="tick"><div class="mark"></div><div>${firstDate}</div></div>
+          <div class="tick"><div class="mark"></div><div>${midDate}</div></div>
+          <div class="tick"><div class="mark"></div><div>${lastDate}</div></div>
+        </div>
+      </div>`;
+}
+
+function renderDailyTable(daily) {
+    const rows = daily.map(r => `<tr>
+        <td>${r.date}</td>
+        <td>${fmtNum(r.total)}</td>
+        <td class="${clsPnL(r.daily_pnl)}">${fmtNum(r.daily_pnl)}</td>
+        <td class="${clsPnL(r.daily_return_pct)}">${fmtPct(r.daily_return_pct)}</td>
+        <td>${fmtNum(r.usdt)}</td>
+        <td>${fmtNum(r.spot_eth_value)}</td>
+        <td>${r.has_long ? '是' : '否'}</td>
+        <td>${r.has_short ? '是' : '否'}</td>
+        <td>${fmtNum(r.long_qty)}</td>
+        <td>${fmtNum(r.short_qty)}</td>
+        <td>${Number(r.trade_count || 0)}</td>
+        <td>${fmtNum(r.total_cost)}</td>
+      </tr>`).join('');
+    return `<div class="scroll-table"><table class="data-table">
+      <thead><tr>
+      <th>日期</th><th>总权益</th><th>当日盈亏</th><th>当日收益</th><th>USDT</th><th>现货价值</th>
+      <th>多仓</th><th>空仓</th><th>多仓数量</th><th>空仓数量</th><th>交易数</th><th>成本</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+function renderTradeTable(trades) {
+    const rows = trades.map((t, idx) => `<tr>
+      <td>${idx + 1}</td>
+      <td>${t.time || ''}</td>
+      <td>${t.action || ''}</td>
+      <td>${t.direction || ''}</td>
+      <td>${fmtNum(t.market_price)}</td>
+      <td>${fmtNum(t.exec_price)}</td>
+      <td>${fmtNum(t.quantity)}</td>
+      <td>${fmtNum(t.notional_value)}</td>
+      <td>${fmtNum(t.fee)}</td>
+      <td>${fmtNum(t.slippage_cost)}</td>
+      <td>${fmtNum(t.total_cost)}</td>
+      <td class="${clsPnL(t.pnl)}">${fmtNum(t.pnl)}</td>
+      <td>${t.reason || ''}</td>
+    </tr>`).join('');
+    return `<div class="scroll-table"><table class="data-table">
+      <thead><tr>
+      <th>#</th><th>时间</th><th>动作</th><th>方向</th><th>市价</th><th>成交价</th><th>数量</th>
+      <th>名义价值</th><th>手续费</th><th>滑点</th><th>总成本</th><th>已实现PnL</th><th>原因</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function render(data) {
+    const meta = data.run_meta || {};
+    const s = data.summary || {};
+    const daily = data.daily_records || [];
+    const trades = data.trades || [];
+    const lastTradeTime = trades.length ? (trades[trades.length - 1].time || '-') : '-';
+    const firstTradeTime = trades.length ? (trades[0].time || '-') : '-';
+    const root = document.getElementById('root');
+    root.innerHTML = `
+      <div class="hero">
+        <h1>多周期固定区间回测（DB独立页）</h1>
+        <div class="meta">
+          区间: ${meta.start_date || '-'} ~ ${meta.end_date || '-'}<br>
+          组合: ${meta.combo_name || '-'} @ ${meta.primary_tf || '-'} | 决策TF: ${(meta.decision_tfs || []).join(', ')}<br>
+          运行: ${meta.runner || '-'} @ ${meta.host || '-'} | 生成时间: ${meta.generated_at || '-'}<br>
+          交易覆盖: ${firstTradeTime} ~ ${lastTradeTime}
+        </div>
+      </div>
+      <div class="grid">
+        <div class="kpi"><div class="k">策略收益</div><div class="v ${clsPnL(s.strategy_return)}">${fmtPct(s.strategy_return)}</div></div>
+        <div class="kpi"><div class="k">买入持有</div><div class="v ${clsPnL(s.buy_hold_return)}">${fmtPct(s.buy_hold_return)}</div></div>
+        <div class="kpi"><div class="k">Alpha</div><div class="v ${clsPnL(s.alpha)}">${fmtPct(s.alpha)}</div></div>
+        <div class="kpi"><div class="k">最大回撤</div><div class="v pnl-neg">${fmtPct(s.max_drawdown)}</div></div>
+        <div class="kpi"><div class="k">总交易数</div><div class="v">${fmtNum(s.total_trades)}</div></div>
+        <div class="kpi"><div class="k">总成本</div><div class="v">${fmtNum(s.total_cost)}</div></div>
+      </div>
+      <div id="charts"></div>
+      <div class="section">
+        <h3>每日持仓盈亏明细 <span class="small">(共 ${daily.length} 天)</span></h3>
+        ${renderDailyTable(daily)}
+      </div>
+      <div class="section">
+        <h3>逐笔交易明细 <span class="small">(共 ${trades.length} 笔)</span></h3>
+        ${renderTradeTable(trades)}
+      </div>
+    `;
+    renderCharts(daily);
+}
+
+fetch('/api/multi_tf_date_range_report')
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) {
+      document.getElementById('root').innerHTML = `<div class="card"><p class="pnl-neg">${data.error}</p></div>`;
+      return;
+    }
+    render(data);
+  })
+  .catch(err => {
+    document.getElementById('root').innerHTML = `<div class="card"><p class="pnl-neg">加载失败: ${err.message}</p></div>`;
+  });
+</script>
+{% endblock %}
