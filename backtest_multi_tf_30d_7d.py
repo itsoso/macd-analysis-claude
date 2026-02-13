@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from binance_fetcher import fetch_binance_klines
 from indicators import add_all_indicators
 from ma_indicators import add_moving_averages
+from live_config import StrategyConfig
 from optimize_six_book import (
     compute_signals_six, run_strategy, run_strategy_multi_tf,
     _build_tf_score_index, calc_fusion_score_six, ALL_TIMEFRAMES
@@ -300,6 +301,7 @@ def _select_oos_base_config(
     ref_tf,
     top_n=8,
     conservative=False,
+    decision_tfs=None,
 ):
     """
     从优化候选中做一次严格样本外筛选:
@@ -372,8 +374,36 @@ def _select_oos_base_config(
         if len(sliced) > 50:
             train_data_all[tf] = sliced
 
-    # 训练信号与配置无关，计算一次复用
-    train_signals = compute_signals_six(train_df, ref_tf, train_data_all, max_bars=0)
+    if ref_tf not in train_data_all:
+        return dict(fallback_config), {
+            "mode": "fallback",
+            "reason": f"训练窗口缺少 ref_tf={ref_tf}",
+        }
+
+    # 训练信号与配置无关，计算一次复用（每个TF都要算，供多TF目标函数）
+    train_signals_all = {}
+    for tf in train_data_all:
+        train_signals_all[tf] = compute_signals_six(
+            train_data_all[tf], tf, train_data_all, max_bars=0
+        )
+
+    # OOS 目标函数使用的决策TF（默认与 live 默认一致）
+    target_decision_tfs = list(decision_tfs or StrategyConfig().decision_timeframes)
+    usable_decision_tfs = [tf for tf in target_decision_tfs if tf in train_data_all]
+    if len(usable_decision_tfs) < 2:
+        tf_rank = sorted(
+            train_data_all.keys(),
+            key=lambda t: ALL_TIMEFRAMES.index(t) if t in ALL_TIMEFRAMES else 999
+        )
+        if ref_tf in tf_rank:
+            tf_rank.remove(ref_tf)
+        usable_decision_tfs = [ref_tf] + tf_rank[:3]
+    usable_decision_tfs = [tf for tf in usable_decision_tfs if tf in train_data_all]
+    if len(usable_decision_tfs) < 2:
+        return dict(fallback_config), {
+            "mode": "fallback",
+            "reason": f"训练窗口可用决策TF不足: {usable_decision_tfs}",
+        }
 
     scored = []
     for i, cand_cfg in enumerate(uniq):
@@ -381,8 +411,17 @@ def _select_oos_base_config(
         if conservative:
             merged = _apply_conservative_risk(merged)
         runtime_cfg = _scale_runtime_config(merged, ref_tf, tf_hours, f"oos_train_{i+1}_{ref_tf}")
-
-        r = run_strategy(train_df, train_signals, runtime_cfg, tf=ref_tf, trade_days=train_days)
+        train_score_index = _build_tf_score_index(
+            train_data_all, train_signals_all, list(train_data_all.keys()), runtime_cfg
+        )
+        r = run_strategy_multi_tf(
+            primary_df=train_data_all[ref_tf],
+            tf_score_map=train_score_index,
+            decision_tfs=usable_decision_tfs,
+            config=runtime_cfg,
+            primary_tf=ref_tf,
+            trade_days=train_days,
+        )
         objective = float(r["alpha"]) - max(0.0, abs(float(r["max_drawdown"])) - 20.0) * 0.5
         scored.append(
             {
@@ -413,6 +452,8 @@ def _select_oos_base_config(
         "train_days": train_days,
         "test_days": test_days,
         "purge_days": 7,
+        "objective_mode": "multi_tf",
+        "decision_tfs": usable_decision_tfs,
         "candidates": len(scored),
         "contamination_risk": contamination_risk,
         "contamination_note": contamination_note,
@@ -489,52 +530,58 @@ def main(args):
         ('中大周期', ['1h', '2h', '4h', '8h', '12h']),
         ('快慢双层', ['15m', '30m', '4h', '24h']),
     ]
+    oos_decision_tfs = list(StrategyConfig().decision_timeframes)
 
     # 基础参数
+    live_defaults = StrategyConfig()
     f12_base = {
         'single_pct': 0.20, 'total_pct': 0.50, 'lifetime_pct': 5.0,
-        'sell_threshold': best_config.get('sell_threshold', 18),
-        'buy_threshold': best_config.get('buy_threshold', 25),
-        'short_threshold': best_config.get('short_threshold', 25),
-        'long_threshold': best_config.get('long_threshold', 40),
-        'close_short_bs': best_config.get('close_short_bs', 40),
-        'close_long_ss': best_config.get('close_long_ss', 40),
-        'sell_pct': best_config.get('sell_pct', 0.55),
-        'margin_use': best_config.get('margin_use', 0.70),
-        'lev': best_config.get('lev', 5),
-        'max_lev': best_config.get('max_lev', 5),
-        'short_sl': best_config.get('short_sl', -0.25),
-        'short_tp': best_config.get('short_tp', 0.60),
-        'short_trail': best_config.get('short_trail', 0.25),
-        'short_max_hold': best_config.get('short_max_hold', 72),
-        'long_sl': best_config.get('long_sl', -0.08),
-        'long_tp': best_config.get('long_tp', 0.30),
-        'long_trail': best_config.get('long_trail', 0.20),
-        'long_max_hold': best_config.get('long_max_hold', 72),
-        'trail_pullback': best_config.get('trail_pullback', 0.60),
-        'cooldown': best_config.get('cooldown', 4),
-        'spot_cooldown': best_config.get('spot_cooldown', 12),
-        'use_partial_tp': best_config.get('use_partial_tp', False),
-        'partial_tp_1': best_config.get('partial_tp_1', 0.20),
-        'partial_tp_1_pct': best_config.get('partial_tp_1_pct', 0.30),
-        'use_partial_tp_2': best_config.get('use_partial_tp_2', False),
-        'partial_tp_2': best_config.get('partial_tp_2', 0.50),
-        'partial_tp_2_pct': best_config.get('partial_tp_2_pct', 0.30),
-        'use_atr_sl': best_config.get('use_atr_sl', False),
-        'atr_sl_mult': best_config.get('atr_sl_mult', 3.0),
-        'fusion_mode': best_config.get('fusion_mode', 'c6_veto_4'),
-        'veto_threshold': best_config.get('veto_threshold', 25),
-        'kdj_bonus': best_config.get('kdj_bonus', 0.09),
-        'kdj_weight': best_config.get('kdj_weight', 0.15),
-        'kdj_strong_mult': best_config.get('kdj_strong_mult', 1.25),
-        'kdj_normal_mult': best_config.get('kdj_normal_mult', 1.12),
-        'kdj_reverse_mult': best_config.get('kdj_reverse_mult', 0.70),
-        'kdj_gate_threshold': best_config.get('kdj_gate_threshold', 10),
-        'veto_dampen': best_config.get('veto_dampen', 0.30),
+        'sell_threshold': best_config.get('sell_threshold', live_defaults.sell_threshold),
+        'buy_threshold': best_config.get('buy_threshold', live_defaults.buy_threshold),
+        'short_threshold': best_config.get('short_threshold', live_defaults.short_threshold),
+        'long_threshold': best_config.get('long_threshold', live_defaults.long_threshold),
+        'close_short_bs': best_config.get('close_short_bs', live_defaults.close_short_bs),
+        'close_long_ss': best_config.get('close_long_ss', live_defaults.close_long_ss),
+        'sell_pct': best_config.get('sell_pct', live_defaults.sell_pct),
+        'margin_use': best_config.get('margin_use', live_defaults.margin_use),
+        'lev': best_config.get('lev', live_defaults.leverage),
+        'max_lev': best_config.get('max_lev', live_defaults.max_lev),
+        'short_sl': best_config.get('short_sl', live_defaults.short_sl),
+        'short_tp': best_config.get('short_tp', live_defaults.short_tp),
+        'short_trail': best_config.get('short_trail', live_defaults.short_trail),
+        'short_max_hold': best_config.get('short_max_hold', live_defaults.short_max_hold),
+        'long_sl': best_config.get('long_sl', live_defaults.long_sl),
+        'long_tp': best_config.get('long_tp', live_defaults.long_tp),
+        'long_trail': best_config.get('long_trail', live_defaults.long_trail),
+        'long_max_hold': best_config.get('long_max_hold', live_defaults.long_max_hold),
+        'trail_pullback': best_config.get('trail_pullback', live_defaults.trail_pullback),
+        'cooldown': best_config.get('cooldown', live_defaults.cooldown),
+        'spot_cooldown': best_config.get('spot_cooldown', live_defaults.spot_cooldown),
+        'use_partial_tp': best_config.get('use_partial_tp', live_defaults.use_partial_tp),
+        'partial_tp_1': best_config.get('partial_tp_1', live_defaults.partial_tp_1),
+        'partial_tp_1_pct': best_config.get('partial_tp_1_pct', live_defaults.partial_tp_1_pct),
+        'use_partial_tp_2': best_config.get('use_partial_tp_2', live_defaults.use_partial_tp_2),
+        'partial_tp_2': best_config.get('partial_tp_2', live_defaults.partial_tp_2),
+        'partial_tp_2_pct': best_config.get('partial_tp_2_pct', live_defaults.partial_tp_2_pct),
+        'use_atr_sl': best_config.get('use_atr_sl', live_defaults.use_atr_sl),
+        'atr_sl_mult': best_config.get('atr_sl_mult', live_defaults.atr_sl_mult),
+        'fusion_mode': best_config.get('fusion_mode', live_defaults.fusion_mode),
+        'veto_threshold': best_config.get('veto_threshold', live_defaults.veto_threshold),
+        'kdj_bonus': best_config.get('kdj_bonus', live_defaults.kdj_bonus),
+        'kdj_weight': best_config.get('kdj_weight', live_defaults.kdj_weight),
+        'div_weight': best_config.get('div_weight', live_defaults.div_weight),
+        'kdj_strong_mult': best_config.get('kdj_strong_mult', live_defaults.kdj_strong_mult),
+        'kdj_normal_mult': best_config.get('kdj_normal_mult', live_defaults.kdj_normal_mult),
+        'kdj_reverse_mult': best_config.get('kdj_reverse_mult', live_defaults.kdj_reverse_mult),
+        'kdj_gate_threshold': best_config.get('kdj_gate_threshold', live_defaults.kdj_gate_threshold),
+        'veto_dampen': best_config.get('veto_dampen', live_defaults.veto_dampen),
+        'bb_bonus': best_config.get('bb_bonus', live_defaults.bb_bonus),
+        'vp_bonus': best_config.get('vp_bonus', live_defaults.vp_bonus),
+        'cs_bonus': best_config.get('cs_bonus', live_defaults.cs_bonus),
         # 与实盘门控口径对齐
         'use_live_gate': use_live_gate,
         'consensus_min_strength': args.consensus_min_strength,
-        'coverage_min': args.coverage_min,
+        'coverage_min': args.coverage_min if args.coverage_min is not None else live_defaults.coverage_min,
         # P2: 市场分层自适应阈值/风险
         'use_regime_aware': use_regime_aware,
         'regime_lookback_bars': args.regime_lookback_bars,
@@ -616,6 +663,7 @@ def main(args):
             ref_tf=ref_tf,
             top_n=args.oos_candidates,
             conservative=use_conservative,
+            decision_tfs=oos_decision_tfs,
         )
         f12_base = selected_cfg
         print("\n[2.5/4] 严格样本外筛选完成:")
@@ -945,6 +993,7 @@ def main(args):
                     ref_tf=wf_ref_tf,
                     top_n=args.oos_candidates,
                     conservative=use_conservative,
+                    decision_tfs=oos_decision_tfs,
                 )
                 wf_score_index = _build_tf_score_index(
                     window_data, all_signals, wf_available_tfs, selected_cfg

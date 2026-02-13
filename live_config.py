@@ -170,6 +170,7 @@ class StrategyConfig:
     long_threshold: float = 40
     close_short_bs: float = 40
     close_long_ss: float = 40
+    sell_pct: float = 0.55
     # 止损止盈
     short_sl: float = -0.30
     short_tp: float = 0.80
@@ -185,8 +186,11 @@ class StrategyConfig:
     use_partial_tp_2: bool = False
     partial_tp_2: float = 0.50
     partial_tp_2_pct: float = 0.30
+    use_atr_sl: bool = False
+    atr_sl_mult: float = 3.0
     # 仓位管理
     leverage: int = 5
+    max_lev: int = 5
     margin_use: float = 0.70
     single_pct: float = 0.20
     total_pct: float = 0.50
@@ -197,6 +201,16 @@ class StrategyConfig:
     fusion_mode: str = "c6_veto_4"
     veto_threshold: float = 25
     kdj_bonus: float = 0.09
+    kdj_weight: float = 0.15
+    div_weight: float = 0.55
+    kdj_strong_mult: float = 1.25
+    kdj_normal_mult: float = 1.12
+    kdj_reverse_mult: float = 0.70
+    kdj_gate_threshold: float = 10
+    veto_dampen: float = 0.30
+    bb_bonus: float = 0.10
+    vp_bonus: float = 0.08
+    cs_bonus: float = 0.06
     # 数据参数
     lookback_days: int = 60
     # 最大持仓K线数
@@ -206,9 +220,13 @@ class StrategyConfig:
     # ── 多周期联合决策 ──
     use_multi_tf: bool = True                    # 是否启用多周期共识
     decision_timeframes: List[str] = field(      # 参与决策的时间框架
+        default_factory=lambda: ['15m', '1h', '4h', '12h']
+    )
+    decision_timeframes_fallback: List[str] = field(  # 回退时间框架(可配置)
         default_factory=lambda: ['15m', '30m', '1h', '4h', '8h', '24h']
     )
     consensus_min_strength: int = 40             # 共识最低强度才可开仓 (0-100)
+    coverage_min: float = 0.5                    # 多周期覆盖率下限
     consensus_position_scale: bool = True        # 是否按共识强度缩放仓位
 
     @classmethod
@@ -236,9 +254,19 @@ class StrategyConfig:
             best_config = data
 
         # 映射配置字段
+        aliases = {
+            "lev": "leverage",
+            "decision_tfs": "decision_timeframes",
+        }
         for key, value in best_config.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
+            target_key = aliases.get(key, key)
+            if hasattr(config, target_key):
+                setattr(config, target_key, value)
+
+        if isinstance(config.decision_timeframes, str):
+            config.decision_timeframes = [
+                x.strip() for x in config.decision_timeframes.split(",") if x.strip()
+            ]
 
         if timeframe:
             config.timeframe = timeframe
@@ -376,8 +404,10 @@ class LiveTradingConfig:
                 "symbol": "ETHUSDT",
                 "timeframe": "1h",
                 "use_multi_tf": True,
-                "decision_timeframes": ["15m", "30m", "1h", "4h", "8h", "24h"],
+                "decision_timeframes": ["15m", "1h", "4h", "12h"],
+                "decision_timeframes_fallback": ["15m", "30m", "1h", "4h", "8h", "24h"],
                 "consensus_min_strength": 40,
+                "coverage_min": 0.5,
             },
             "risk": {
                 "max_leverage": 2,

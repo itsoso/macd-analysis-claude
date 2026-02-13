@@ -117,6 +117,24 @@ class LiveSignalGenerator:
         # 在K线结束前10秒刷新数据，确保拿到最新收盘数据
         return max(30, minutes * 60 - 10)
 
+    def _build_fusion_config(self) -> Dict:
+        """构造与回测一致的融合参数字典。"""
+        return {
+            'fusion_mode': self.config.fusion_mode,
+            'veto_threshold': self.config.veto_threshold,
+            'kdj_bonus': self.config.kdj_bonus,
+            'kdj_weight': getattr(self.config, 'kdj_weight', 0.15),
+            'div_weight': getattr(self.config, 'div_weight', 0.55),
+            'kdj_strong_mult': getattr(self.config, 'kdj_strong_mult', 1.25),
+            'kdj_normal_mult': getattr(self.config, 'kdj_normal_mult', 1.12),
+            'kdj_reverse_mult': getattr(self.config, 'kdj_reverse_mult', 0.70),
+            'kdj_gate_threshold': getattr(self.config, 'kdj_gate_threshold', 10),
+            'veto_dampen': getattr(self.config, 'veto_dampen', 0.30),
+            'bb_bonus': getattr(self.config, 'bb_bonus', 0.10),
+            'vp_bonus': getattr(self.config, 'vp_bonus', 0.08),
+            'cs_bonus': getattr(self.config, 'cs_bonus', 0.06),
+        }
+
     # ============================================================
     # 数据获取
     # ============================================================
@@ -207,14 +225,8 @@ class LiveSignalGenerator:
             return None
 
         try:
-            # 将 StrategyConfig 转为 dict 供 calc_fusion_score_six 使用
-            config_dict = {
-                'fusion_mode': self.config.fusion_mode,
-                'veto_threshold': self.config.veto_threshold,
-                'kdj_bonus': self.config.kdj_bonus,
-            }
-
             dt = df.index[idx]
+            config_dict = self._build_fusion_config()
             sell_score, buy_score = calc_fusion_score_six(
                 signals, df, idx, dt, config_dict
             )
@@ -529,11 +541,7 @@ class LiveSignalGenerator:
 
             # 计算融合分数
             idx = len(df) - 1
-            config_dict = {
-                'fusion_mode': self.config.fusion_mode,
-                'veto_threshold': self.config.veto_threshold,
-                'kdj_bonus': self.config.kdj_bonus,
-            }
+            config_dict = self._build_fusion_config()
             sell_score, buy_score = calc_fusion_score_six(
                 signals, df, idx, df.index[idx], config_dict
             )
@@ -604,6 +612,7 @@ class LiveSignalGenerator:
         fuse_config = {
             'short_threshold': self.config.short_threshold,
             'long_threshold': self.config.long_threshold,
+            'coverage_min': getattr(self.config, 'coverage_min', 0.5),
         }
         consensus = fuse_tf_scores(tf_scores, decision_tfs, fuse_config)
 

@@ -100,6 +100,10 @@ DEFAULT_CONFIG = {
     'prot_daily_loss_limit_pct': 0.03,
     'prot_global_dd_limit_pct': 0.12,
     'prot_close_on_global_halt': True,
+    # ── 趋势持仓保护 ──
+    # 上升趋势中(EMA20>EMA60)限制现货卖出, 保持最低ETH敞口, 减少牛市踏空。
+    'use_trend_enhance': True,
+    'trend_floor_ratio': 0.40,  # 上升趋势中最低ETH占比
 }
 
 TF_HOURS = {

@@ -574,6 +574,8 @@ def _run_strategy_core(
 
         # Regime-aware 动态阈值与风险控制 (仅使用历史数据)
         regime_ctl = _compute_regime_controls(primary_df, idx, config)
+        # 注入 regime_label 供多周期融合动态调权 (P1-2)
+        config['_regime_label'] = regime_ctl.get('regime_label', 'neutral')
         cur_sell_threshold = float(regime_ctl['sell_threshold'])
         cur_buy_threshold = float(regime_ctl['buy_threshold'])
         cur_short_threshold = float(regime_ctl['short_threshold'])
@@ -583,14 +585,34 @@ def _run_strategy_core(
         cur_lev = int(regime_ctl['lev'])
         cur_margin_use = float(regime_ctl['margin_use'])
 
+        # ── 趋势持仓保护 (Trend Floor) ──
+        # 上升趋势中设定最低ETH占比, 防止频繁卖出导致牛市踏空。
+        trend_floor_active = False
+        effective_sell_pct = sell_pct
+        if config.get('use_trend_enhance', False) and idx >= 60:
+            close_arr = primary_df['close'].iloc[max(0, idx - 80):idx + 1]
+            if len(close_arr) >= 60:
+                ema20 = float(close_arr.ewm(span=20, adjust=False).mean().iloc[-1])
+                ema60 = float(close_arr.ewm(span=60, adjust=False).mean().iloc[-1])
+                trend_floor_ratio = float(config.get('trend_floor_ratio', 0.40))
+                # 上升趋势: EMA20 > EMA60
+                if ema20 > ema60:
+                    total_val = eng.total_value(price)
+                    eth_val = eng.spot_eth * price
+                    eth_ratio = eth_val / total_val if total_val > 0 else 0
+                    if eth_ratio <= trend_floor_ratio:
+                        trend_floor_active = True
+                    elif eth_ratio <= trend_floor_ratio + 0.15:
+                        effective_sell_pct = sell_pct * 0.3
+
         # 卖出现货 (用 exec_price 执行, 即本bar open)
-        if ss >= cur_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500:
-            eng.spot_sell(exec_price, dt, sell_pct, f"卖出 SS={ss:.0f}")
+        if not trend_floor_active and ss >= cur_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500:
+            eng.spot_sell(exec_price, dt, effective_sell_pct, f"卖出 SS={ss:.0f}")
             spot_cd = spot_cooldown
 
         # 开空 (用 exec_price 执行, 即本bar open)
         sell_dom = (ss > bs * 1.5) if bs > 0 else True
-        if short_cd == 0 and ss >= cur_short_threshold and not eng.futures_short and sell_dom and can_open_risk:
+        if short_cd == 0 and ss >= cur_short_threshold and not eng.futures_short and sell_dom and not in_conflict and can_open_risk:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
             eng.open_short(exec_price, dt, margin, actual_lev, f"开空 {actual_lev}x")
@@ -684,7 +706,7 @@ def _run_strategy_core(
 
         # 开多 (用 exec_price 执行, 即本bar open)
         buy_dom = (bs > ss * 1.5) if ss > 0 else True
-        if long_cd == 0 and bs >= cur_long_threshold and not eng.futures_long and buy_dom and can_open_risk:
+        if long_cd == 0 and bs >= cur_long_threshold and not eng.futures_long and buy_dom and not in_conflict and can_open_risk:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
             eng.open_long(exec_price, dt, margin, actual_lev, f"开多 {actual_lev}x")
@@ -895,7 +917,11 @@ def _build_tf_score_index(all_data, all_signals, tfs, config):
 
 
 def _get_tf_score_at(tf_score_map, tf, dt):
-    """在 tf 的评分索引中查找离 dt 最近且 <= dt 的评分"""
+    """
+    在 tf 的评分索引中查找离 dt 最近且 <= dt 的评分。
+    使用时效衰减: 评分随年龄(age)平滑衰减，而非二值截断，
+    减少临界点抖动和信号跳变。
+    """
     scores = tf_score_map.get(tf)
     if not scores:
         return 0.0, 0.0
@@ -910,12 +936,25 @@ def _get_tf_score_at(tf_score_map, tf, dt):
         return 0.0, 0.0
     nearest = max(candidates)
 
-    # 如果最近评分太老 (超过该TF的2个周期), 视为无效
+    # 时效衰减: 1个周期内=100%, 2个周期=50%, 3个周期=25%, >4个周期≈0
     tf_mins = _MTF_MINUTES.get(tf, 60)
-    if (dt - nearest).total_seconds() > tf_mins * 60 * 2:
+    age_secs = (dt - nearest).total_seconds()
+    period_secs = tf_mins * 60
+    age_periods = age_secs / period_secs if period_secs > 0 else 999
+
+    if age_periods <= 1.0:
+        decay = 1.0  # 1个周期内, 完全有效
+    elif age_periods >= 4.0:
+        decay = 0.0  # 4个周期以上, 视为失效
+    else:
+        # 1~4个周期之间, 线性衰减: 1期=100%, 4期=0%
+        decay = max(0.0, 1.0 - (age_periods - 1.0) / 3.0)
+
+    if decay <= 0.01:
         return 0.0, 0.0
 
-    return scores[nearest]
+    ss, bs = scores[nearest]
+    return float(ss) * decay, float(bs) * decay
 
 
 def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
@@ -942,6 +981,12 @@ def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
         'short_threshold': config.get('short_threshold', 25),
         'long_threshold': config.get('long_threshold', 40),
         'coverage_min': config.get('coverage_min', 0.0),
+        # 参数化融合阈值
+        'dominance_ratio': config.get('dominance_ratio', 1.3),
+        'chain_boost_per_tf': config.get('chain_boost_per_tf', 0.08),
+        'chain_boost_weak_per_tf': config.get('chain_boost_weak_per_tf', 0.04),
+        # Regime驱动动态TF权重 (由 _run_strategy_core 通过 config 注入)
+        '_regime_label': config.get('_regime_label', 'neutral'),
     }
     result = fuse_tf_scores(tf_scores, decision_tfs, fuse_config)
     meta = dict(result.get("meta", {}))

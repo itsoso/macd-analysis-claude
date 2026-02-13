@@ -142,7 +142,17 @@ class LiveTradingEngine:
         self._last_consensus: Optional[dict] = None
         self._last_consensus_time: float = 0
         self._use_multi_tf = config.strategy.use_multi_tf
-        self._decision_tfs = config.strategy.decision_timeframes
+        preferred_tfs = list(getattr(config.strategy, "decision_timeframes", []) or [])
+        fallback_tfs = list(getattr(config.strategy, "decision_timeframes_fallback", []) or [])
+        if len(preferred_tfs) >= 2:
+            self._decision_tfs = preferred_tfs
+            self._decision_tfs_source = "preferred"
+        else:
+            self._decision_tfs = fallback_tfs
+            self._decision_tfs_source = "fallback"
+        if self._use_multi_tf and len(self._decision_tfs) < 2:
+            self._use_multi_tf = False
+            self._decision_tfs_source = "disabled_insufficient_tfs"
         self._consensus_min_strength = config.strategy.consensus_min_strength
         self._consensus_position_scale = config.strategy.consensus_position_scale
 
@@ -168,6 +178,8 @@ class LiveTradingEngine:
         if self._use_multi_tf:
             self.logger.info(f"  🔗 多周期决策: 启用")
             self.logger.info(f"  决策TFs: {','.join(self._decision_tfs)}")
+            if self._decision_tfs_source == "fallback":
+                self.logger.warning("  多周期TF使用回退配置（preferred不足2个）")
             self.logger.info(f"  最低共识强度: {self._consensus_min_strength}")
         else:
             self.logger.info(f"  多周期决策: 关闭 (单TF模式)")

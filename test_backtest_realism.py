@@ -291,6 +291,109 @@ def test_calc_multi_tf_consensus_passes_configured_coverage_min(monkeypatch):
     assert called["config"]["coverage_min"] == 0.75
 
 
+def test_calc_multi_tf_consensus_coverage_counts_only_valid_tf_scores():
+    dt = pd.Timestamp("2025-01-01 00:00:00")
+    # 1h 在 dt 有效；4h 只有未来评分点，应视为无效，不应计入 coverage
+    score_map = {
+        "1h": {dt: (10.0, 50.0)},
+        "4h": {dt + pd.Timedelta(hours=6): (20.0, 40.0)},
+    }
+
+    ss, bs, meta = opt_six.calc_multi_tf_consensus(
+        score_map,
+        ["1h", "4h"],
+        dt,
+        {"short_threshold": 25, "long_threshold": 40, "coverage_min": 0.5},
+    )
+
+    # 只应按 1h 权重计 coverage: 8 / (8+15)
+    cov = 8 / 23
+    assert meta["coverage"] == pytest.approx(cov, abs=1e-3)
+    # coverage<1 时融合分数会按 coverage 衰减
+    assert ss == pytest.approx(10.0 * cov, abs=1e-6)
+    assert bs == pytest.approx(50.0 * cov, abs=1e-6)
+    assert meta["decision"]["actionable"] is False
+    assert "覆盖不足" in meta["decision"]["label"]
+
+
+def test_oos_selection_uses_multi_tf_objective(monkeypatch):
+    df_ref = _make_ohlcv(n=24 * 220, start=100, step=0.02)
+    df_fast = _make_ohlcv(n=24 * 220, start=100, step=0.02)
+    df_mid = _make_ohlcv(n=24 * 220, start=100, step=0.02)
+    df_slow = _make_ohlcv(n=24 * 220, start=100, step=0.02)
+    all_data = {
+        "1h": df_ref,
+        "15m": df_fast,
+        "4h": df_mid,
+        "12h": df_slow,
+    }
+
+    calls = {"multi": 0, "single": 0, "decision_tfs": []}
+
+    def fake_compute_signals_six(_df, _tf, _all, max_bars=0):
+        return {"ok": True, "max_bars": max_bars}
+
+    def fake_build_tf_score_index(_all_data, _all_signals, _tfs, _cfg):
+        return {"dummy": {}}
+
+    def fake_run_strategy(*_args, **_kwargs):
+        calls["single"] += 1
+        raise AssertionError("OOS should use multi-TF objective, not single-TF run_strategy")
+
+    def fake_run_strategy_multi_tf(primary_df, tf_score_map, decision_tfs, config, primary_tf="1h", trade_days=30, **_kwargs):
+        calls["multi"] += 1
+        calls["decision_tfs"].append(tuple(decision_tfs))
+        alpha_map = {
+            "candidate_top": 20.0,
+            "candidate_best": 10.0,
+            "fallback_cfg": 12.0,
+            "generic_conservative": 2.0,
+            "generic_moderate": 3.0,
+            "generic_high_bar": 1.0,
+        }
+        alpha = alpha_map.get(config.get("tag", ""), 0.0)
+        return {
+            "alpha": alpha,
+            "max_drawdown": -5.0,
+            "strategy_return": alpha,
+            "buy_hold_return": 0.0,
+            "total_trades": 5,
+            "liquidations": 0,
+            "fees": {"total_costs": 0.0},
+        }
+
+    monkeypatch.setattr(bt_60307, "compute_signals_six", fake_compute_signals_six)
+    monkeypatch.setattr(bt_60307, "_build_tf_score_index", fake_build_tf_score_index)
+    monkeypatch.setattr(bt_60307, "run_strategy", fake_run_strategy)
+    monkeypatch.setattr(bt_60307, "run_strategy_multi_tf", fake_run_strategy_multi_tf)
+
+    opt_result = {
+        "global_best": {"config": {"tag": "candidate_best"}},
+        "global_top30": [{"config": {"tag": "candidate_top"}}],
+    }
+    fallback_cfg = {"tag": "fallback_cfg", "coverage_min": 0.5}
+
+    selected_cfg, meta = bt_60307._select_oos_base_config(
+        opt_result=opt_result,
+        all_data=all_data,
+        test_days=60,
+        train_days=60,
+        tf_hours={"1h": 1, "15m": 0.25, "4h": 4, "12h": 12},
+        fallback_config=fallback_cfg,
+        ref_tf="1h",
+        top_n=2,
+        conservative=False,
+        decision_tfs=["15m", "1h", "4h", "12h"],
+    )
+
+    assert calls["single"] == 0
+    assert calls["multi"] > 0
+    assert all(tfs == ("15m", "1h", "4h", "12h") for tfs in calls["decision_tfs"])
+    assert selected_cfg["tag"] == "candidate_top"
+    assert meta["objective_mode"] == "multi_tf"
+    assert meta["decision_tfs"] == ["15m", "1h", "4h", "12h"]
+
+
 def test_run_strategy_multi_tf_live_gate_blocks_non_actionable(monkeypatch):
     df = _make_ohlcv(n=180, start=100, step=0.2)
 

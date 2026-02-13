@@ -373,6 +373,10 @@ def fuse_tf_scores(tf_scores, decision_tfs, config=None):
     short_threshold = config.get('short_threshold', 25)
     long_threshold = config.get('long_threshold', 40)
     coverage_min = config.get('coverage_min', 0.5)
+    # 可配置融合阈值 (原硬编码, 现参数化)
+    dominance_ratio = float(config.get('dominance_ratio', 1.3))  # 方向判定主导比
+    chain_boost_per_tf = float(config.get('chain_boost_per_tf', 0.08))  # 共振链每级增强
+    chain_boost_weak_per_tf = float(config.get('chain_boost_weak_per_tf', 0.04))  # 弱共振链每级增强
 
     # ── 0. Coverage (有效TF占比) ──
     available_tfs = [tf for tf in decision_tfs if tf in tf_scores]
@@ -383,11 +387,31 @@ def fuse_tf_scores(tf_scores, decision_tfs, config=None):
     if not available_tfs:
         return _empty_consensus(decision_tfs, coverage)
 
-    # ── 1. 加权平均 ss/bs ──
-    total_w = sum(TF_WEIGHT.get(tf, 5) for tf in available_tfs)
-    weighted_ss = sum(tf_scores[tf][0] * TF_WEIGHT.get(tf, 5)
+    # ── 1. 加权平均 ss/bs (支持 regime 驱动动态权重) ──
+    # regime_label 由上游 _compute_regime_controls 计算后通过 config 传入
+    regime_label = config.get('_regime_label', 'neutral')
+    effective_weights = {}
+    for tf in available_tfs:
+        base_w = TF_WEIGHT.get(tf, 5)
+        tf_min = TF_MINUTES.get(tf, 60)
+        if regime_label in ('high_vol_choppy', 'high_vol'):
+            # 高波动/震荡: 降低小周期权重(噪声大), 维持大周期
+            if tf_min < 60:
+                base_w *= 0.6
+            elif tf_min >= 240:
+                base_w *= 1.15
+        elif regime_label in ('trend', 'low_vol_trend'):
+            # 趋势市场: 抬高大周期权重, 略降小周期
+            if tf_min >= 240:
+                base_w *= 1.25
+            elif tf_min < 60:
+                base_w *= 0.8
+        effective_weights[tf] = base_w
+
+    total_w = sum(effective_weights[tf] for tf in available_tfs)
+    weighted_ss = sum(tf_scores[tf][0] * effective_weights[tf]
                       for tf in available_tfs) / total_w
-    weighted_bs = sum(tf_scores[tf][1] * TF_WEIGHT.get(tf, 5)
+    weighted_bs = sum(tf_scores[tf][1] * effective_weights[tf]
                       for tf in available_tfs) / total_w
 
     # ── 2. 每个TF的方向判定 (用于共振/决策矩阵) ──
@@ -399,10 +423,10 @@ def fuse_tf_scores(tf_scores, decision_tfs, config=None):
 
     for tf in sorted_tfs:
         ss, bs = tf_scores[tf]
-        if ss >= short_threshold and ss > bs * 1.3:
+        if ss >= short_threshold and ss > bs * dominance_ratio:
             d = 'short'
             short_tfs.append(tf)
-        elif bs >= long_threshold and bs > ss * 1.3:
+        elif bs >= long_threshold and bs > ss * dominance_ratio:
             d = 'long'
             long_tfs.append(tf)
         else:
@@ -436,11 +460,11 @@ def fuse_tf_scores(tf_scores, decision_tfs, config=None):
     # ── 4. 大小周期反向衰减 (与回测一致) ──
     if large_tfs and small_tfs:
         # 大周期偏空 + 小周期偏多 → 衰减买入
-        if large_ss_avg > large_bs_avg * 1.3 and small_bs_avg > small_ss_avg * 1.3:
+        if large_ss_avg > large_bs_avg * dominance_ratio and small_bs_avg > small_ss_avg * dominance_ratio:
             weighted_bs *= 0.5
             weighted_ss *= 1.15
         # 大周期偏多 + 小周期偏空 → 衰减卖出
-        elif large_bs_avg > large_ss_avg * 1.3 and small_ss_avg > small_bs_avg * 1.3:
+        elif large_bs_avg > large_ss_avg * dominance_ratio and small_ss_avg > small_bs_avg * dominance_ratio:
             weighted_ss *= 0.5
             weighted_bs *= 1.15
 
@@ -479,13 +503,13 @@ def fuse_tf_scores(tf_scores, decision_tfs, config=None):
             best_chain_tfs = list(chain)
 
     if best_chain_len >= 3 and best_chain_has_4h:
-        chain_boost = 1.0 + best_chain_len * 0.08
+        chain_boost = 1.0 + best_chain_len * chain_boost_per_tf
         if best_chain_dir == 'short':
             weighted_ss *= chain_boost
         else:
             weighted_bs *= chain_boost
     elif best_chain_len >= 2:
-        chain_boost = 1.0 + best_chain_len * 0.04
+        chain_boost = 1.0 + best_chain_len * chain_boost_weak_per_tf
         if best_chain_dir == 'short':
             weighted_ss *= chain_boost
         else:
