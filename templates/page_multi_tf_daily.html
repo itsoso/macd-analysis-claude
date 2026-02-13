@@ -131,21 +131,40 @@ document.addEventListener('DOMContentLoaded', async () => {
     </div>`;
 
     // ══════ 汇总卡片 ══════
+    // 预计算各类交易统计
+    const _spotSells = trades.filter(t => t.action === 'SPOT_SELL');
+    const _futuresClose = trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action));
+    const _partialTP = trades.filter(t => t.action === 'PARTIAL_TP');
+    const _spotPnl = _spotSells.reduce((s,t) => s+(t.pnl||0), 0);
+    const _futuresPnl = _futuresClose.reduce((s,t) => s+(t.pnl||0), 0) + _partialTP.reduce((s,t) => s+(t.pnl||0), 0);
+
     html += `<div class="card"><div class="title"><span class="icon">📊</span>回测汇总</div>
     <div class="mg">
         <div class="mi"><div class="lb">策略收益</div><div class="vl ${cls(s.total_return_pct)}">${fv(s.total_return_pct)}%</div></div>
         <div class="mi"><div class="lb">买入持有</div><div class="vl ${cls(s.buy_hold_return_pct)}">${fv(s.buy_hold_return_pct)}%</div></div>
         <div class="mi"><div class="lb">Alpha</div><div class="vl ${cls(s.alpha_pct)}">${fv(s.alpha_pct)}%</div></div>
         <div class="mi"><div class="lb">最大回撤</div><div class="vl neg">${fv(s.max_drawdown_pct)}%</div></div>
-        <div class="mi"><div class="lb">胜率</div><div class="vl ${(s.win_rate_pct||0)>=50?'pos':'neg'}">${fv(s.win_rate_pct)}%</div></div>
-        <div class="mi"><div class="lb">盈亏比</div><div class="vl ${(s.profit_factor||0)>=1.5?'pos':'neu'}">${fv(s.profit_factor)}</div></div>
-        <div class="mi"><div class="lb">交易次数</div><div class="vl neu">${s.total_trades||0} (平仓${s.close_trades||0})</div></div>
-        <div class="mi"><div class="lb">强平次数</div><div class="vl ${(s.liquidations||0)>0?'neg':'pos'}">${s.liquidations||0}</div></div>
         <div class="mi"><div class="lb">期末资金</div><div class="vl">${fc(s.final_capital)}</div></div>
+        <div class="mi"><div class="lb">强平次数</div><div class="vl ${(s.liquidations||0)>0?'neg':'pos'}">${s.liquidations||0}</div></div>
+    </div>
+    <div style="margin-top:6px;">
+    <div class="mg">
+        <div class="mi"><div class="lb">总交易</div><div class="vl neu">${s.total_trades||0}笔</div></div>
+        <div class="mi"><div class="lb">现货卖出</div><div class="vl neu">${_spotSells.length}笔</div></div>
+        <div class="mi"><div class="lb">合约平仓</div><div class="vl neu">${_futuresClose.length}笔</div></div>
+        <div class="mi"><div class="lb">部分止盈</div><div class="vl neu">${_partialTP.length}笔</div></div>
+        <div class="mi"><div class="lb">合约胜率</div><div class="vl ${(s.win_rate_pct||0)>=50?'pos':'neg'}">${fv(s.win_rate_pct)}%</div></div>
+        <div class="mi"><div class="lb">盈亏比</div><div class="vl ${(s.profit_factor||0)>=1.5?'pos':'neu'}">${fv(s.profit_factor)}</div></div>
+    </div></div>
+    <div style="margin-top:6px;">
+    <div class="mg">
+        <div class="mi"><div class="lb">现货已实现PnL</div><div class="vl ${cls(_spotPnl)}">${fc(_spotPnl)}</div></div>
+        <div class="mi"><div class="lb">合约已实现PnL</div><div class="vl ${cls(_futuresPnl)}">${fc(_futuresPnl)}</div></div>
         <div class="mi"><div class="lb">总费用</div><div class="vl">${fc(s.total_costs)}</div></div>
         <div class="mi"><div class="lb">费用拖累</div><div class="vl neg">${fv(s.fee_drag_pct)}%</div></div>
         <div class="mi"><div class="lb">净Funding</div><div class="vl ${cls(s.net_funding)}">${fc(s.net_funding)}</div></div>
-    </div></div>`;
+    </div></div>
+    </div>`;
 
     // ══════ 资金曲线 + 回撤 ══════
     html += `<div class="card">
@@ -226,24 +245,90 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     html += '</tbody></table></div></details></div>';
 
-    // ══════ 交易统计 ══════
-    const closeTrades = trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action));
-    const wins = closeTrades.filter(t => (t.pnl||0) > 0);
-    const losses = closeTrades.filter(t => (t.pnl||0) <= 0);
+    // ══════ 交易统计 (分类) ══════
+    // 按类型分组
+    const actionGroups = {};
+    trades.forEach(t => { const a = t.action||'UNKNOWN'; if (!actionGroups[a]) actionGroups[a]=[]; actionGroups[a].push(t); });
+    const futuresClose = trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action));
+    const partialTP = trades.filter(t => t.action === 'PARTIAL_TP');
+    const spotSells = trades.filter(t => t.action === 'SPOT_SELL');
+    const spotBuys = trades.filter(t => t.action === 'SPOT_BUY');
+    const futuresOpen = trades.filter(t => ['OPEN_LONG','OPEN_SHORT'].includes(t.action));
+    // 所有有已实现PnL的交易
+    const allPnlTrades = trades.filter(t => (t.pnl||0) !== 0);
+    const allWins = allPnlTrades.filter(t => (t.pnl||0) > 0);
+    const allLosses = allPnlTrades.filter(t => (t.pnl||0) < 0);
+    const totalRealizedPnl = allPnlTrades.reduce((s,t) => s+(t.pnl||0), 0);
+    // 期货平仓统计
+    const fWins = futuresClose.filter(t => (t.pnl||0) > 0);
+    const fLosses = futuresClose.filter(t => (t.pnl||0) <= 0);
+    const fTotalPnl = futuresClose.reduce((s,t) => s+(t.pnl||0), 0);
+    const ptPnl = partialTP.reduce((s,t) => s+(t.pnl||0), 0);
+    const spotPnl = spotSells.reduce((s,t) => s+(t.pnl||0), 0);
 
-    html += `<div class="card"><div class="title"><span class="icon">📊</span>交易统计分析</div>
+    // ── 交易构成概览 ──
+    html += `<div class="card"><div class="title"><span class="icon">📊</span>交易构成总览 (${trades.length}笔)</div>
+    <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:12px;">
+        441笔交易包含多种操作类型，以下按类别分别统计已实现PnL
+    </div>
+    <div style="overflow-x:auto;"><table class="dt"><thead><tr>
+        <th>操作类型</th><th class="center">笔数</th><th class="center">已实现PnL</th><th class="center">占比</th><th>说明</th>
+    </tr></thead><tbody>`;
+    const typeRows = [
+        {name:'SPOT_SELL(现货卖出)', items:spotSells, desc:'卖出持有的ETH现货'},
+        {name:'SPOT_BUY(现货买入)', items:spotBuys, desc:'买入ETH现货'},
+        {name:'OPEN_SHORT/LONG(开仓)', items:futuresOpen, desc:'开启合约仓位'},
+        {name:'CLOSE_SHORT/LONG(平仓)', items:futuresClose, desc:'关闭合约仓位'},
+        {name:'PARTIAL_TP(部分止盈)', items:partialTP, desc:'合约部分止盈'},
+    ];
+    typeRows.forEach(r => {
+        const pnl = r.items.reduce((s,t) => s+(t.pnl||0), 0);
+        const pct = totalRealizedPnl ? (pnl/totalRealizedPnl*100) : 0;
+        html += `<tr>
+            <td style="font-weight:600">${r.name}</td>
+            <td class="center">${r.items.length}</td>
+            <td class="center"><span class="${cls(pnl)}" style="font-weight:700">${fc(pnl)}</span></td>
+            <td class="center">${pnl!==0?pct.toFixed(1)+'%':'-'}</td>
+            <td style="color:var(--text-muted);font-size:0.72rem">${r.desc}</td>
+        </tr>`;
+    });
+    html += `<tr style="border-top:2px solid var(--border);font-weight:700">
+        <td>合计</td><td class="center">${trades.length}</td>
+        <td class="center"><span class="${cls(totalRealizedPnl)}">${fc(totalRealizedPnl)}</span></td>
+        <td class="center">100%</td><td></td>
+    </tr>`;
+    html += '</tbody></table></div></div>';
+
+    // ── 合约交易统计 ──
+    html += `<div class="card"><div class="title"><span class="icon">💹</span>合约交易统计 (平仓${futuresClose.length}笔 + 部分止盈${partialTP.length}笔)</div>
     <div class="mg">
-        <div class="mi"><div class="lb">盈利笔数</div><div class="vl pos">${wins.length}</div></div>
-        <div class="mi"><div class="lb">亏损笔数</div><div class="vl neg">${losses.length}</div></div>
-        <div class="mi"><div class="lb">平均盈利</div><div class="vl pos">$${fv(wins.reduce((s,t)=>s+(t.pnl||0),0)/(wins.length||1))}</div></div>
-        <div class="mi"><div class="lb">平均亏损</div><div class="vl neg">$${fv(losses.reduce((s,t)=>s+(t.pnl||0),0)/(losses.length||1))}</div></div>
-        <div class="mi"><div class="lb">最大单笔盈利</div><div class="vl pos">$${fv(Math.max(0,...closeTrades.map(t=>t.pnl||0)))}</div></div>
-        <div class="mi"><div class="lb">最大单笔亏损</div><div class="vl neg">$${fv(Math.min(0,...closeTrades.map(t=>t.pnl||0)))}</div></div>
-        <div class="mi"><div class="lb">总手续费</div><div class="vl">${fc(s.total_fees)}</div></div>
-        <div class="mi"><div class="lb">总滑点</div><div class="vl">${fc(s.total_slippage)}</div></div>
+        <div class="mi"><div class="lb">平仓盈利</div><div class="vl pos">${fWins.length}笔</div></div>
+        <div class="mi"><div class="lb">平仓亏损</div><div class="vl neg">${fLosses.length}笔</div></div>
+        <div class="mi"><div class="lb">胜率</div><div class="vl ${(fWins.length/(futuresClose.length||1)*100)>=50?'pos':'neg'}">${(fWins.length/(futuresClose.length||1)*100).toFixed(1)}%</div></div>
+        <div class="mi"><div class="lb">平均盈利</div><div class="vl pos">$${fv(fWins.reduce((s,t)=>s+(t.pnl||0),0)/(fWins.length||1))}</div></div>
+        <div class="mi"><div class="lb">平均亏损</div><div class="vl neg">$${fv(fLosses.reduce((s,t)=>s+(t.pnl||0),0)/(fLosses.length||1))}</div></div>
+        <div class="mi"><div class="lb">最大单笔盈利</div><div class="vl pos">$${fv(Math.max(0,...futuresClose.map(t=>t.pnl||0)))}</div></div>
+        <div class="mi"><div class="lb">最大单笔亏损</div><div class="vl neg">$${fv(Math.min(0,...futuresClose.map(t=>t.pnl||0)))}</div></div>
+        <div class="mi"><div class="lb">合约总PnL</div><div class="vl ${cls(fTotalPnl+ptPnl)}">${fc(fTotalPnl+ptPnl)}</div></div>
     </div>
     <div style="margin-top:14px;"><div class="chart-box" style="height:220px"><canvas id="pnlChart"></canvas></div></div>
     </div>`;
+
+    // ── 现货交易统计 ──
+    const spotWins = spotSells.filter(t => (t.pnl||0) > 0);
+    const spotLosses = spotSells.filter(t => (t.pnl||0) <= 0);
+    html += `<div class="card"><div class="title"><span class="icon">🪙</span>现货交易统计 (卖出${spotSells.length}笔 / 买入${spotBuys.length}笔)</div>
+    <div class="mg">
+        <div class="mi"><div class="lb">盈利卖出</div><div class="vl pos">${spotWins.length}笔</div></div>
+        <div class="mi"><div class="lb">亏损卖出</div><div class="vl neg">${spotLosses.length}笔</div></div>
+        <div class="mi"><div class="lb">现货总PnL</div><div class="vl ${cls(spotPnl)}">${fc(spotPnl)}</div></div>
+        <div class="mi"><div class="lb">平均单笔PnL</div><div class="vl ${cls(spotPnl)}">${fc(spotPnl/(spotSells.length||1))}</div></div>
+        <div class="mi"><div class="lb">最大单笔盈利</div><div class="vl pos">${fc(Math.max(0,...spotSells.map(t=>t.pnl||0)))}</div></div>
+        <div class="mi"><div class="lb">占总PnL比</div><div class="vl neu">${totalRealizedPnl?(spotPnl/totalRealizedPnl*100).toFixed(1)+'%':'-'}</div></div>
+    </div>
+    <div style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">
+        注: 现货PnL = (卖出价 - 持仓均价) × 数量。策略初始分配50%资金买入ETH现货，后续根据信号进行现货买卖。
+    </div></div>`;
 
     // ══════ 月度汇总 ══════
     const monthMap = {};
