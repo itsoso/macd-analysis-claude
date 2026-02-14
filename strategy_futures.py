@@ -109,6 +109,8 @@ class FuturesEngine:
 
         self.usdt = initial_usdt
         self.spot_eth = 0  # 现货ETH持仓
+        self.spot_cost_basis = 0  # 现货ETH加权平均成本基准(USDT)
+        self.spot_realized_pnl = 0  # 现货真实已实现PnL(按成本法)
         self.futures_long = None   # 多头合约仓位
         self.futures_short = None  # 空头合约仓位
         self.frozen_margin = 0     # 冻结保证金
@@ -132,6 +134,19 @@ class FuturesEngine:
         # 累计使用保证金(限制总吞吐量, 初始的150%)
         self.lifetime_margin_used = 0
         self.max_lifetime_margin = self.initial_total * 1.5
+        # 月度重置支持: 每月重置 lifetime_margin_used, 避免长周期回测中额度耗尽
+        self._last_lifetime_reset_month = None  # 上次重置的月份 (YYYY-MM)
+
+    def maybe_reset_lifetime_monthly(self, dt):
+        """按月重置累计保证金计数器, 模拟真实风控月度额度刷新"""
+        if dt is None:
+            return
+        current_month = str(dt)[:7]  # 'YYYY-MM'
+        if self._last_lifetime_reset_month is None:
+            self._last_lifetime_reset_month = current_month
+        elif current_month != self._last_lifetime_reset_month:
+            self.lifetime_margin_used = 0
+            self._last_lifetime_reset_month = current_month
 
     def available_usdt(self):
         """可用USDT(排除冻结保证金)"""
@@ -232,6 +247,7 @@ class FuturesEngine:
         qty = (invest - fee) / actual_p
         self.usdt -= invest
         self.spot_eth += qty
+        self.spot_cost_basis += invest  # 成本基准: 买入总投入(含手续费+滑点)
         self.total_spot_fees += fee
         self.total_slippage_cost += slippage_cost
         self._record_trade(dt, price, 'SPOT_BUY', 'long', qty, invest, fee, 1, reason,
@@ -247,13 +263,23 @@ class FuturesEngine:
         fair_revenue = qty * price
         fee = revenue * self.TAKER_FEE
         slippage_cost = fair_revenue - revenue
+        # 按加权平均成本法计算真实已实现PnL
+        if self.spot_eth > 0 and self.spot_cost_basis > 0:
+            avg_cost_per_eth = self.spot_cost_basis / self.spot_eth
+            sold_cost = qty * avg_cost_per_eth
+            real_pnl = revenue - fee - sold_cost  # 卖出净收入 - 成本
+            self.spot_cost_basis -= sold_cost  # 按比例减少成本基准
+        else:
+            real_pnl = revenue - fee  # 无成本基准时退化为现金流
+            sold_cost = 0
+        self.spot_realized_pnl += real_pnl
         self.usdt += revenue - fee
         self.spot_eth -= qty
         self.total_spot_fees += fee
         self.total_slippage_cost += slippage_cost
         self._record_trade(dt, price, 'SPOT_SELL', 'long', qty, revenue, fee, 1, reason,
                            exec_price=actual_p, slippage_cost=slippage_cost,
-                           pnl=revenue - fee)
+                           pnl=real_pnl)  # 修正: 记录真实已实现PnL(成本法)
 
     # === 合约操作 ===
     def open_long(self, price, dt, margin, leverage, reason):

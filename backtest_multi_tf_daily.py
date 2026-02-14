@@ -109,14 +109,13 @@ def _build_default_config():
         'prot_loss_streak_limit': 3,
         'prot_loss_streak_cooldown_bars': 24,
         'prot_daily_loss_limit_pct': 0.03,
-        'prot_global_dd_limit_pct': 0.12,
+        'prot_global_dd_limit_pct': 0.15,  # 15%回撤触发停机(放宽, 原0.12)
         'prot_close_on_global_halt': True,
         # ── 趋势持仓保护 ──
         'use_trend_enhance': True,
         'trend_floor_ratio': 0.50,  # 上调至0.50: 趋势中持有更多ETH，减少过度卖出
         'min_base_eth_ratio': 0.0,  # 禁用最低持仓限制, 允许灵活调仓
         # ── global_halt 恢复机制 ──
-        'prot_global_dd_limit_pct': 0.15,  # 15%回撤触发停机(放宽)
         'prot_global_halt_recovery_pct': 0.06,  # 回撤收窄到6%时恢复交易
         # ── 微结构增强 ── (回测中关闭, 隔离趋势保护v3效果)
         'use_microstructure': False,  # _LIVE_DEFAULT.use_microstructure,

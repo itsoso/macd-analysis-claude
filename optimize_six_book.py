@@ -128,6 +128,7 @@ def _init_protection_state(config, initial_equity):
         'equity_peak': float(initial_equity),
         'drawdown_from_peak_pct': 0.0,
         'global_halt': False,
+        'global_halt_closed': False,  # 停机后是否已执行平仓
         'entry_block_until_idx': -1,
         'loss_streak': 0,
         'stats': {
@@ -181,6 +182,7 @@ def _update_protection_risk_state(state, dt, equity, idx, config):
         recovery_threshold = float(config.get('prot_global_halt_recovery_pct', 0.06))
         if state['drawdown_from_peak_pct'] > -recovery_threshold:
             state['global_halt'] = False
+            state['global_halt_closed'] = False  # 重置平仓标记, 下次停机可再执行平仓
             state['stats']['global_halt_recovered'] = int(state['stats'].get('global_halt_recovered', 0)) + 1
 
     return state
@@ -702,6 +704,7 @@ def _run_strategy_core(
         if init_idx >= len(primary_df):
             init_idx = 0
     eng.spot_eth = eng.initial_eth_value / float(close_prices[init_idx])
+    eng.spot_cost_basis = eng.initial_eth_value  # 初始ETH成本基准 = 初始分配金额
 
     eng.max_single_margin = eng.initial_total * config.get('single_pct', 0.20)
     eng.max_margin_total = eng.initial_total * config.get('total_pct', 0.50)
@@ -765,7 +768,6 @@ def _run_strategy_core(
     pending_bs = 0.0
     has_pending_signal = False
     prot_state = _init_protection_state(config, eng.total_value(primary_df['close'].iloc[init_idx]))
-    global_halt_closed = False
     trade_cursor = 0
     micro_df = _build_microstructure_features(primary_df, config) if config.get('use_microstructure', False) else None
     vol_ann = _build_realized_vol_series(primary_df, primary_tf, config)
@@ -801,6 +803,9 @@ def _run_strategy_core(
         price = float(close_prices[idx])
         # 交易执行价 = 当前 bar 的 open (模拟"收到上根信号后在下根开盘执行")
         exec_price = float(open_prices[idx])
+
+        # 月度重置累计保证金额度, 避免长周期回测耗尽
+        eng.maybe_reset_lifetime_monthly(dt)
 
         if start_dt and dt < start_dt:
             if idx % record_interval == 0:
@@ -848,7 +853,7 @@ def _run_strategy_core(
         if (
             prot_state.get('enabled', False)
             and prot_state.get('global_halt', False)
-            and not global_halt_closed
+            and not prot_state.get('global_halt_closed', False)
             and config.get('prot_close_on_global_halt', True)
         ):
             if eng.futures_short:
@@ -857,7 +862,7 @@ def _run_strategy_core(
             if eng.futures_long:
                 eng.close_long(exec_price, dt, "全局停机平多")
                 long_bars = 0
-            global_halt_closed = True
+            prot_state['global_halt_closed'] = True
 
         can_open_risk, blocked_reason = _protection_entry_allowed(prot_state, idx)
         if prot_state.get('enabled', False) and not can_open_risk:
