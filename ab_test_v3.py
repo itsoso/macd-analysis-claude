@@ -2,7 +2,11 @@
 """A/B 对比: v2基线 vs v3增强 (同区间、同数据、同信号)
 
 用法:
-  python3 ab_test_v3.py
+  python3 ab_test_v3.py                    # 第七轮 研究口径
+  python3 ab_test_v3.py --live            # 第八轮 实盘口径
+  python3 ab_test_v3.py --live --spot     # 第九轮 现货卖出质量
+  python3 ab_test_v3.py --macd             # 第十轮 双MACD共振 A/B (全周期)
+  python3 ab_test_v3.py --p1               # 第十一轮 P1a空单NoTP退出 + P1b中分SS降卖
 """
 import time, json, sys, os
 sys.path.insert(0, os.path.dirname(__file__))
@@ -53,7 +57,7 @@ def _load_data_and_signals():
     tf_score_index = _build_tf_score_index(all_data, all_signals, score_tfs, base_cfg)
     print(f"  评分索引: {sum(len(v) for v in tf_score_index.values())} 个评分点")
 
-    return all_data, decision_tfs, tf_score_index
+    return all_data, decision_tfs, tf_score_index, all_signals, score_tfs
 
 
 def _run_variant(label, cfg_overrides, all_data, decision_tfs, tf_score_index):
@@ -132,11 +136,15 @@ def _run_variant(label, cfg_overrides, all_data, decision_tfs, tf_score_index):
 
 
 def main():
-    all_data, decision_tfs, tf_score_index = _load_data_and_signals()
+    all_data, decision_tfs, tf_score_index, all_signals, score_tfs = _load_data_and_signals()
 
     # 是否跑「实盘口径」：--live 第八轮(降频控损)，--live --spot 第九轮(现货卖出质量)
     run_live_track = '--live' in sys.argv or os.environ.get('RUN_LIVE_AB') == '1'
     run_live_spot = '--spot' in sys.argv or os.environ.get('RUN_LIVE_SPOT') == '1'
+    # 第十轮: 双 MACD 共振 A/B（全周期，不替换默认 MACD）
+    run_macd_ab = '--macd' in sys.argv or os.environ.get('RUN_MACD_AB') == '1'
+    # 第十一轮: P1a 空单 NoTP 提前退出 + P1b neutral 中分 SS 降 sell_pct
+    run_p1_ab = '--p1' in sys.argv or os.environ.get('RUN_P1_AB') == '1'
 
     # ── 研究口径基线 (run#43) ──
     stable_base = {
@@ -153,7 +161,50 @@ def main():
         'use_spot_sell_confirm': False,
     }
 
-    if run_live_track and run_live_spot:
+    if run_p1_ab:
+        # ── 第十一轮: P1a 空单 NoTP 提前退出 + P1b neutral 中分 SS 降 sell_pct ──
+        # 基线 = run#62 (实盘口径 + confirm35x3 + block high_vol + short_sl=-0.16)
+        live_base = {
+            **stable_base,
+            'use_microstructure': True,
+            'use_dual_engine': True,
+            'use_vol_target': True,
+            'regime_short_gate_add': 35,
+            'short_sl': -0.16,
+            'use_spot_sell_confirm': True,
+            'spot_sell_confirm_ss': 35,
+            'spot_sell_confirm_min': 3,
+            'spot_sell_regime_block': 'high_vol',
+        }
+        variants = [
+            ("A:run62基线", {**live_base}),
+            ("B:NoTP退出16bar", {**live_base, 'no_tp_exit_bars': 16, 'no_tp_exit_min_pnl': 0.03}),
+            ("C:neutral降卖50%", {**live_base, 'neutral_mid_ss_sell_ratio': 0.50}),
+            ("D:B+C组合", {**live_base,
+                'no_tp_exit_bars': 16, 'no_tp_exit_min_pnl': 0.03,
+                'neutral_mid_ss_sell_ratio': 0.50}),
+        ]
+        round_title = "第十一轮: P1a空单NoTP退出 + P1b中分SS降卖 | 基线=run#62"
+    elif run_macd_ab:
+        # ── 第十轮: 双 MACD 共振 | 实盘口径 ──
+        # 标准 MACD(12,26,9) 不变；B 变体增加快速 MACD(5,10,5) 共振加分
+        live_base = {
+            **stable_base,
+            'use_microstructure': True,
+            'use_dual_engine': True,
+            'use_vol_target': True,
+            'regime_short_gate_add': 35,
+        }
+        variants = [
+            ("A:标准MACD", {**live_base}),
+            ("B:双MACD共振", {**live_base, 'use_dual_macd': True, 'dual_macd_bonus': 8}),
+        ]
+        round_title = "第十轮: 双MACD共振 | 实盘口径"
+        # B 变体需用「带双 MACD 加分」的评分索引，单独构建
+        cfg_b = _scale_runtime_config(_build_default_config(), PRIMARY_TF)
+        cfg_b.update({'use_dual_macd': True, 'dual_macd_bonus': 8})
+        tf_score_index_B = _build_tf_score_index(all_data, all_signals, score_tfs, cfg_b)
+    elif run_live_track and run_live_spot:
         # ── 第九轮: 实盘口径 现货卖出质量 (Codex) ──
         # 基线 = run#46 (LVT+35)。目标: 高波动期 SPOT_SELL 噪声下降，confirm_ss 下调覆盖 SS 40~70
         # 评估: pPF、CLOSE_SHORT净亏、high_vol SPOT_SELL净值、fee_drag
@@ -228,7 +279,11 @@ def main():
     results = []
     for label, overrides in variants:
         print(f"\n[3/3] 运行 {label}...")
-        r = _run_variant(label, overrides, all_data, decision_tfs, tf_score_index)
+        if run_macd_ab and label == "B:双MACD共振":
+            idx_map = tf_score_index_B
+        else:
+            idx_map = tf_score_index
+        r = _run_variant(label, overrides, all_data, decision_tfs, idx_map)
         results.append(r)
         print(f"  收益: {r['return_pct']:+.2f}%  Alpha: {r['alpha']:+.2f}%  "
               f"回撤: {r['max_dd']:.2f}%  cPF: {r['contract_pf']:.2f}  pPF: {r['full_pf']:.2f}  "

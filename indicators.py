@@ -487,6 +487,16 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['DIF'] = macd_df['DIF']
     df['DEA'] = macd_df['DEA']
     df['MACD_BAR'] = macd_df['MACD_BAR']
+    # 快速 MACD (5,10,5)，用于双 MACD 共振 A/B
+    macd_alt = calc_macd(
+        df['close'],
+        fast=cfg.MACD_FAST_ALT,
+        slow=cfg.MACD_SLOW_ALT,
+        signal=cfg.MACD_SIGNAL_ALT,
+    )
+    df['DIF_FAST'] = macd_alt['DIF']
+    df['DEA_FAST'] = macd_alt['DEA']
+    df['MACD_BAR_FAST'] = macd_alt['MACD_BAR']
 
     # KDJ
     kdj_df = calc_kdj(df['high'], df['low'], df['close'])

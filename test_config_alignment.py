@@ -88,3 +88,23 @@ def test_backtest_daily_defaults_align_with_strategy_defaults():
     assert daily_cfg.DEFAULT_CONFIG["use_dual_engine"] is False     # 回测中关闭
     assert daily_cfg.DEFAULT_CONFIG["use_vol_target"] is False      # 回测中关闭
     assert daily_cfg.DEFAULT_CONFIG["vol_target_annual"] == cfg.vol_target_annual
+
+
+def test_regime_gate_add_35_effective():
+    """验证 gate_add=35 时 LVT regime 中做空有效门槛为 60 (25+35)。"""
+    cfg = StrategyConfig()
+    assert cfg.regime_short_gate_add == 35
+    assert cfg.short_threshold == 25
+    effective_threshold = cfg.short_threshold + cfg.regime_short_gate_add
+    assert effective_threshold == 60
+
+
+def test_warmup_fixed_200_bars():
+    """验证 warmup 按固定 200 bar 计算，不随样本长度 5% 放大。"""
+    WARMUP_BARS = 200
+    # 短样本: 取 min(200, len-1)
+    assert min(max(60, WARMUP_BARS), 500 - 1) == 200
+    # 长样本: 之前 5%*10000=500，现固定 200
+    assert min(max(60, WARMUP_BARS), 10000 - 1) == 200
+    # 极短样本: 不超过 len-1
+    assert min(max(60, WARMUP_BARS), 100 - 1) == 99

@@ -1,244 +1,175 @@
 {% extends "base.html" %}
-{% block title %}当前最优策略(v4.2) - 技术分析平台{% endblock %}
+{% block title %}当前最优策略(v4.3候选) - 技术分析平台{% endblock %}
 
 {% block content %}
 <style>
     .strategy-hero {
-        background: linear-gradient(135deg, rgba(74,158,255,0.12), rgba(168,85,247,0.08));
+        background: linear-gradient(135deg, rgba(74,158,255,0.14), rgba(168,85,247,0.09));
         border: 1px solid var(--border);
         border-radius: 16px;
         padding: 28px 32px;
         margin-bottom: 28px;
     }
     .strategy-hero h1 { font-size: 26px; font-weight: 700; margin-bottom: 8px; }
-    .strategy-hero .tagline { font-size: 14px; color: var(--text-secondary); margin-bottom: 20px; }
-    .strategy-meta {
-        display: flex; flex-wrap: wrap; gap: 12px;
-    }
+    .strategy-hero .tagline { font-size: 14px; color: var(--text-secondary); margin-bottom: 18px; line-height: 1.7; }
+    .strategy-meta { display: flex; flex-wrap: wrap; gap: 10px; }
     .strategy-meta .badge {
-        padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;
+        padding: 6px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 600;
     }
-    .strategy-meta .badge.blue { background: rgba(74,158,255,0.2); color: var(--accent-blue); }
-    .strategy-meta .badge.green { background: rgba(0,214,143,0.2); color: var(--accent-green); }
-    .strategy-meta .badge.purple { background: rgba(168,85,247,0.2); color: var(--accent-purple); }
-    .strategy-meta .badge.yellow { background: rgba(255,170,0,0.2); color: var(--accent-yellow); }
+    .strategy-meta .blue { background: rgba(74,158,255,0.2); color: var(--accent-blue); }
+    .strategy-meta .green { background: rgba(0,214,143,0.2); color: var(--accent-green); }
+    .strategy-meta .purple { background: rgba(168,85,247,0.2); color: var(--accent-purple); }
+    .strategy-meta .yellow { background: rgba(255,170,0,0.2); color: var(--accent-yellow); }
+    .strategy-meta .orange { background: rgba(230,126,34,0.2); color: #e67e22; }
 
-    .section h3 {
-        font-size: 16px; font-weight: 600; margin-bottom: 12px;
-        display: flex; align-items: center; gap: 8px;
-    }
     .section { margin-bottom: 24px; }
-    .section ul { margin: 0; padding-left: 20px; color: var(--text-secondary); font-size: 14px; line-height: 1.8; }
-    .section .param-table {
-        width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px;
+    .section p, .section li {
+        color: var(--text-secondary);
+        font-size: 14px;
+        line-height: 1.75;
     }
-    .section .param-table th, .section .param-table td {
-        text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border);
+    .section ul { margin: 0; padding-left: 20px; }
+    .param-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin-top: 8px;
     }
-    .section .param-table th { color: var(--text-muted); font-weight: 600; }
-    .section .param-table code { background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px; }
-    .monitor-tip {
-        background: rgba(255,170,0,0.1); border: 1px solid rgba(255,170,0,0.3);
-        border-radius: 10px; padding: 16px; margin-top: 16px; font-size: 13px; color: var(--text-secondary);
+    .param-table th, .param-table td {
+        text-align: left;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
     }
-    .monitor-tip strong { color: var(--accent-yellow); }
-    .evolution-timeline {
-        display: flex; flex-direction: column; gap: 0; margin: 16px 0; font-size: 13px;
+    .param-table th { color: var(--text-muted); font-weight: 600; }
+    .param-table code { background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px; }
+    .hint {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--text-muted);
     }
-    .evolution-item {
-        display: flex; gap: 16px; padding: 12px 0;
-        border-left: 2px solid var(--border); margin-left: 12px; padding-left: 20px;
-        position: relative; color: var(--text-secondary); line-height: 1.6;
-    }
-    .evolution-item::before {
-        content: ''; position: absolute; left: -6px; top: 16px;
-        width: 10px; height: 10px; border-radius: 50%; background: var(--border);
-    }
-    .evolution-item.active { border-left-color: var(--accent-blue); }
-    .evolution-item.active::before { background: var(--accent-blue); box-shadow: 0 0 8px rgba(74,158,255,0.5); }
-    .evolution-tag { font-weight: 600; color: var(--text-primary); min-width: 32px; }
-    .ab-result { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
-    .ab-card {
-        background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px;
-        padding: 12px; font-size: 12px; color: var(--text-secondary);
-    }
-    .ab-card .ab-label { font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
-    .ab-card .ab-verdict { font-weight: 600; margin-top: 4px; }
-    .ab-card .ab-verdict.keep { color: var(--accent-green); }
-    .ab-card .ab-verdict.drop { color: var(--accent-red); }
 </style>
 
 <div class="strategy-hero">
-    <h1>📌 当前最优策略（v4.2 — SPOT_SELL 尾部收敛优化）</h1>
-    <p class="tagline">六书融合 · 多周期联合决策 · ETH/USDT · 与逐日回测 Run#38 一致 · 第六轮A/B验证</p>
+    <h1>📌 当前最优策略（v4.3 候选）</h1>
+    <p class="tagline">
+        六书融合 × 多周期联合决策（15m+1h+4h+24h）<br>
+        主线参数关联 Run#62（进攻平衡）/ Run#64（回撤优先）/ Run#63,66（2024 OOS），截至 2026-02-14。
+    </p>
     <div class="strategy-meta">
-        <span class="badge blue">决策周期 15m / 1h / 4h / 24h</span>
-        <span class="badge green">分段止盈 v3（+12% / +25%）</span>
-        <span class="badge purple">Regime 动态阈值</span>
-        <span class="badge yellow">结构化落库 ss/bs/atr/regime</span>
-        <span class="badge orange">SPOT_SELL高SS确认过滤</span>
+        <span class="badge blue">主TF: 1h / 决策TF: 15m+1h+4h+24h</span>
+        <span class="badge green">SPOT_SELL过滤: SS≥35 + 3项确认</span>
+        <span class="badge purple">Regime门控: low_vol_trend +35</span>
+        <span class="badge yellow">分段止盈v3: 12% / 25%</span>
+        <span class="badge orange">v4.3关键收敛: short_sl -0.25 → -0.16</span>
     </div>
 </div>
 
-<div class="card">
-    <h3 class="card-title">🎯 策略概要</h3>
-    <p style="color: var(--text-secondary); font-size: 14px; line-height: 1.7; margin-bottom: 16px;">
-        基于六维融合评分（背离、均线、蜡烛图、布林带、量价、KDJ）在多个时间框架上并行计算<strong>卖出分（SS）</strong>与<strong>买入分（BS）</strong>，
-        通过多周期共识与趋势/Regime 动态阈值决定开平仓。v4.2 在 v4 基础上，通过第六轮 10 组 A/B 验证：
-        (1) 启用 SPOT_SELL 高 SS 确认过滤 → pPF 1.92→1.95，trend regime pPF 1.30→1.47；
-        (2) 验证空头门控/Cap方案均不值得（代价>40pp收益）。
-    </p>
+<div class="card section">
+    <h3 class="card-title">🎯 策略摘要</h3>
     <ul>
-        <li><strong>开空</strong>：SS ≥ 25（v4 降低门槛），且卖方优势满足 dominance，无冲突、风控与微结构未拦截。</li>
-        <li><strong>开多</strong>：BS ≥ 30（long_threshold），且买方优势满足 dominance。</li>
-        <li><strong>卖出现货</strong>：SS ≥ 18（sell_threshold），冷却与趋势底线满足。<strong style="color:#e67e22;">v4.2：SS≥100 时需额外确认（EMA/量/ATR 至少3项满足）</strong></li>
-        <li><strong>固定止损</strong>：做空 -25%，做多 -10%；硬断路器 -30%（A/B验证零代价防跳空）；ATR 动态止损关闭（A/B 证明对 ETH 无效）。</li>
-        <li><strong>分段止盈 v3</strong>：做空 TP1 在 +12% 平 30%，TP2 在 +25% 再平 30%；做多同理。</li>
-        <li><strong>追踪止损</strong>：做空 trailing 15%，做多 12%，回撤比 50%。</li>
-        <li><strong>结构化观测</strong>：每笔交易自动记录 ss/bs/atr_pct/regime_label 到 DB，支持精确归因分析。</li>
+        <li>信号层：六维评分（背离/均线/蜡烛图/布林带/量价/KDJ）在多周期并行生成 SS/BS。</li>
+        <li>决策层：多周期共识 + veto 过滤 + regime 动态阈值 + 双引擎（trend/reversion）切换。</li>
+        <li>风控层：组合保护（连亏/日亏/全局回撤）、硬断路器、分段止盈、趋势持仓底线。</li>
+        <li>本轮优化主结论：<strong>空头止损从 -0.25 收敛到 -0.16</strong>，在不伤 OOS 的前提下改善主样本收益与回撤。</li>
     </ul>
 </div>
 
-<div class="card">
-    <h3 class="card-title">📊 回测参考（Run#38，2025-01～2026-01）</h3>
+<div class="card section">
+    <h3 class="card-title">📊 当前主线表现（Run#62）</h3>
     <div class="stats-grid">
         <div class="stat-card">
+            <div class="stat-label">回测区间</div>
+            <div class="stat-value">2025-01 ~ 2026-01</div>
+            <div class="stat-note">Run#62</div>
+        </div>
+        <div class="stat-card">
             <div class="stat-label">策略收益</div>
-            <div class="stat-value positive">+850.83%</div>
-            <div class="stat-note">vs 买入持有 -13.55%</div>
+            <div class="stat-value positive">+881.93%</div>
+            <div class="stat-note">买持 -13.55%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">Alpha</div>
-            <div class="stat-value positive">+864.38%</div>
+            <div class="stat-value positive">+895.48%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">最大回撤</div>
-            <div class="stat-value" style="color: var(--accent-yellow);">-8.48%</div>
+            <div class="stat-value" style="color:var(--accent-yellow);">-4.43%</div>
         </div>
         <div class="stat-card">
-            <div class="stat-label">合约 PF</div>
-            <div class="stat-value">1.07</div>
+            <div class="stat-label">合约PF</div>
+            <div class="stat-value">0.93</div>
             <div class="stat-note">仅 CLOSE_LONG/SHORT</div>
         </div>
         <div class="stat-card">
-            <div class="stat-label">组合 PF</div>
-            <div class="stat-value positive">1.95</div>
+            <div class="stat-label">组合PF</div>
+            <div class="stat-value positive">2.17</div>
             <div class="stat-note">含 PARTIAL_TP / SPOT_SELL</div>
         </div>
-        <div class="stat-card">
-            <div class="stat-label">胜率</div>
-            <div class="stat-value">62.9%</div>
-            <div class="stat-note">248 次平仓</div>
-        </div>
     </div>
-    <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-primary);">Regime 分段表现</h4>
-    <table class="param-table">
-        <thead><tr><th>Regime</th><th>笔数</th><th>净 PnL</th><th>pPF</th><th>说明</th></tr></thead>
-        <tbody>
-            <tr><td>neutral</td><td>272</td><td class="pnl-pos">+$360,997</td><td>2.78</td><td>主要利润来源</td></tr>
-            <tr><td>trend</td><td>140</td><td class="pnl-pos">+$123,789</td><td><strong>1.47</strong></td><td>v4.2 高SS确认 → pPF从1.30↑1.47</td></tr>
-            <tr><td>high_vol</td><td>44</td><td class="pnl-pos">+$95,028</td><td>3.81</td><td>高波动行情获利丰厚</td></tr>
-            <tr><td>low_vol_trend</td><td>62</td><td class="pnl-pos">+$2,253</td><td>1.02</td><td>低波动趋势近平，止损集中区</td></tr>
-            <tr><td>high_vol_choppy</td><td>5</td><td class="pnl-pos">+$3,999</td><td>5.32</td><td>罕见状态</td></tr>
-        </tbody>
-    </table>
-</div>
 
-<div class="card">
-    <h3 class="card-title">⚙️ 关键参数（v4.2 — 第六轮A/B验证后）</h3>
+    <h4 style="font-size:14px;font-weight:600;margin-bottom:8px;color:var(--text-primary);">关键 Run 关联（版本选择器可直接查看）</h4>
     <table class="param-table">
         <thead>
-            <tr><th>参数</th><th>v4.2 值</th><th>v4 值</th><th>变化说明</th></tr>
+            <tr><th>Run</th><th>标签</th><th>区间</th><th>收益</th><th>MaxDD</th><th>pPF</th><th>用途</th></tr>
         </thead>
         <tbody>
-            <tr><td><code>short_threshold</code></td><td>25</td><td>25</td><td>不变</td></tr>
-            <tr><td><code>short_sl</code></td><td>-25%</td><td>-25%</td><td>不变</td></tr>
-            <tr><td><code>short_tp</code></td><td>60%</td><td>60%</td><td>不变</td></tr>
-            <tr><td><code>long_sl</code></td><td>-10%</td><td>-10%</td><td>不变</td></tr>
-            <tr><td><code>short_trail / long_trail</code></td><td>15% / 12%</td><td>15% / 12%</td><td>不变</td></tr>
-            <tr><td><code>trail_pullback</code></td><td>50%</td><td>50%</td><td>不变</td></tr>
-            <tr><td><code>hard_stop_loss</code></td><td>-30%</td><td>-30%</td><td>硬断路器(A/B验证零代价防跳空)</td></tr>
-            <tr style="background:rgba(46,204,113,0.08)"><td><code>use_spot_sell_confirm</code></td><td><strong style="color:#27ae60;">开</strong></td><td>关</td><td><strong>v4.2新</strong>：SS≥100时需EMA/量/ATR三重确认</td></tr>
-            <tr style="background:rgba(46,204,113,0.08)"><td><code>spot_sell_confirm_ss</code></td><td><strong style="color:#27ae60;">100</strong></td><td>50</td><td>仅过滤极端高SS卖出(trend+SS≥100曾拖累-$129k)</td></tr>
-            <tr style="background:rgba(46,204,113,0.08)"><td><code>spot_sell_confirm_min</code></td><td><strong style="color:#27ae60;">3</strong></td><td>2</td><td>要求全部3项确认(更严格)</td></tr>
-            <tr><td><code>use_regime_short_gate</code></td><td>关</td><td>关</td><td>第六轮验证：gate_add 25/35均不值(代价>40pp)</td></tr>
-            <tr><td><code>use_spot_sell_cap</code></td><td>关</td><td>关</td><td>第六轮验证：cap20%损收益-71pp</td></tr>
-            <tr><td><code>spot_sell_regime_block</code></td><td>空</td><td>空</td><td>备选：='trend'可达pPF 2.25/DD -7.89%但-37pp收益</td></tr>
+            <tr><td>#62</td><td>live-v6-sl16-c35m3-blkhv</td><td>2025-01~2026-01</td><td class="pnl-pos">+881.93%</td><td>-4.43%</td><td>2.17</td><td>主线（进攻平衡）</td></tr>
+            <tr><td>#64</td><td>live-v7-sl14-c35m3-blkhv</td><td>2025-01~2026-01</td><td class="pnl-pos">+867.19%</td><td><strong>-3.96%</strong></td><td>2.16</td><td>备线（回撤优先）</td></tr>
+            <tr><td>#63</td><td>oos-v13-sl16-c35m3-blkhv</td><td>2024-01~2024-12</td><td class="pnl-pos">+95.98%</td><td>-19.24%</td><td>1.45</td><td>OOS校验（-0.16）</td></tr>
+            <tr><td>#66</td><td>oos-v14-sl14-c35m3-blkhv</td><td>2024-01~2024-12</td><td class="pnl-pos">+95.98%</td><td>-19.24%</td><td>1.45</td><td>OOS校验（-0.14）</td></tr>
+            <tr><td>#67</td><td>oos-v15-sl16-cap20</td><td>2024-01~2024-12</td><td class="pnl-pos">+85.07%</td><td>-19.57%</td><td>1.54</td><td>验证：cap20 收益回落，不采用</td></tr>
+        </tbody>
+    </table>
+    <div class="hint">说明：页面指标以组合口径（portfolio_pf）为主，避免只看合约PF导致误判。</div>
+</div>
+
+<div class="card section">
+    <h3 class="card-title">⚙️ v4.3 主线参数（与 Run#62 对齐）</h3>
+    <table class="param-table">
+        <thead>
+            <tr><th>参数组</th><th>参数</th><th>值</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+            <tr><td>多周期</td><td><code>decision_tfs</code></td><td>15m,1h,4h,24h</td><td>日线级趋势锚定保留 24h</td></tr>
+            <tr><td>融合阈值</td><td><code>consensus_min_strength / coverage_min</code></td><td>40 / 0.5</td><td>共识强度与覆盖率下限</td></tr>
+            <tr><td>入场阈值</td><td><code>sell/buy/short/long_threshold</code></td><td>18 / 25 / 25 / 30</td><td>实盘口径主线</td></tr>
+            <tr><td>止损止盈</td><td><code>short_sl / short_tp / long_sl / long_tp</code></td><td>-0.16 / 0.6 / -0.1 / 0.4</td><td>本轮核心改动仅 short_sl</td></tr>
+            <tr><td>分段止盈</td><td><code>use_partial_tp_v3</code></td><td>true</td><td>早锁利：TP1=12%，TP2=25%</td></tr>
+            <tr><td>SPOT_SELL过滤</td><td><code>use_spot_sell_confirm</code></td><td>true</td><td>SS≥35 启动确认</td></tr>
+            <tr><td>SPOT_SELL过滤</td><td><code>spot_sell_confirm_ss / min</code></td><td>35 / 3</td><td>确认项不足则阻断卖出</td></tr>
+            <tr><td>SPOT_SELL过滤</td><td><code>spot_sell_regime_block</code></td><td>high_vol</td><td>高波动段禁卖</td></tr>
+            <tr><td>Regime门控</td><td><code>use_regime_short_gate</code></td><td>true</td><td>low_vol_trend 抬高做空门槛</td></tr>
+            <tr><td>Regime门控</td><td><code>regime_short_gate_add</code></td><td>35</td><td>仅 low_vol_trend 生效</td></tr>
+            <tr><td>增强开关</td><td><code>use_microstructure / use_dual_engine / use_vol_target</code></td><td>true / true / true</td><td>回测与实盘参数保持一致</td></tr>
+            <tr><td>保护</td><td><code>hard_stop_loss / prot_global_dd_limit_pct</code></td><td>-0.28 / 0.15</td><td>跳空硬止损 + 全局回撤停机</td></tr>
         </tbody>
     </table>
 </div>
 
-<div class="card">
-    <h3 class="card-title">🔬 第六轮 A/B 消融验证（v4→v4.2）</h3>
-    <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 12px;">
-        10 组消融测试，聚焦 SPOT_SELL 尾部风控 + 空头门控强化：
-    </p>
-    <div class="ab-result">
-        <div class="ab-card">
-            <div class="ab-label">B: SS≥100 确认过滤</div>
-            <p>pPF 1.92→<strong>1.95</strong>，trend pPF 1.30→1.47，收益仅-8pp</p>
-            <div class="ab-verdict keep">启用 — 几乎零代价过滤趋势中高SS误杀</div>
-        </div>
-        <div class="ab-card">
-            <div class="ab-label">F: 趋势禁卖(备选)</div>
-            <p>pPF 1.92→<strong>2.25</strong>，DD -7.89%（最优），但收益-37pp</p>
-            <div class="ab-verdict keep">备选 — 风险收敛最优(spot_sell_regime_block='trend')</div>
-        </div>
-        <div class="ab-card">
-            <div class="ab-label">D: cap20% 比例上限</div>
-            <p>收益-71pp，SPOT_SELL PnL 从 $335k 降至 $252k</p>
-            <div class="ab-verdict drop">关闭 — 削弱核心收益</div>
-        </div>
-        <div class="ab-card">
-            <div class="ab-label">G/H: 空头门控+25/+35</div>
-            <p>gate_add 25: -41pp; gate_add 35: -43pp; neutral扩展: -66pp</p>
-            <div class="ab-verdict drop">关闭 — 任何强度均代价过大</div>
-        </div>
-    </div>
+<div class="card section">
+    <h3 class="card-title">🧪 本轮优化结论（你这几轮）</h3>
+    <ul>
+        <li><strong>有效：</strong><code>short_sl=-0.16</code>（Run#62）相对上一主线 Run#55 同时改善收益与回撤。</li>
+        <li><strong>可选：</strong><code>short_sl=-0.14</code>（Run#64）进一步压回撤，但收益略低于 -0.16。</li>
+        <li><strong>无效：</strong><code>regime_short_gate_add</code> 与 <code>hard_stop_loss=-0.22</code> 在 2024 OOS 基本零影响。</li>
+        <li><strong>暂不采用：</strong><code>use_spot_sell_cap=true, spot_sell_max_pct=0.2</code>（Run#67）提高 pPF 但收益下滑明显。</li>
+    </ul>
 </div>
 
-<div class="card">
-    <h3 class="card-title">📈 策略演进路线</h3>
-    <div class="evolution-timeline">
-        <div class="evolution-item">
-            <span class="evolution-tag">v1</span>
-            <div>基础六书融合策略，固定阈值 + 固定止盈止损。收益 +600%。</div>
-        </div>
-        <div class="evolution-item">
-            <span class="evolution-tag">v2</span>
-            <div>引入多周期共识、Regime 动态阈值、微结构过滤。收益 +600%，回撤改善。</div>
-        </div>
-        <div class="evolution-item">
-            <span class="evolution-tag">v3</span>
-            <div>早期分段锁利（+12%/+25%），收益跃升至 +806%，回撤 -10.26%。</div>
-        </div>
-        <div class="evolution-item">
-            <span class="evolution-tag">v4</span>
-            <div>param_sweep 33 组系统性优化：短阈值降至 25、止损放宽至 -25%、追踪收紧至 15%/12%。
-                收益 +859%（+53pp），回撤 -8.48%（改善 1.78pp）。结构化观测链路落库。</div>
-        </div>
-        <div class="evolution-item active">
-            <span class="evolution-tag">v4.2</span>
-            <div>第六轮 10 组 A/B 验证：启用高 SS 确认过滤（SS≥100 需 EMA/量/ATR 三重确认）。
-                收益 +851%（-8pp），<strong>pPF 1.95</strong>（+1.6%），<strong>trend regime pPF 1.47</strong>（+13%）。
-                硬断路器 -30% 防跳空。2024年OOS验证 Alpha +61%，无过拟合。</div>
-        </div>
-    </div>
-</div>
-
-<div class="card">
-    <h3 class="card-title">🔗 相关页面</h3>
-    <p style="color: var(--text-secondary); font-size: 14px;">
-        <a href="/strategy/live-control" style="color: var(--accent-blue);">实盘控制面板</a> ·
-        <a href="/strategy/multi-tf-daily" style="color: var(--accent-blue);">多周期·逐日盈亏</a> ·
-        <a href="/strategy/multi-tf-deep-dive" style="color: var(--accent-blue);">多周期联合决策·代码详解</a> ·
-        <a href="/strategy/multi-tf-date-range-report" style="color: var(--accent-blue);">多周期区间回测(DB)</a>
+<div class="card section">
+    <h3 class="card-title">🔗 结果与入口</h3>
+    <p>
+        <a href="/strategy/multi-tf-daily" style="color:var(--accent-blue);">本地结果页：多周期·逐日持仓盈亏</a> ·
+        <a href="/strategy/live-control" style="color:var(--accent-blue);">实盘控制面板</a> ·
+        <a href="/strategy/multi-tf-date-range-report" style="color:var(--accent-blue);">多周期区间回测(DB)</a>
     </p>
-    <div class="monitor-tip">
-        <strong>实盘控制面板建议</strong>：多周期信号检测默认勾选 <strong>15m、1h、4h、24h</strong>（与策略决策一致）；
-        自动检测间隔建议 <strong>10 分钟</strong>；重点关注各周期 SS/BS 与「动作」「原因」列，多空分歧时显示「多空分歧-观望」。
-        <br><strong>v4.2 关键变化</strong>：SS≥100 时启用 EMA/量/ATR 三重确认过滤（trend+SS≥100 曾拖累 -$129k）。
-        备选"风险收敛模式"：spot_sell_regime_block='trend' → pPF 2.25 / DD -7.89%（收益-37pp）。
-    </div>
+    <p>
+        <a href="https://invest.executor.life/strategy/current" target="_blank" rel="noopener noreferrer" style="color:var(--accent-blue);">线上策略说明页</a> ·
+        <a href="https://invest.executor.life/strategy/multi-tf-daily" target="_blank" rel="noopener noreferrer" style="color:var(--accent-blue);">线上运行结果页</a>
+    </p>
 </div>
 {% endblock %}

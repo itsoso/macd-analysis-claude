@@ -192,10 +192,10 @@ STRATEGY_PARAM_VERSIONS = {
         "use_partial_tp_2": True,
         "short_max_hold": 48,
     },
-    "v4": {  # run31 — param_sweep 33组系统性优化 (收益+15.6%, DD改善27%)
+    "v4": {  # run31→run62 — param_sweep + Codex 优化 (收敛到 run#62 主线)
         "short_threshold": 25,   # 更低门槛, 抓更多做空机会 (v2:35)
         "long_threshold": 30,    # 保持 (v2一致)
-        "short_sl": -0.25,       # 更宽止损, 减少被扫损 (v2:-0.18)
+        "short_sl": -0.16,       # run#62 最优: 更紧止损 (v4旧:-0.25, ret+881% MDD-4.43%)
         "short_tp": 0.60,        # 更大目标利润 (v2:0.50)
         "long_sl": -0.10,        # 多头略放宽 (v2:-0.08)
         "long_tp": 0.40,         # 保持 (v2一致)
@@ -266,14 +266,14 @@ class StrategyConfig:
     use_regime_short_gate: bool = True    # 启用 LVT 做空门控
     regime_short_gate_add: float = 35     # 实盘口径 E 变体: +35 (run#44 基线 -87k → -45k)
     regime_short_gate_regimes: str = 'low_vol_trend'  # 仅 low_vol_trend
-    # 暂不启用 (Codex): 激进档再单独并行评估
-    use_spot_sell_confirm: bool = False    # 暂关 (原 v4.2 高SS确认)
-    spot_sell_confirm_ss: float = 100     # SS>=此值时需额外确认
-    spot_sell_confirm_min: int = 3        # 至少满足的确认条件数
-    use_spot_sell_cap: bool = False       # 暂不启用
-    spot_sell_max_pct: float = 0.30       # 单笔卖出比例上限
-    # 稳健档为空; 激进档并行评估: spot_sell_regime_block='low_vol_trend,trend' (run#42 pPF 2.12 回撤-9.14%)
-    spot_sell_regime_block: str = ''      # 阻止卖出的 regime 列表
+    # Codex run#62 主线: confirm35x3 + block high_vol
+    use_spot_sell_confirm: bool = True     # run#62: 启用高分确认过滤
+    spot_sell_confirm_ss: float = 35       # run#62: SS>=35 需额外确认 (原 100)
+    spot_sell_confirm_min: int = 3         # 至少满足 3 项确认条件
+    use_spot_sell_cap: bool = False        # 不启用 (run#67 验证退化)
+    spot_sell_max_pct: float = 0.30        # 单笔卖出比例上限
+    # run#62: 高波动期禁止 SPOT_SELL (原为空)
+    spot_sell_regime_block: str = 'high_vol'
     # 仓位管理
     leverage: int = 5
     max_lev: int = 5

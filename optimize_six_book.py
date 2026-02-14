@@ -760,6 +760,14 @@ def _run_strategy_core(
     spot_sell_regime_block = set(
         r.strip() for r in _spot_sell_regime_block_str.split(',') if r.strip()
     )
+    # P1b: neutral 中分 SS 降 sell_pct 的比例
+    neutral_mid_ss_sell_ratio = float(config.get('neutral_mid_ss_sell_ratio', 1.0))
+    neutral_mid_ss_lo = float(config.get('neutral_mid_ss_lo', 50))
+    neutral_mid_ss_hi = float(config.get('neutral_mid_ss_hi', 70))
+
+    # P1a: 空单 NoTP 提前退出 — 持仓 N bar 未达最低盈利 → 平仓
+    no_tp_exit_bars = int(config.get('no_tp_exit_bars', 0))      # 0=关闭
+    no_tp_exit_min_pnl = float(config.get('no_tp_exit_min_pnl', 0.03))
 
     # v3 分段止盈（更早锁利）
     use_partial_tp_v3 = config.get('use_partial_tp_v3', False)
@@ -1076,15 +1084,15 @@ def _run_strategy_core(
         spot_sell_confirmed = True
         if use_spot_sell_confirm and ss >= spot_sell_confirm_ss:
             _confirmations = 0
-            # 确认1: 价格在EMA20下方(短期弱势)
-            if idx >= 20:
-                ema20 = float(close_series.iloc[max(0, idx-20):idx+1].mean())
-                if price < ema20:
+            # 确认1: 价格在EMA20下方(短期弱势) — 仅用已完成 bar 数据(idx-1 及以前)
+            if idx >= 21:
+                ema20 = float(close_series.iloc[max(0, idx-20):idx].mean())
+                if exec_price < ema20:
                     _confirmations += 1
-            # 确认2: 成交量放大(超过20bar均量)
-            if idx >= 20:
+            # 确认2: 成交量放大(超过20bar均量) — 仅用已完成 bar 数据(idx-1)
+            if idx >= 21:
                 vol_mean = float(primary_df['volume'].iloc[max(0, idx-20):idx].mean()) if 'volume' in primary_df.columns else 0
-                vol_now = float(primary_df['volume'].iloc[idx]) if 'volume' in primary_df.columns else 0
+                vol_now = float(primary_df['volume'].iloc[idx - 1]) if 'volume' in primary_df.columns else 0
                 if vol_mean > 0 and vol_now > vol_mean * 1.1:
                     _confirmations += 1
             # 确认3: regime 不是 low_vol_trend (低波动强趋势中不宜卖)
@@ -1105,6 +1113,10 @@ def _run_strategy_core(
         # SPOT_SELL cap: 限制单笔卖出不超过当前ETH仓位的 spot_sell_max_pct
         if use_spot_sell_cap and effective_sell_pct > spot_sell_max_pct:
             effective_sell_pct = spot_sell_max_pct
+
+        # P1b: neutral regime + 中分段 SS 时降低卖出比例（减少误卖）
+        if neutral_mid_ss_sell_ratio < 1.0 and _regime_label == 'neutral' and neutral_mid_ss_lo <= ss <= neutral_mid_ss_hi:
+            effective_sell_pct *= neutral_mid_ss_sell_ratio
 
         if not trend_floor_active and ss >= effective_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500 and spot_sell_confirmed and spot_sell_regime_ok:
             eng.spot_sell(exec_price, dt, effective_sell_pct, f"卖出 SS={ss:.0f}")
@@ -1204,6 +1216,11 @@ def _run_strategy_core(
                     if pnl_r < short_max_pnl * trail_pullback:
                         eng.close_short(price, dt, "追踪止盈")
                         short_max_pnl = 0; short_cd = cooldown; short_bars = 0
+                # P1a: 空单 NoTP 提前退出 — 持仓超过 N bar 且从未触发 TP1，盈利不足 → 平仓
+                if eng.futures_short and no_tp_exit_bars > 0 and short_bars >= no_tp_exit_bars and not short_partial_done and pnl_r < no_tp_exit_min_pnl:
+                    eng.close_short(exec_price, dt,
+                        f"NoTP退出 {short_bars}bar pnl={pnl_r*100:.0f}%")
+                    short_max_pnl = 0; short_cd = cooldown * 2; short_bars = 0
                 if eng.futures_short and bs >= cur_close_short_bs:
                     bs_dom = (ss < bs * 0.7) if bs > 0 else True
                     if bs_dom:

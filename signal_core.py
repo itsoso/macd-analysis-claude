@@ -322,6 +322,16 @@ def calc_fusion_score_six(signals, df, idx, dt, config):
     div_sell, _ = _calc_top_score(merged, trend)
     div_buy = _calc_bottom_score(merged, trend)
 
+    # 1b. 双 MACD 共振加分
+    if config.get("use_dual_macd") and "DIF_FAST" in df.columns and "DEA_FAST" in df.columns:
+        bonus = int(config.get("dual_macd_bonus", 8))
+        dif_f = float(df["DIF_FAST"].iloc[idx])
+        dea_f = float(df["DEA_FAST"].iloc[idx])
+        if div_sell > 0 and dif_f < dea_f:
+            div_sell += bonus
+        if div_buy > 0 and dif_f > dea_f:
+            div_buy += bonus
+
     # 2. 均线
     ma_sell = float(signals["ma"]["sell_score"].iloc[idx]) if idx < len(signals["ma"]["sell_score"]) else 0
     ma_buy = float(signals["ma"]["buy_score"].iloc[idx]) if idx < len(signals["ma"]["buy_score"]) else 0
@@ -821,6 +831,16 @@ def calc_fusion_score_six_batch(signals, df, config, warmup=60):
     # ─── 4. 向量化 top/bottom score ───
     div_sell = _vectorized_top_score(merged, trend_down)
     div_buy = _vectorized_bottom_score(merged, trend_up)
+
+    # ─── 4b. 双 MACD 共振加分 (快 MACD 与标准背离同向时加分) ───
+    if config.get("use_dual_macd") and "DIF_FAST" in df.columns and "DEA_FAST" in df.columns:
+        bonus = float(config.get("dual_macd_bonus", 8))
+        dif_f = df["DIF_FAST"].values.astype(np.float64)
+        dea_f = df["DEA_FAST"].values.astype(np.float64)
+        fast_bear = dif_f < dea_f
+        fast_bull = dif_f > dea_f
+        div_sell = div_sell + np.where((div_sell > 0) & fast_bear, bonus, 0.0)
+        div_buy = div_buy + np.where((div_buy > 0) & fast_bull, bonus, 0.0)
 
     # ─── 5. 提取 5 个信号 Series 为 numpy 数组 ───
     ma_sell = signals["ma"]["sell_score"].values.astype(np.float64) if hasattr(signals["ma"]["sell_score"], 'values') else np.zeros(n)

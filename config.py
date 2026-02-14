@@ -9,6 +9,10 @@
 MACD_FAST = 12       # 快速EMA周期
 MACD_SLOW = 26       # 慢速EMA周期
 MACD_SIGNAL = 9      # 信号线(DEA)周期
+# 辅助快速 MACD (5,10,5)，用于双 MACD 共振 A/B，不替换默认
+MACD_FAST_ALT = 5
+MACD_SLOW_ALT = 10
+MACD_SIGNAL_ALT = 5
 
 # ============================================================
 # 均线参数 (第二章第四/五节)
