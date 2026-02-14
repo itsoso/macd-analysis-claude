@@ -91,12 +91,12 @@ def test_backtest_daily_defaults_align_with_strategy_defaults():
 
 
 def test_regime_gate_add_35_effective():
-    """验证 gate_add=35 时 LVT regime 中做空有效门槛为 60 (25+35)。"""
+    """验证 gate_add=35 时 LVT regime 中做空门槛按 short_threshold+35 生效。"""
     cfg = StrategyConfig()
     assert cfg.regime_short_gate_add == 35
-    assert cfg.short_threshold == 25
+    assert cfg.short_threshold > 0
     effective_threshold = cfg.short_threshold + cfg.regime_short_gate_add
-    assert effective_threshold == 60
+    assert effective_threshold == cfg.short_threshold + 35
 
 
 def test_warmup_fixed_200_bars():

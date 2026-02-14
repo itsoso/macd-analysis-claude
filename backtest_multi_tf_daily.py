@@ -55,6 +55,9 @@ COMBO_NAME = f"四TF联合({'+'.join(DECISION_TFS)})"
 def _build_default_config():
     cfg = {
         'name': f'多TF逐日_{COMBO_NAME}@{PRIMARY_TF}',
+        # ── 初始资金 ──
+        'initial_usdt': 100000,       # 10万USDT起步
+        'initial_eth_value': 0,       # 0 ETH (纯U起步, 方便核对)
         'single_pct': _LIVE_DEFAULT.single_pct,
         'total_pct': _LIVE_DEFAULT.total_pct,
         'lifetime_pct': 5.0,
@@ -111,9 +114,11 @@ def _build_default_config():
         'no_tp_exit_regimes': _LIVE_DEFAULT.no_tp_exit_regimes,  # 旧参数, 兼容
         'no_tp_exit_short_bars': _LIVE_DEFAULT.no_tp_exit_short_bars,
         'no_tp_exit_short_min_pnl': _LIVE_DEFAULT.no_tp_exit_short_min_pnl,
+        'no_tp_exit_short_loss_floor': _LIVE_DEFAULT.no_tp_exit_short_loss_floor,
         'no_tp_exit_short_regimes': _LIVE_DEFAULT.no_tp_exit_short_regimes,
         'no_tp_exit_long_bars': _LIVE_DEFAULT.no_tp_exit_long_bars,
         'no_tp_exit_long_min_pnl': _LIVE_DEFAULT.no_tp_exit_long_min_pnl,
+        'no_tp_exit_long_loss_floor': _LIVE_DEFAULT.no_tp_exit_long_loss_floor,
         'no_tp_exit_long_regimes': _LIVE_DEFAULT.no_tp_exit_long_regimes,
         # neutral 中分段 SS 卖出降仓
         'neutral_mid_ss_sell_ratio': 1.0,  # 1.0=不调整
@@ -674,7 +679,7 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
     raw_trades = result.get('trades', [])
     fees = result.get('fees', {})
 
-    initial_capital = result.get('initial_total', 200000)
+    initial_capital = result.get('initial_total', 100000)
     final_total = result.get('final_total', 0)
     strategy_return = result.get('strategy_return', 0)
     buy_hold_return = result.get('buy_hold_return', 0)

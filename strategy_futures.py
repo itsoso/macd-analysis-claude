@@ -98,7 +98,7 @@ class FuturesEngine:
     SLIPPAGE = 0.001      # 0.1% 滑点(含市场冲击)
     LIQUIDATION_FEE = 0.005  # 0.5% 强平清算手续费
 
-    def __init__(self, name, initial_usdt=100000, initial_eth_value=100000,
+    def __init__(self, name, initial_usdt=100000, initial_eth_value=0,
                  max_leverage=3, use_spot=True):
         self.name = name
         self.initial_usdt = initial_usdt
@@ -487,8 +487,13 @@ class FuturesEngine:
         last_price = main_df['close'].iloc[-1]
         final_total = self.total_value(last_price)
         initial_total = self.initial_usdt + self.initial_eth_value
-        bh_eth = self.initial_eth_value / first_price
-        bh_total = self.initial_usdt + bh_eth * last_price
+        if self.initial_eth_value > 0:
+            # 混合起步: buy-hold = USDT不动 + ETH持有
+            bh_eth = self.initial_eth_value / first_price
+            bh_total = self.initial_usdt + bh_eth * last_price
+        else:
+            # 纯USDT起步: buy-hold = 全额买入ETH并持有
+            bh_total = initial_total * (last_price / first_price)
 
         # Max drawdown — 只计算交易窗口内 (main_df 时间范围) 的回撤,
         # 避免预热期(warmup)历史数据对回撤计算的污染

@@ -290,9 +290,11 @@ class StrategyConfig:
     no_tp_exit_regimes: str = 'neutral'  # 旧参数, 保留兼容
     no_tp_exit_short_bars: int = 0
     no_tp_exit_short_min_pnl: float = 0.03
+    no_tp_exit_short_loss_floor: float = -0.03
     no_tp_exit_short_regimes: str = 'neutral'
     no_tp_exit_long_bars: int = 0
     no_tp_exit_long_min_pnl: float = 0.03
+    no_tp_exit_long_loss_floor: float = -0.03
     no_tp_exit_long_regimes: str = 'neutral'
     # 融合模式
     fusion_mode: str = "c6_veto_4"

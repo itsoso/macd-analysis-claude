@@ -28,7 +28,7 @@ import pandas as pd
 
 TRADE_START = DEFAULT_TRADE_START
 TRADE_END = DEFAULT_TRADE_END
-INITIAL_CAPITAL = 200000
+INITIAL_CAPITAL = 100000  # 10万USDT纯U起步
 
 
 def _load_data_and_signals():

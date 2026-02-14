@@ -674,7 +674,12 @@ def _run_strategy_core(
     """统一交易执行循环: 单TF/多TF共用。
     tf_score_map, decision_tfs: 可选, 供趋势做多直接读取大周期原始信号。
     """
-    eng = FuturesEngine(config.get('name', 'opt'), max_leverage=config.get('max_lev', 5))
+    eng = FuturesEngine(
+        config.get('name', 'opt'),
+        initial_usdt=config.get('initial_usdt', 100000),
+        initial_eth_value=config.get('initial_eth_value', 0),
+        max_leverage=config.get('max_lev', 5),
+    )
 
     def _norm_ts(ts):
         if ts is None:
@@ -703,8 +708,10 @@ def _run_strategy_core(
         init_idx = index_values.searchsorted(start_dt)
         if init_idx >= len(primary_df):
             init_idx = 0
-    eng.spot_eth = eng.initial_eth_value / float(close_prices[init_idx])
-    eng.spot_cost_basis = eng.initial_eth_value  # 初始ETH成本基准 = 初始分配金额
+    # 初始 ETH 持仓: 按 initial_eth_value 分配 (0 则纯 USDT 起步)
+    if eng.initial_eth_value > 0:
+        eng.spot_eth = eng.initial_eth_value / float(close_prices[init_idx])
+        eng.spot_cost_basis = eng.initial_eth_value  # 初始ETH成本基准 = 初始分配金额
 
     eng.max_single_margin = eng.initial_total * config.get('single_pct', 0.20)
     eng.max_margin_total = eng.initial_total * config.get('total_pct', 0.50)
@@ -773,8 +780,10 @@ def _run_strategy_core(
 
     no_tp_exit_short_bars = int(config.get('no_tp_exit_short_bars', _legacy_no_tp_bars))
     no_tp_exit_short_min_pnl = float(config.get('no_tp_exit_short_min_pnl', _legacy_no_tp_min))
+    no_tp_exit_short_loss_floor = float(config.get('no_tp_exit_short_loss_floor', -0.03))
     no_tp_exit_long_bars = int(config.get('no_tp_exit_long_bars', _legacy_no_tp_bars))
     no_tp_exit_long_min_pnl = float(config.get('no_tp_exit_long_min_pnl', _legacy_no_tp_min))
+    no_tp_exit_long_loss_floor = float(config.get('no_tp_exit_long_loss_floor', -0.03))
 
     def _parse_regimes(v):
         if v is None:
@@ -1272,6 +1281,7 @@ def _run_strategy_core(
                     and short_bars >= no_tp_exit_short_bars
                     and not short_partial_done
                     and _no_tp_short_regime_ok
+                    and pnl_r >= no_tp_exit_short_loss_floor
                     and pnl_r < no_tp_exit_short_min_pnl
                 ):
                     # 基于当前bar收盘数据触发, 应按当前bar价格成交, 避免前视到开盘价
@@ -1442,6 +1452,7 @@ def _run_strategy_core(
                     and long_bars >= no_tp_exit_long_bars
                     and not long_partial_done
                     and _no_tp_long_regime_ok
+                    and pnl_r >= no_tp_exit_long_loss_floor
                     and pnl_r < no_tp_exit_long_min_pnl
                 ):
                     # 基于当前bar收盘数据触发, 应按当前bar价格成交, 避免前视到开盘价
