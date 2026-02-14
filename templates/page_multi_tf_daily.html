@@ -209,7 +209,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             <span class="mbadge"><b>主TF</b>${m.primary_tf||'1h'}</span>
             <span class="mbadge"><b>机器</b>${m.host||''}</span>
         </div>
-        <div style="text-align:center;margin-bottom:16px;">
+        <div style="text-align:center;margin-bottom:10px;">
             ${switchTag(snap.use_trend_enhance, '趋势保护v3')}
             ${switchTag(snap.use_microstructure, '微结构')}
             ${switchTag(snap.use_dual_engine, '双引擎')}
@@ -217,7 +217,30 @@ document.addEventListener('DOMContentLoaded', async () => {
             ${switchTag(snap.use_live_gate, 'LiveGate')}
             ${switchTag(snap.use_regime_aware, 'Regime')}
             ${switchTag(snap.use_protections, '风控保护')}
+            ${switchTag(snap.use_spot_sell_confirm, 'SS确认')}
+            ${switchTag(snap.use_regime_short_gate, '做空门控')}
+            ${switchTag(snap.use_dual_macd, '双MACD')}
+            ${snap.no_tp_exit_bars > 0 ? switchTag(true, 'NoTP退出') : ''}
+        </div>
+        <div style="text-align:center;margin-bottom:16px;font-size:0.75rem;color:var(--text-muted);">
+            ${snap.short_sl != null ? `<span class="mbadge" style="font-size:0.7rem">短止损 ${snap.short_sl}</span>` : ''}
+            ${snap.regime_short_gate_add != null ? `<span class="mbadge" style="font-size:0.7rem">Gate +${snap.regime_short_gate_add}</span>` : ''}
+            ${snap.spot_sell_confirm_ss != null && snap.use_spot_sell_confirm ? `<span class="mbadge" style="font-size:0.7rem">确认SS≥${snap.spot_sell_confirm_ss} min${snap.spot_sell_confirm_min||2}</span>` : ''}
+            ${snap.spot_sell_regime_block ? `<span class="mbadge" style="font-size:0.7rem">Block ${snap.spot_sell_regime_block}</span>` : ''}
+            ${snap.hard_stop_loss != null ? `<span class="mbadge" style="font-size:0.7rem">硬断路 ${snap.hard_stop_loss}</span>` : ''}
+            ${snap.no_tp_exit_bars > 0 ? `<span class="mbadge" style="font-size:0.7rem">NoTP ${snap.no_tp_exit_bars}bar ≥${((snap.no_tp_exit_min_pnl||0)*100).toFixed(0)}%</span>` : ''}
+            ${snap.neutral_mid_ss_sell_ratio != null && snap.neutral_mid_ss_sell_ratio < 1 ? `<span class="mbadge" style="font-size:0.7rem">neutral降卖 ${(snap.neutral_mid_ss_sell_ratio*100).toFixed(0)}%</span>` : ''}
+            ${snap.regime_short_threshold ? `<span class="mbadge" style="font-size:0.7rem">分regime门槛 ${JSON.stringify(snap.regime_short_threshold)}</span>` : ''}
         </div>`;
+
+        // ═══ 实验说明 ═══
+        const notes = data.experiment_notes || '';
+        if (notes) {
+            html += `<div class="card" style="border-left:3px solid var(--accent);margin-bottom:18px;">
+                <div class="title">📋 实验说明</div>
+                <div style="font-size:0.85rem;line-height:1.6;white-space:pre-wrap;color:var(--text-muted);">${notes.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+            </div>`;
+        }
 
         // ═══ 对比表 (如果有对比数据) ═══
         if (cmpData) {

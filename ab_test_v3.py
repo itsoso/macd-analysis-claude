@@ -7,6 +7,7 @@
   python3 ab_test_v3.py --live --spot     # 第九轮 现货卖出质量
   python3 ab_test_v3.py --macd             # 第十轮 双MACD共振 A/B (全周期)
   python3 ab_test_v3.py --p1               # 第十一轮 P1a空单NoTP退出 + P1b中分SS降卖
+  python3 ab_test_v3.py --regime-st        # 第十二轮 regime-specific门槛 + NoTP 组合
 """
 import time, json, sys, os
 sys.path.insert(0, os.path.dirname(__file__))
@@ -145,6 +146,8 @@ def main():
     run_macd_ab = '--macd' in sys.argv or os.environ.get('RUN_MACD_AB') == '1'
     # 第十一轮: P1a 空单 NoTP 提前退出 + P1b neutral 中分 SS 降 sell_pct
     run_p1_ab = '--p1' in sys.argv or os.environ.get('RUN_P1_AB') == '1'
+    # 第十二轮: 实验3 regime-specific short_threshold + 组合 NoTP
+    run_regime_st = '--regime-st' in sys.argv or os.environ.get('RUN_REGIME_ST') == '1'
 
     # ── 研究口径基线 (run#43) ──
     stable_base = {
@@ -161,7 +164,32 @@ def main():
         'use_spot_sell_confirm': False,
     }
 
-    if run_p1_ab:
+    if run_regime_st:
+        # ── 第十二轮: regime-specific short_threshold + NoTP 组合 ──
+        # Codex 实验3: neutral/high_vol 用 short_threshold=35, trend/lvt 保持默认25
+        # 叠加第十一轮最优变体 B(NoTP退出)
+        live_base = {
+            **stable_base,
+            'use_microstructure': True,
+            'use_dual_engine': True,
+            'use_vol_target': True,
+            'regime_short_gate_add': 35,
+            'short_sl': -0.16,
+            'use_spot_sell_confirm': True,
+            'spot_sell_confirm_ss': 35,
+            'spot_sell_confirm_min': 3,
+            'spot_sell_regime_block': 'high_vol',
+        }
+        notp_overrides = {'no_tp_exit_bars': 16, 'no_tp_exit_min_pnl': 0.03}
+        regime_st_overrides = {'regime_short_threshold': {'neutral': 35, 'high_vol': 35, 'high_vol_choppy': 35}}
+        variants = [
+            ("A:run62基线", {**live_base}),
+            ("B:NoTP退出(R11最优)", {**live_base, **notp_overrides}),
+            ("C:regime门槛35", {**live_base, **regime_st_overrides}),
+            ("D:NoTP+regime门槛", {**live_base, **notp_overrides, **regime_st_overrides}),
+        ]
+        round_title = "第十二轮: regime-specific short_threshold + NoTP | 基线=run#62"
+    elif run_p1_ab:
         # ── 第十一轮: P1a 空单 NoTP 提前退出 + P1b neutral 中分 SS 降 sell_pct ──
         # 基线 = run#62 (实盘口径 + confirm35x3 + block high_vol + short_sl=-0.16)
         live_base = {

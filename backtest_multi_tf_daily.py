@@ -104,6 +104,14 @@ def _build_default_config():
         'use_spot_sell_cap': _LIVE_DEFAULT.use_spot_sell_cap,
         'spot_sell_max_pct': _LIVE_DEFAULT.spot_sell_max_pct,
         'spot_sell_regime_block': _LIVE_DEFAULT.spot_sell_regime_block,
+        # ── 实验参数（默认关闭/中性） ──
+        # 空单 NoTP 提前退出
+        'no_tp_exit_bars': 0,          # 0=关闭
+        'no_tp_exit_min_pnl': 0.03,    # 仅在 no_tp_exit_bars > 0 时生效
+        # neutral 中分段 SS 卖出降仓
+        'neutral_mid_ss_sell_ratio': 1.0,  # 1.0=不调整
+        'neutral_mid_ss_lo': 50.0,
+        'neutral_mid_ss_hi': 70.0,
         # v3 分段止盈
         'use_partial_tp_v3': _LIVE_DEFAULT.use_partial_tp_v3,
         'partial_tp_1_early': _LIVE_DEFAULT.partial_tp_1_early,
@@ -396,7 +404,7 @@ def _normalize_trade(t):
     }
 
 
-def main(trade_start=None, trade_end=None, version_tag=None):
+def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=None):
     t0 = time.time()
     perf_log = {}  # 性能日志: 阶段 -> 耗时(秒)
 
@@ -405,6 +413,8 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     parser.add_argument('--start', type=str, default=None, help='回测起始日 (YYYY-MM-DD)')
     parser.add_argument('--end', type=str, default=None, help='回测结束日 (YYYY-MM-DD)')
     parser.add_argument('--tag', type=str, default=None, help='策略版本标签')
+    parser.add_argument('--notes', type=str, default=None,
+                        help='实验说明文本，会存入DB方便查阅')
     parser.add_argument('--fast', action='store_true', default=False,
                         help='[实验性] P0向量化信号计算, 结果与原版存在近似偏差(±1%%), 不建议作为正式策略结论依据')
     parser.add_argument('--override', action='append', default=[],
@@ -415,6 +425,8 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     TRADE_END = args.end or trade_end or DEFAULT_TRADE_END
     if args.tag:
         version_tag = args.tag
+    if args.notes:
+        experiment_notes = args.notes
 
     # ── 应用 --override 参数 ──
     if args.override:
@@ -799,6 +811,7 @@ def main(trade_start=None, trade_end=None, version_tag=None):
         daily_records=daily_records,
         trades=trades,
         version_tag=version_tag,
+        experiment_notes=experiment_notes,
     )
     perf_log['5_db_save'] = time.time() - t_db
     print(f"\n💾 结果已写入 DB: {db_path} (run_id={run_id})")

@@ -769,6 +769,19 @@ def _run_strategy_core(
     no_tp_exit_bars = int(config.get('no_tp_exit_bars', 0))      # 0=关闭
     no_tp_exit_min_pnl = float(config.get('no_tp_exit_min_pnl', 0.03))
 
+    # 实验3: regime-specific short_threshold — 字典 {regime: threshold}
+    # 例: {'neutral': 35, 'high_vol': 35} → 在这些 regime 下用 35, 其余用默认
+    _regime_st_raw = config.get('regime_short_threshold', None)
+    regime_short_threshold = {}
+    if isinstance(_regime_st_raw, dict):
+        regime_short_threshold = {k: float(v) for k, v in _regime_st_raw.items()}
+    elif isinstance(_regime_st_raw, str) and _regime_st_raw:
+        # 支持 "neutral:35,high_vol:35" 格式
+        for pair in _regime_st_raw.split(','):
+            if ':' in pair:
+                rr, vv = pair.strip().split(':', 1)
+                regime_short_threshold[rr.strip()] = float(vv.strip())
+
     # v3 分段止盈（更早锁利）
     use_partial_tp_v3 = config.get('use_partial_tp_v3', False)
     partial_tp_1_early = config.get('partial_tp_1_early', 0.12)
@@ -1132,6 +1145,10 @@ def _run_strategy_core(
         # Regime-aware 做空门控: trend/low_vol_trend 中进一步提高门槛
         if use_regime_short_gate and _regime_label in regime_short_gate_regimes:
             effective_short_threshold += regime_short_gate_add
+        # 实验3: regime-specific short_threshold — 对指定 regime 直接覆盖门槛
+        if regime_short_threshold and _regime_label in regime_short_threshold:
+            effective_short_threshold = max(effective_short_threshold,
+                                            regime_short_threshold[_regime_label])
         if short_cd == 0 and ss >= effective_short_threshold and not eng.futures_short and sell_dom and not in_conflict and can_open_risk and not micro_block_short:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)

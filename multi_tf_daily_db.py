@@ -45,7 +45,8 @@ def init_db(db_path=None):
                 summary_json    TEXT,
                 meta_json       TEXT,
                 version_tag     TEXT,
-                strategy_snapshot TEXT
+                strategy_snapshot TEXT,
+                experiment_notes TEXT
             );
 
             CREATE TABLE IF NOT EXISTS mtf_daily (
@@ -110,6 +111,10 @@ def init_db(db_path=None):
             conn.execute("ALTER TABLE mtf_runs ADD COLUMN strategy_snapshot TEXT")
         except sqlite3.OperationalError:
             pass  # 列已存在
+        try:
+            conn.execute("ALTER TABLE mtf_runs ADD COLUMN experiment_notes TEXT")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
 
         conn.commit()
     finally:
@@ -150,6 +155,23 @@ def _build_strategy_snapshot(config):
         # 保护参数
         'prot_global_dd_limit_pct': config.get('prot_global_dd_limit_pct'),
         'prot_global_halt_recovery_pct': config.get('prot_global_halt_recovery_pct'),
+        # ── Codex run#62 新增：confirm / block / gate / 退出规则 ──
+        'use_spot_sell_confirm': config.get('use_spot_sell_confirm', False),
+        'spot_sell_confirm_ss': config.get('spot_sell_confirm_ss'),
+        'spot_sell_confirm_min': config.get('spot_sell_confirm_min'),
+        'spot_sell_regime_block': config.get('spot_sell_regime_block', ''),
+        'use_regime_short_gate': config.get('use_regime_short_gate', False),
+        'regime_short_gate_add': config.get('regime_short_gate_add'),
+        'regime_short_gate_regimes': config.get('regime_short_gate_regimes', ''),
+        'hard_stop_loss': config.get('hard_stop_loss'),
+        'use_dual_macd': config.get('use_dual_macd', False),
+        'dual_macd_bonus': config.get('dual_macd_bonus'),
+        # P1a / P1b
+        'no_tp_exit_bars': config.get('no_tp_exit_bars', 0),
+        'no_tp_exit_min_pnl': config.get('no_tp_exit_min_pnl'),
+        'neutral_mid_ss_sell_ratio': config.get('neutral_mid_ss_sell_ratio'),
+        # 实验3: regime-specific short_threshold
+        'regime_short_threshold': config.get('regime_short_threshold'),
     }
     return snapshot
 
@@ -174,8 +196,13 @@ def _auto_version_tag(config):
     return ' + '.join(parts)
 
 
-def save_run(db_path, run_meta, summary, daily_records, trades, version_tag=None):
-    """保存一次完整回测到 DB。Returns run_id."""
+def save_run(db_path, run_meta, summary, daily_records, trades,
+             version_tag=None, experiment_notes=None):
+    """保存一次完整回测到 DB。Returns run_id.
+
+    Args:
+        experiment_notes: 实验说明文本 (Markdown)，描述本轮回测目的、变体、结论等。
+    """
     db_path = db_path or _default_db_path()
     init_db(db_path)
 
@@ -183,6 +210,10 @@ def save_run(db_path, run_meta, summary, daily_records, trades, version_tag=None
     strategy_snapshot = _build_strategy_snapshot(config)
     if not version_tag:
         version_tag = _auto_version_tag(config)
+
+    # experiment_notes 也可从 run_meta 中取
+    if not experiment_notes:
+        experiment_notes = run_meta.get('experiment_notes', '')
 
     conn = sqlite3.connect(db_path)
     try:
@@ -192,8 +223,8 @@ def save_run(db_path, run_meta, summary, daily_records, trades, version_tag=None
                 created_at, runner, host, start_date, end_date,
                 primary_tf, decision_tfs, combo_name,
                 leverage, initial_capital, summary_json, meta_json,
-                version_tag, strategy_snapshot
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                version_tag, strategy_snapshot, experiment_notes
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             datetime.now().isoformat(),
             run_meta.get('runner', 'local'),
@@ -209,6 +240,7 @@ def save_run(db_path, run_meta, summary, daily_records, trades, version_tag=None
             json.dumps(run_meta, ensure_ascii=False),
             version_tag,
             json.dumps(strategy_snapshot, ensure_ascii=False),
+            experiment_notes or '',
         ))
         run_id = cur.lastrowid
 
@@ -293,7 +325,8 @@ def list_runs(db_path=None):
         rows = cur.execute("""
             SELECT id, created_at, runner, host, start_date, end_date,
                    primary_tf, decision_tfs, combo_name, leverage,
-                   initial_capital, summary_json, version_tag, strategy_snapshot
+                   initial_capital, summary_json, version_tag, strategy_snapshot,
+                   experiment_notes
             FROM mtf_runs ORDER BY id DESC
         """).fetchall()
 
@@ -301,6 +334,11 @@ def list_runs(db_path=None):
         for r in rows:
             summary = json.loads(r['summary_json']) if r['summary_json'] else {}
             snapshot = json.loads(r['strategy_snapshot']) if r['strategy_snapshot'] else {}
+            notes = ''
+            try:
+                notes = r['experiment_notes'] or ''
+            except (KeyError, IndexError):
+                pass
             result.append({
                 'run_id': r['id'],
                 'created_at': r['created_at'],
@@ -310,6 +348,7 @@ def list_runs(db_path=None):
                 'combo_name': r['combo_name'],
                 'version_tag': r['version_tag'] or f"Run #{r['id']}",
                 'strategy_snapshot': snapshot,
+                'experiment_notes': notes,
                 'total_return_pct': summary.get('total_return_pct'),
                 'alpha_pct': summary.get('alpha_pct'),
                 'max_drawdown_pct': summary.get('max_drawdown_pct'),
@@ -389,9 +428,11 @@ def _load_run_data(cur, run):
     # 读取版本信息
     version_tag = None
     strategy_snapshot = {}
+    experiment_notes = ''
     try:
         version_tag = run['version_tag']
         strategy_snapshot = json.loads(run['strategy_snapshot']) if run['strategy_snapshot'] else {}
+        experiment_notes = run['experiment_notes'] or ''
     except (KeyError, IndexError):
         pass
 
@@ -419,7 +460,23 @@ def _load_run_data(cur, run):
         'summary': summary,
         'version_tag': version_tag or f"Run #{run_id}",
         'strategy_snapshot': strategy_snapshot,
+        'experiment_notes': experiment_notes,
         'daily_records': daily_records,
         'trade_details': trades,
         'equity_curve': equity_curve,
     }
+
+
+def update_experiment_notes(run_id, notes, db_path=None):
+    """更新指定 run 的实验说明 (用于回填历史记录)。"""
+    db_path = db_path or _default_db_path()
+    init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "UPDATE mtf_runs SET experiment_notes = ? WHERE id = ?",
+            (notes, run_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
