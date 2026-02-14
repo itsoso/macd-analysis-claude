@@ -169,6 +169,16 @@ class FuturesEngine:
             futures_pnl += self.futures_short.calc_pnl(price)
         return self.usdt + spot_val + futures_pnl
 
+    @staticmethod
+    def _clip_exec_price(exec_price, bar_low=None, bar_high=None):
+        """将成交价限制在当前K线范围内，避免出现不可成交价格。"""
+        p = float(exec_price)
+        if bar_low is not None:
+            p = max(p, float(bar_low))
+        if bar_high is not None:
+            p = min(p, float(bar_high))
+        return p
+
     def _record_trade(self, dt, price, action, direction, quantity, value,
                       fee, leverage, reason, *,
                       exec_price=None, slippage_cost=0.0, margin=0.0,
@@ -244,13 +254,14 @@ class FuturesEngine:
         })
 
     # === 现货操作 ===
-    def spot_buy(self, price, dt, usdt_amount, reason):
+    def spot_buy(self, price, dt, usdt_amount, reason, *, bar_low=None, bar_high=None):
         """现货买入ETH"""
         avail = self.available_usdt()
         invest = min(usdt_amount, avail)
         if invest < 200:
             return
         actual_p = price * (1 + self.SLIPPAGE)
+        actual_p = self._clip_exec_price(actual_p, bar_low=bar_low, bar_high=bar_high)
         fee = invest * self.TAKER_FEE
         slippage_cost = invest * self.SLIPPAGE
         qty = (invest - fee) / actual_p
@@ -262,12 +273,13 @@ class FuturesEngine:
         self._record_trade(dt, price, 'SPOT_BUY', 'long', qty, invest, fee, 1, reason,
                            exec_price=actual_p, slippage_cost=slippage_cost)
 
-    def spot_sell(self, price, dt, ratio, reason):
+    def spot_sell(self, price, dt, ratio, reason, *, bar_low=None, bar_high=None):
         """现货卖出ETH"""
         qty = self.spot_eth * ratio
         if qty * price < 200:
             return
         actual_p = price * (1 - self.SLIPPAGE)
+        actual_p = self._clip_exec_price(actual_p, bar_low=bar_low, bar_high=bar_high)
         revenue = qty * actual_p
         fair_revenue = qty * price
         fee = revenue * self.TAKER_FEE
@@ -291,7 +303,7 @@ class FuturesEngine:
                            pnl=real_pnl)  # 修正: 记录真实已实现PnL(成本法)
 
     # === 合约操作 ===
-    def open_long(self, price, dt, margin, leverage, reason):
+    def open_long(self, price, dt, margin, leverage, reason, *, bar_low=None, bar_high=None):
         """开多仓"""
         if self.futures_long:
             return  # 已有多仓
@@ -300,6 +312,7 @@ class FuturesEngine:
         if margin < 200:
             return
         actual_p = price * (1 + self.SLIPPAGE)
+        actual_p = self._clip_exec_price(actual_p, bar_low=bar_low, bar_high=bar_high)
         notional = margin * leverage
         qty = notional / actual_p
         fee = notional * self.TAKER_FEE
@@ -315,12 +328,13 @@ class FuturesEngine:
                            exec_price=actual_p, slippage_cost=slippage_cost,
                            margin=margin)
 
-    def close_long(self, price, dt, reason):
+    def close_long(self, price, dt, reason, *, bar_low=None, bar_high=None):
         """平多仓"""
         if not self.futures_long:
             return
         pos = self.futures_long
         actual_p = price * (1 - self.SLIPPAGE)
+        actual_p = self._clip_exec_price(actual_p, bar_low=bar_low, bar_high=bar_high)
         pnl = (actual_p - pos.entry_price) * pos.quantity
         notional = actual_p * pos.quantity
         fee = notional * self.TAKER_FEE
@@ -341,7 +355,7 @@ class FuturesEngine:
                            pnl=pnl, entry_price=entry_price,
                            margin_released=margin_released)
 
-    def open_short(self, price, dt, margin, leverage, reason):
+    def open_short(self, price, dt, margin, leverage, reason, *, bar_low=None, bar_high=None):
         """开空仓"""
         if self.futures_short:
             return  # 已有空仓
@@ -350,6 +364,7 @@ class FuturesEngine:
         if margin < 200:
             return
         actual_p = price * (1 - self.SLIPPAGE)
+        actual_p = self._clip_exec_price(actual_p, bar_low=bar_low, bar_high=bar_high)
         notional = margin * leverage
         qty = notional / actual_p
         fee = notional * self.TAKER_FEE
@@ -365,12 +380,13 @@ class FuturesEngine:
                            exec_price=actual_p, slippage_cost=slippage_cost,
                            margin=margin)
 
-    def close_short(self, price, dt, reason):
+    def close_short(self, price, dt, reason, *, bar_low=None, bar_high=None):
         """平空仓"""
         if not self.futures_short:
             return
         pos = self.futures_short
         actual_p = price * (1 + self.SLIPPAGE)
+        actual_p = self._clip_exec_price(actual_p, bar_low=bar_low, bar_high=bar_high)
         pnl = (pos.entry_price - actual_p) * pos.quantity
         notional = actual_p * pos.quantity
         fee = notional * self.TAKER_FEE
