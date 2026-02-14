@@ -12,7 +12,7 @@ from functools import wraps
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, render_template, jsonify, request, redirect, url_for, session
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
 from date_range_report import load_latest_report_from_db
 from web_routes import register_page_routes, register_result_api_routes
@@ -38,11 +38,17 @@ def login_required(f):
     return decorated_function
 
 
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'),
+                               'favicon.ico', mimetype='image/x-icon')
+
+
 @app.before_request
 def check_auth():
     """全局认证检查 - 除登录页和静态资源外，所有请求都需要认证"""
     # 允许访问登录页面和静态资源
-    allowed_endpoints = ('login', 'static')
+    allowed_endpoints = ('login', 'static', 'favicon')
     if request.endpoint in allowed_endpoints:
         return
     # 未登录

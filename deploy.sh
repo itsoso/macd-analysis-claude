@@ -34,10 +34,10 @@ echo ""
 echo "[2/3] 拉取最新代码..."
 $SSH_CMD "cd $REMOTE_DIR && git reset --hard HEAD && git pull origin main"
 
-# 3. 平滑重载 Web 服务 (SIGHUP → gunicorn graceful reload, 不杀子进程)
+# 3. 重启 Web 服务 (preload_app=True 时 reload 不会加载新代码, 必须 restart)
 echo ""
-echo "[3/3] 平滑重载 Web 服务..."
-$SSH_CMD "systemctl reload macd-analysis 2>/dev/null && echo '  ✅ Web 服务已平滑重载 (reload)' || { echo '  reload 不支持，回退到 restart...'; systemctl restart macd-analysis && echo '  ✅ Web 服务已重启 (restart)'; }"
+echo "[3/3] 重启 Web 服务..."
+$SSH_CMD "systemctl restart macd-analysis && sleep 2 && systemctl is-active macd-analysis >/dev/null && echo '  ✅ Web 服务已重启 (restart)' || echo '  ❌ 服务重启失败!'"
 
 # 4. 再次确认引擎状态
 if [ -n "$ENGINE_STATUS" ]; then
