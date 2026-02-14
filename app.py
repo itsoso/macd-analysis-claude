@@ -12,7 +12,7 @@ from functools import wraps
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from flask import Flask, render_template, jsonify, request, redirect, url_for, session, send_from_directory
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session, send_from_directory, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 from date_range_report import load_latest_report_from_db
 from web_routes import register_page_routes, register_result_api_routes
@@ -212,6 +212,186 @@ def api_multi_tf_daily_runs():
     from multi_tf_daily_db import list_runs
     runs = list_runs(MULTI_TF_DAILY_DB_FILE)
     return jsonify(runs)
+
+
+@app.route('/api/multi_tf_daily/export_trades')
+def api_multi_tf_daily_export_trades():
+    """导出完整交易记录为 Excel 文件。支持 ?run_id=N，默认最新。"""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
+    from multi_tf_daily_db import load_latest_run, load_run_by_id
+
+    run_id = request.args.get('run_id', type=int)
+    if run_id:
+        data = load_run_by_id(run_id, MULTI_TF_DAILY_DB_FILE)
+    else:
+        data = load_latest_run(MULTI_TF_DAILY_DB_FILE)
+    if not data:
+        return jsonify({"error": "未找到回测数据"}), 404
+
+    trades = data.get('trade_details', [])
+    run_meta = data.get('run_meta', {})
+    summary = data.get('summary', {})
+    daily = data.get('daily_records', [])
+    actual_run_id = data.get('run_id', run_id or 'latest')
+    tag = data.get('version_tag', '')
+
+    wb = Workbook()
+
+    # ── Sheet 1: 交易记录 ──
+    ws = wb.active
+    ws.title = "交易记录"
+
+    # 样式定义
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    header_fill = PatternFill(start_color="2B3E50", end_color="2B3E50", fill_type="solid")
+    green_font = Font(color="228B22", bold=True)
+    red_font = Font(color="DC143C", bold=True)
+    thin_border = Border(
+        left=Side(style='thin', color='D0D0D0'),
+        right=Side(style='thin', color='D0D0D0'),
+        top=Side(style='thin', color='D0D0D0'),
+        bottom=Side(style='thin', color='D0D0D0'),
+    )
+    center_align = Alignment(horizontal='center', vertical='center')
+
+    # 摘要区
+    summary_items = [
+        ("回测版本", f"Run #{actual_run_id} {tag}"),
+        ("回测区间", f"{run_meta.get('start_date', '')} ~ {run_meta.get('end_date', '')}"),
+        ("策略收益", f"{summary.get('total_return_pct', 0):.2f}%"),
+        ("最大回撤", f"{summary.get('max_drawdown_pct', 0):.2f}%"),
+        ("总交易数", f"{len(trades)}"),
+        ("胜率", f"{summary.get('win_rate', 0):.1f}%"),
+        ("总费用", f"${summary.get('total_fees', 0):,.2f}"),
+    ]
+    for i, (label, value) in enumerate(summary_items):
+        cell_l = ws.cell(row=i + 1, column=1, value=label)
+        cell_l.font = Font(bold=True, size=10)
+        ws.cell(row=i + 1, column=2, value=value)
+
+    # 交易表头
+    headers = ['#', '时间', '操作', '方向', '市场价', '成交价', '数量',
+               '名义价值', '保证金', '杠杆', '手续费', '滑点', 'PnL',
+               '账户总值', '原因']
+    header_row = len(summary_items) + 2
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=header_row, column=col_idx, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = thin_border
+
+    # 操作名称映射
+    action_map = {
+        'OPEN_LONG': '开多', 'CLOSE_LONG': '平多',
+        'OPEN_SHORT': '开空', 'CLOSE_SHORT': '平空',
+        'LIQUIDATED': '强平', 'SPOT_BUY': '现买',
+        'SPOT_SELL': '现卖', 'PARTIAL_TP': '部分止盈',
+    }
+    dir_map = {'long': '多', 'short': '空'}
+
+    # 写入交易数据
+    for i, t in enumerate(trades):
+        row = header_row + 1 + i
+        pnl = t.get('pnl')
+        values = [
+            i + 1,
+            str(t.get('time', '')).replace('T', ' ')[:19],
+            action_map.get(t.get('action', ''), t.get('action', '')),
+            dir_map.get(t.get('direction', ''), '-'),
+            t.get('market_price'),
+            t.get('exec_price'),
+            t.get('quantity'),
+            t.get('notional_value'),
+            t.get('margin'),
+            t.get('leverage'),
+            t.get('fee'),
+            t.get('slippage_cost'),
+            pnl,
+            t.get('after_total'),
+            t.get('reason', ''),
+        ]
+        for col_idx, val in enumerate(values, 1):
+            cell = ws.cell(row=row, column=col_idx, value=val)
+            cell.border = thin_border
+            if col_idx in (5, 6, 7, 8, 9, 11, 12, 13, 14):
+                cell.alignment = center_align
+            # PnL 着色
+            if col_idx == 13 and pnl is not None:
+                cell.font = green_font if pnl > 0 else red_font if pnl < 0 else Font()
+                cell.number_format = '#,##0.00'
+            # 金额格式
+            if col_idx in (5, 6, 8, 9, 14) and isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+            if col_idx == 7 and isinstance(val, (int, float)):
+                cell.number_format = '0.0000'
+
+    # 自动列宽
+    for col_idx in range(1, len(headers) + 1):
+        max_len = len(str(headers[col_idx - 1]))
+        for row_idx in range(header_row + 1, header_row + 1 + min(len(trades), 50)):
+            val = ws.cell(row=row_idx, column=col_idx).value
+            if val is not None:
+                max_len = max(max_len, min(len(str(val)), 40))
+        ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = max_len + 3
+
+    # ── Sheet 2: 逐日盈亏 ──
+    if daily:
+        ws2 = wb.create_sheet("逐日盈亏")
+        day_headers = ['日期', '总资产', '持仓ETH', 'ETH价格', '当日PnL',
+                       '当日交易数', '累计收益%']
+        for col_idx, h in enumerate(day_headers, 1):
+            cell = ws2.cell(row=1, column=col_idx, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_align
+            cell.border = thin_border
+
+        initial_equity = daily[0].get('total_value', 200000) if daily else 200000
+        for i, d in enumerate(daily):
+            row = i + 2
+            eq = d.get('total_value', 0)
+            cum_ret = (eq / initial_equity - 1) * 100 if initial_equity else 0
+            day_pnl = d.get('day_pnl', 0)
+            vals = [
+                d.get('date', ''),
+                eq,
+                d.get('eth_qty', 0),
+                d.get('eth_price', 0),
+                day_pnl,
+                d.get('day_trades', 0),
+                cum_ret,
+            ]
+            for col_idx, val in enumerate(vals, 1):
+                cell = ws2.cell(row=row, column=col_idx, value=val)
+                cell.border = thin_border
+                cell.alignment = center_align
+                if col_idx == 2:
+                    cell.number_format = '#,##0.00'
+                if col_idx == 5:
+                    cell.number_format = '#,##0.00'
+                    if isinstance(val, (int, float)):
+                        cell.font = green_font if val > 0 else red_font if val < 0 else Font()
+                if col_idx == 7:
+                    cell.number_format = '0.00'
+
+        for col_idx in range(1, len(day_headers) + 1):
+            ws2.column_dimensions[ws2.cell(row=1, column=col_idx).column_letter].width = 14
+
+    # 生成文件
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"trades_run{actual_run_id}_{tag.replace(' ', '_')}.xlsx" if tag else f"trades_run{actual_run_id}.xlsx"
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=filename,
+    )
 
 
 # ======================================================

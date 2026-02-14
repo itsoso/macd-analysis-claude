@@ -319,8 +319,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>`;
 
         // ═══ 交易记录 ═══
+        const exportUrl = '/api/multi_tf_daily/export_trades' + (data.run_id ? '?run_id=' + data.run_id : '');
         html += `<div class="card"><details>
-            <summary class="title" style="cursor:pointer">完整交易记录 (${trades.length} 笔)</summary>
+            <summary class="title" style="cursor:pointer">完整交易记录 (${trades.length} 笔)
+                <a href="${exportUrl}" class="btn-export" title="导出Excel"
+                   onclick="event.stopPropagation()" style="margin-left:12px;display:inline-block;padding:2px 10px;font-size:0.72rem;background:var(--cyan,#17a2b8);color:#fff;border-radius:4px;text-decoration:none;font-weight:600;vertical-align:middle">📥 导出Excel</a>
+            </summary>
             <div style="overflow-x:auto;margin-top:10px;">
             <table class="dt" style="font-size:0.72rem;white-space:nowrap;"><thead><tr>
                 <th>#</th><th>时间</th><th>操作</th><th>方向</th>
