@@ -1189,7 +1189,7 @@ def _run_strategy_core(
         if regime_short_threshold and _regime_label in regime_short_threshold:
             effective_short_threshold = max(effective_short_threshold,
                                             regime_short_threshold[_regime_label])
-        if short_cd == 0 and ss >= effective_short_threshold and not eng.futures_short and sell_dom and not in_conflict and can_open_risk and not micro_block_short:
+        if short_cd == 0 and ss >= effective_short_threshold and not eng.futures_short and not eng.futures_long and sell_dom and not in_conflict and can_open_risk and not micro_block_short:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')
@@ -1362,7 +1362,7 @@ def _run_strategy_core(
                     if raw_big_bs > raw_big_ss * 1.2:  # 大周期买方占优
                         trend_long_bs = raw_big_bs
                         buy_dom = True
-        if long_cd == 0 and trend_long_bs >= effective_long_threshold and not eng.futures_long and buy_dom and not in_conflict and can_open_risk and not micro_block_long:
+        if long_cd == 0 and trend_long_bs >= effective_long_threshold and not eng.futures_long and not eng.futures_short and buy_dom and not in_conflict and can_open_risk and not micro_block_long:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')

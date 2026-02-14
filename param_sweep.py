@@ -120,6 +120,10 @@ def run_with_params(all_data, all_signals, score_tfs, decision_tfs,
 
 PARAM_SPACE = {
     # === 优先级 0: 已编码功能开关 A/B (零开发成本) ===
+    'use_trend_enhance': [False, True],                  # 基线 True — 趋势底仓保护
+    'trend_enhance_engine_gate': [False, True],          # 基线 False — 趋势保护是否受引擎模式门控
+    'trend_floor_ratio': [0.40, 0.45, 0.50, 0.55],       # 基线 0.50 — 趋势持仓底仓比例
+    'min_base_eth_ratio': [0.00, 0.05, 0.10],            # 基线 0.00 — 最低ETH底仓比例
     'use_partial_tp_v3': [False, True],                  # 基线 True — v3早期锁利
     'use_atr_sl': [False, True],                         # 基线 False — ATR自适应止损
     # [已移除] use_short_suppress — A/B+param_sweep验证零效果
