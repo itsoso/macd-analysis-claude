@@ -444,7 +444,7 @@ function render(data) {
                 ${feeCard('资金费(净)', f30.net_funding, true)}
                 ${feeCard('滑点成本', f30.slippage_cost)}
                 ${feeCard('总成本', f30.total_costs, false, true)}
-                ${feeCard('费用拖累', f30.fee_drag_pct, false, false, true)}
+                ${feeCard('费用/本金比', f30.fee_drag_pct, false, false, true)}
             </div>
         </div>
         <div class="cmp-box">
@@ -456,7 +456,7 @@ function render(data) {
                 ${feeCard('资金费(净)', f7.net_funding, true)}
                 ${feeCard('滑点成本', f7.slippage_cost)}
                 ${feeCard('总成本', f7.total_costs, false, true)}
-                ${feeCard('费用拖累', f7.fee_drag_pct, false, false, true)}
+                ${feeCard('费用/本金比', f7.fee_drag_pct, false, false, true)}
             </div>
         </div>
     </div>`;
@@ -544,7 +544,7 @@ function buildTbl(results) {
     h += '<div style="overflow-x:auto"><table class="dt"><thead><tr>';
     h += '<th>#</th><th>周期</th><th>策略</th><th class="center">Alpha</th><th class="center">策略收益</th>';
     h += '<th class="center">BH收益</th><th class="center">最大回撤</th><th class="center">交易数</th>';
-    h += '<th class="center">强平</th><th class="center">总费用</th><th class="center">费用拖累</th>';
+    h += '<th class="center">强平</th><th class="center">总费用</th><th class="center">费用/本金比</th>';
     h += '</tr></thead><tbody>';
     results.forEach((r, i) => {
         const fees = r.fees || {};

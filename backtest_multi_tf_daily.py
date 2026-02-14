@@ -127,8 +127,7 @@ def _build_default_config():
         'neutral_mid_ss_sell_ratio': 1.0,  # 1.0=不调整
         'neutral_mid_ss_lo': 50.0,
         'neutral_mid_ss_hi': 70.0,
-        # regime-specific short_threshold (dict: {regime: threshold})
-        'regime_short_threshold': None,    # None=不启用; 例: {'neutral':40}
+        # regime-specific short_threshold → 移至下方 S1 区段, 使用 _LIVE_DEFAULT
         # v3 分段止盈
         'use_partial_tp_v3': _LIVE_DEFAULT.use_partial_tp_v3,
         'partial_tp_1_early': _LIVE_DEFAULT.partial_tp_1_early,
@@ -204,6 +203,18 @@ def _build_default_config():
         'vol_target_lookback_bars': _LIVE_DEFAULT.vol_target_lookback_bars,
         'vol_target_min_scale': _LIVE_DEFAULT.vol_target_min_scale,
         'vol_target_max_scale': _LIVE_DEFAULT.vol_target_max_scale,
+        # ── S1: Neutral regime做空门槛覆盖 ──
+        'regime_short_threshold': _LIVE_DEFAULT.regime_short_threshold,
+        # ── S2: 保本止损 ──
+        'use_breakeven_after_tp1': _LIVE_DEFAULT.use_breakeven_after_tp1,
+        'breakeven_buffer': _LIVE_DEFAULT.breakeven_buffer,
+        # ── S3: 棘轮追踪止损 ──
+        'use_ratchet_trail': _LIVE_DEFAULT.use_ratchet_trail,
+        'ratchet_trail_tiers': _LIVE_DEFAULT.ratchet_trail_tiers,
+        # ── S5: 信号质量止损 ──
+        'use_ss_quality_sl': _LIVE_DEFAULT.use_ss_quality_sl,
+        'ss_quality_sl_threshold': _LIVE_DEFAULT.ss_quality_sl_threshold,
+        'ss_quality_sl_mult': _LIVE_DEFAULT.ss_quality_sl_mult,
     }
     return cfg
 

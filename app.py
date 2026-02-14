@@ -620,7 +620,7 @@ def _write_summary_sheet(ws, data, styles):
         ("胜率", f"{s.get('win_rate_pct', 0):.1f}%"),
         ("盈亏比", f"{s.get('profit_factor', 0):.2f}"),
         ("总费用", f"${s.get('total_costs', 0):,.2f}"),
-        ("费用拖累", f"{s.get('fee_drag_pct', 0):.2f}%"),
+        ("费用/本金比", f"{s.get('fee_drag_pct', 0):.2f}%"),
         ("强平次数", str(s.get('liquidations', 0))),
         ("", ""),
         ("趋势保护v3", "ON" if snap.get('use_trend_enhance') else "OFF"),

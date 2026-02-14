@@ -302,9 +302,10 @@ class StrategyConfig:
     no_tp_exit_long_min_pnl: float = 0.03
     no_tp_exit_long_loss_floor: float = -0.03
     no_tp_exit_long_regimes: str = 'neutral'
-    # 反向平仓最小持仓bars（0=关闭）。用于抑制短周期来回反手造成的手续费拖累。
-    reverse_min_hold_short: int = 0
-    reverse_min_hold_long: int = 0
+    # 反向平仓最小持仓bars。用于抑制短周期来回反手造成的手续费拖累。
+    # 2025-01~2026-01 A/B: 8 bars 在收益/组合PF上优于0/2/6/12。
+    reverse_min_hold_short: int = 8
+    reverse_min_hold_long: int = 8
     # 融合模式
     fusion_mode: str = "c6_veto_4"
     veto_threshold: float = 25
@@ -387,6 +388,28 @@ class StrategyConfig:
     partial_tp_1_early: float = 0.12    # v3触发TP1 (+12% vs 默认+15%)
     partial_tp_2_early: float = 0.25    # v3触发TP2 (+25% vs 默认+50%)
     use_partial_tp_v3: bool = True      # 启用v3分段止盈(早期锁利, A/B已验证)
+
+    # ── S1: Regime做空门槛覆盖 (neutral shorts -$47K/88笔 → 抑制) ──
+    # 最新回归: 在关闭 BE/Ratchet/SSQ 后, neutral:45 复现最优收益/组合PF
+    # 格式 "regime:threshold,..." 例 "neutral:45" → neutral中SS须>=45才开空
+    regime_short_threshold: str = 'neutral:45'
+
+    # ── S2: 保本止损 — TP1触发后将SL移至保本, 防止盈利全部回吐 ──
+    # 最新消融: 单开与组合均拉低收益, 默认关闭
+    use_breakeven_after_tp1: bool = False
+    breakeven_buffer: float = 0.01      # 允许入场价下方1%才触发保本止损
+
+    # ── S3: 棘轮追踪止损 — 利润越高回撤容忍越小 ──
+    # 最新消融: 与保本止损叠加时显著压制利润, 默认关闭
+    use_ratchet_trail: bool = False
+    # 格式 "threshold:pullback,..." — 到达利润阈值后pullback收紧
+    ratchet_trail_tiers: str = '0.20:0.50,0.30:0.40,0.40:0.30'
+
+    # ── S5: 信号质量止损 — 弱信号入场使用更紧SL, 减少低质量交易亏损 ──
+    # 当前区间收益导向下默认关闭, 作为风控备选开关
+    use_ss_quality_sl: bool = False
+    ss_quality_sl_threshold: float = 50  # SS/BS低于此值视为弱信号
+    ss_quality_sl_mult: float = 0.70     # 弱信号SL *= 0.70 (如-0.20→-0.14)
 
     @classmethod
     def from_optimize_result(cls, filepath: str, timeframe: str = None) -> 'StrategyConfig':

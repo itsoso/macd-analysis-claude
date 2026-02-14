@@ -371,7 +371,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             <div class="mi"><div class="lb">现货已实现PnL(成本法)</div><div class="vl ${cls(_spotPnl)}">${fc(_spotPnl)}</div></div>
             <div class="mi"><div class="lb">合约已实现PnL</div><div class="vl ${cls(_futuresPnl)}">${fc(_futuresPnl)}</div></div>
             <div class="mi"><div class="lb">总费用</div><div class="vl">${fc(s.total_costs)}</div></div>
-            <div class="mi"><div class="lb">费用拖累</div><div class="vl neg">${fv(s.fee_drag_pct)}%</div></div>
+            <div class="mi"><div class="lb">费用/本金比</div><div class="vl neg">${fv(s.fee_drag_pct)}%</div></div>
             <div class="mi"><div class="lb">净Funding</div><div class="vl ${cls(s.net_funding)}">${fc(s.net_funding)}</div></div>
         </div></div>`;
 

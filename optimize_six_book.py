@@ -828,11 +828,34 @@ def _run_strategy_core(
     partial_tp_2 = config.get('partial_tp_2', 0.50)
     partial_tp_2_pct = config.get('partial_tp_2_pct', 0.30)
 
+    # S2: 保本止损 — TP1触发后将止损移至保本位(或微利), 防止盈利回吐
+    use_breakeven_after_tp1 = config.get('use_breakeven_after_tp1', False)
+    breakeven_buffer = float(config.get('breakeven_buffer', 0.01))  # 允许入场价下方1%再触发
+
+    # S3: 棘轮追踪止损 — 利润越高, 回撤容忍越小
+    use_ratchet_trail = config.get('use_ratchet_trail', False)
+    _ratchet_raw = config.get('ratchet_trail_tiers', '0.20:0.50,0.30:0.40,0.40:0.30')
+    ratchet_trail_tiers = []
+    if isinstance(_ratchet_raw, str) and _ratchet_raw:
+        for pair in _ratchet_raw.split(','):
+            if ':' in pair:
+                t, p = pair.strip().split(':', 1)
+                ratchet_trail_tiers.append((float(t), float(p)))
+        ratchet_trail_tiers.sort(key=lambda x: x[0])
+    elif isinstance(_ratchet_raw, list):
+        ratchet_trail_tiers = [(float(t), float(p)) for t, p in _ratchet_raw]
+
+    # S5: 信号质量止损 — 低SS入场的空单使用更紧止损, 高SS给更大空间
+    use_ss_quality_sl = config.get('use_ss_quality_sl', False)
+    ss_quality_sl_threshold = float(config.get('ss_quality_sl_threshold', 50))
+    ss_quality_sl_mult = float(config.get('ss_quality_sl_mult', 0.70))
+
     short_cd = 0; long_cd = 0; spot_cd = 0
     short_bars = 0; long_bars = 0
     short_max_pnl = 0; long_max_pnl = 0
     short_partial_done = False; long_partial_done = False
     short_partial2_done = False; long_partial2_done = False
+    short_entry_ss = 0.0; long_entry_bs = 0.0  # S5: 记录入场时信号强度
 
     # 趋势持续状态 (跨bar持久, 带滞后)
     _trend_up_active = False  # 上升趋势一旦激活, 直到明确反转才关闭
@@ -1226,6 +1249,7 @@ def _run_strategy_core(
                 bar_low=_bar_low, bar_high=_bar_high)
             short_max_pnl = 0; short_bars = 0; short_cd = cooldown
             short_just_opened = True; short_partial_done = False; short_partial2_done = False
+            short_entry_ss = ss  # S5: 记录入场信号强度
 
         # 管理空仓
         if eng.futures_short and not short_just_opened:
@@ -1312,8 +1336,16 @@ def _run_strategy_core(
             else:
                 if pnl_r > short_max_pnl: short_max_pnl = pnl_r
                 if short_max_pnl >= short_trail and eng.futures_short:
-                    if pnl_r < short_max_pnl * trail_pullback:
-                        eng.close_short(price, dt, "追踪止盈", bar_low=_bar_low, bar_high=_bar_high)
+                    # S3: 棘轮追踪 — 利润越高, 回撤容忍越小
+                    _eff_pb = trail_pullback
+                    if use_ratchet_trail and ratchet_trail_tiers:
+                        for _rt_thr, _rt_pb in ratchet_trail_tiers:
+                            if short_max_pnl >= _rt_thr:
+                                _eff_pb = _rt_pb
+                    if pnl_r < short_max_pnl * _eff_pb:
+                        eng.close_short(price, dt,
+                            f"追踪止盈 max={short_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
+                            bar_low=_bar_low, bar_high=_bar_high)
                         short_max_pnl = 0; short_cd = cooldown; short_bars = 0
                         short_partial_done = False; short_partial2_done = False
                 # P1a: 空单 NoTP 提前退出（长短独立 + regime 白名单）
@@ -1344,11 +1376,20 @@ def _run_strategy_core(
                         short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 # 常规止损: 用收盘确认触发(降低 wick 噪音), 但成交价封顶到止损价
                 # 这样既避免过度悲观(仅high触发即止损), 又不会出现远超阈值的超额亏损。
-                if eng.futures_short and pnl_r < actual_short_sl:
-                    _sl_price = eng.futures_short.entry_price - actual_short_sl * eng.futures_short.margin / eng.futures_short.quantity
+                # S2: 保本止损 — TP1后收紧SL到保本(微亏)
+                # S5: 弱信号SL收紧 — 入场SS低于阈值时, 止损距离缩窄
+                _eff_short_sl = actual_short_sl
+                if use_breakeven_after_tp1 and short_partial_done:
+                    _eff_short_sl = max(_eff_short_sl, -breakeven_buffer)
+                if use_ss_quality_sl and short_entry_ss < ss_quality_sl_threshold and not short_partial_done:
+                    _eff_short_sl = _eff_short_sl * ss_quality_sl_mult
+                if eng.futures_short and pnl_r < _eff_short_sl:
+                    _sl_price = eng.futures_short.entry_price - _eff_short_sl * eng.futures_short.margin / eng.futures_short.quantity
                     _sl_exec = min(price, _sl_price)
-                    eng.close_short(_sl_exec, dt, f"止损 {pnl_r*100:.0f}%→限{actual_short_sl*100:.0f}%",
-                                    bar_low=_bar_low, bar_high=_bar_high)
+                    _sl_label = "保本止损" if (use_breakeven_after_tp1 and short_partial_done) else "止损"
+                    eng.close_short(_sl_exec, dt,
+                        f"{_sl_label} {pnl_r*100:.0f}%→限{_eff_short_sl*100:.0f}%",
+                        bar_low=_bar_low, bar_high=_bar_high)
                     short_max_pnl = 0; short_cd = cooldown * 4; short_bars = 0
                     short_partial_done = False; short_partial2_done = False
                 if eng.futures_short and short_bars >= int(max(3, short_max_hold * hold_mult)):
@@ -1418,6 +1459,7 @@ def _run_strategy_core(
                 bar_low=_bar_low, bar_high=_bar_high)
             long_max_pnl = 0; long_bars = 0; long_cd = cooldown
             long_just_opened = True; long_partial_done = False; long_partial2_done = False
+            long_entry_bs = trend_long_bs  # S5: 记录入场信号强度
 
         # 管理多仓
         if eng.futures_long and not long_just_opened:
@@ -1502,10 +1544,18 @@ def _run_strategy_core(
             else:
                 if pnl_r > long_max_pnl: long_max_pnl = pnl_r
                 if long_max_pnl >= long_trail and eng.futures_long:
-                    if pnl_r < long_max_pnl * trail_pullback:
-                        eng.close_long(price, dt, "追踪止盈", bar_low=_bar_low, bar_high=_bar_high)
+                    # S3: 棘轮追踪 — 利润越高, 回撤容忍越小
+                    _eff_pb = trail_pullback
+                    if use_ratchet_trail and ratchet_trail_tiers:
+                        for _rt_thr, _rt_pb in ratchet_trail_tiers:
+                            if long_max_pnl >= _rt_thr:
+                                _eff_pb = _rt_pb
+                    if pnl_r < long_max_pnl * _eff_pb:
+                        eng.close_long(price, dt,
+                            f"追踪止盈 max={long_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
+                            bar_low=_bar_low, bar_high=_bar_high)
                         long_max_pnl = 0; long_cd = cooldown; long_bars = 0
-                        long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
+                        long_partial_done = False; long_partial2_done = False
                 # P1: 多仓 NoTP 提前退出（长短独立 + regime 白名单）
                 _no_tp_long_regime_ok = (
                     not no_tp_exit_long_regimes or _regime_label in no_tp_exit_long_regimes
@@ -1533,11 +1583,20 @@ def _run_strategy_core(
                         long_max_pnl = 0; long_cd = cooldown * 3; long_bars = 0
                         long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 # 常规止损: 用收盘确认触发(降低 wick 噪音), 但成交价封顶到止损价
-                if eng.futures_long and pnl_r < actual_long_sl:
-                    _sl_price = eng.futures_long.entry_price + actual_long_sl * eng.futures_long.margin / eng.futures_long.quantity
+                # S2: 保本止损 — TP1后收紧SL到保本(微亏)
+                # S5: 弱信号SL收紧 — 入场BS低于阈值时, 止损距离缩窄
+                _eff_long_sl = actual_long_sl
+                if use_breakeven_after_tp1 and long_partial_done:
+                    _eff_long_sl = max(_eff_long_sl, -breakeven_buffer)
+                if use_ss_quality_sl and long_entry_bs < ss_quality_sl_threshold and not long_partial_done:
+                    _eff_long_sl = _eff_long_sl * ss_quality_sl_mult
+                if eng.futures_long and pnl_r < _eff_long_sl:
+                    _sl_price = eng.futures_long.entry_price + _eff_long_sl * eng.futures_long.margin / eng.futures_long.quantity
                     _sl_exec = max(price, _sl_price)
-                    eng.close_long(_sl_exec, dt, f"止损 {pnl_r*100:.0f}%→限{actual_long_sl*100:.0f}%",
-                                   bar_low=_bar_low, bar_high=_bar_high)
+                    _sl_label = "保本止损" if (use_breakeven_after_tp1 and long_partial_done) else "止损"
+                    eng.close_long(_sl_exec, dt,
+                        f"{_sl_label} {pnl_r*100:.0f}%→限{_eff_long_sl*100:.0f}%",
+                        bar_low=_bar_low, bar_high=_bar_high)
                     long_max_pnl = 0; long_cd = cooldown * 4; long_bars = 0
                     long_partial_done = False; long_partial2_done = False
                 if eng.futures_long and long_bars >= int(max(3, long_max_hold * hold_mult)):
