@@ -1185,6 +1185,21 @@ def _run_strategy_core(
             eng.spot_sell(exec_price, dt, effective_sell_pct, f"卖出 SS={ss:.0f}")
             spot_cd = effective_spot_cooldown
 
+        # 先执行“反向平仓”再判断开仓：
+        # 避免因开仓逻辑先执行而错过同bar反手，且保证不会同时持有多空仓。
+        if eng.futures_short and bs >= cur_close_short_bs:
+            bs_dom = (ss < bs * 0.7) if bs > 0 else True
+            if bs_dom:
+                eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}")
+                short_max_pnl = 0; short_cd = cooldown * 3; short_bars = 0
+                short_partial_done = False; short_partial2_done = False
+        if eng.futures_long and ss >= cur_close_long_ss:
+            ss_dom = (bs < ss * 0.7) if bs > 0 else True
+            if ss_dom:
+                eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}")
+                long_max_pnl = 0; long_cd = cooldown * 3; long_bars = 0
+                long_partial_done = False; long_partial2_done = False
+
         # 开空 (用 exec_price 执行, 即本bar open)
         sell_dom = (ss > bs * entry_dom_ratio) if bs > 0 else True
         # 趋势中抑制做空: 提高阈值 + 要求更强的卖方优势
@@ -1319,15 +1334,14 @@ def _run_strategy_core(
                         eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}")
                         short_max_pnl = 0; short_cd = cooldown * 3; short_bars = 0
                         short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
-                # 常规止损: 同样使用 bar HIGH 检测 intrabar 穿越(空仓)
-                _worst_sl_pnl_short = eng.futures_short.calc_pnl(_high_price) / eng.futures_short.margin if eng.futures_short else 0
-                if eng.futures_short and _worst_sl_pnl_short < actual_short_sl:
+                # 常规止损: 用收盘确认触发(降低 wick 噪音), 但成交价封顶到止损价
+                # 这样既避免过度悲观(仅high触发即止损), 又不会出现远超阈值的超额亏损。
+                if eng.futures_short and pnl_r < actual_short_sl:
                     _sl_price = eng.futures_short.entry_price - actual_short_sl * eng.futures_short.margin / eng.futures_short.quantity
-                    _sl_exec = min(_sl_price, _high_price)
-                    eng.close_short(_sl_exec, dt, f"止损 {_worst_sl_pnl_short*100:.0f}%→限{actual_short_sl*100:.0f}%")
+                    _sl_exec = min(price, _sl_price)
+                    eng.close_short(_sl_exec, dt, f"止损 {pnl_r*100:.0f}%→限{actual_short_sl*100:.0f}%")
                     short_max_pnl = 0; short_cd = cooldown * 4; short_bars = 0
                     short_partial_done = False; short_partial2_done = False
-                    long_cd = max(long_cd, cooldown * 3)  # 跨方向冷却
                 if eng.futures_short and short_bars >= int(max(3, short_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_short(exec_price, dt, "超时")
@@ -1503,15 +1517,13 @@ def _run_strategy_core(
                         eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}")
                         long_max_pnl = 0; long_cd = cooldown * 3; long_bars = 0
                         long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
-                # 常规止损: 使用 bar LOW 检测 intrabar 穿越(多仓)
-                _worst_sl_pnl_long = eng.futures_long.calc_pnl(_low_price) / eng.futures_long.margin if eng.futures_long else 0
-                if eng.futures_long and _worst_sl_pnl_long < actual_long_sl:
+                # 常规止损: 用收盘确认触发(降低 wick 噪音), 但成交价封顶到止损价
+                if eng.futures_long and pnl_r < actual_long_sl:
                     _sl_price = eng.futures_long.entry_price + actual_long_sl * eng.futures_long.margin / eng.futures_long.quantity
-                    _sl_exec = max(_sl_price, _low_price)
-                    eng.close_long(_sl_exec, dt, f"止损 {_worst_sl_pnl_long*100:.0f}%→限{actual_long_sl*100:.0f}%")
+                    _sl_exec = max(price, _sl_price)
+                    eng.close_long(_sl_exec, dt, f"止损 {pnl_r*100:.0f}%→限{actual_long_sl*100:.0f}%")
                     long_max_pnl = 0; long_cd = cooldown * 4; long_bars = 0
                     long_partial_done = False; long_partial2_done = False
-                    short_cd = max(short_cd, cooldown * 3)  # 跨方向冷却
                 if eng.futures_long and long_bars >= int(max(3, long_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_long(exec_price, dt, "超时")
