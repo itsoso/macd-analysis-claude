@@ -396,6 +396,8 @@ def _normalize_trade(t):
         'pnl': _num(t.get('pnl')),
         'entry_price': _num(t.get('entry_price')),
         'after_usdt': _num(t.get('after_usdt')),
+        'after_spot_eth': _num(t.get('after_spot_eth')),  # 现货ETH持仓(修复: 之前遗漏)
+        'after_spot_value': _num(t.get('after_spot_value')),  # 现货ETH价值
         'after_total': _num(t.get('after_total')),
         'after_frozen_margin': _num(t.get('after_frozen_margin')),
         'after_available': _num(t.get('after_available')),

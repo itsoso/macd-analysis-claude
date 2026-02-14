@@ -1062,8 +1062,10 @@ def _run_strategy_core(
             ratio = min(ss, bs) / max(ss, bs)
             in_conflict = ratio >= 0.6 and min(ss, bs) >= 15
 
-        # 是否启用趋势增强（反转引擎中禁用趋势偏置）
-        trend_enhance_active = bool(config.get('use_trend_enhance', False)) and engine_mode != 'reversion'
+        # 是否启用趋势增强（现货底仓保护）
+        # 与 engine_mode 解耦: engine_mode 控制合约开仓倍率, trend_enhance 控制现货持仓保护
+        # EMA10/EMA30 趋势状态已有滞后 (enter=1.005x, exit=0.98x), 可独立判断
+        trend_enhance_active = bool(config.get('use_trend_enhance', False))
 
         # ── 趋势持仓保护 (Trend Floor v3 — 带滞后 + 事后检查) ──
         trend_floor_active = False

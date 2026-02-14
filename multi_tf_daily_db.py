@@ -137,10 +137,14 @@ def _build_strategy_snapshot(config):
         'use_regime_aware': config.get('use_regime_aware', False),
         'use_protections': config.get('use_protections', False),
         # 核心参数
+        'fusion_mode': config.get('fusion_mode'),
+        'veto_threshold': config.get('veto_threshold'),
         'sell_threshold': config.get('sell_threshold'),
         'buy_threshold': config.get('buy_threshold'),
         'short_threshold': config.get('short_threshold'),
         'long_threshold': config.get('long_threshold'),
+        'close_short_bs': config.get('close_short_bs'),
+        'close_long_ss': config.get('close_long_ss'),
         'sell_pct': config.get('sell_pct'),
         'margin_use': config.get('margin_use'),
         'lev': config.get('lev'),
@@ -148,10 +152,30 @@ def _build_strategy_snapshot(config):
         'short_tp': config.get('short_tp'),
         'long_sl': config.get('long_sl'),
         'long_tp': config.get('long_tp'),
+        'short_trail': config.get('short_trail'),
+        'long_trail': config.get('long_trail'),
+        'trail_pullback': config.get('trail_pullback'),
         'short_max_hold': config.get('short_max_hold'),
         'long_max_hold': config.get('long_max_hold'),
+        'cooldown': config.get('cooldown'),
+        'spot_cooldown': config.get('spot_cooldown'),
         'consensus_min_strength': config.get('consensus_min_strength'),
         'coverage_min': config.get('coverage_min'),
+        # 分段止盈
+        'use_partial_tp': config.get('use_partial_tp', False),
+        'partial_tp_1': config.get('partial_tp_1'),
+        'partial_tp_1_pct': config.get('partial_tp_1_pct'),
+        'use_partial_tp_2': config.get('use_partial_tp_2', False),
+        'partial_tp_2': config.get('partial_tp_2'),
+        'partial_tp_2_pct': config.get('partial_tp_2_pct'),
+        'use_partial_tp_v3': config.get('use_partial_tp_v3', False),
+        'partial_tp_1_early': config.get('partial_tp_1_early'),
+        'partial_tp_2_early': config.get('partial_tp_2_early'),
+        # ATR 止损
+        'use_atr_sl': config.get('use_atr_sl', False),
+        'atr_sl_mult': config.get('atr_sl_mult'),
+        'atr_sl_floor': config.get('atr_sl_floor'),
+        'atr_sl_ceil': config.get('atr_sl_ceil'),
         # 保护参数
         'prot_global_dd_limit_pct': config.get('prot_global_dd_limit_pct'),
         'prot_global_halt_recovery_pct': config.get('prot_global_halt_recovery_pct'),
@@ -181,6 +205,14 @@ def _build_strategy_snapshot(config):
         'neutral_mid_ss_sell_ratio': config.get('neutral_mid_ss_sell_ratio'),
         # 实验3: regime-specific short_threshold
         'regime_short_threshold': config.get('regime_short_threshold'),
+        # 引擎模式倍率
+        'trend_engine_entry_mult': config.get('trend_engine_entry_mult'),
+        'trend_engine_hold_mult': config.get('trend_engine_hold_mult'),
+        'reversion_engine_entry_mult': config.get('reversion_engine_entry_mult'),
+        'reversion_engine_hold_mult': config.get('reversion_engine_hold_mult'),
+        # 波动目标
+        'vol_target_annual': config.get('vol_target_annual'),
+        'vol_target_lookback_bars': config.get('vol_target_lookback_bars'),
     }
     return snapshot
 

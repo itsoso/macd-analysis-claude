@@ -216,6 +216,7 @@ class FuturesEngine:
             # 交易后账户快照
             'after_usdt': round(self.usdt, 2),
             'after_spot_eth': round(self.spot_eth, 6),
+            'after_spot_value': round(self.spot_eth * price, 2),  # 现货ETH市值
             'after_frozen_margin': round(self.frozen_margin, 2),
             'after_total': round(self.total_value(price), 2),
             'after_available': round(self.available_usdt(), 2),
