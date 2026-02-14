@@ -784,6 +784,9 @@ def _run_strategy_core(
     no_tp_exit_long_bars = int(config.get('no_tp_exit_long_bars', _legacy_no_tp_bars))
     no_tp_exit_long_min_pnl = float(config.get('no_tp_exit_long_min_pnl', _legacy_no_tp_min))
     no_tp_exit_long_loss_floor = float(config.get('no_tp_exit_long_loss_floor', -0.03))
+    # 反向平仓防抖: 至少持有N根K线后才允许“反向信号平仓”
+    reverse_min_hold_short = int(config.get('reverse_min_hold_short', 0))
+    reverse_min_hold_long = int(config.get('reverse_min_hold_long', 0))
 
     def _parse_regimes(v):
         if v is None:
@@ -1187,13 +1190,13 @@ def _run_strategy_core(
 
         # 先执行“反向平仓”再判断开仓：
         # 避免因开仓逻辑先执行而错过同bar反手，且保证不会同时持有多空仓。
-        if eng.futures_short and bs >= cur_close_short_bs:
+        if eng.futures_short and short_bars >= reverse_min_hold_short and bs >= cur_close_short_bs:
             bs_dom = (ss < bs * 0.7) if bs > 0 else True
             if bs_dom:
                 eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}", bar_low=_bar_low, bar_high=_bar_high)
                 short_max_pnl = 0; short_cd = cooldown * 3; short_bars = 0
                 short_partial_done = False; short_partial2_done = False
-        if eng.futures_long and ss >= cur_close_long_ss:
+        if eng.futures_long and long_bars >= reverse_min_hold_long and ss >= cur_close_long_ss:
             ss_dom = (bs < ss * 0.7) if bs > 0 else True
             if ss_dom:
                 eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}", bar_low=_bar_low, bar_high=_bar_high)
@@ -1332,7 +1335,7 @@ def _run_strategy_core(
                         bar_low=_bar_low, bar_high=_bar_high)
                     short_max_pnl = 0; short_cd = cooldown * 2; short_bars = 0
                     short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
-                if eng.futures_short and bs >= cur_close_short_bs:
+                if eng.futures_short and short_bars >= reverse_min_hold_short and bs >= cur_close_short_bs:
                     bs_dom = (ss < bs * 0.7) if bs > 0 else True
                     if bs_dom:
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
@@ -1522,7 +1525,7 @@ def _run_strategy_core(
                         bar_low=_bar_low, bar_high=_bar_high)
                     long_max_pnl = 0; long_cd = cooldown * 2; long_bars = 0
                     long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
-                if eng.futures_long and ss >= cur_close_long_ss:
+                if eng.futures_long and long_bars >= reverse_min_hold_long and ss >= cur_close_long_ss:
                     ss_dom = (bs < ss * 0.7) if bs > 0 else True
                     if ss_dom:
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar

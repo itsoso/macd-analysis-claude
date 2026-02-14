@@ -140,13 +140,13 @@ def test_run_strategy_core_blocks_dual_futures_open(monkeypatch):
         return 0.0, 85.0
 
     class _GuardEngine(opt_six.FuturesEngine):
-        def open_long(self, price, dt, margin, leverage, reason):
+        def open_long(self, price, dt, margin, leverage, reason, **kwargs):
             assert self.futures_short is None, "OPEN_LONG called while short position is active"
-            return super().open_long(price, dt, margin, leverage, reason)
+            return super().open_long(price, dt, margin, leverage, reason, **kwargs)
 
-        def open_short(self, price, dt, margin, leverage, reason):
+        def open_short(self, price, dt, margin, leverage, reason, **kwargs):
             assert self.futures_long is None, "OPEN_SHORT called while long position is active"
-            return super().open_short(price, dt, margin, leverage, reason)
+            return super().open_short(price, dt, margin, leverage, reason, **kwargs)
 
     monkeypatch.setattr(opt_six, "FuturesEngine", _GuardEngine)
 
@@ -181,6 +181,52 @@ def test_run_strategy_core_blocks_dual_futures_open(monkeypatch):
     # 测试有效性：确实开过空；且不存在在空单存续期间开多
     assert any(t["action"] == "OPEN_SHORT" for t in result["trades"])
     assert not any(t["action"] == "OPEN_LONG" for t in result["trades"])
+
+
+def test_reverse_close_then_open_same_bar():
+    """反向信号应先平旧仓，再允许同bar开新方向仓位。"""
+    df = _make_ohlcv(n=420, start=100, step=0.1)
+    warmup = 200
+
+    def score_provider(idx, _dt, _price):
+        if idx < warmup:
+            return 0.0, 0.0
+        if idx == warmup:
+            return 85.0, 0.0   # 先开空
+        if idx == warmup + 1:
+            return 0.0, 85.0   # 下一根触发反向平空 + 开多
+        return 0.0, 0.0
+
+    cfg = _base_exec_config()
+    cfg.update(
+        {
+            "short_threshold": 20,
+            "long_threshold": 20,
+            "close_short_bs": 20,
+            "close_long_ss": 20,
+            "cooldown": 1,
+            "spot_cooldown": 1,
+            "use_trend_enhance": False,
+            "reverse_min_hold_short": 0,
+            "reverse_min_hold_long": 0,
+        }
+    )
+
+    result = opt_six._run_strategy_core(
+        primary_df=df,
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+        score_provider=score_provider,
+    )
+
+    trades = result["trades"]
+    close_short_idx = next(i for i, t in enumerate(trades) if t["action"] == "CLOSE_SHORT")
+    open_long_idx = next(i for i, t in enumerate(trades) if t["action"] == "OPEN_LONG")
+
+    # 关键断言: 同一bar先平空再开多，避免“错过反手”
+    assert close_short_idx < open_long_idx
+    assert trades[close_short_idx]["time"] == trades[open_long_idx]["time"]
 
 
 def test_trade_days_60_is_windowed_not_full_history():

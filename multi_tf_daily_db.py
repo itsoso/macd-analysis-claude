@@ -203,6 +203,8 @@ def _build_strategy_snapshot(config):
         'no_tp_exit_long_min_pnl': config.get('no_tp_exit_long_min_pnl'),
         'no_tp_exit_long_loss_floor': config.get('no_tp_exit_long_loss_floor'),
         'no_tp_exit_long_regimes': config.get('no_tp_exit_long_regimes'),
+        'reverse_min_hold_short': config.get('reverse_min_hold_short', 0),
+        'reverse_min_hold_long': config.get('reverse_min_hold_long', 0),
         'neutral_mid_ss_sell_ratio': config.get('neutral_mid_ss_sell_ratio'),
         # 实验3: regime-specific short_threshold
         'regime_short_threshold': config.get('regime_short_threshold'),

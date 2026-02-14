@@ -302,6 +302,9 @@ class StrategyConfig:
     no_tp_exit_long_min_pnl: float = 0.03
     no_tp_exit_long_loss_floor: float = -0.03
     no_tp_exit_long_regimes: str = 'neutral'
+    # 反向平仓最小持仓bars（0=关闭）。用于抑制短周期来回反手造成的手续费拖累。
+    reverse_min_hold_short: int = 0
+    reverse_min_hold_long: int = 0
     # 融合模式
     fusion_mode: str = "c6_veto_4"
     veto_threshold: float = 25

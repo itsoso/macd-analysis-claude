@@ -120,6 +120,9 @@ def _build_default_config():
         'no_tp_exit_long_min_pnl': _LIVE_DEFAULT.no_tp_exit_long_min_pnl,
         'no_tp_exit_long_loss_floor': _LIVE_DEFAULT.no_tp_exit_long_loss_floor,
         'no_tp_exit_long_regimes': _LIVE_DEFAULT.no_tp_exit_long_regimes,
+        # 反向平仓最小持仓 bars（防抖）
+        'reverse_min_hold_short': _LIVE_DEFAULT.reverse_min_hold_short,
+        'reverse_min_hold_long': _LIVE_DEFAULT.reverse_min_hold_long,
         # neutral 中分段 SS 卖出降仓
         'neutral_mid_ss_sell_ratio': 1.0,  # 1.0=不调整
         'neutral_mid_ss_lo': 50.0,
