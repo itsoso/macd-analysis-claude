@@ -238,22 +238,40 @@ MULTI_TF_DAILY_DB_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'multi_tf_d
 
 @app.route('/api/multi_tf_daily')
 def api_multi_tf_daily():
-    """从 SQLite DB 加载回测数据。支持 ?run_id=N 指定版本，默认最新。"""
+    """从 SQLite DB 加载回测数据。支持 ?run_id=N, ?lite=1 轻量模式。"""
     import time as _t
     from multi_tf_daily_db import load_latest_run, load_run_by_id
     t0 = _t.time()
     run_id = request.args.get('run_id', type=int)
+    lite = request.args.get('lite', default='0') == '1'
     if run_id:
-        data = load_run_by_id(run_id, MULTI_TF_DAILY_DB_FILE)
+        data = load_run_by_id(run_id, MULTI_TF_DAILY_DB_FILE,
+                              include_trades=not lite)
     else:
-        data = load_latest_run(MULTI_TF_DAILY_DB_FILE)
+        data = load_latest_run(MULTI_TF_DAILY_DB_FILE,
+                               include_trades=not lite)
     elapsed = (_t.time() - t0) * 1000
-    app.logger.info(f"[perf] api_multi_tf_daily run_id={run_id} -> {elapsed:.0f}ms")
+    app.logger.info(f"[perf] api_multi_tf_daily run_id={run_id} lite={lite} -> {elapsed:.0f}ms")
     if data:
         return jsonify(data)
     return jsonify({
         "error": "未找到多周期逐日回测数据，请先运行 python backtest_multi_tf_daily.py",
     }), 404
+
+
+@app.route('/api/multi_tf_daily/trades')
+def api_multi_tf_daily_trades():
+    """延迟加载：单独返回某 run 的完整交易记录。"""
+    import time as _t
+    from multi_tf_daily_db import load_trades_by_run
+    t0 = _t.time()
+    run_id = request.args.get('run_id', type=int)
+    if not run_id:
+        return jsonify({"error": "需要 run_id 参数"}), 400
+    trades = load_trades_by_run(run_id, MULTI_TF_DAILY_DB_FILE)
+    elapsed = (_t.time() - t0) * 1000
+    app.logger.info(f"[perf] api_multi_tf_daily_trades run_id={run_id} -> {elapsed:.0f}ms, {len(trades)} trades")
+    return jsonify(trades)
 
 
 @app.route('/api/multi_tf_daily/runs')

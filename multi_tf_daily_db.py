@@ -428,8 +428,8 @@ def list_runs(db_path=None, limit=0, offset=0):
         conn.close()
 
 
-def load_run_by_id(run_id, db_path=None):
-    """按 run_id 加载回测的完整数据"""
+def load_run_by_id(run_id, db_path=None, include_trades=True):
+    """按 run_id 加载回测数据。include_trades=False 返回轻量首屏数据。"""
     db_path = db_path or _default_db_path()
     if not os.path.exists(db_path):
         return None
@@ -446,13 +446,13 @@ def load_run_by_id(run_id, db_path=None):
         if not run:
             return None
 
-        return _load_run_data(cur, run)
+        return _load_run_data(cur, run, include_trades=include_trades)
     finally:
         conn.close()
 
 
-def load_latest_run(db_path=None):
-    """加载最新一次回测的完整数据"""
+def load_latest_run(db_path=None, include_trades=True):
+    """加载最新一次回测数据。include_trades=False 返回轻量首屏数据。"""
     db_path = db_path or _default_db_path()
     if not os.path.exists(db_path):
         return None
@@ -469,17 +469,17 @@ def load_latest_run(db_path=None):
         if not run:
             return None
 
-        return _load_run_data(cur, run)
+        return _load_run_data(cur, run, include_trades=include_trades)
     finally:
         conn.close()
 
 
-def _load_run_data(cur, run):
+def _load_run_data(cur, run, include_trades=True):
     """内部：从 run 行加载完整数据（性能优化版）。
 
-    - daily：只取结构化列，不再 json.loads(data_json)
-    - trades：从结构化列构建，不再 json.loads(data_json)
-    - equity_curve：直接从结构化列构建
+    Args:
+        include_trades: False 时不返回完整 trade_details，
+            改为轻量的 trade_summary + trade_marks，首屏体积减少 ~50%。
     """
     run_id = run['id']
 
@@ -491,14 +491,6 @@ def _load_run_data(cur, run):
                has_long, has_short, long_entry, long_qty,
                short_entry, short_qty, day_trades, day_pnl
         FROM mtf_daily WHERE run_id = ? ORDER BY date ASC
-    """, (run_id,)).fetchall()
-
-    # ── trades: 从结构化列构建，避免解析 data_json ──
-    trade_rows = cur.execute("""
-        SELECT time, action, direction, market_price, exec_price,
-               quantity, notional_value, margin, leverage, fee,
-               slippage_cost, pnl, after_total, reason
-        FROM mtf_trades WHERE run_id = ? ORDER BY seq ASC
     """, (run_id,)).fetchall()
 
     run_meta = json.loads(run['meta_json']) if run['meta_json'] else {}
@@ -539,38 +531,7 @@ def _load_run_data(cur, run):
             'day_pnl': r['day_pnl'],
         })
 
-    # 构建 trades（从结构化列，不 parse JSON）
-    trades = []
-    for r in trade_rows:
-        trades.append({
-            'time': r['time'],
-            'action': r['action'],
-            'direction': r['direction'],
-            'market_price': r['market_price'],
-            'exec_price': r['exec_price'],
-            'quantity': r['quantity'],
-            'notional_value': r['notional_value'],
-            'margin': r['margin'],
-            'leverage': r['leverage'],
-            'fee': r['fee'],
-            'slippage_cost': r['slippage_cost'],
-            'pnl': r['pnl'],
-            'after_total': r['after_total'],
-            'reason': r['reason'],
-        })
-
-    # equity_curve：直接从 daily 列构建
-    equity_curve = [
-        {
-            'date': r['date'],
-            'total': r['total_value'],
-            'price': r['eth_price'],
-            'drawdown': r['drawdown_pct'],
-        }
-        for r in daily_rows
-    ]
-
-    return {
+    result = {
         'run_id': run_id,
         'run_meta': run_meta,
         'summary': summary,
@@ -578,9 +539,97 @@ def _load_run_data(cur, run):
         'strategy_snapshot': strategy_snapshot,
         'experiment_notes': experiment_notes,
         'daily_records': daily_records,
-        'trade_details': trades,
-        'equity_curve': equity_curve,
     }
+
+    # ── trades 处理 ──
+    if include_trades:
+        # 完整模式：返回 trade_details + equity_curve（兼容旧调用，如导出 Excel）
+        trade_rows = cur.execute("""
+            SELECT time, action, direction, market_price, exec_price,
+                   quantity, notional_value, margin, leverage, fee,
+                   slippage_cost, pnl, after_total, reason
+            FROM mtf_trades WHERE run_id = ? ORDER BY seq ASC
+        """, (run_id,)).fetchall()
+        trades = []
+        for r in trade_rows:
+            trades.append({
+                'time': r['time'], 'action': r['action'],
+                'direction': r['direction'],
+                'market_price': r['market_price'],
+                'exec_price': r['exec_price'],
+                'quantity': r['quantity'],
+                'notional_value': r['notional_value'],
+                'margin': r['margin'], 'leverage': r['leverage'],
+                'fee': r['fee'], 'slippage_cost': r['slippage_cost'],
+                'pnl': r['pnl'], 'after_total': r['after_total'],
+                'reason': r['reason'],
+            })
+        result['trade_details'] = trades
+        result['equity_curve'] = [
+            {'date': r['date'], 'total': r['total_value'],
+             'price': r['eth_price'], 'drawdown': r['drawdown_pct']}
+            for r in daily_rows
+        ]
+    else:
+        # 轻量模式：只返回 trade_summary + trade_marks（首屏用）
+        trade_rows = cur.execute("""
+            SELECT time, action, pnl
+            FROM mtf_trades WHERE run_id = ? ORDER BY seq ASC
+        """, (run_id,)).fetchall()
+
+        # trade_summary: 按 action 汇总数量和 PnL
+        from collections import defaultdict
+        counts = defaultdict(int)
+        pnls = defaultdict(float)
+        for r in trade_rows:
+            a = r['action']
+            counts[a] += 1
+            if r['pnl']:
+                pnls[a] += r['pnl']
+        result['trade_summary'] = {
+            'counts': dict(counts),
+            'pnls': dict(pnls),
+            'total': len(trade_rows),
+        }
+
+        # trade_marks: 轻量数组，仅供逐日时间线显示
+        # 格式: [date_str, action, pnl] 极致精简
+        result['trade_marks'] = [
+            [(r['time'] or '')[:10], r['action'], r['pnl']]
+            for r in trade_rows
+        ]
+
+    return result
+
+
+def load_trades_by_run(run_id, db_path=None):
+    """单独加载某 run 的完整交易记录（延迟加载用）。"""
+    db_path = db_path or _default_db_path()
+    if not os.path.exists(db_path):
+        return []
+    conn = _open_conn(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("""
+            SELECT time, action, direction, market_price, exec_price,
+                   quantity, notional_value, margin, leverage, fee,
+                   slippage_cost, pnl, after_total, reason
+            FROM mtf_trades WHERE run_id = ? ORDER BY seq ASC
+        """, (run_id,)).fetchall()
+        return [{
+            'time': r['time'], 'action': r['action'],
+            'direction': r['direction'],
+            'market_price': r['market_price'],
+            'exec_price': r['exec_price'],
+            'quantity': r['quantity'],
+            'notional_value': r['notional_value'],
+            'margin': r['margin'], 'leverage': r['leverage'],
+            'fee': r['fee'], 'slippage_cost': r['slippage_cost'],
+            'pnl': r['pnl'], 'after_total': r['after_total'],
+            'reason': r['reason'],
+        } for r in rows]
+    finally:
+        conn.close()
 
 
 def update_experiment_notes(run_id, notes, db_path=None):

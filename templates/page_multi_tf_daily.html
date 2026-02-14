@@ -1,5 +1,22 @@
 {% extends "base.html" %}
 {% block title %}多周期联合决策 · 逐日盈亏{% endblock %}
+{% block head_extra %}
+<link rel="preload" href="/static/js/chart.umd.min.js" as="script">
+<script>
+// ═══ 最早时机发起 API 请求（在 <head> 中，HTML body 解析之前）═══
+const RUNS_PAGE_SIZE = 20;
+const _urlParams = new URLSearchParams(window.location.search);
+const _initialRunId = _urlParams.get('run_id');
+function _loadRunUrl(runId) {
+    const base = runId ? `/api/multi_tf_daily?run_id=${runId}` : '/api/multi_tf_daily';
+    return base + (base.includes('?') ? '&' : '?') + 'lite=1';
+}
+const _earlyFetch = Promise.allSettled([
+    fetch(`/api/multi_tf_daily/runs?limit=${RUNS_PAGE_SIZE}&offset=0`).then(r => r.ok ? r.json() : []),
+    fetch(_loadRunUrl(_initialRunId)).then(r => { if (!r.ok) throw new Error('数据加载失败'); return r.json(); }),
+]);
+</script>
+{% endblock %}
 {% block content %}
 <style>
 :root {
@@ -109,23 +126,7 @@ details summary:hover { color: var(--accent); }
     <div class="loading"><div class="spin"></div><div>加载数据...</div></div>
 </div>
 
-<link rel="preload" href="/static/js/chart.umd.min.js" as="script">
 <script src="/static/js/chart.umd.min.js" defer></script>
-<script>
-// ═══ 立即发起 API 请求（不等 DOMContentLoaded / Chart.js）═══
-const RUNS_PAGE_SIZE = 20;
-const _urlParams = new URLSearchParams(window.location.search);
-const _initialRunId = _urlParams.get('run_id');
-
-function _loadRunUrl(runId) {
-    return runId ? `/api/multi_tf_daily?run_id=${runId}` : '/api/multi_tf_daily';
-}
-// 这两个 fetch 在 HTML 解析阶段就开始了，与 Chart.js 下载并行
-const _earlyFetch = Promise.allSettled([
-    fetch(`/api/multi_tf_daily/runs?limit=${RUNS_PAGE_SIZE}&offset=0`).then(r => r.ok ? r.json() : []),
-    fetch(_loadRunUrl(_initialRunId)).then(r => { if (!r.ok) throw new Error('数据加载失败'); return r.json(); }),
-]);
-</script>
 <script>
 document.addEventListener('DOMContentLoaded', async () => {
     const root = document.getElementById('mtd-root');
@@ -143,6 +144,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function fetchRunsPage(offset, limit) {
         const resp = await fetch(`/api/multi_tf_daily/runs?limit=${limit}&offset=${offset}`);
+        return resp.ok ? resp.json() : [];
+    }
+
+    async function loadTrades(runId) {
+        const resp = await fetch(`/api/multi_tf_daily/trades?run_id=${runId}`);
         return resp.ok ? resp.json() : [];
     }
 
@@ -187,22 +193,37 @@ document.addEventListener('DOMContentLoaded', async () => {
         const m = data.run_meta || {};
         const s = data.summary || {};
         const daily = data.daily_records || [];
-        const trades = data.trade_details || [];
-        const equity = data.equity_curve || [];
         const snap = data.strategy_snapshot || {};
         const vTag = data.version_tag || `Run #${data.run_id}`;
+
+        // 兼容两种模式：lite (trade_summary + trade_marks) 和 full (trade_details)
+        const trades = data.trade_details || [];
+        const tSummary = data.trade_summary || null;
+        const tMarks = data.trade_marks || null;
+
+        // equity_curve：从 daily_records 派生（不再从后端传）
+        const equity = data.equity_curve || daily.map(d => ({
+            date: d.date, total: d.total_value, price: d.eth_price, drawdown: d.drawdown_pct
+        }));
 
         const fv = v => v != null ? (typeof v === 'number' ? v.toFixed(2) : v) : '-';
         const fc = v => v != null ? '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}) : '-';
         const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu';
 
-        // 交易日期索引
+        // 交易日期索引（优先用 trade_marks 轻量数据）
         const tradeByDate = {};
-        trades.forEach(t => {
-            const d = (t.time || '').slice(0, 10);
-            if (!tradeByDate[d]) tradeByDate[d] = [];
-            tradeByDate[d].push(t);
-        });
+        if (tMarks) {
+            tMarks.forEach(([d, action, pnl]) => {
+                if (!tradeByDate[d]) tradeByDate[d] = [];
+                tradeByDate[d].push({action, pnl});
+            });
+        } else {
+            trades.forEach(t => {
+                const d = (t.time || '').slice(0, 10);
+                if (!tradeByDate[d]) tradeByDate[d] = [];
+                tradeByDate[d].push(t);
+            });
+        }
 
         const exportAllUrl = '/api/multi_tf_daily/export_all' + (data.run_id ? '?run_id=' + data.run_id : '');
         let html = `
@@ -315,14 +336,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             </tbody></table></div>`;
         }
 
-        // ═══ 汇总卡片 ═══
-        const _spotBuys = trades.filter(t => t.action === 'SPOT_BUY');
-        const _spotSells = trades.filter(t => t.action === 'SPOT_SELL');
-        const _futuresOpen = trades.filter(t => ['OPEN_LONG','OPEN_SHORT'].includes(t.action));
-        const _futuresClose = trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action));
-        const _partialTP = trades.filter(t => t.action === 'PARTIAL_TP');
-        const _spotPnl = _spotSells.reduce((s2,t) => s2+(t.pnl||0), 0);
-        const _futuresPnl = _futuresClose.reduce((s2,t) => s2+(t.pnl||0), 0) + _partialTP.reduce((s2,t) => s2+(t.pnl||0), 0);
+        // ═══ 汇总卡片（优先用 trade_summary 轻量数据）═══
+        const _tc = tSummary ? tSummary.counts : {};
+        const _tp = tSummary ? tSummary.pnls : {};
+        const _spotBuysCnt = _tc['SPOT_BUY'] || (trades.filter(t => t.action === 'SPOT_BUY').length);
+        const _spotSellsCnt = _tc['SPOT_SELL'] || (trades.filter(t => t.action === 'SPOT_SELL').length);
+        const _futuresOpenCnt = (_tc['OPEN_LONG']||0) + (_tc['OPEN_SHORT']||0) || trades.filter(t => ['OPEN_LONG','OPEN_SHORT'].includes(t.action)).length;
+        const _futuresCloseCnt = (_tc['CLOSE_LONG']||0) + (_tc['CLOSE_SHORT']||0) + (_tc['LIQUIDATED']||0) || trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action)).length;
+        const _partialTPCnt = _tc['PARTIAL_TP'] || trades.filter(t => t.action === 'PARTIAL_TP').length;
+        const _spotPnl = _tp['SPOT_SELL'] || trades.filter(t=>t.action==='SPOT_SELL').reduce((s2,t) => s2+(t.pnl||0), 0);
+        const _futuresPnl = ((_tp['CLOSE_LONG']||0)+(_tp['CLOSE_SHORT']||0)+(_tp['LIQUIDATED']||0)+(_tp['PARTIAL_TP']||0)) || (trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action)).reduce((s2,t) => s2+(t.pnl||0), 0) + trades.filter(t => t.action === 'PARTIAL_TP').reduce((s2,t) => s2+(t.pnl||0), 0));
+        const _totalTradesCnt = tSummary ? tSummary.total : trades.length;
 
         html += `<div class="card"><div class="title"><span class="icon"></span>回测汇总</div>
         <div class="mg">
@@ -335,11 +359,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
         <div class="mg">
             <div class="mi"><div class="lb">总交易</div><div class="vl neu">${s.total_trades||0}笔</div></div>
-            <div class="mi"><div class="lb">现货买入</div><div class="vl neu">${_spotBuys.length}笔</div></div>
-            <div class="mi"><div class="lb">现货卖出</div><div class="vl neu">${_spotSells.length}笔</div></div>
-            <div class="mi"><div class="lb">合约开仓</div><div class="vl neu">${_futuresOpen.length}笔</div></div>
-            <div class="mi"><div class="lb">合约平仓</div><div class="vl neu">${_futuresClose.length}笔</div></div>
-            <div class="mi"><div class="lb">部分止盈</div><div class="vl neu">${_partialTP.length}笔</div></div>
+            <div class="mi"><div class="lb">现货买入</div><div class="vl neu">${_spotBuysCnt}笔</div></div>
+            <div class="mi"><div class="lb">现货卖出</div><div class="vl neu">${_spotSellsCnt}笔</div></div>
+            <div class="mi"><div class="lb">合约开仓</div><div class="vl neu">${_futuresOpenCnt}笔</div></div>
+            <div class="mi"><div class="lb">合约平仓</div><div class="vl neu">${_futuresCloseCnt}笔</div></div>
+            <div class="mi"><div class="lb">部分止盈</div><div class="vl neu">${_partialTPCnt}笔</div></div>
             <div class="mi"><div class="lb">合约胜率</div><div class="vl ${(s.win_rate_pct||0)>=50?'pos':'neg'}">${fv(s.win_rate_pct)}%</div></div>
             <div class="mi"><div class="lb">盈亏比</div><div class="vl ${(s.profit_factor||0)>=1.5?'pos':'neu'}">${fv(s.profit_factor)}</div></div>
         </div>
@@ -391,46 +415,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             </div>
         </div>`;
 
-        // ═══ 交易记录 ═══
+        // ═══ 交易记录（延迟加载）═══
         const exportUrl = '/api/multi_tf_daily/export_trades' + (data.run_id ? '?run_id=' + data.run_id : '');
-        html += `<div class="card"><details>
-            <summary class="title" style="cursor:pointer">完整交易记录 (${trades.length} 笔)
+        html += `<div class="card"><details id="tradeDetails">
+            <summary class="title" style="cursor:pointer">完整交易记录 (${_totalTradesCnt} 笔) <span style="font-size:0.7rem;color:var(--text-muted)">[点击展开加载]</span>
                 <a href="${exportUrl}" class="btn-export" title="导出Excel"
                    onclick="event.stopPropagation()" style="margin-left:12px;display:inline-block;padding:2px 10px;font-size:0.72rem;background:var(--cyan,#17a2b8);color:#fff;border-radius:4px;text-decoration:none;font-weight:600;vertical-align:middle">📥 导出Excel</a>
             </summary>
-            <div style="overflow-x:auto;margin-top:10px;">
-            <table class="dt" style="font-size:0.72rem;white-space:nowrap;"><thead><tr>
-                <th>#</th><th>时间</th><th>操作</th><th>方向</th>
-                <th class="center">市场价</th><th class="center">成交价</th>
-                <th class="center">数量</th><th class="center">名义价值</th>
-                <th class="center">保证金</th><th class="center">杠杆</th>
-                <th class="center">手续费</th><th class="center">滑点</th>
-                <th class="center">PnL</th>
-                <th class="center">账户总值</th><th>原因</th>
-            </tr></thead><tbody>`;
-        trades.forEach((t, i) => {
-            const pCls = (t.pnl||0) > 0 ? 'color:var(--green)' : (t.pnl||0) < 0 ? 'color:var(--red)' : '';
-            const actionMap = {'OPEN_LONG':'开多', 'CLOSE_LONG':'平多', 'OPEN_SHORT':'开空', 'CLOSE_SHORT':'平空', 'LIQUIDATED':'强平', 'SPOT_BUY':'现买', 'SPOT_SELL':'现卖', 'PARTIAL_TP':'部分止盈'};
-            const isOpen = t.action && t.action.startsWith('OPEN');
-            const isLiq = t.action === 'LIQUIDATED';
-            html += `<tr>
-                <td>${i+1}</td><td>${(t.time||'').replace('T',' ').slice(0,16)}</td>
-                <td style="font-weight:600;${isLiq?'color:var(--red)':isOpen?'color:var(--cyan)':'color:var(--orange)'}">${actionMap[t.action]||t.action}</td>
-                <td>${t.direction==='long'?'多':t.direction==='short'?'空':'-'}</td>
-                <td class="center">$${fv(t.market_price)}</td>
-                <td class="center">$${fv(t.exec_price)}</td>
-                <td class="center">${fv(t.quantity)}</td>
-                <td class="center">${fc(t.notional_value)}</td>
-                <td class="center">${fc(t.margin)}</td>
-                <td class="center">${t.leverage||'-'}x</td>
-                <td class="center">$${fv(t.fee)}</td>
-                <td class="center">$${fv(t.slippage_cost)}</td>
-                <td class="center" style="${pCls};font-weight:700">${t.pnl!=null?'$'+fv(t.pnl):'-'}</td>
-                <td class="center">${fc(t.after_total)}</td>
-                <td style="font-size:0.68rem;max-width:250px;overflow:hidden;text-overflow:ellipsis">${t.reason||''}</td>
-            </tr>`;
-        });
-        html += '</tbody></table></div></details></div>';
+            <div id="tradeTableWrap" style="margin-top:10px;"><div class="loading"><div class="spin"></div><div>加载交易记录...</div></div></div>
+        </details></div>`;
 
         // ═══ 月度汇总 ═══
         const monthMap = {};
@@ -580,6 +573,55 @@ document.addEventListener('DOMContentLoaded', async () => {
                         y2: { position: 'right', ticks: { color: '#ef4444', font: { size: 9 }, callback: v=>v+'%' }, grid: { drawOnChartArea: false }, max: 0, min: Math.min(-5, (s.max_drawdown_pct||15)*1.2) },
                     },
                 },
+            });
+        }
+
+        // ═══ 交易记录延迟加载 ═══
+        const tradeEl = document.getElementById('tradeDetails');
+        if (tradeEl) {
+            let _tradesLoaded = false;
+            tradeEl.addEventListener('toggle', async () => {
+                if (!tradeEl.open || _tradesLoaded) return;
+                _tradesLoaded = true;
+                const wrap = document.getElementById('tradeTableWrap');
+                try {
+                    const allTrades = await loadTrades(data.run_id);
+                    const actionMap = {'OPEN_LONG':'开多', 'CLOSE_LONG':'平多', 'OPEN_SHORT':'开空', 'CLOSE_SHORT':'平空', 'LIQUIDATED':'强平', 'SPOT_BUY':'现买', 'SPOT_SELL':'现卖', 'PARTIAL_TP':'部分止盈'};
+                    let tbl = `<div style="overflow-x:auto;"><table class="dt" style="font-size:0.72rem;white-space:nowrap;"><thead><tr>
+                        <th>#</th><th>时间</th><th>操作</th><th>方向</th>
+                        <th class="center">市场价</th><th class="center">成交价</th>
+                        <th class="center">数量</th><th class="center">名义价值</th>
+                        <th class="center">保证金</th><th class="center">杠杆</th>
+                        <th class="center">手续费</th><th class="center">滑点</th>
+                        <th class="center">PnL</th>
+                        <th class="center">账户总值</th><th>原因</th>
+                    </tr></thead><tbody>`;
+                    allTrades.forEach((t, i) => {
+                        const pCls = (t.pnl||0) > 0 ? 'color:var(--green)' : (t.pnl||0) < 0 ? 'color:var(--red)' : '';
+                        const isOpen = t.action && t.action.startsWith('OPEN');
+                        const isLiq = t.action === 'LIQUIDATED';
+                        tbl += `<tr>
+                            <td>${i+1}</td><td>${(t.time||'').replace('T',' ').slice(0,16)}</td>
+                            <td style="font-weight:600;${isLiq?'color:var(--red)':isOpen?'color:var(--cyan)':'color:var(--orange)'}">${actionMap[t.action]||t.action}</td>
+                            <td>${t.direction==='long'?'多':t.direction==='short'?'空':'-'}</td>
+                            <td class="center">$${fv(t.market_price)}</td>
+                            <td class="center">$${fv(t.exec_price)}</td>
+                            <td class="center">${fv(t.quantity)}</td>
+                            <td class="center">${fc(t.notional_value)}</td>
+                            <td class="center">${fc(t.margin)}</td>
+                            <td class="center">${t.leverage||'-'}x</td>
+                            <td class="center">$${fv(t.fee)}</td>
+                            <td class="center">$${fv(t.slippage_cost)}</td>
+                            <td class="center" style="${pCls};font-weight:700">${t.pnl!=null?'$'+fv(t.pnl):'-'}</td>
+                            <td class="center">${fc(t.after_total)}</td>
+                            <td style="font-size:0.68rem;max-width:250px;overflow:hidden;text-overflow:ellipsis">${t.reason||''}</td>
+                        </tr>`;
+                    });
+                    tbl += '</tbody></table></div>';
+                    wrap.innerHTML = tbl;
+                } catch(e) {
+                    wrap.innerHTML = `<div style="color:var(--red);padding:20px">加载交易记录失败: ${e.message}</div>`;
+                }
             });
         }
 
