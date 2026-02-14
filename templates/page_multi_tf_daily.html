@@ -109,18 +109,33 @@ details summary:hover { color: var(--accent); }
     <div class="loading"><div class="spin"></div><div>加载数据...</div></div>
 </div>
 
+<link rel="preload" href="/static/js/chart.umd.min.js" as="script">
 <script src="/static/js/chart.umd.min.js" defer></script>
+<script>
+// ═══ 立即发起 API 请求（不等 DOMContentLoaded / Chart.js）═══
+const RUNS_PAGE_SIZE = 20;
+const _urlParams = new URLSearchParams(window.location.search);
+const _initialRunId = _urlParams.get('run_id');
+
+function _loadRunUrl(runId) {
+    return runId ? `/api/multi_tf_daily?run_id=${runId}` : '/api/multi_tf_daily';
+}
+// 这两个 fetch 在 HTML 解析阶段就开始了，与 Chart.js 下载并行
+const _earlyFetch = Promise.allSettled([
+    fetch(`/api/multi_tf_daily/runs?limit=${RUNS_PAGE_SIZE}&offset=0`).then(r => r.ok ? r.json() : []),
+    fetch(_loadRunUrl(_initialRunId)).then(r => { if (!r.ok) throw new Error('数据加载失败'); return r.json(); }),
+]);
+</script>
 <script>
 document.addEventListener('DOMContentLoaded', async () => {
     const root = document.getElementById('mtd-root');
 
-    // ═══ 1. 并行加载 runs 列表(分页) + 当前版本数据 ═══
-    const RUNS_PAGE_SIZE = 20;
+    // ═══ 1. 等待已提前发出的请求 ═══
     let _runsOffset = 0;
     let _runsHasMore = true;
 
     async function loadRun(runId) {
-        const url = runId ? `/api/multi_tf_daily?run_id=${runId}` : '/api/multi_tf_daily';
+        const url = _loadRunUrl(runId);
         const resp = await fetch(url);
         if (!resp.ok) throw new Error('数据加载失败');
         return await resp.json();
@@ -131,14 +146,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         return resp.ok ? resp.json() : [];
     }
 
-    const urlParams = new URLSearchParams(window.location.search);
-    const initialRunId = urlParams.get('run_id');
-
-    // 两个请求并行发出，不串行等待
-    const [runsResult, dataResult] = await Promise.allSettled([
-        fetchRunsPage(0, RUNS_PAGE_SIZE),
-        loadRun(initialRunId),
-    ]);
+    // 复用提前发起的请求结果，不再重新发请求
+    const [runsResult, dataResult] = await _earlyFetch;
 
     let allRuns = runsResult.status === 'fulfilled' ? runsResult.value : [];
     _runsOffset = allRuns.length;
