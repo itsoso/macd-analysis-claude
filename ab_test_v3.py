@@ -89,9 +89,15 @@ def _run_variant(label, cfg_overrides, all_data, decision_tfs, tf_score_index):
     losses = [t for t in close_trades if (t.get('pnl', 0) or 0) <= 0]
     win_rate = len(wins) / len(close_trades) * 100 if close_trades else 0
 
-    # 全量 PF
-    total_win_pnl = sum(t.get('pnl', 0) for t in raw_trades if (t.get('pnl', 0) or 0) > 0)
-    total_loss_pnl = abs(sum(t.get('pnl', 0) for t in raw_trades if (t.get('pnl', 0) or 0) < 0))
+    # 合约PF (仅平仓)
+    contract_win = sum(t.get('pnl', 0) for t in wins)
+    contract_loss = abs(sum(t.get('pnl', 0) for t in losses))
+    contract_pf = contract_win / contract_loss if contract_loss > 0 else 999
+    # 组合PF (含 PARTIAL_TP / SPOT_SELL)
+    pnl_actions = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED', 'PARTIAL_TP', 'SPOT_SELL'}
+    all_pnl_trades = [t for t in raw_trades if t.get('action') in pnl_actions and t.get('pnl') is not None]
+    total_win_pnl = sum(t['pnl'] for t in all_pnl_trades if t['pnl'] > 0)
+    total_loss_pnl = abs(sum(t['pnl'] for t in all_pnl_trades if t['pnl'] < 0))
     full_pf = total_win_pnl / total_loss_pnl if total_loss_pnl > 0 else 999
 
     # 分类统计
@@ -116,6 +122,7 @@ def _run_variant(label, cfg_overrides, all_data, decision_tfs, tf_score_index):
         'win_count': len(wins),
         'loss_count': len(losses),
         'win_rate': win_rate,
+        'contract_pf': contract_pf,
         'full_pf': full_pf,
         'fees': total_costs,
         'final': final_total,
@@ -127,51 +134,72 @@ def _run_variant(label, cfg_overrides, all_data, decision_tfs, tf_score_index):
 def main():
     all_data, decision_tfs, tf_score_index = _load_data_and_signals()
 
-    # ── 第二轮: 聚焦 ATR SL 参数调优 + 早期锁利 ──
-    base_v3 = {
-        'use_short_suppress': False,    # 第一轮证明无效
-        'use_spot_sell_confirm': False,  # 第一轮证明略负面
+    # ── 第三轮: v4基线 + 尾部损失控制消融 ──
+    # v4 基线参数 (param_sweep 系统性优化)
+    v4_base = {
+        'short_threshold': 25, 'short_sl': -0.25, 'short_tp': 0.60,
+        'long_sl': -0.10, 'short_trail': 0.15, 'long_trail': 0.12,
+        'trail_pullback': 0.50,
+        'use_partial_tp_v3': True,
+        'partial_tp_1_early': 0.12, 'partial_tp_2_early': 0.25,
+        'use_spot_sell_cap': False,
+        'use_regime_short_gate': False,
     }
     variants = [
-        ("A:v2基线", {
-            'use_atr_sl': False, 'use_partial_tp_v3': False,
-            **base_v3,
+        # ── 基线对照 ──
+        ("A:v4基线", {
+            **v4_base,
         }),
-        ("B:仅早锁利", {
-            'use_atr_sl': False, 'use_partial_tp_v3': True,
-            'partial_tp_1_early': 0.12, 'partial_tp_2_early': 0.25,
-            **base_v3,
+        ("B:v2基线(无早锁)", {
+            **v4_base,
+            'use_partial_tp_v3': False,
+            'short_threshold': 35, 'short_sl': -0.18, 'short_tp': 0.50,
+            'long_sl': -0.08, 'short_trail': 0.25, 'long_trail': 0.20,
+            'trail_pullback': 0.60,
         }),
-        ("C:ATR(3.0x/-15%)", {
+
+        # ── 尾部损失控制: regime-aware 做空门控 ──
+        ("C:regime门控+10", {
+            **v4_base,
+            'use_regime_short_gate': True, 'regime_short_gate_add': 10,
+        }),
+        ("D:regime门控+15", {
+            **v4_base,
+            'use_regime_short_gate': True, 'regime_short_gate_add': 15,
+        }),
+        ("E:regime门控+20", {
+            **v4_base,
+            'use_regime_short_gate': True, 'regime_short_gate_add': 20,
+        }),
+
+        # ── spot_sell_cap 比例方案 ──
+        ("F:卖出cap30%", {
+            **v4_base,
+            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.30,
+        }),
+        ("G:卖出cap20%", {
+            **v4_base,
+            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.20,
+        }),
+
+        # ── ATR止损 + regime门控 组合 (GPT建议) ──
+        ("H:ATR3.0+regime+15", {
+            **v4_base,
             'use_atr_sl': True, 'atr_sl_mult': 3.0,
             'atr_sl_floor': -0.25, 'atr_sl_ceil': -0.15,
-            'use_partial_tp_v3': False,
-            **base_v3,
+            'use_regime_short_gate': True, 'regime_short_gate_add': 15,
         }),
-        ("D:ATR(3.5x/-16%)", {
-            'use_atr_sl': True, 'atr_sl_mult': 3.5,
-            'atr_sl_floor': -0.25, 'atr_sl_ceil': -0.16,
-            'use_partial_tp_v3': False,
-            **base_v3,
-        }),
-        ("E:ATR3.0+早锁", {
-            'use_atr_sl': True, 'atr_sl_mult': 3.0,
-            'atr_sl_floor': -0.25, 'atr_sl_ceil': -0.15,
-            'use_partial_tp_v3': True,
-            'partial_tp_1_early': 0.12, 'partial_tp_2_early': 0.25,
-            **base_v3,
-        }),
-        ("F:ATR3.5+早锁", {
-            'use_atr_sl': True, 'atr_sl_mult': 3.5,
-            'atr_sl_floor': -0.25, 'atr_sl_ceil': -0.16,
-            'use_partial_tp_v3': True,
-            'partial_tp_1_early': 0.12, 'partial_tp_2_early': 0.25,
-            **base_v3,
+
+        # ── 全组合: 早锁 + regime门控 + cap ──
+        ("I:早锁+regime+15+cap30%", {
+            **v4_base,
+            'use_regime_short_gate': True, 'regime_short_gate_add': 15,
+            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.30,
         }),
     ]
 
     print(f"\n{'='*90}")
-    print(f"  A/B/C/D/E 消融测试 | {TRADE_START} ~ {TRADE_END} | ${INITIAL_CAPITAL:,}")
+    print(f"  第三轮消融测试: v4基线 + 尾部损失控制 | {TRADE_START} ~ {TRADE_END} | ${INITIAL_CAPITAL:,}")
     print(f"{'='*90}")
 
     results = []
@@ -180,7 +208,7 @@ def main():
         r = _run_variant(label, overrides, all_data, decision_tfs, tf_score_index)
         results.append(r)
         print(f"  收益: {r['return_pct']:+.2f}%  Alpha: {r['alpha']:+.2f}%  "
-              f"回撤: {r['max_dd']:.2f}%  PF: {r['full_pf']:.2f}  "
+              f"回撤: {r['max_dd']:.2f}%  cPF: {r['contract_pf']:.2f}  pPF: {r['full_pf']:.2f}  "
               f"胜率: {r['win_rate']:.1f}%  ({r['elapsed']:.1f}s)")
 
     # 汇总表
@@ -196,7 +224,8 @@ def main():
         ('收益率', 'return_pct', '{:+.2f}%'),
         ('Alpha', 'alpha', '{:+.2f}%'),
         ('最大回撤', 'max_dd', '{:.2f}%'),
-        ('全量PF', 'full_pf', '{:.2f}'),
+        ('合约PF', 'contract_pf', '{:.2f}'),
+        ('组合PF', 'full_pf', '{:.2f}'),
         ('胜率', 'win_rate', '{:.1f}%'),
         ('平仓数', 'close_trades', '{:,.0f}'),
         ('总交易', 'total_trades', '{:,.0f}'),

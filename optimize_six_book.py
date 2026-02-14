@@ -740,14 +740,26 @@ def _run_strategy_core(
     atr_sl_floor = config.get('atr_sl_floor', -0.25)   # ATR止损最宽
     atr_sl_ceil = config.get('atr_sl_ceil', -0.08)      # ATR止损最窄
 
-    # <12h 空单抑制
-    use_short_suppress = config.get('use_short_suppress', False)
-    short_suppress_ss_min = config.get('short_suppress_ss_min', 55)
+    # [已移除] use_short_suppress: A/B+param_sweep双重验证完全零效果
+
+    # Regime-aware 做空门控: trend/low_vol_trend 中提高做空门槛
+    use_regime_short_gate = config.get('use_regime_short_gate', False)
+    regime_short_gate_add = config.get('regime_short_gate_add', 15)
+    _rsg_str = config.get('regime_short_gate_regimes', 'low_vol_trend,trend')
+    regime_short_gate_regimes = set(r.strip() for r in _rsg_str.split(',') if r.strip())
 
     # SPOT_SELL 高分确认过滤
     use_spot_sell_confirm = config.get('use_spot_sell_confirm', False)
     spot_sell_confirm_ss = config.get('spot_sell_confirm_ss', 50)
     spot_sell_confirm_min = config.get('spot_sell_confirm_min', 2)
+
+    # SPOT_SELL 尾部风控: 单笔卖出比例上限
+    use_spot_sell_cap = config.get('use_spot_sell_cap', False)
+    spot_sell_max_pct = config.get('spot_sell_max_pct', 0.30)
+    _spot_sell_regime_block_str = config.get('spot_sell_regime_block', '')
+    spot_sell_regime_block = set(
+        r.strip() for r in _spot_sell_regime_block_str.split(',') if r.strip()
+    )
 
     # v3 分段止盈（更早锁利）
     use_partial_tp_v3 = config.get('use_partial_tp_v3', False)
@@ -927,7 +939,13 @@ def _run_strategy_core(
         # Regime-aware 动态阈值与风险控制 (仅使用历史数据)
         regime_ctl = _compute_regime_controls(primary_df, idx, config, precomputed=regime_precomputed)
         # 注入 regime_label 供多周期融合动态调权 (P1-2)
-        config['_regime_label'] = regime_ctl.get('regime_label', 'neutral')
+        _regime_label = regime_ctl.get('regime_label', 'neutral')
+        config['_regime_label'] = _regime_label
+        # 设置到引擎, 每笔交易自动记录当前 regime / ss / bs / atr_pct
+        eng._regime_label = _regime_label
+        eng._current_ss = round(ss, 1)
+        eng._current_bs = round(bs, 1)
+        eng._current_atr_pct = round(_atr_pct_val, 5) if _atr_pct_val > 0 else None
         cur_sell_threshold = float(regime_ctl['sell_threshold'])
         cur_buy_threshold = float(regime_ctl['buy_threshold'])
         cur_short_threshold = float(regime_ctl['short_threshold'])
@@ -1075,7 +1093,18 @@ def _run_strategy_core(
             if _atr_pct_val > 0.02:
                 _confirmations += 1
             spot_sell_confirmed = _confirmations >= spot_sell_confirm_min
-        if not trend_floor_active and ss >= effective_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500 and spot_sell_confirmed:
+        # SPOT_SELL regime gate: 阻止在指定 regime 中卖出
+        spot_sell_regime_ok = True
+        if spot_sell_regime_block:
+            _rl = regime_ctl.get('regime_label', 'neutral')
+            if _rl in spot_sell_regime_block:
+                spot_sell_regime_ok = False
+
+        # SPOT_SELL cap: 限制单笔卖出不超过当前ETH仓位的 spot_sell_max_pct
+        if use_spot_sell_cap and effective_sell_pct > spot_sell_max_pct:
+            effective_sell_pct = spot_sell_max_pct
+
+        if not trend_floor_active and ss >= effective_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500 and spot_sell_confirmed and spot_sell_regime_ok:
             eng.spot_sell(exec_price, dt, effective_sell_pct, f"卖出 SS={ss:.0f}")
             spot_cd = effective_spot_cooldown
 
@@ -1086,11 +1115,10 @@ def _run_strategy_core(
         if trend_is_up and trend_enhance_active:
             effective_short_threshold = max(cur_short_threshold, 55)
             sell_dom = (ss > bs * max(2.5, entry_dom_ratio)) if bs > 0 else True
-        # <12h 空单抑制: SS低于阈值的做空信号预期持仓短,净亏损
-        short_suppressed = False
-        if use_short_suppress and ss < short_suppress_ss_min and ss >= effective_short_threshold:
-            short_suppressed = True
-        if short_cd == 0 and ss >= effective_short_threshold and not eng.futures_short and sell_dom and not in_conflict and can_open_risk and not micro_block_short and not short_suppressed:
+        # Regime-aware 做空门控: trend/low_vol_trend 中进一步提高门槛
+        if use_regime_short_gate and _regime_label in regime_short_gate_regimes:
+            effective_short_threshold += regime_short_gate_add
+        if short_cd == 0 and ss >= effective_short_threshold and not eng.futures_short and sell_dom and not in_conflict and can_open_risk and not micro_block_short:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')

@@ -65,7 +65,7 @@ def test_live_fusion_config_contains_backtest_fusion_params():
 
 def test_backtest_daily_defaults_align_with_strategy_defaults():
     cfg = StrategyConfig()
-    assert cfg.decision_timeframes == ["15m", "1h", "4h", "12h"]
+    assert cfg.decision_timeframes == ["15m", "1h", "4h", "24h"]
     assert cfg.decision_timeframes_fallback == ["15m", "30m", "1h", "4h", "8h", "24h"]
 
     assert daily_cfg.PRIMARY_TF == cfg.timeframe
@@ -82,7 +82,9 @@ def test_backtest_daily_defaults_align_with_strategy_defaults():
     assert daily_cfg.DEFAULT_CONFIG["kdj_weight"] == cfg.kdj_weight
     assert daily_cfg.DEFAULT_CONFIG["consensus_min_strength"] == cfg.consensus_min_strength
     assert daily_cfg.DEFAULT_CONFIG["coverage_min"] == cfg.coverage_min
-    assert daily_cfg.DEFAULT_CONFIG["use_microstructure"] == cfg.use_microstructure
-    assert daily_cfg.DEFAULT_CONFIG["use_dual_engine"] == cfg.use_dual_engine
-    assert daily_cfg.DEFAULT_CONFIG["use_vol_target"] == cfg.use_vol_target
+    # 注: use_microstructure / use_dual_engine / use_vol_target 在回测中
+    # 被故意关闭以隔离趋势保护 v3 效果, 因此与 StrategyConfig 不同
+    assert daily_cfg.DEFAULT_CONFIG["use_microstructure"] is False  # 回测中关闭
+    assert daily_cfg.DEFAULT_CONFIG["use_dual_engine"] is False     # 回测中关闭
+    assert daily_cfg.DEFAULT_CONFIG["use_vol_target"] is False      # 回测中关闭
     assert daily_cfg.DEFAULT_CONFIG["vol_target_annual"] == cfg.vol_target_annual

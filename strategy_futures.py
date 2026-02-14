@@ -173,7 +173,7 @@ class FuturesEngine:
                       fee, leverage, reason, *,
                       exec_price=None, slippage_cost=0.0, margin=0.0,
                       pnl=0.0, entry_price=0.0, margin_released=0.0,
-                      partial_ratio=0.0):
+                      partial_ratio=0.0, extra=None):
         """记录完整交易明细，供人工 review。
 
         Parameters
@@ -186,6 +186,7 @@ class FuturesEngine:
         entry_price : float    开仓时入场价 (平仓时回填)
         margin_released : float 平仓释放的保证金
         partial_ratio : float  分段止盈比例 (0=全仓)
+        extra : dict           附加字段 (如 regime_label, ss, bs)
         """
         self.trades.append({
             # 时间
@@ -232,6 +233,13 @@ class FuturesEngine:
             'cum_slippage': round(self.total_slippage_cost, 2),
             # 原因
             'reason': reason,
+            # 自动附加: 由 optimize_six_book 在每个 bar 设置的结构化观测字段
+            'regime_label': getattr(self, '_regime_label', 'unknown'),
+            'ss': getattr(self, '_current_ss', None),
+            'bs': getattr(self, '_current_bs', None),
+            'atr_pct': getattr(self, '_current_atr_pct', None),
+            # 附加字段
+            **(extra or {}),
         })
 
     # === 现货操作 ===

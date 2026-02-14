@@ -84,6 +84,8 @@ def run_with_params(all_data, all_signals, score_tfs, decision_tfs,
 
     # 提取指标
     trades = result.get('trades', [])
+
+    # contract_pf: 仅合约平仓
     close_actions = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED'}
     close_trades = [t for t in trades if t.get('action') in close_actions]
     wins = [t for t in close_trades if (t.get('pnl') or 0) > 0]
@@ -91,6 +93,14 @@ def run_with_params(all_data, all_signals, score_tfs, decision_tfs,
 
     total_pnl_w = sum(t['pnl'] for t in wins) if wins else 0
     total_pnl_l = abs(sum(t['pnl'] for t in losses)) if losses else 1
+    contract_pf = total_pnl_w / total_pnl_l if total_pnl_l > 0 else 0
+
+    # portfolio_pf: 含 PARTIAL_TP / SPOT_SELL
+    pnl_actions = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED', 'PARTIAL_TP', 'SPOT_SELL'}
+    all_pnl = [t for t in trades if t.get('action') in pnl_actions and t.get('pnl') is not None]
+    gp = sum(t['pnl'] for t in all_pnl if (t.get('pnl') or 0) > 0)
+    gl = abs(sum(t['pnl'] for t in all_pnl if (t.get('pnl') or 0) < 0))
+    portfolio_pf = round(gp / gl, 2) if gl > 0 else 999
 
     return {
         'return_pct': result.get('strategy_return', 0) * 100,
@@ -98,7 +108,8 @@ def run_with_params(all_data, all_signals, score_tfs, decision_tfs,
         'total_trades': len(trades),
         'closed': len(close_trades),
         'win_rate': len(wins) / len(close_trades) * 100 if close_trades else 0,
-        'profit_factor': total_pnl_w / total_pnl_l if total_pnl_l > 0 else 0,
+        'profit_factor': contract_pf,
+        'portfolio_pf': portfolio_pf,
         'final_equity': result.get('final_total', 0),
         'alpha': result.get('alpha', 0) * 100,
         'fees': result.get('fees', {}).get('total_fees', 0),
@@ -108,25 +119,32 @@ def run_with_params(all_data, all_signals, score_tfs, decision_tfs,
 # ── 参数空间定义 ──
 
 PARAM_SPACE = {
+    # === 优先级 0: 已编码功能开关 A/B (零开发成本) ===
+    'use_partial_tp_v3': [False, True],                  # 基线 True — v3早期锁利
+    'use_atr_sl': [False, True],                         # 基线 False — ATR自适应止损
+    # [已移除] use_short_suppress — A/B+param_sweep验证零效果
+    'use_spot_sell_cap': [False, True],                  # 基线 False — SPOT_SELL比例上限
+    'use_regime_short_gate': [False, True],              # 基线 False — regime做空门控
+
     # === 优先级 1: 空头风控 ===
-    'short_sl': [-0.12, -0.15, -0.18, -0.25],          # 基线 -0.25
-    'short_threshold': [25, 28, 30, 35],                 # 基线 25
-    'short_max_hold': [48, 60, 72],                      # 基线 72
+    'short_sl': [-0.12, -0.15, -0.18, -0.25],          # 基线 -0.18
+    'short_threshold': [25, 28, 30, 35],                 # 基线 35
+    'short_max_hold': [36, 48, 60, 72],                  # 基线 48
 
     # === 优先级 2: 做多机会 ===
-    'long_threshold': [30, 35, 40],                      # 基线 40
+    'long_threshold': [25, 30, 35, 40],                  # 基线 30
     'long_sl': [-0.06, -0.08, -0.10],                   # 基线 -0.08
 
     # === 优先级 3: 止盈优化 ===
-    'short_tp': [0.40, 0.50, 0.60],                     # 基线 0.60
-    'long_tp': [0.25, 0.30, 0.40],                      # 基线 0.30
+    'short_tp': [0.40, 0.50, 0.60],                     # 基线 0.50
+    'long_tp': [0.25, 0.30, 0.40],                      # 基线 0.40
     'short_trail': [0.15, 0.20, 0.25],                  # 基线 0.25
     'long_trail': [0.12, 0.15, 0.20],                   # 基线 0.20
     'trail_pullback': [0.50, 0.55, 0.60],               # 基线 0.60
 
     # === 优先级 4: 部分止盈 ===
-    'partial_tp_1': [0.15, 0.20, 0.25],                 # 基线 0.20
-    'use_partial_tp_2': [False, True],                   # 基线 False
+    'partial_tp_1': [0.12, 0.15, 0.20, 0.25],           # 基线 0.15
+    'use_partial_tp_2': [False, True],                   # 基线 True
 }
 
 
@@ -145,7 +163,8 @@ def single_param_sweep(all_data, all_signals, score_tfs, decision_tfs,
                                primary_tf, trade_start, trade_end, {})
     elapsed = time.time() - t0
     print(f"  基线: 收益={baseline['return_pct']:+.2f}%  DD={baseline['max_dd_pct']:.2f}%  "
-          f"WR={baseline['win_rate']:.1f}%  PF={baseline['profit_factor']:.2f}  "
+          f"WR={baseline['win_rate']:.1f}%  cPF={baseline['profit_factor']:.2f}  "
+          f"pPF={baseline['portfolio_pf']:.2f}  "
           f"交易={baseline['total_trades']}  [{elapsed:.1f}s]")
     results.append(('BASELINE', '', baseline))
 
@@ -173,10 +192,12 @@ def single_param_sweep(all_data, all_signals, score_tfs, decision_tfs,
             d_dd = metrics['max_dd_pct'] - baseline['max_dd_pct']
             d_pf = metrics['profit_factor'] - baseline['profit_factor']
 
+            d_ppf = metrics['portfolio_pf'] - baseline['portfolio_pf']
             marker = '★' if d_ret > 0 and d_dd <= 0 else ('▲' if d_ret > 0 else '▼')
             print(f"  {marker} {param_name}={val}: 收益={metrics['return_pct']:+.2f}%({d_ret:+.2f})  "
                   f"DD={metrics['max_dd_pct']:.2f}%({d_dd:+.2f})  "
-                  f"WR={metrics['win_rate']:.1f}%  PF={metrics['profit_factor']:.2f}({d_pf:+.2f})  "
+                  f"WR={metrics['win_rate']:.1f}%  cPF={metrics['profit_factor']:.2f}({d_pf:+.2f})  "
+                  f"pPF={metrics['portfolio_pf']:.2f}({d_ppf:+.2f})  "
                   f"交易={metrics['total_trades']}  [{elapsed:.1f}s]")
             results.append((param_name, val, metrics))
 
@@ -207,7 +228,8 @@ def combo_sweep(all_data, all_signals, score_tfs, decision_tfs,
         d_ret = metrics['return_pct'] - baseline['return_pct']
         d_dd = metrics['max_dd_pct'] - baseline['max_dd_pct']
         print(f"  + {param_name}={best_val}: 收益={metrics['return_pct']:+.2f}%({d_ret:+.2f} vs 基线)  "
-              f"DD={metrics['max_dd_pct']:.2f}%  PF={metrics['profit_factor']:.2f}  "
+              f"DD={metrics['max_dd_pct']:.2f}%  cPF={metrics['profit_factor']:.2f}  "
+              f"pPF={metrics['portfolio_pf']:.2f}  "
               f"交易={metrics['total_trades']}  [{elapsed:.1f}s]")
 
         # 只接受不恶化的参数
@@ -225,7 +247,8 @@ def combo_sweep(all_data, all_signals, score_tfs, decision_tfs,
     d_dd = final['max_dd_pct'] - baseline['max_dd_pct']
     print(f"\n  最终结果: 收益={final['return_pct']:+.2f}%({d_ret:+.2f})  "
           f"DD={final['max_dd_pct']:.2f}%({d_dd:+.2f})  "
-          f"PF={final['profit_factor']:.2f}  交易={final['total_trades']}")
+          f"cPF={final['profit_factor']:.2f}  pPF={final['portfolio_pf']:.2f}  "
+          f"交易={final['total_trades']}")
     return current_overrides, final
 
 
@@ -292,20 +315,20 @@ def main():
         param_results = [(v, m) for p, v, m in results if p == param_name]
         if not param_results:
             continue
-        # 按综合评分排序: 收益提升 + 回撤改善 + PF提升
+        # 按综合评分排序: 收益提升 + 回撤改善 + portfolio_PF 提升
         scored = []
         for val, m in param_results:
-            # 综合分 = 收益变化% + 回撤改善(负值=改善) * 5 + PF变化 * 20
+            # 综合分 = 收益变化% + 回撤改善(负值=改善) * 5 + pPF变化 * 20
             d_ret = m['return_pct'] - baseline['return_pct']
             d_dd = m['max_dd_pct'] - baseline['max_dd_pct']
-            d_pf = m['profit_factor'] - baseline['profit_factor']
-            composite = d_ret - d_dd * 5 + d_pf * 20
-            scored.append((val, m, composite, d_ret, d_dd, d_pf))
+            d_ppf = m['portfolio_pf'] - baseline['portfolio_pf']
+            composite = d_ret - d_dd * 5 + d_ppf * 20
+            scored.append((val, m, composite, d_ret, d_dd, d_ppf))
         scored.sort(key=lambda x: x[2], reverse=True)
-        best_val, best_m, comp, d_ret, d_dd, d_pf = scored[0]
+        best_val, best_m, comp, d_ret, d_dd, d_ppf = scored[0]
         if comp > 0:
-            best_params[param_name] = (best_val, d_ret, d_dd, d_pf, comp)
-            print(f"  ★ {param_name}: {best_val} (收益{d_ret:+.2f}% DD{d_dd:+.2f}% PF{d_pf:+.2f} 综合{comp:+.1f})")
+            best_params[param_name] = (best_val, d_ret, d_dd, d_ppf, comp)
+            print(f"  ★ {param_name}: {best_val} (收益{d_ret:+.2f}% DD{d_dd:+.2f}% pPF{d_ppf:+.2f} 综合{comp:+.1f})")
         else:
             print(f"  · {param_name}: 基线最优")
 

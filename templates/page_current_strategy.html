@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}当前最新策略 - 技术分析平台{% endblock %}
+{% block title %}当前最优策略(v4) - 技术分析平台{% endblock %}
 
 {% block content %}
 <style>
@@ -21,6 +21,7 @@
     .strategy-meta .badge.blue { background: rgba(74,158,255,0.2); color: var(--accent-blue); }
     .strategy-meta .badge.green { background: rgba(0,214,143,0.2); color: var(--accent-green); }
     .strategy-meta .badge.purple { background: rgba(168,85,247,0.2); color: var(--accent-purple); }
+    .strategy-meta .badge.yellow { background: rgba(255,170,0,0.2); color: var(--accent-yellow); }
 
     .section h3 {
         font-size: 16px; font-weight: 600; margin-bottom: 12px;
@@ -41,15 +42,40 @@
         border-radius: 10px; padding: 16px; margin-top: 16px; font-size: 13px; color: var(--text-secondary);
     }
     .monitor-tip strong { color: var(--accent-yellow); }
+    .evolution-timeline {
+        display: flex; flex-direction: column; gap: 0; margin: 16px 0; font-size: 13px;
+    }
+    .evolution-item {
+        display: flex; gap: 16px; padding: 12px 0;
+        border-left: 2px solid var(--border); margin-left: 12px; padding-left: 20px;
+        position: relative; color: var(--text-secondary); line-height: 1.6;
+    }
+    .evolution-item::before {
+        content: ''; position: absolute; left: -6px; top: 16px;
+        width: 10px; height: 10px; border-radius: 50%; background: var(--border);
+    }
+    .evolution-item.active { border-left-color: var(--accent-blue); }
+    .evolution-item.active::before { background: var(--accent-blue); box-shadow: 0 0 8px rgba(74,158,255,0.5); }
+    .evolution-tag { font-weight: 600; color: var(--text-primary); min-width: 32px; }
+    .ab-result { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+    .ab-card {
+        background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px;
+        padding: 12px; font-size: 12px; color: var(--text-secondary);
+    }
+    .ab-card .ab-label { font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+    .ab-card .ab-verdict { font-weight: 600; margin-top: 4px; }
+    .ab-card .ab-verdict.keep { color: var(--accent-green); }
+    .ab-card .ab-verdict.drop { color: var(--accent-red); }
 </style>
 
 <div class="strategy-hero">
-    <h1>📌 当前最新策略（v3 早期锁利）</h1>
-    <p class="tagline">六书融合 · 多周期联合决策 · ETH/USDT · 与逐日回测 Run#30 一致</p>
+    <h1>📌 当前最优策略（v4 — param_sweep 系统性优化）</h1>
+    <p class="tagline">六书融合 · 多周期联合决策 · ETH/USDT · 与逐日回测 Run#33 一致 · 结构化观测链路</p>
     <div class="strategy-meta">
         <span class="badge blue">决策周期 15m / 1h / 4h / 24h</span>
         <span class="badge green">分段止盈 v3（+12% / +25%）</span>
-        <span class="badge purple">趋势保护 v3 + Regime</span>
+        <span class="badge purple">Regime 动态阈值</span>
+        <span class="badge yellow">结构化落库 ss/bs/atr/regime</span>
     </div>
 </div>
 
@@ -57,56 +83,137 @@
     <h3 class="card-title">🎯 策略概要</h3>
     <p style="color: var(--text-secondary); font-size: 14px; line-height: 1.7; margin-bottom: 16px;">
         基于六维融合评分（背离、均线、蜡烛图、布林带、量价、KDJ）在多个时间框架上并行计算<strong>卖出分（SS）</strong>与<strong>买入分（BS）</strong>，
-        通过多周期共识与趋势/Regime 动态阈值决定开平仓。当前实盘与回测 Run#30 使用同一套参数，包含早期分段止盈优化。
+        通过多周期共识与趋势/Regime 动态阈值决定开平仓。v4 在 v3 早锁利基础上，通过 33 组 param_sweep 系统性优化，收益 +15.6%、回撤改善 27%。
     </p>
     <ul>
-        <li><strong>开空</strong>：SS ≥ 35（short_threshold），且卖方优势满足 dominance，无冲突、风控与微结构未拦截。</li>
+        <li><strong>开空</strong>：SS ≥ 25（v4 降低门槛，增加做空机会），且卖方优势满足 dominance，无冲突、风控与微结构未拦截。</li>
         <li><strong>开多</strong>：BS ≥ 30（long_threshold），且买方优势满足 dominance。</li>
         <li><strong>卖出现货</strong>：SS ≥ 18（sell_threshold），冷却与趋势底线满足。</li>
-        <li><strong>固定止损</strong>：做空 -18%（short_sl），做多 -8%；ATR 动态止损当前关闭（回测 A/B 对 ETH 未带来收益提升）。</li>
-        <li><strong>分段止盈 v3</strong>：做空 TP1 在 +12% 平 30%，TP2 在 +25% 再平 30%；做多同理。较原 +15%/+50% 更早锁利，回测收益 +205pp。</li>
+        <li><strong>固定止损</strong>：做空 -25%（v4 放宽），做多 -10%（v4 放宽）；ATR 动态止损关闭（A/B 证明对 ETH 无效）。</li>
+        <li><strong>分段止盈 v3</strong>：做空 TP1 在 +12% 平 30%，TP2 在 +25% 再平 30%；做多同理。</li>
+        <li><strong>追踪止损</strong>：做空 trailing 15%（v4 收紧），做多 12%，回撤比 50%。</li>
+        <li><strong>结构化观测</strong>：每笔交易自动记录 ss/bs/atr_pct/regime_label 到 DB，支持精确归因分析。</li>
     </ul>
 </div>
 
 <div class="card">
-    <h3 class="card-title">📡 多周期与信号</h3>
-    <ul>
-        <li><strong>决策时间框架</strong>：15m、1h、4h、24h（与 <code>live_config.decision_timeframes</code> 一致）。</li>
-        <li><strong>主周期</strong>：1h，用于执行价与持仓管理。</li>
-        <li><strong>Regime</strong>：根据波动率与趋势强度动态调整入场/出场阈值与杠杆（高波动震荡提高门槛、低波动趋势放宽）。</li>
-        <li><strong>入场日志</strong>：开仓时 reason 记录 SS、BS、regime_label、ATR%，便于事后分析。</li>
-    </ul>
-</div>
-
-<div class="card">
-    <h3 class="card-title">⚙️ 关键参数（StrategyConfig v2）</h3>
+    <h3 class="card-title">📊 回测参考（Run#33，2025-01～2026-01）</h3>
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">策略收益</div>
+            <div class="stat-value positive">+858.10%</div>
+            <div class="stat-note">vs 买入持有 -13.55%</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Alpha</div>
+            <div class="stat-value positive">+871.65%</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">最大回撤</div>
+            <div class="stat-value" style="color: var(--accent-yellow);">-8.47%</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">合约 PF</div>
+            <div class="stat-value">1.07</div>
+            <div class="stat-note">仅 CLOSE_LONG/SHORT</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">组合 PF</div>
+            <div class="stat-value positive">1.92</div>
+            <div class="stat-note">含 PARTIAL_TP / SPOT_SELL</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">胜率</div>
+            <div class="stat-value">63.5%</div>
+            <div class="stat-note">249 次平仓</div>
+        </div>
+    </div>
+    <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-primary);">Regime 分段表现</h4>
     <table class="param-table">
-        <thead>
-            <tr><th>参数</th><th>值</th><th>说明</th></tr>
-        </thead>
+        <thead><tr><th>Regime</th><th>笔数</th><th>净 PnL</th><th>pPF</th><th>说明</th></tr></thead>
         <tbody>
-            <tr><td><code>short_threshold</code></td><td>35</td><td>做空门槛 SS ≥ 35</td></tr>
-            <tr><td><code>long_threshold</code></td><td>30</td><td>做多门槛 BS ≥ 30</td></tr>
-            <tr><td><code>sell_threshold</code></td><td>18</td><td>现货卖出 SS ≥ 18</td></tr>
-            <tr><td><code>short_sl</code></td><td>-18%</td><td>做空固定止损</td></tr>
-            <tr><td><code>short_tp</code></td><td>50%</td><td>做空止盈目标</td></tr>
-            <tr><td><code>partial_tp_1_early</code></td><td>12%</td><td>v3 第一段止盈触发</td></tr>
-            <tr><td><code>partial_tp_2_early</code></td><td>25%</td><td>v3 第二段止盈触发</td></tr>
-            <tr><td><code>short_max_hold</code></td><td>48 根 K</td><td>做空最大持仓（1h 即 48h）</td></tr>
-            <tr><td><code>use_atr_sl</code></td><td>关</td><td>A/B 证明对 ETH 无效</td></tr>
-            <tr><td><code>use_partial_tp_v3</code></td><td>开</td><td>早期锁利，回测 +205pp</td></tr>
+            <tr><td>neutral</td><td>276</td><td class="pnl-pos">+$379,532</td><td>2.99</td><td>主要利润来源</td></tr>
+            <tr><td>high_vol</td><td>44</td><td class="pnl-pos">+$100,773</td><td>4.47</td><td>高波动行情获利丰厚</td></tr>
+            <tr><td>trend</td><td>145</td><td class="pnl-pos">+$82,470</td><td>1.30</td><td>趋势行情盈利但止损较多</td></tr>
+            <tr><td>low_vol_trend</td><td>65</td><td class="pnl-pos">+$8,011</td><td>1.06</td><td>低波动趋势近平，73% 止损来源</td></tr>
+            <tr><td>high_vol_choppy</td><td>5</td><td class="pnl-pos">+$4,612</td><td>14.27</td><td>罕见状态</td></tr>
         </tbody>
     </table>
 </div>
 
 <div class="card">
-    <h3 class="card-title">📊 回测参考（Run#30，2025-01～2026-01）</h3>
-    <ul>
-        <li>收益率 +805.72%，Alpha +819.27%，最大回撤 -10.26%，全量 PF 1.90。</li>
-        <li>决策周期 15m / 1h / 4h / 24h；实盘控制面板建议<strong>优先监控这 4 个周期</strong>，再按需勾选 30m、8h 等辅助周期。</li>
-    </ul>
-    <div class="monitor-tip">
-        <strong>实盘控制面板建议</strong>：多周期信号检测默认勾选 <strong>15m、1h、4h、24h</strong>（与策略决策一致）；自动检测间隔建议 <strong>10 分钟</strong>；重点关注各周期 SS/BS 与「动作」「原因」列，多空分歧时显示「多空分歧-观望」。
+    <h3 class="card-title">⚙️ 关键参数（v4 — param_sweep 优化后）</h3>
+    <table class="param-table">
+        <thead>
+            <tr><th>参数</th><th>v4 值</th><th>v3 值</th><th>变化说明</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>short_threshold</code></td><td><strong>25</strong></td><td>35</td><td>降低门槛，增加做空机会</td></tr>
+            <tr><td><code>long_threshold</code></td><td>30</td><td>30</td><td>不变</td></tr>
+            <tr><td><code>short_sl</code></td><td><strong>-25%</strong></td><td>-18%</td><td>放宽止损，减少假突破出局</td></tr>
+            <tr><td><code>short_tp</code></td><td><strong>60%</strong></td><td>50%</td><td>目标更高，配合追踪止损</td></tr>
+            <tr><td><code>long_sl</code></td><td><strong>-10%</strong></td><td>-8%</td><td>放宽做多止损</td></tr>
+            <tr><td><code>short_trail</code></td><td><strong>15%</strong></td><td>25%</td><td>收紧追踪，更快锁利</td></tr>
+            <tr><td><code>long_trail</code></td><td><strong>12%</strong></td><td>20%</td><td>收紧追踪</td></tr>
+            <tr><td><code>trail_pullback</code></td><td><strong>50%</strong></td><td>60%</td><td>更敏感的回撤触发</td></tr>
+            <tr><td><code>partial_tp_1_early</code></td><td>12%</td><td>12%</td><td>v3 早锁利保留</td></tr>
+            <tr><td><code>partial_tp_2_early</code></td><td>25%</td><td>25%</td><td>v3 早锁利保留</td></tr>
+            <tr><td><code>use_atr_sl</code></td><td>关</td><td>关</td><td>A/B + param_sweep 双重验证无效</td></tr>
+            <tr><td><code>use_regime_short_gate</code></td><td>关</td><td>—</td><td>新增 regime 做空门控，回撤改善 0.15% 但收益降 50+pp</td></tr>
+            <tr><td><code>use_spot_sell_cap</code></td><td>关</td><td>—</td><td>比例限卖实测削弱收益，不启用</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3 class="card-title">🔬 第三轮 A/B 消融验证</h3>
+    <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 12px;">
+        对 v4 基线进行 9 组消融测试，验证每个功能模块的边际贡献：
+    </p>
+    <div class="ab-result">
+        <div class="ab-card">
+            <div class="ab-label">早期锁利 (v3)</div>
+            <p>v4 vs v2(无早锁): +858% vs +601%</p>
+            <div class="ab-verdict keep">保留 — 贡献 +257pp 收益</div>
+        </div>
+        <div class="ab-card">
+            <div class="ab-label">ATR 动态止损</div>
+            <p>合约 PF 降至 0.99（跌破 1.0）</p>
+            <div class="ab-verdict drop">关闭 — 对 ETH 有害</div>
+        </div>
+        <div class="ab-card">
+            <div class="ab-label">Regime 做空门控</div>
+            <p>回撤 -8.32%（改善 0.15%），收益降 ~50pp</p>
+            <div class="ab-verdict drop">关闭 — 性价比不足</div>
+        </div>
+        <div class="ab-card">
+            <div class="ab-label">SPOT_SELL 比例上限</div>
+            <p>cap30%: SPOT_SELL PnL 从 $334k 降至 $253k</p>
+            <div class="ab-verdict drop">关闭 — 削弱核心收益</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="card-title">📈 策略演进路线</h3>
+    <div class="evolution-timeline">
+        <div class="evolution-item">
+            <span class="evolution-tag">v1</span>
+            <div>基础六书融合策略，固定阈值 + 固定止盈止损。收益 +600%。</div>
+        </div>
+        <div class="evolution-item">
+            <span class="evolution-tag">v2</span>
+            <div>引入多周期共识、Regime 动态阈值、微结构过滤。收益 +600%，回撤改善。</div>
+        </div>
+        <div class="evolution-item">
+            <span class="evolution-tag">v3</span>
+            <div>早期分段锁利（+12%/+25%），收益跃升至 +806%，回撤 -10.26%。</div>
+        </div>
+        <div class="evolution-item active">
+            <span class="evolution-tag">v4</span>
+            <div>param_sweep 33 组系统性优化：短阈值降至 25、止损放宽至 -25%、追踪收紧至 15%/12%。
+                收益 +858%（+52pp），回撤 -8.47%（改善 1.79pp）。结构化观测链路落库。</div>
+        </div>
     </div>
 </div>
 
@@ -115,7 +222,13 @@
     <p style="color: var(--text-secondary); font-size: 14px;">
         <a href="/strategy/live-control" style="color: var(--accent-blue);">实盘控制面板</a> ·
         <a href="/strategy/multi-tf-daily" style="color: var(--accent-blue);">多周期·逐日盈亏</a> ·
-        <a href="/strategy/multi-tf-deep-dive" style="color: var(--accent-blue);">多周期联合决策·代码详解</a>
+        <a href="/strategy/multi-tf-deep-dive" style="color: var(--accent-blue);">多周期联合决策·代码详解</a> ·
+        <a href="/strategy/multi-tf-date-range-report" style="color: var(--accent-blue);">多周期区间回测(DB)</a>
     </p>
+    <div class="monitor-tip">
+        <strong>实盘控制面板建议</strong>：多周期信号检测默认勾选 <strong>15m、1h、4h、24h</strong>（与策略决策一致）；
+        自动检测间隔建议 <strong>10 分钟</strong>；重点关注各周期 SS/BS 与「动作」「原因」列，多空分歧时显示「多空分歧-观望」。
+        <br><strong>v4 关键变化</strong>：做空门槛从 35 降至 25，追踪止损更紧（15%/12%），止损更宽（-25%/-10%）。
+    </div>
 </div>
 {% endblock %}

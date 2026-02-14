@@ -222,9 +222,15 @@
             </button>
         </div>
         <div class="nav-section">
-            <div class="nav-section-title">当前策略</div>
+            <div class="nav-section-title">实盘运营</div>
+            <a class="nav-item {% if active_page == 'live-control' %}active{% endif %}" href="/strategy/live-control" data-tooltip="实盘控制面板">
+                <span class="nav-icon">🎛️</span><span class="nav-item-text">实盘控制面板</span>
+            </a>
             <a class="nav-item {% if active_page == 'current-strategy' %}active{% endif %}" href="/strategy/current" data-tooltip="当前最新策略说明">
-                <span class="nav-icon">📌</span><span class="nav-item-text">当前最新策略</span>
+                <span class="nav-icon">📌</span><span class="nav-item-text">当前最优策略(v4)</span>
+            </a>
+            <a class="nav-item {% if active_page == 'live-trading-guide' %}active{% endif %}" href="/strategy/live-trading-guide" data-tooltip="实盘验证指南">
+                <span class="nav-icon">🔒</span><span class="nav-item-text">实盘验证指南</span>
             </a>
         </div>
         <div class="nav-section">
@@ -348,12 +354,6 @@
             </a>
             <a class="nav-item {% if active_page == 'backtest-30d-7d' %}active{% endif %}" href="/strategy/backtest-30d-7d" data-tooltip="30天 vs 7天回测">
                 <span class="nav-icon">📊</span><span class="nav-item-text">30天 vs 7天回测</span>
-            </a>
-            <a class="nav-item {% if active_page == 'live-trading-guide' %}active{% endif %}" href="/strategy/live-trading-guide" data-tooltip="实盘验证指南">
-                <span class="nav-icon">🔒</span><span class="nav-item-text">实盘验证指南</span>
-            </a>
-            <a class="nav-item {% if active_page == 'live-control' %}active{% endif %}" href="/strategy/live-control" data-tooltip="实盘控制面板">
-                <span class="nav-icon">🎛️</span><span class="nav-item-text">实盘控制面板</span>
             </a>
         </div>
         <div class="nav-section">

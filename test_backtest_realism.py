@@ -276,7 +276,9 @@ def test_calc_multi_tf_consensus_passes_configured_coverage_min(monkeypatch):
             "weighted_scores": {},
         }
 
-    monkeypatch.setattr(multi_tf_consensus, "fuse_tf_scores", fake_fuse)
+    # 必须 patch optimize_six_book 模块中已绑定的名称,
+    # 因为 optimize_six_book.py 用 'from multi_tf_consensus import fuse_tf_scores'
+    monkeypatch.setattr(opt_six, "fuse_tf_scores", fake_fuse)
     dt = pd.Timestamp("2025-01-01 00:00:00")
     score_map = {"1h": {dt: (10.0, 20.0)}}
     ss, bs, _meta = opt_six.calc_multi_tf_consensus(

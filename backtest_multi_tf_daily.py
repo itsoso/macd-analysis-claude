@@ -89,13 +89,19 @@ def _build_default_config():
         'atr_sl_mult': _LIVE_DEFAULT.atr_sl_mult,
         'atr_sl_floor': _LIVE_DEFAULT.atr_sl_floor,
         'atr_sl_ceil': _LIVE_DEFAULT.atr_sl_ceil,
-        # <12h 空单抑制
-        'use_short_suppress': _LIVE_DEFAULT.use_short_suppress,
-        'short_suppress_ss_min': _LIVE_DEFAULT.short_suppress_ss_min,
+        # [已移除] use_short_suppress
+        # Regime-aware 做空门控
+        'use_regime_short_gate': _LIVE_DEFAULT.use_regime_short_gate,
+        'regime_short_gate_add': _LIVE_DEFAULT.regime_short_gate_add,
+        'regime_short_gate_regimes': _LIVE_DEFAULT.regime_short_gate_regimes,
         # SPOT_SELL 高分确认过滤
         'use_spot_sell_confirm': _LIVE_DEFAULT.use_spot_sell_confirm,
         'spot_sell_confirm_ss': _LIVE_DEFAULT.spot_sell_confirm_ss,
         'spot_sell_confirm_min': _LIVE_DEFAULT.spot_sell_confirm_min,
+        # SPOT_SELL 尾部风控
+        'use_spot_sell_cap': _LIVE_DEFAULT.use_spot_sell_cap,
+        'spot_sell_max_pct': _LIVE_DEFAULT.spot_sell_max_pct,
+        'spot_sell_regime_block': _LIVE_DEFAULT.spot_sell_regime_block,
         # v3 分段止盈
         'use_partial_tp_v3': _LIVE_DEFAULT.use_partial_tp_v3,
         'partial_tp_1_early': _LIVE_DEFAULT.partial_tp_1_early,
@@ -380,6 +386,11 @@ def _normalize_trade(t):
         'cum_funding_paid': _num(t.get('cum_funding_paid')),
         'cum_slippage': _num(t.get('cum_slippage')),
         'reason': str(t.get('reason', '')),
+        # 结构化观测字段 (分市场段统计 + 后续归因分析)
+        'regime_label': t.get('regime_label', 'unknown'),
+        'ss': _num(t.get('ss')),
+        'bs': _num(t.get('bs')),
+        'atr_pct': _num(t.get('atr_pct')),
     }
 
 
@@ -617,6 +628,7 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     )
 
     # 计算胜率等交易统计
+    # ── contract_pf: 仅合约平仓 (CLOSE_LONG/CLOSE_SHORT/LIQUIDATED) ──
     close_actions = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED'}
     close_trades = []
     wins = []
@@ -632,9 +644,21 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     win_rate = round(len(wins) / len(close_trades) * 100, 2) if close_trades else 0
     avg_win = round(sum(t['pnl'] for t in wins) / len(wins), 2) if wins else 0
     avg_loss = round(sum(t['pnl'] for t in losses) / len(losses), 2) if losses else 0
-    profit_factor = round(
+    contract_pf = round(
         abs(sum(t['pnl'] for t in wins)) / abs(sum(t['pnl'] for t in losses)), 2
     ) if losses and sum(t['pnl'] for t in losses) != 0 else 999
+
+    # ── portfolio_pf: 全量 PnL (含 PARTIAL_TP / SPOT_SELL) ──
+    pnl_actions = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED', 'PARTIAL_TP', 'SPOT_SELL'}
+    all_pnl_trades = [t for t in trades if t['action'] in pnl_actions and t.get('pnl') is not None]
+    all_wins = [t for t in all_pnl_trades if (t.get('pnl') or 0) > 0]
+    all_losses = [t for t in all_pnl_trades if (t.get('pnl') or 0) < 0]
+    gross_profit = sum(t['pnl'] for t in all_wins)
+    gross_loss = abs(sum(t['pnl'] for t in all_losses))
+    portfolio_pf = round(gross_profit / gross_loss, 2) if gross_loss > 0 else 999
+
+    # 兼容性: profit_factor 保持为 contract_pf
+    profit_factor = contract_pf
 
     elapsed = time.time() - t0
 
@@ -653,6 +677,8 @@ def main(trade_start=None, trade_end=None, version_tag=None):
         'avg_win': avg_win,
         'avg_loss': avg_loss,
         'profit_factor': profit_factor,
+        'contract_pf': contract_pf,
+        'portfolio_pf': portfolio_pf,
         'total_fees': fees.get('total_fees', 0),
         'total_slippage': fees.get('slippage_cost', 0),
         'total_costs': fees.get('total_costs', 0),
@@ -694,9 +720,48 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     print(f"  最大回撤:    {max_drawdown:.2f}%")
     print(f"  交易次数:    {len(raw_trades)} (平仓 {len(close_trades)})")
     print(f"  胜率:        {win_rate:.1f}%")
-    print(f"  盈亏比:      {profit_factor:.2f}")
+    print(f"  合约PF:      {contract_pf:.2f} (仅 CLOSE_LONG/SHORT/LIQUIDATED)")
+    print(f"  组合PF:      {portfolio_pf:.2f} (含 PARTIAL_TP / SPOT_SELL)")
     print(f"  总费用:      ${fees.get('total_costs', 0):,.2f}")
     print(f"  逐日记录:    {len(daily_records)} 天")
+
+    # ── 分市场段统计 (按 regime 拆分) ──
+    pnl_actions_set = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED', 'PARTIAL_TP', 'SPOT_SELL'}
+    regime_stats = defaultdict(lambda: {'trades': 0, 'gross_profit': 0, 'gross_loss': 0, 'net_pnl': 0})
+    for t in trades:
+        if t['action'] not in pnl_actions_set or t.get('pnl') is None:
+            continue
+        regime = t.get('regime_label', 'unknown')
+        pnl_val = t['pnl']
+        rs = regime_stats[regime]
+        rs['trades'] += 1
+        rs['net_pnl'] += pnl_val
+        if pnl_val > 0:
+            rs['gross_profit'] += pnl_val
+        else:
+            rs['gross_loss'] += pnl_val
+
+    if regime_stats:
+        print(f"\n  {'─' * 60}")
+        print(f"  分市场段统计 (regime)")
+        print(f"  {'─' * 60}")
+        print(f"  {'Regime':<20s} {'笔数':>5s} {'净PnL':>12s} {'毛利':>12s} {'毛损':>12s} {'pPF':>6s}")
+        for regime in sorted(regime_stats.keys()):
+            rs = regime_stats[regime]
+            gl = abs(rs['gross_loss'])
+            ppf = round(rs['gross_profit'] / gl, 2) if gl > 0 else 999
+            print(f"  {regime:<20s} {rs['trades']:>5d} {rs['net_pnl']:>+12,.0f} "
+                  f"{rs['gross_profit']:>12,.0f} {rs['gross_loss']:>12,.0f} {ppf:>6.2f}")
+        summary['regime_breakdown'] = {
+            r: {
+                'trades': s['trades'],
+                'net_pnl': round(s['net_pnl'], 2),
+                'gross_profit': round(s['gross_profit'], 2),
+                'gross_loss': round(s['gross_loss'], 2),
+                'portfolio_pf': round(s['gross_profit'] / abs(s['gross_loss']), 2) if s['gross_loss'] != 0 else 999,
+            }
+            for r, s in regime_stats.items()
+        }
 
     # ── 保存到 DB ──
     t_db = time.time()

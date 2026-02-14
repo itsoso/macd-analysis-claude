@@ -158,9 +158,9 @@ PHASE_CONFIGS = {
 }
 
 
-# ── 策略参数版本 (v1=run28基线, v2=run29优化) ──
-# 通过环境变量 STRATEGY_VERSION=v1 可回退到 run28 参数
-# 默认使用 v2 (run29)
+# ── 策略参数版本 ──
+# 通过环境变量 STRATEGY_VERSION=v1/v2/v3/v4 可切换
+# 默认使用 v4 (run31 — param_sweep 系统性优化)
 STRATEGY_PARAM_VERSIONS = {
     "v1": {  # run28 基线参数 (趋势v3 + LiveGate + Regime)
         "short_threshold": 25,
@@ -182,18 +182,32 @@ STRATEGY_PARAM_VERSIONS = {
         "use_partial_tp_2": True,
         "short_max_hold": 48,
     },
-    "v3": {  # run30 增强参数 (ATR止损 + 空单抑制 + 确认过滤 + 早期止盈)
+    "v3": {  # run30 早期锁利 (v3分段止盈 A/B验证)
         "short_threshold": 35,
         "long_threshold": 30,
-        "short_sl": -0.18,       # fallback (ATR止损优先)
+        "short_sl": -0.18,
         "short_tp": 0.50,
         "long_tp": 0.40,
         "partial_tp_1": 0.12,    # 更早锁利 (+12%即触发)
         "use_partial_tp_2": True,
         "short_max_hold": 48,
     },
+    "v4": {  # run31 — param_sweep 33组系统性优化 (收益+15.6%, DD改善27%)
+        "short_threshold": 25,   # 更低门槛, 抓更多做空机会 (v2:35)
+        "long_threshold": 30,    # 保持 (v2一致)
+        "short_sl": -0.25,       # 更宽止损, 减少被扫损 (v2:-0.18)
+        "short_tp": 0.60,        # 更大目标利润 (v2:0.50)
+        "long_sl": -0.10,        # 多头略放宽 (v2:-0.08)
+        "long_tp": 0.40,         # 保持 (v2一致)
+        "partial_tp_1": 0.15,    # 保持v2 (v3 early由use_partial_tp_v3控制)
+        "use_partial_tp_2": True,
+        "short_max_hold": 48,    # 保持
+        "short_trail": 0.15,     # ★最强单参: 更紧追踪止盈, 快速锁利 (v2:0.25)
+        "long_trail": 0.12,      # 多头追踪也更紧 (v2:0.20)
+        "trail_pullback": 0.50,  # 稍微收紧 (v2:0.60)
+    },
 }
-_ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v2")
+_ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v4")
 
 
 def get_strategy_version() -> str:
@@ -212,8 +226,8 @@ def _resolve_param(field_name: str, v2_default):
 class StrategyConfig:
     """策略参数配置 - 从优化结果加载
 
-    版本切换: 设置环境变量 STRATEGY_VERSION=v1 回退到 run28 参数
-    默认: v2 (run29 优化参数)
+    版本切换: 设置环境变量 STRATEGY_VERSION=v1/v2/v3/v4
+    默认: v4 (run31 — param_sweep 系统性优化)
     """
     symbol: str = "ETHUSDT"
     timeframe: str = "1h"
@@ -228,11 +242,11 @@ class StrategyConfig:
     # 止损止盈
     short_sl: float = field(default_factory=lambda: _resolve_param("short_sl", -0.18))
     short_tp: float = field(default_factory=lambda: _resolve_param("short_tp", 0.50))
-    long_sl: float = -0.08
+    long_sl: float = field(default_factory=lambda: _resolve_param("long_sl", -0.08))
     long_tp: float = field(default_factory=lambda: _resolve_param("long_tp", 0.40))
-    short_trail: float = 0.25
-    long_trail: float = 0.20
-    trail_pullback: float = 0.60
+    short_trail: float = field(default_factory=lambda: _resolve_param("short_trail", 0.25))
+    long_trail: float = field(default_factory=lambda: _resolve_param("long_trail", 0.20))
+    trail_pullback: float = field(default_factory=lambda: _resolve_param("trail_pullback", 0.60))
     # 部分止盈
     use_partial_tp: bool = True
     partial_tp_1: float = field(default_factory=lambda: _resolve_param("partial_tp_1", 0.15))
@@ -244,13 +258,21 @@ class StrategyConfig:
     atr_sl_mult: float = 2.5            # ATR倍数: 2.5倍ATR作为止损距离
     atr_sl_floor: float = -0.25         # ATR止损下限(最宽, 高波动时)
     atr_sl_ceil: float = -0.15          # ATR止损上限(最窄, 低波动时)
-    # <12h 空单抑制 (A/B测试:SS>=42已覆盖所有信号, 无额外过滤效果)
-    use_short_suppress: bool = False    # 抑制低信号强度短期做空
-    short_suppress_ss_min: float = 42   # SS低于此值时抑制
+    # [已移除] use_short_suppress: A/B+param_sweep双重验证完全零效果(SS>=42已覆盖)
+    # Regime-aware 做空抑制: 在 trend/low_vol_trend regime 中提高做空门槛
+    # 数据支持: run#32 regime分析显示 73% 止损亏损来自这两个 regime
+    use_regime_short_gate: bool = False    # 启用 regime 做空门控
+    regime_short_gate_add: float = 15     # 在 gate regime 中, short_threshold += 此值
+    regime_short_gate_regimes: str = 'low_vol_trend,trend'  # 触发门控的 regime 列表
     # SPOT_SELL 高分确认过滤 (A/B测试:略负面, 减少了有效卖出)
     use_spot_sell_confirm: bool = False # SPOT_SELL二次确认
     spot_sell_confirm_ss: float = 50    # SS>=此值时需要确认
     spot_sell_confirm_min: int = 2      # 至少需要满足的确认条件数
+    # SPOT_SELL 尾部风控: 限制单笔卖出比例
+    # A/B 验证: 固定金额上限($50K)伤害收益(+5751), 改为比例上限
+    use_spot_sell_cap: bool = False     # 启用单笔卖出比例上限 (默认关闭, 待比例方案A/B验证)
+    spot_sell_max_pct: float = 0.30     # 单笔卖出不超过当前ETH仓位价值的30%
+    spot_sell_regime_block: str = ''    # 阻止卖出的regime列表(逗号分隔), 如 'low_vol_trend'
     # 仓位管理
     leverage: int = 5
     max_lev: int = 5
