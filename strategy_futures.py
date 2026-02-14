@@ -404,8 +404,8 @@ class FuturesEngine:
             # 修正: 强平时margin被没收, 必须从usdt中扣除
             self.usdt -= pos.margin + liq_fee
             self.frozen_margin -= pos.margin
+            # 清算费单独记入 total_liquidation_fees，避免与 total_futures_fees 重复统计
             self.total_liquidation_fees += liq_fee
-            self.total_futures_fees += liq_fee
             self.futures_long = None
             self._record_trade(dt, price, 'LIQUIDATED', 'long',
                                qty, notional, liq_fee, lev,
@@ -425,8 +425,8 @@ class FuturesEngine:
             # 修正: 强平时margin被没收, 必须从usdt中扣除
             self.usdt -= pos.margin + liq_fee
             self.frozen_margin -= pos.margin
+            # 清算费单独记入 total_liquidation_fees，避免与 total_futures_fees 重复统计
             self.total_liquidation_fees += liq_fee
-            self.total_futures_fees += liq_fee
             self.futures_short = None
             self._record_trade(dt, price, 'LIQUIDATED', 'short',
                                qty, notional, liq_fee, lev,
@@ -505,7 +505,7 @@ class FuturesEngine:
 
         # 费用汇总
         total_all_fees = (self.total_spot_fees + self.total_futures_fees +
-                          self.total_funding_paid)
+                          self.total_liquidation_fees + self.total_funding_paid)
         total_all_costs = total_all_fees + self.total_slippage_cost
         net_funding = self.total_funding_received - self.total_funding_paid
         gross_return = final_total + total_all_costs - initial_total

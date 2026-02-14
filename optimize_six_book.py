@@ -765,9 +765,33 @@ def _run_strategy_core(
     neutral_mid_ss_lo = float(config.get('neutral_mid_ss_lo', 50))
     neutral_mid_ss_hi = float(config.get('neutral_mid_ss_hi', 70))
 
-    # P1a: 空单 NoTP 提前退出 — 持仓 N bar 未达最低盈利 → 平仓
-    no_tp_exit_bars = int(config.get('no_tp_exit_bars', 0))      # 0=关闭
-    no_tp_exit_min_pnl = float(config.get('no_tp_exit_min_pnl', 0.03))
+    # P1a: NoTP 提前退出（长短独立 + regime 白名单）
+    # 兼容旧参数: no_tp_exit_bars / no_tp_exit_min_pnl / no_tp_exit_regimes
+    _legacy_no_tp_bars = int(config.get('no_tp_exit_bars', 0))
+    _legacy_no_tp_min = float(config.get('no_tp_exit_min_pnl', 0.03))
+    _legacy_no_tp_regimes = config.get('no_tp_exit_regimes', 'neutral')
+
+    no_tp_exit_short_bars = int(config.get('no_tp_exit_short_bars', _legacy_no_tp_bars))
+    no_tp_exit_short_min_pnl = float(config.get('no_tp_exit_short_min_pnl', _legacy_no_tp_min))
+    no_tp_exit_long_bars = int(config.get('no_tp_exit_long_bars', _legacy_no_tp_bars))
+    no_tp_exit_long_min_pnl = float(config.get('no_tp_exit_long_min_pnl', _legacy_no_tp_min))
+
+    def _parse_regimes(v):
+        if v is None:
+            return set()
+        if isinstance(v, (list, tuple, set)):
+            return {str(x).strip() for x in v if str(x).strip()}
+        s = str(v).strip()
+        if not s:
+            return set()
+        return {x.strip() for x in s.split(',') if x.strip()}
+
+    no_tp_exit_short_regimes = _parse_regimes(
+        config.get('no_tp_exit_short_regimes', _legacy_no_tp_regimes)
+    )
+    no_tp_exit_long_regimes = _parse_regimes(
+        config.get('no_tp_exit_long_regimes', _legacy_no_tp_regimes)
+    )
 
     # 实验3: regime-specific short_threshold — 字典 {regime: threshold}
     # 例: {'neutral': 35, 'high_vol': 35} → 在这些 regime 下用 35, 其余用默认
@@ -959,8 +983,9 @@ def _run_strategy_core(
                     actual_short_tp = short_tp * 0.7
                     actual_long_tp = long_tp * 0.7
 
-        # Regime-aware 动态阈值与风险控制 (仅使用历史数据)
-        regime_ctl = _compute_regime_controls(primary_df, idx, config, precomputed=regime_precomputed)
+        # Regime-aware 动态阈值与风险控制 (仅使用已完成bar数据, idx-1)
+        # 修复P0前视: 原来传 idx 会读取当前bar的close/vol/ma, 改为 idx-1
+        regime_ctl = _compute_regime_controls(primary_df, idx - 1, config, precomputed=regime_precomputed)
         # 注入 regime_label 供多周期融合动态调权 (P1-2)
         _regime_label = regime_ctl.get('regime_label', 'neutral')
         config['_regime_label'] = _regime_label
@@ -1038,8 +1063,9 @@ def _run_strategy_core(
         effective_spot_cooldown = spot_cooldown
         trend_is_up = False  # 供后续做多/抑空逻辑使用
         if trend_enhance_active and idx >= 30 and trend_ema10 is not None and trend_ema30 is not None:
-            ema10 = float(trend_ema10.iloc[idx])
-            ema30 = float(trend_ema30.iloc[idx])
+            # 修复P0前视: 原来用 idx 会包含当前bar收盘价, 改为 idx-1 (仅用已完成bar)
+            ema10 = float(trend_ema10.iloc[idx - 1])
+            ema30 = float(trend_ema30.iloc[idx - 1])
 
             # 趋势激活条件: EMA10 > EMA30 (不要求price > ema10, 避免敏感波动)
             trend_enter = ema10 > ema30 * 1.005  # 略高于1:1才激活
@@ -1169,6 +1195,7 @@ def _run_strategy_core(
             if pnl_r < hard_sl and eng.futures_short:
                 eng.close_short(price, dt, f"硬止损 {pnl_r*100:.0f}% (上限{hard_sl*100:.0f}%)")
                 short_max_pnl = 0; short_cd = cooldown * 5; short_bars = 0
+                short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 # 仓位已清, 后续 if eng.futures_short 检查自动跳过止盈/止损/超时
 
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
@@ -1227,30 +1254,47 @@ def _run_strategy_core(
             if pnl_r >= actual_short_tp:
                 eng.close_short(price, dt, f"止盈 +{pnl_r*100:.0f}%")
                 short_max_pnl = 0; short_cd = cooldown * 2; short_bars = 0
+                short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
             else:
                 if pnl_r > short_max_pnl: short_max_pnl = pnl_r
                 if short_max_pnl >= short_trail and eng.futures_short:
                     if pnl_r < short_max_pnl * trail_pullback:
                         eng.close_short(price, dt, "追踪止盈")
                         short_max_pnl = 0; short_cd = cooldown; short_bars = 0
-                # P1a: 空单 NoTP 提前退出 — 持仓超过 N bar 且从未触发 TP1，盈利不足 → 平仓
-                if eng.futures_short and no_tp_exit_bars > 0 and short_bars >= no_tp_exit_bars and not short_partial_done and pnl_r < no_tp_exit_min_pnl:
-                    eng.close_short(exec_price, dt,
-                        f"NoTP退出 {short_bars}bar pnl={pnl_r*100:.0f}%")
+                        short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
+                # P1a: 空单 NoTP 提前退出（长短独立 + regime 白名单）
+                _no_tp_short_regime_ok = (
+                    not no_tp_exit_short_regimes or _regime_label in no_tp_exit_short_regimes
+                )
+                if (
+                    eng.futures_short
+                    and no_tp_exit_short_bars > 0
+                    and short_bars >= no_tp_exit_short_bars
+                    and not short_partial_done
+                    and _no_tp_short_regime_ok
+                    and pnl_r < no_tp_exit_short_min_pnl
+                ):
+                    # 基于当前bar收盘数据触发, 应按当前bar价格成交, 避免前视到开盘价
+                    eng.close_short(price, dt,
+                        f"NoTP退出[{_regime_label}] {short_bars}bar pnl={pnl_r*100:.0f}%")
                     short_max_pnl = 0; short_cd = cooldown * 2; short_bars = 0
+                    short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_short and bs >= cur_close_short_bs:
                     bs_dom = (ss < bs * 0.7) if bs > 0 else True
                     if bs_dom:
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
                         eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}")
                         short_max_pnl = 0; short_cd = cooldown * 3; short_bars = 0
+                        short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_short and pnl_r < actual_short_sl:
                     eng.close_short(price, dt, f"止损 {pnl_r*100:.0f}%")
                     short_max_pnl = 0; short_cd = cooldown * 4; short_bars = 0
+                    short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_short and short_bars >= int(max(3, short_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_short(exec_price, dt, "超时")
                     short_max_pnl = 0; short_cd = cooldown; short_bars = 0
+                    short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
         elif eng.futures_short and short_just_opened:
             short_bars = 1
 
@@ -1322,6 +1366,7 @@ def _run_strategy_core(
             if pnl_r < hard_sl and eng.futures_long:
                 eng.close_long(price, dt, f"硬止损 {pnl_r*100:.0f}% (上限{hard_sl*100:.0f}%)")
                 long_max_pnl = 0; long_cd = cooldown * 5; long_bars = 0
+                long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 # 仓位已清, 后续 if eng.futures_long 检查自动跳过止盈/止损/超时
 
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
@@ -1379,25 +1424,47 @@ def _run_strategy_core(
             if pnl_r >= actual_long_tp:
                 eng.close_long(price, dt, f"止盈 +{pnl_r*100:.0f}%")
                 long_max_pnl = 0; long_cd = cooldown * 2; long_bars = 0
+                long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
             else:
                 if pnl_r > long_max_pnl: long_max_pnl = pnl_r
                 if long_max_pnl >= long_trail and eng.futures_long:
                     if pnl_r < long_max_pnl * trail_pullback:
                         eng.close_long(price, dt, "追踪止盈")
                         long_max_pnl = 0; long_cd = cooldown; long_bars = 0
+                        long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
+                # P1: 多仓 NoTP 提前退出（长短独立 + regime 白名单）
+                _no_tp_long_regime_ok = (
+                    not no_tp_exit_long_regimes or _regime_label in no_tp_exit_long_regimes
+                )
+                if (
+                    eng.futures_long
+                    and no_tp_exit_long_bars > 0
+                    and long_bars >= no_tp_exit_long_bars
+                    and not long_partial_done
+                    and _no_tp_long_regime_ok
+                    and pnl_r < no_tp_exit_long_min_pnl
+                ):
+                    # 基于当前bar收盘数据触发, 应按当前bar价格成交, 避免前视到开盘价
+                    eng.close_long(price, dt,
+                        f"NoTP退出多[{_regime_label}] {long_bars}bar pnl={pnl_r*100:.0f}%")
+                    long_max_pnl = 0; long_cd = cooldown * 2; long_bars = 0
+                    long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_long and ss >= cur_close_long_ss:
                     ss_dom = (bs < ss * 0.7) if bs > 0 else True
                     if ss_dom:
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
                         eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}")
                         long_max_pnl = 0; long_cd = cooldown * 3; long_bars = 0
+                        long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_long and pnl_r < actual_long_sl:
                     eng.close_long(price, dt, f"止损 {pnl_r*100:.0f}%")
                     long_max_pnl = 0; long_cd = cooldown * 4; long_bars = 0
+                    long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_long and long_bars >= int(max(3, long_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_long(exec_price, dt, "超时")
                     long_max_pnl = 0; long_cd = cooldown; long_bars = 0
+                    long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
         elif eng.futures_long and long_just_opened:
             long_bars = 1
 
@@ -1408,7 +1475,18 @@ def _run_strategy_core(
                     _apply_loss_streak_protection(prot_state, pnl, idx, config)
             trade_cursor = len(eng.trades)
 
-        if idx % record_interval == 0:
+        # 资金曲线记录策略：
+        # 1) 保留采样点(控制体积)；2) 强制记录每个交易日的最后一根bar；3) 强制记录回测窗口最后一根bar。
+        should_record = (idx % record_interval == 0)
+        if idx + 1 < len(primary_df):
+            next_dt = index_values[idx + 1]
+            if next_dt.date() != dt.date():
+                should_record = True
+            if end_dt is not None and next_dt > end_dt:
+                should_record = True
+        else:
+            should_record = True
+        if should_record:
             eng.record_history(dt, price)
 
         # ── 在当前 bar 收盘后计算信号, 供下一根 bar 执行 ──
@@ -1427,6 +1505,8 @@ def _run_strategy_core(
         eng.close_short(last_price, last_dt, "期末平仓")
     if eng.futures_long:
         eng.close_long(last_price, last_dt, "期末平仓")
+    # 关键修正：记录“期末平仓后”的最终快照，避免日表/月表与summary不一致。
+    eng.record_history(last_dt, last_price)
 
     trade_df = primary_df
     if start_dt is not None:

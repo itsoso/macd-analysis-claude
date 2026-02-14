@@ -169,6 +169,13 @@ def _build_strategy_snapshot(config):
         # P1a / P1b
         'no_tp_exit_bars': config.get('no_tp_exit_bars', 0),
         'no_tp_exit_min_pnl': config.get('no_tp_exit_min_pnl'),
+        'no_tp_exit_regimes': config.get('no_tp_exit_regimes'),
+        'no_tp_exit_short_bars': config.get('no_tp_exit_short_bars'),
+        'no_tp_exit_short_min_pnl': config.get('no_tp_exit_short_min_pnl'),
+        'no_tp_exit_short_regimes': config.get('no_tp_exit_short_regimes'),
+        'no_tp_exit_long_bars': config.get('no_tp_exit_long_bars'),
+        'no_tp_exit_long_min_pnl': config.get('no_tp_exit_long_min_pnl'),
+        'no_tp_exit_long_regimes': config.get('no_tp_exit_long_regimes'),
         'neutral_mid_ss_sell_ratio': config.get('neutral_mid_ss_sell_ratio'),
         # 实验3: regime-specific short_threshold
         'regime_short_threshold': config.get('regime_short_threshold'),

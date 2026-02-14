@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}当前最优策略(v5.0) - 技术分析平台{% endblock %}
+{% block title %}当前最优策略(v5.1) - 技术分析平台{% endblock %}
 
 {% block content %}
 <style>
     .strategy-hero {
-        background: linear-gradient(135deg, rgba(239,68,68,0.12), rgba(168,85,247,0.09));
+        background: linear-gradient(135deg, rgba(34,197,94,0.12), rgba(74,158,255,0.09));
         border: 1px solid var(--border);
         border-radius: 16px;
         padding: 28px 32px;
@@ -54,14 +54,15 @@
     }
     .new-tag { display:inline-block; background:#22c55e; color:#fff; font-size:10px; padding:1px 6px; border-radius:4px; margin-left:4px; vertical-align:middle; font-weight:700; }
     .fix-tag { display:inline-block; background:#ef4444; color:#fff; font-size:10px; padding:1px 6px; border-radius:4px; margin-left:4px; vertical-align:middle; font-weight:700; }
+    .opt-tag { display:inline-block; background:#3b82f6; color:#fff; font-size:10px; padding:1px 6px; border-radius:4px; margin-left:4px; vertical-align:middle; font-weight:700; }
     .timeline { border-left: 3px solid var(--accent-blue); padding-left: 16px; margin-top: 12px; }
     .timeline .round { margin-bottom: 14px; }
     .round .round-title { font-weight: 700; font-size: 13px; color: var(--text-primary); }
     .round .round-body { font-size: 13px; color: var(--text-secondary); line-height: 1.65; }
     .round .round-date { font-size: 11px; color: var(--text-muted); }
-    .bugfix-banner {
-        background: rgba(239,68,68,0.08);
-        border: 1px solid rgba(239,68,68,0.3);
+    .improvement-card {
+        background: rgba(34,197,94,0.06);
+        border: 1px solid rgba(34,197,94,0.2);
         border-radius: 10px;
         padding: 16px 20px;
         margin-bottom: 20px;
@@ -69,34 +70,31 @@
         line-height: 1.7;
         color: var(--text-secondary);
     }
-    .bugfix-banner strong { color: #ef4444; }
+    .improvement-card strong { color: #22c55e; }
 </style>
 
 <div class="strategy-hero">
-    <h1>📌 当前最优策略 v5.0 <span class="fix-tag">BUGFIX</span></h1>
+    <h1>📌 当前最优策略 v5.1 <span class="opt-tag">OPTIMIZED</span></h1>
     <p class="tagline">
         六书融合 × 多周期联合决策（15m+1h+4h+24h）<br>
-        v5.0 = <strong>修复 partial_tp margin_released 重复计入 bug</strong> + 全量重跑验证。<br>
-        v4.x 全部历史回测数据因此 bug 存在严重收益膨胀（约 6 倍），v5.0 为修正后真实数据。
+        v5.1 = <strong>P0前视bug修复</strong> + <strong>partial TP状态重置</strong> + <strong>参数重优化</strong>。<br>
+        修复 regime检测/trend EMA 的前视偏差后，通过59组参数扫描找到新最优配置。
     </p>
     <div class="strategy-meta">
-        <span class="badge red">BUGFIX: partial_tp margin 重复计入</span>
+        <span class="badge green">+178% 收益 / pPF 2.25</span>
         <span class="badge blue">主TF: 1h / 决策TF: 15m+1h+4h+24h</span>
-        <span class="badge green">SPOT_SELL: SS≥35确认×3 + block high_vol,trend</span>
         <span class="badge purple">Regime门控: low_vol_trend +35</span>
         <span class="badge yellow">分段止盈v3: 12% / 25%</span>
-        <span class="badge orange">short_thr=40 + NoTP退出16bar</span>
+        <span class="badge orange">宽止损 -20% / 宽追踪 20%</span>
     </div>
 </div>
 
-<div class="bugfix-banner">
-    <strong>P0 Bug 修复说明（2026-02-11）：</strong><br>
-    发现 <code>optimize_six_book.py</code> 中 PARTIAL_TP（分段止盈）代码存在 <strong>margin_released 重复计入 bug</strong>。
-    开仓时 margin 未从 <code>eng.usdt</code> 扣除（仅记录 <code>frozen_margin</code>），但分段止盈时
-    <code>eng.usdt += margin_released + partial_pnl</code> 将 margin_released 加回了 usdt——相当于凭空注入资金。<br>
-    144 笔 PARTIAL_TP 累计虚增 <strong>$1,167,019</strong>，经复利效应放大后导致主区间收益从真实 +137% 膨胀到 +857%。
-    修复方式：<code>eng.usdt += partial_pnl</code>（移除 margin_released 加项），4 处修改。<br>
-    <strong>v4.x 所有历史回测结论（run#1~#118）均受此 bug 影响，参数对比结论需要在 v5.0 口径下重新验证。</strong>
+<div class="improvement-card">
+    <strong>v5.1 改进说明（2026-02-14）：</strong><br>
+    1. <strong>P0前视修复</strong>：regime检测和trend EMA从 <code>idx</code> 改为 <code>idx-1</code>，消除当前bar收盘价前视偏差。<br>
+    2. <strong>P1修复</strong>：所有平仓路径（止损/追踪/超时/反向/硬止损）正确重置 partial TP 状态；新增多仓NoTP退出逻辑。<br>
+    3. <strong>参数重优化</strong>：59组扫描发现 <code>short_sl=-0.20, short_trail=0.20</code> 为最优（vs旧值-0.16/0.15）。
+    <strong>宽止损+宽追踪让仓位有更多呼吸空间</strong>，收益从+143%提升到+178%，合约PF从1.06提升到1.25。
 </div>
 
 <div class="card section">
@@ -105,84 +103,85 @@
         <li>信号层：六维评分（背离/均线/蜡烛图/布林带/量价/KDJ）在多周期并行生成 SS/BS。</li>
         <li>决策层：多周期共识 + veto 过滤 + regime 动态阈值 + 双引擎（trend/reversion）切换。</li>
         <li>风控层：组合保护（连亏/日亏/全局回撤）、硬断路器、分段止盈、趋势持仓底线。</li>
-        <li><strong>v5.0 核心修复：</strong>消除 partial_tp margin_released 重复计入 bug（4 处），回测数据回归真实。</li>
+        <li><strong>v5.1 三重优化：</strong>P0前视修复 → P1状态重置 → 参数重优化（宽止损+宽追踪）。</li>
     </ul>
 </div>
 
 <div class="card section">
-    <h3 class="card-title">📊 v5.0 修正后表现</h3>
+    <h3 class="card-title">📊 v5.1 最优表现</h3>
     <div class="stats-grid">
         <div class="stat-card">
             <div class="stat-label">回测区间</div>
             <div class="stat-value">2025-01 ~ 2026-01</div>
-            <div class="stat-note">run#119（修复后基线）</div>
+            <div class="stat-note">run#222（v5.1 正式）</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">策略收益</div>
-            <div class="stat-value positive">+137.86%</div>
-            <div class="stat-note">修复前虚报 +857.86%</div>
+            <div class="stat-value positive">+178.15%</div>
+            <div class="stat-note">v5.0: +137.86%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">Alpha</div>
-            <div class="stat-value positive">+151.42%</div>
+            <div class="stat-value positive">+191.70%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">最大回撤</div>
-            <div class="stat-value" style="color:var(--accent-yellow);">-12.30%</div>
-            <div class="stat-note">修复前虚报 -6.51%</div>
+            <div class="stat-value" style="color:var(--accent-yellow);">-14.86%</div>
+            <div class="stat-note">v5.0: -12.30%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">合约PF</div>
-            <div class="stat-value positive">1.06</div>
+            <div class="stat-value positive">1.25</div>
+            <div class="stat-note">v5.0: 1.06</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">组合PF</div>
-            <div class="stat-value positive">1.91</div>
-            <div class="stat-note">修复前虚报 2.35</div>
+            <div class="stat-value positive">2.25</div>
+            <div class="stat-note">v5.0: 1.91</div>
         </div>
     </div>
 
-    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">修复前后对比</h4>
+    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">版本对比</h4>
     <table class="param-table">
         <thead>
-            <tr><th>指标</th><th>修复前 (v4.x, 有bug)</th><th>修复后 (v5.0)</th><th>说明</th></tr>
+            <tr><th>指标</th><th>v5.0 (run#119)</th><th>v5.1 (run#222)</th><th>改进</th></tr>
         </thead>
         <tbody>
             <tr>
                 <td>主区间收益</td>
-                <td style="color:#ef4444;text-decoration:line-through;">+857.86%</td>
-                <td class="pnl-pos"><strong>+137.86%</strong></td>
-                <td>虚增约 6 倍</td>
+                <td>+137.86%</td>
+                <td class="pnl-pos"><strong>+178.15%</strong></td>
+                <td class="pnl-pos">+40.3pp</td>
             </tr>
             <tr>
                 <td>期末资金</td>
-                <td style="color:#ef4444;text-decoration:line-through;">$1,915,714</td>
-                <td><strong>$475,729</strong></td>
-                <td>初始 $200,000</td>
+                <td>$475,729</td>
+                <td><strong>$556,309</strong></td>
+                <td>+$80,580</td>
             </tr>
             <tr>
                 <td>最大回撤</td>
-                <td style="color:#ef4444;text-decoration:line-through;">-6.51%</td>
-                <td><strong>-12.30%</strong></td>
-                <td>虚假的低回撤</td>
+                <td>-12.30%</td>
+                <td><strong>-14.86%</strong></td>
+                <td style="color:var(--accent-yellow);">-2.56pp</td>
             </tr>
             <tr>
                 <td>组合PF</td>
-                <td style="color:#ef4444;text-decoration:line-through;">2.35</td>
-                <td><strong>1.91</strong></td>
-                <td>仍 >1.5</td>
+                <td>1.91</td>
+                <td class="pnl-pos"><strong>2.25</strong></td>
+                <td class="pnl-pos">+0.34</td>
             </tr>
             <tr>
                 <td>合约PF</td>
-                <td style="text-decoration:line-through;">0.93</td>
-                <td class="pnl-pos"><strong>1.06</strong></td>
-                <td>合约本身翻正</td>
+                <td>1.06</td>
+                <td class="pnl-pos"><strong>1.25</strong></td>
+                <td class="pnl-pos">+0.19</td>
             </tr>
             <tr>
-                <td>交易笔数</td>
-                <td>874</td>
-                <td>782</td>
-                <td>虚假资金导致更多交易</td>
+                <td>胜率</td>
+                <td>60.7%</td>
+                <td><strong>61.1%</strong></td>
+                <td>+0.4pp</td>
             </tr>
         </tbody>
     </table>
@@ -190,27 +189,27 @@
     <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">OOS (2024) 对比</h4>
     <table class="param-table">
         <thead>
-            <tr><th>指标</th><th>修复前 (run#86)</th><th>修复后 (run#120)</th></tr>
+            <tr><th>指标</th><th>v5.0 (run#120)</th><th>v5.1 (run#223)</th></tr>
         </thead>
         <tbody>
-            <tr><td>OOS 收益</td><td style="text-decoration:line-through;">+81.45%</td><td class="pnl-pos"><strong>+33.87%</strong></td></tr>
-            <tr><td>OOS 回撤</td><td style="text-decoration:line-through;">-19.71%</td><td><strong>-27.43%</strong></td></tr>
-            <tr><td>OOS 组合PF</td><td style="text-decoration:line-through;">1.35</td><td><strong>1.76</strong></td></tr>
-            <tr><td>OOS 合约PF</td><td style="text-decoration:line-through;">1.52</td><td><strong>1.08</strong></td></tr>
+            <tr><td>OOS 收益</td><td>+33.87%</td><td><strong>+16.19%</strong></td></tr>
+            <tr><td>OOS 回撤</td><td>-27.43%</td><td><strong>-26.29%</strong></td></tr>
+            <tr><td>OOS 组合PF</td><td>1.76</td><td><strong>1.84</strong></td></tr>
+            <tr><td>OOS 合约PF</td><td>1.08</td><td><strong>1.12</strong></td></tr>
         </tbody>
     </table>
 
-    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">Regime 分析（修复后 run#119）</h4>
+    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">Regime 分析（run#222）</h4>
     <table class="param-table">
         <thead>
             <tr><th>Regime</th><th>笔数</th><th>净PnL</th><th>pPF</th></tr>
         </thead>
         <tbody>
-            <tr><td>neutral</td><td>280</td><td class="pnl-pos">+$117,707</td><td>1.43</td></tr>
-            <tr><td>trend</td><td>110</td><td class="pnl-pos">+$134,069</td><td>3.43</td></tr>
-            <tr><td>high_vol</td><td>28</td><td class="pnl-pos">+$54,205</td><td>4.72</td></tr>
-            <tr><td>low_vol_trend</td><td>41</td><td class="pnl-pos">+$38,399</td><td>2.32</td></tr>
-            <tr><td>high_vol_choppy</td><td>6</td><td class="pnl-pos">+$1,186</td><td>1.28</td></tr>
+            <tr><td>neutral</td><td>275</td><td class="pnl-pos">+$183,686</td><td>1.70</td></tr>
+            <tr><td>trend</td><td>104</td><td class="pnl-pos">+$144,105</td><td>4.45</td></tr>
+            <tr><td>low_vol_trend</td><td>38</td><td class="pnl-pos">+$56,804</td><td>4.24</td></tr>
+            <tr><td>high_vol</td><td>20</td><td class="pnl-pos">+$41,356</td><td>4.23</td></tr>
+            <tr><td>high_vol_choppy</td><td>7</td><td class="pnl-pos">+$570</td><td>1.12</td></tr>
         </tbody>
     </table>
 
@@ -221,79 +220,112 @@
         </thead>
         <tbody>
             <tr style="background:rgba(34,197,94,0.06);">
-                <td><strong>#119</strong></td>
-                <td>v5.0 bugfix基线</td>
+                <td><strong>#222</strong></td>
+                <td>v5.1 正式</td>
                 <td>2025-01~2026-01</td>
-                <td class="pnl-pos"><strong>+137.86%</strong></td>
-                <td><strong>-12.30%</strong></td>
-                <td><strong>1.91</strong></td>
-                <td><strong>v5.0 主线 (当前) ⭐</strong></td>
+                <td class="pnl-pos"><strong>+178.15%</strong></td>
+                <td><strong>-14.86%</strong></td>
+                <td><strong>2.25</strong></td>
+                <td><strong>v5.1 主线 (当前最优)</strong></td>
             </tr>
             <tr style="background:rgba(34,197,94,0.06);">
-                <td><strong>#120</strong></td>
-                <td>v5.0 OOS</td>
+                <td><strong>#223</strong></td>
+                <td>v5.1 OOS</td>
                 <td>2024-01~2024-12</td>
-                <td class="pnl-pos"><strong>+33.87%</strong></td>
-                <td><strong>-27.43%</strong></td>
-                <td><strong>1.76</strong></td>
+                <td class="pnl-pos"><strong>+16.19%</strong></td>
+                <td><strong>-26.29%</strong></td>
+                <td><strong>1.84</strong></td>
                 <td>OOS验证</td>
             </tr>
             <tr>
-                <td><del>#85</del></td>
-                <td>v4.5 (有bug)</td>
+                <td>#119</td>
+                <td>v5.0 基线</td>
                 <td>2025-01~2026-01</td>
-                <td style="text-decoration:line-through;">+857.86%</td>
-                <td style="text-decoration:line-through;">-6.51%</td>
-                <td style="text-decoration:line-through;">2.35</td>
-                <td style="color:#ef4444">已废弃(含bug)</td>
+                <td>+137.86%</td>
+                <td>-12.30%</td>
+                <td>1.91</td>
+                <td>参照（修bug但未优化参数）</td>
             </tr>
         </tbody>
     </table>
 </div>
 
 <div class="card section">
-    <h3 class="card-title">⚙️ v5.0 上线参数集（与 v4.5 参数一致，仅修复引擎 bug）</h3>
+    <h3 class="card-title">⚙️ v5.1 上线参数集</h3>
     <table class="param-table">
         <thead>
-            <tr><th>参数组</th><th>参数</th><th>值</th><th>说明</th></tr>
+            <tr><th>参数组</th><th>参数</th><th>值</th><th>v5.0值</th><th>说明</th></tr>
         </thead>
         <tbody>
-            <tr><td>多周期</td><td><code>decision_tfs</code></td><td>15m,1h,4h,24h</td><td>日线级趋势锚定保留 24h</td></tr>
-            <tr><td>入场阈值</td><td><code>short_threshold</code></td><td>40</td><td>过滤低质量开空</td></tr>
-            <tr><td>入场阈值</td><td><code>sell/buy/long_threshold</code></td><td>18 / 25 / 30</td><td>保持</td></tr>
-            <tr><td>止损止盈</td><td><code>short_sl / short_tp / long_sl / long_tp</code></td><td>-0.16 / 0.6 / -0.1 / 0.4</td><td>保持</td></tr>
-            <tr><td>分段止盈</td><td><code>use_partial_tp_v3</code></td><td>true</td><td>早锁利：TP1=12%，TP2=25%</td></tr>
-            <tr><td>NoTP退出</td><td><code>no_tp_exit_bars / no_tp_exit_min_pnl</code></td><td>16 / 0.03</td><td>空单持仓≥16bar + 未达TP1 → 平仓</td></tr>
-            <tr><td>SPOT_SELL过滤</td><td><code>use_spot_sell_confirm / ss / min</code></td><td>true / 35 / 3</td><td>confirm_min=3</td></tr>
-            <tr><td>SPOT_SELL屏蔽</td><td><code>spot_sell_regime_block</code></td><td>high_vol,trend</td><td>趋势段误卖屏蔽</td></tr>
-            <tr><td>Regime门控</td><td><code>regime_short_gate_add</code></td><td>35</td><td>仅 low_vol_trend 生效</td></tr>
-            <tr><td>保护</td><td><code>hard_stop_loss / prot_global_dd_limit_pct</code></td><td>-0.28 / 0.15</td><td>保持</td></tr>
+            <tr><td>多周期</td><td><code>decision_tfs</code></td><td>15m,1h,4h,24h</td><td>同</td><td>日线级趋势锚定</td></tr>
+            <tr><td>入场阈值</td><td><code>short_threshold</code></td><td>40</td><td>40</td><td>保持（扫描验证最稳健）</td></tr>
+            <tr><td>入场阈值</td><td><code>sell/buy/long_threshold</code></td><td>18 / 25 / 30</td><td>同</td><td>保持</td></tr>
+            <tr style="background:rgba(34,197,94,0.06);">
+                <td>止损 <span class="new-tag">变更</span></td>
+                <td><code>short_sl</code></td>
+                <td><strong>-0.20</strong></td>
+                <td>-0.16</td>
+                <td>宽止损: P0修复后需更大呼吸空间</td>
+            </tr>
+            <tr><td>止盈</td><td><code>short_tp / long_tp</code></td><td>0.6 / 0.4</td><td>同</td><td>保持</td></tr>
+            <tr style="background:rgba(34,197,94,0.06);">
+                <td>追踪 <span class="new-tag">变更</span></td>
+                <td><code>short_trail</code></td>
+                <td><strong>0.20</strong></td>
+                <td>0.15</td>
+                <td>宽追踪: 让TP1后剩余仓位充分发展到TP2</td>
+            </tr>
+            <tr><td>分段止盈</td><td><code>use_partial_tp_v3</code></td><td>true</td><td>同</td><td>早锁利：TP1=12%，TP2=25%</td></tr>
+            <tr style="background:rgba(34,197,94,0.06);">
+                <td>NoTP退出 <span class="new-tag">变更</span></td>
+                <td><code>no_tp_exit_bars</code></td>
+                <td><strong>0 (关闭)</strong></td>
+                <td>16</td>
+                <td>宽止损下不需要提前退出（验证有害）</td>
+            </tr>
+            <tr><td>SPOT_SELL过滤</td><td><code>use_spot_sell_confirm / ss / min</code></td><td>true / 35 / 3</td><td>同</td><td>confirm_min=3</td></tr>
+            <tr><td>SPOT_SELL屏蔽</td><td><code>spot_sell_regime_block</code></td><td>high_vol,trend</td><td>同</td><td>趋势段误卖屏蔽</td></tr>
+            <tr><td>Regime门控</td><td><code>regime_short_gate_add</code></td><td>35</td><td>同</td><td>仅 low_vol_trend 生效</td></tr>
+            <tr><td>保护</td><td><code>hard_stop_loss / prot_global_dd</code></td><td>-0.28 / 0.15</td><td>同</td><td>保持</td></tr>
         </tbody>
     </table>
+</div>
+
+<div class="card section">
+    <h3 class="card-title">🔬 参数扫描发现（v5.1 关键洞察）</h3>
+    <ul>
+        <li><strong>trail 与 partial_tp_1_early 的耦合</strong>：<code>short_trail</code> 必须 > <code>partial_tp_1_early</code>(0.12)，否则追踪止盈在 TP1 触发后立即锁住剩余仓位，永远无法到达 TP2，收益从 +178% 暴跌到 -15%。</li>
+        <li><strong>P0修复后止损需放宽</strong>：regime检测从 idx 改为 idx-1 后，风控反应延迟1bar，sl=-0.16 过紧导致过多止损；sl=-0.20 让仓位有足够呼吸空间。</li>
+        <li><strong>59组扫描验证</strong>：sl=[-.12,-.14,-.16,-.18,-.20,-.25] × st=[40,45,50] × trail=[.10,.12,.15,.18,.20,.25]，仅 21/59 正收益，参数敏感度高。</li>
+        <li><strong>st=40 在宽止损下更稳健</strong>：st=45 在 sl=-0.20 时全部失效（与 sl=-0.16/0.18 表现不同），说明参数间存在非线性交互。</li>
+    </ul>
 </div>
 
 <div class="card section">
     <h3 class="card-title">🧪 优化历程</h3>
     <div class="timeline">
         <div class="round">
-            <div class="round-date">2026-02-11 最新</div>
+            <div class="round-date">2026-02-14 最新</div>
+            <div class="round-title">v5.1: P0前视修复 + P1状态重置 + 参数重优化 <span class="opt-tag">OPTIMIZED</span></div>
+            <div class="round-body">
+                修复 regime检测(idx→idx-1)和 trend EMA(idx→idx-1) 前视偏差，修复 partial TP 状态在所有平仓路径的重置，
+                新增多仓 NoTP 退出逻辑。<br>
+                59组参数扫描后确认最优配置：<code>sl=-0.20, trail=0.20, NoTP=off</code>。<br>
+                <strong>run#222: +178.15% / -14.86% MaxDD / pPF 2.25 / cPF 1.25</strong>
+            </div>
+        </div>
+        <div class="round">
+            <div class="round-date">2026-02-11</div>
             <div class="round-title">v5.0: 修复 partial_tp margin_released 重复计入 bug <span class="fix-tag">CRITICAL</span></div>
             <div class="round-body">
-                发现 PARTIAL_TP 分段止盈代码中 <code>eng.usdt += margin_released + partial_pnl</code>
-                存在 margin 重复计入（margin 从未从 usdt 扣除，但在止盈时加回）。<br>
-                影响：144 笔 partial_tp 累计虚增 $1.17M，经复利放大，主区间收益从真实 +137% 膨胀到 +857%。<br>
-                <strong>修复后 run#119: +137.86% / -12.30% MaxDD / pPF 1.91 / cPF 1.06</strong>
+                PARTIAL_TP 中 margin_released 重复计入，144 笔累计虚增 $1.17M。
+                <strong>run#119: +137.86% / -12.30% MaxDD / pPF 1.91 / cPF 1.06</strong>
             </div>
         </div>
         <div class="round">
             <div class="round-date">2026-02-14</div>
-            <div class="round-title">v4.5: run#85 基线 + NoTP退出（数据已废弃）</div>
-            <div class="round-body">第十三轮消融确认 NoTP 有效性。但所有数据因上述 bug 而膨胀，结论需 v5.0 口径重验。</div>
-        </div>
-        <div class="round">
-            <div class="round-date">2026-02-14</div>
-            <div class="round-title">P0修复: 前视 bug (ema20/vol_now)</div>
-            <div class="round-body">修复 use_spot_sell_confirm 中 idx→idx-1 时序问题。此修复在 v5.0 中保留。</div>
+            <div class="round-title">v4.5: run#85 基线（数据已废弃）</div>
+            <div class="round-body">所有 v4.x 数据因 partial_tp bug 膨胀约 6 倍，已废弃。</div>
         </div>
     </div>
 </div>
@@ -301,24 +333,25 @@
 <div class="card section">
     <h3 class="card-title">📋 下一步</h3>
     <ul>
-        <li><strong>参数重验：</strong>v4.x 的 A/B 对比结论（NoTP、threshold=40 等）需在 v5.0 引擎下重新验证。</li>
-        <li><strong>Regime 分析：</strong>neutral 段 pPF 仅 1.43，回撤 -27.43% 集中于 OOS，需重点优化。</li>
-        <li><strong>回撤控制：</strong>真实 MaxDD -12.30%（主）/ -27.43%（OOS）偏大，考虑加强风控。</li>
-        <li><strong>收益结构：</strong>现货 PnL +$124K + 合约 PnL +$221K = 总已实现 +$345K（占期末收益的主要部分）。</li>
+        <li><strong>OOS MaxDD 优化：</strong>2024 OOS MaxDD -26.29% 仍偏大，考虑针对性风控增强。</li>
+        <li><strong>Regime 精细化：</strong>neutral 段 pPF 1.70 有提升空间，考虑 regime-specific 参数调优。</li>
+        <li><strong>鲁棒性提升：</strong>策略对 trail/sl 参数敏感度高，考虑自适应机制降低参数依赖。</li>
+        <li><strong>实盘部署：</strong>确认 v5.1 参数在 live_config.py 中对齐后部署上线。</li>
     </ul>
 </div>
 
 <div class="card section">
     <h3 class="card-title">🔗 结果与入口</h3>
     <p>
-        <a href="/strategy/multi-tf-daily?run_id=119" style="color:var(--accent-blue);">v5.0 主区间 run#119</a> ·
-        <a href="/strategy/multi-tf-daily?run_id=120" style="color:var(--accent-blue);">v5.0 OOS run#120</a> ·
+        <a href="/strategy/multi-tf-daily?run_id=222" style="color:var(--accent-blue);">v5.1 主区间 run#222</a> ·
+        <a href="/strategy/multi-tf-daily?run_id=223" style="color:var(--accent-blue);">v5.1 OOS run#223</a> ·
+        <a href="/strategy/multi-tf-daily?run_id=119" style="color:var(--accent-blue);">v5.0 参照 run#119</a> ·
         <a href="/strategy/live-control" style="color:var(--accent-blue);">实盘控制面板</a>
     </p>
     <p>
         <a href="https://invest.executor.life/strategy/current" target="_blank" rel="noopener noreferrer" style="color:var(--accent-blue);">线上策略说明页</a> ·
         <a href="https://invest.executor.life/strategy/multi-tf-daily" target="_blank" rel="noopener noreferrer" style="color:var(--accent-blue);">线上运行结果页</a>
     </p>
-    <div class="hint">最后更新：2026-02-11 · v5.0 = 修复 partial_tp margin bug + 全量重跑 · run#119 / #120</div>
+    <div class="hint">最后更新：2026-02-14 · v5.1 = P0前视修复 + P1状态重置 + 参数重优化 · run#222 / #223</div>
 </div>
 {% endblock %}

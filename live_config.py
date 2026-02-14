@@ -192,18 +192,18 @@ STRATEGY_PARAM_VERSIONS = {
         "use_partial_tp_2": True,
         "short_max_hold": 48,
     },
-    "v4": {  # run31→run85 — param_sweep + Codex 优化 (收敛到 run#85 主线)
-        "short_threshold": 40,   # run#85: 提高门槛过滤低质量开空 (v4旧:25, run#62:25)
+    "v4": {  # v5.1: P0前视修复 + 参数重优化 (run#190/221)
+        "short_threshold": 40,   # 保持 (扫描验证 st=40 最稳健)
         "long_threshold": 30,    # 保持 (v2一致)
-        "short_sl": -0.16,       # run#62 最优: 更紧止损 (v4旧:-0.25, ret+881% MDD-4.43%)
+        "short_sl": -0.20,       # v5.1: 放宽止损, P0修复后需更大呼吸空间 (v4旧:-0.16)
         "short_tp": 0.60,        # 更大目标利润 (v2:0.50)
         "long_sl": -0.10,        # 多头略放宽 (v2:-0.08)
         "long_tp": 0.40,         # 保持 (v2一致)
         "partial_tp_1": 0.15,    # 保持v2 (v3 early由use_partial_tp_v3控制)
         "use_partial_tp_2": True,
         "short_max_hold": 48,    # 保持
-        "short_trail": 0.15,     # ★最强单参: 更紧追踪止盈, 快速锁利 (v2:0.25)
-        "long_trail": 0.12,      # 多头追踪也更紧 (v2:0.20)
+        "short_trail": 0.20,     # v5.1: 放宽追踪, 让TP1后剩余仓位充分发展 (v4旧:0.15)
+        "long_trail": 0.12,      # 多头追踪 (v2:0.20)
         "trail_pullback": 0.50,  # 稍微收紧 (v2:0.60)
     },
 }
@@ -283,9 +283,17 @@ class StrategyConfig:
     # 冷却
     cooldown: int = 4
     spot_cooldown: int = 12
-    # 空单 NoTP 提前退出 (第十一/十三轮验证: pPF +0.27, 回撤 +1.48pp, 合约PF翻正)
-    no_tp_exit_bars: int = 16          # 持仓≥16bar + 未达TP1 + 盈利<3% → 平仓
-    no_tp_exit_min_pnl: float = 0.03
+    # NoTP 提前退出（长短独立 + regime 白名单）
+    # 兼容旧参数: no_tp_exit_bars / no_tp_exit_min_pnl / no_tp_exit_regimes
+    no_tp_exit_bars: int = 0           # 0=关闭 (旧参数, 保留兼容)
+    no_tp_exit_min_pnl: float = 0.03   # 旧参数, 保留兼容
+    no_tp_exit_regimes: str = 'neutral'  # 旧参数, 保留兼容
+    no_tp_exit_short_bars: int = 0
+    no_tp_exit_short_min_pnl: float = 0.03
+    no_tp_exit_short_regimes: str = 'neutral'
+    no_tp_exit_long_bars: int = 0
+    no_tp_exit_long_min_pnl: float = 0.03
+    no_tp_exit_long_regimes: str = 'neutral'
     # 融合模式
     fusion_mode: str = "c6_veto_4"
     veto_threshold: float = 25

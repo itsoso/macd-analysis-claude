@@ -105,9 +105,16 @@ def _build_default_config():
         'spot_sell_max_pct': _LIVE_DEFAULT.spot_sell_max_pct,
         'spot_sell_regime_block': _LIVE_DEFAULT.spot_sell_regime_block,
         # ── 实验参数（默认关闭/中性） ──
-        # 空单 NoTP 提前退出
-        'no_tp_exit_bars': 0,          # 0=关闭
-        'no_tp_exit_min_pnl': 0.03,    # 仅在 no_tp_exit_bars > 0 时生效
+        # NoTP 提前退出（长短独立 + regime 白名单）
+        'no_tp_exit_bars': _LIVE_DEFAULT.no_tp_exit_bars,  # 旧参数, 兼容
+        'no_tp_exit_min_pnl': _LIVE_DEFAULT.no_tp_exit_min_pnl,  # 旧参数, 兼容
+        'no_tp_exit_regimes': _LIVE_DEFAULT.no_tp_exit_regimes,  # 旧参数, 兼容
+        'no_tp_exit_short_bars': _LIVE_DEFAULT.no_tp_exit_short_bars,
+        'no_tp_exit_short_min_pnl': _LIVE_DEFAULT.no_tp_exit_short_min_pnl,
+        'no_tp_exit_short_regimes': _LIVE_DEFAULT.no_tp_exit_short_regimes,
+        'no_tp_exit_long_bars': _LIVE_DEFAULT.no_tp_exit_long_bars,
+        'no_tp_exit_long_min_pnl': _LIVE_DEFAULT.no_tp_exit_long_min_pnl,
+        'no_tp_exit_long_regimes': _LIVE_DEFAULT.no_tp_exit_long_regimes,
         # neutral 中分段 SS 卖出降仓
         'neutral_mid_ss_sell_ratio': 1.0,  # 1.0=不调整
         'neutral_mid_ss_lo': 50.0,
