@@ -21,6 +21,7 @@
             --accent-purple: #a855f7;
             --border: #2a2d3e;
             --sidebar-w: 280px;
+            --sidebar-collapsed-w: 60px;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -43,12 +44,49 @@
             display: flex;
             flex-direction: column;
             overflow-y: auto;
+            transition: width 0.25s cubic-bezier(.4,0,.2,1), min-width 0.25s cubic-bezier(.4,0,.2,1);
         }
+
+        /* ── 侧边栏收起状态 ── */
+        .sidebar.collapsed { width: var(--sidebar-collapsed-w); min-width: var(--sidebar-collapsed-w); }
+        .sidebar.collapsed .sidebar-header h1,
+        .sidebar.collapsed .sidebar-header p,
+        .sidebar.collapsed .nav-section-title,
+        .sidebar.collapsed .nav-item-text { display: none; }
+        .sidebar.collapsed .sidebar-header { padding: 16px 0; text-align: center; }
+        .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
+        .sidebar.collapsed .nav-item .nav-icon { width: auto; font-size: 18px; }
+        .sidebar.collapsed .nav-item.active { border-left: none; border-bottom: 2px solid var(--accent-blue); }
+        .sidebar.collapsed .nav-section { padding: 8px 0; }
+        /* tooltip */
+        .sidebar.collapsed .nav-item { position: relative; }
+        .sidebar.collapsed .nav-item::after {
+            content: attr(data-tooltip);
+            position: absolute; left: 100%; top: 50%; transform: translateY(-50%);
+            background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border);
+            padding: 4px 10px; border-radius: 6px; font-size: 12px; white-space: nowrap;
+            pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 1000;
+            margin-left: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .sidebar.collapsed .nav-item:hover::after { opacity: 1; }
+
+        /* ── 收起/展开按钮 ── */
+        .sidebar-toggle {
+            background: none; border: none; color: var(--text-muted); cursor: pointer;
+            width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center;
+            justify-content: center; transition: all 0.2s; flex-shrink: 0; font-size: 16px;
+        }
+        .sidebar-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .sidebar-toggle svg { transition: transform 0.25s ease; }
+        .sidebar.collapsed .sidebar-toggle svg { transform: rotate(180deg); }
 
         .sidebar-header {
             padding: 24px 20px 16px;
             border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
         }
+
+        .sidebar-header-text { flex: 1; min-width: 0; overflow: hidden; }
 
         .sidebar-header h1 {
             font-size: 18px;
@@ -57,11 +95,13 @@
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             margin-bottom: 4px;
+            white-space: nowrap;
         }
 
         .sidebar-header p {
             font-size: 12px;
             color: var(--text-muted);
+            white-space: nowrap;
         }
 
         .nav-section {
@@ -77,6 +117,7 @@
             letter-spacing: 0.5px;
             padding: 0 20px;
             margin-bottom: 4px;
+            white-space: nowrap; overflow: hidden;
         }
 
         .nav-item {
@@ -88,6 +129,7 @@
             color: var(--text-secondary);
             transition: all 0.15s;
             gap: 10px;
+            white-space: nowrap; overflow: hidden;
         }
 
         .nav-item:hover {
@@ -105,7 +147,10 @@
             width: 18px;
             text-align: center;
             font-size: 14px;
+            flex-shrink: 0;
         }
+
+        .nav-item-text { overflow: hidden; text-overflow: ellipsis; }
 
         /* ===== Main Content ===== */
         .main-content {
@@ -644,69 +689,74 @@
 </head>
 <body>
     <!-- Sidebar -->
-    <nav class="sidebar">
+    <nav class="sidebar" id="sidebar">
         <div class="sidebar-header">
-            <h1>技术分析平台</h1>
-            <p>背离分析 + 均线分析 · ETH回测</p>
+            <div class="sidebar-header-text">
+                <h1>技术分析平台</h1>
+                <p>背离分析 + 均线分析 · ETH回测</p>
+            </div>
+            <button class="sidebar-toggle" id="sidebarToggle" title="收起/展开菜单">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
         </div>
 
         <div class="nav-section">
             <div class="nav-section-title">概览</div>
-            <div class="nav-item active" data-page="overview">
-                <span class="nav-icon">📖</span> 书籍大纲
+            <div class="nav-item active" data-page="overview" data-tooltip="书籍大纲">
+                <span class="nav-icon">📖</span><span class="nav-item-text">书籍大纲</span>
             </div>
-            <div class="nav-item" data-page="architecture">
-                <span class="nav-icon">🏗️</span> 项目架构
+            <div class="nav-item" data-page="architecture" data-tooltip="项目架构">
+                <span class="nav-icon">🏗️</span><span class="nav-item-text">项目架构</span>
             </div>
         </div>
 
         <div class="nav-section">
             <div class="nav-section-title">代码实现</div>
-            <div class="nav-item" data-page="code-indicators">
-                <span class="nav-icon">📊</span> 技术指标计算
+            <div class="nav-item" data-page="code-indicators" data-tooltip="技术指标计算">
+                <span class="nav-icon">📊</span><span class="nav-item-text">技术指标计算</span>
             </div>
-            <div class="nav-item" data-page="code-pattern">
-                <span class="nav-icon">📐</span> 几何形态背离
+            <div class="nav-item" data-page="code-pattern" data-tooltip="几何形态背离">
+                <span class="nav-icon">📐</span><span class="nav-item-text">几何形态背离</span>
             </div>
-            <div class="nav-item" data-page="code-macd">
-                <span class="nav-icon">📈</span> MACD背离
+            <div class="nav-item" data-page="code-macd" data-tooltip="MACD背离">
+                <span class="nav-icon">📈</span><span class="nav-item-text">MACD背离</span>
             </div>
-            <div class="nav-item" data-page="code-exhaustion">
-                <span class="nav-icon">⚡</span> 背离与背驰
+            <div class="nav-item" data-page="code-exhaustion" data-tooltip="背离与背驰">
+                <span class="nav-icon">⚡</span><span class="nav-item-text">背离与背驰</span>
             </div>
-            <div class="nav-item" data-page="code-other">
-                <span class="nav-icon">🔬</span> 其他指标背离
+            <div class="nav-item" data-page="code-other" data-tooltip="其他指标背离">
+                <span class="nav-icon">🔬</span><span class="nav-item-text">其他指标背离</span>
             </div>
         </div>
 
         <div class="nav-section">
             <div class="nav-section-title">ETH/USDT 回测</div>
-            <div class="nav-item" data-page="global-strategy">
-                <span class="nav-icon">🏆</span> 全局最优策略
+            <div class="nav-item" data-page="global-strategy" data-tooltip="全局最优策略">
+                <span class="nav-icon">🏆</span><span class="nav-item-text">全局最优策略</span>
             </div>
-            <div class="nav-item" data-page="strategy-compare">
-                <span class="nav-icon">🔬</span> 策略优化对比
+            <div class="nav-item" data-page="strategy-compare" data-tooltip="策略优化对比">
+                <span class="nav-icon">🔬</span><span class="nav-item-text">策略优化对比</span>
             </div>
-            <div class="nav-item" data-page="strategy-futures">
-                <span class="nav-icon">📊</span> 合约做空策略
+            <div class="nav-item" data-page="strategy-futures" data-tooltip="合约做空策略">
+                <span class="nav-icon">📊</span><span class="nav-item-text">合约做空策略</span>
             </div>
-            <div class="nav-item" data-page="ma-strategy">
-                <span class="nav-icon">📈</span> 均线技术分析
+            <div class="nav-item" data-page="ma-strategy" data-tooltip="均线技术分析">
+                <span class="nav-icon">📈</span><span class="nav-item-text">均线技术分析</span>
             </div>
-            <div class="nav-item" data-page="combined-strategy">
-                <span class="nav-icon">🔗</span> 双书融合策略
+            <div class="nav-item" data-page="combined-strategy" data-tooltip="双书融合策略">
+                <span class="nav-icon">🔗</span><span class="nav-item-text">双书融合策略</span>
             </div>
-            <div class="nav-item" data-page="multi-compare">
-                <span class="nav-icon">📊</span> 多周期对比
+            <div class="nav-item" data-page="multi-compare" data-tooltip="多周期对比">
+                <span class="nav-icon">📊</span><span class="nav-item-text">多周期对比</span>
             </div>
-            <div class="nav-item" data-page="backtest-summary">
-                <span class="nav-icon">💰</span> 单周期详情
+            <div class="nav-item" data-page="backtest-summary" data-tooltip="单周期详情">
+                <span class="nav-icon">💰</span><span class="nav-item-text">单周期详情</span>
             </div>
-            <div class="nav-item" data-page="backtest-chart">
-                <span class="nav-icon">📉</span> K线与信号
+            <div class="nav-item" data-page="backtest-chart" data-tooltip="K线与信号">
+                <span class="nav-icon">📉</span><span class="nav-item-text">K线与信号</span>
             </div>
-            <div class="nav-item" data-page="backtest-trades">
-                <span class="nav-icon">📋</span> 交易明细
+            <div class="nav-item" data-page="backtest-trades" data-tooltip="交易明细">
+                <span class="nav-icon">📋</span><span class="nav-item-text">交易明细</span>
             </div>
         </div>
     </nav>
@@ -5384,6 +5434,20 @@
             </div>
         `;
     }
+    </script>
+    <script>
+    (function() {
+        var sidebar = document.getElementById('sidebar');
+        var toggle = document.getElementById('sidebarToggle');
+        var STORAGE_KEY = 'sidebar_collapsed';
+        if (localStorage.getItem(STORAGE_KEY) === '1') {
+            sidebar.classList.add('collapsed');
+        }
+        toggle.addEventListener('click', function() {
+            sidebar.classList.toggle('collapsed');
+            localStorage.setItem(STORAGE_KEY, sidebar.classList.contains('collapsed') ? '1' : '0');
+        });
+    })();
     </script>
 </body>
 </html>

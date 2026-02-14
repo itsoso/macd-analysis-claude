@@ -21,6 +21,7 @@
             --accent-purple: #a855f7;
             --border: #2a2d3e;
             --sidebar-w: 280px;
+            --sidebar-collapsed-w: 60px;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -32,14 +33,44 @@
             width: var(--sidebar-w); min-width: var(--sidebar-w);
             background: var(--bg-secondary); border-right: 1px solid var(--border);
             display: flex; flex-direction: column; overflow-y: auto;
+            transition: width 0.25s cubic-bezier(.4,0,.2,1), min-width 0.25s cubic-bezier(.4,0,.2,1);
         }
-        .sidebar-header { padding: 24px 20px 16px; border-bottom: 1px solid var(--border); }
+        /* ── 侧边栏收起状态 ── */
+        .sidebar.collapsed {
+            width: var(--sidebar-collapsed-w); min-width: var(--sidebar-collapsed-w);
+        }
+        .sidebar.collapsed .sidebar-header h1,
+        .sidebar.collapsed .sidebar-header p,
+        .sidebar.collapsed .nav-section-title,
+        .sidebar.collapsed .nav-item-text,
+        .sidebar.collapsed .user-name,
+        .sidebar.collapsed .logout-btn { display: none; }
+        .sidebar.collapsed .sidebar-header { padding: 16px 0; text-align: center; }
+        .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
+        .sidebar.collapsed .nav-item .nav-icon { width: auto; font-size: 18px; }
+        .sidebar.collapsed .nav-item.active { border-left: none; border-bottom: 2px solid var(--accent-blue); }
+        .sidebar.collapsed .sidebar-footer { justify-content: center; padding: 12px 0; }
+        .sidebar.collapsed .user-info { gap: 0; }
+        .sidebar.collapsed .user-avatar { font-size: 20px; }
+        .sidebar.collapsed .nav-section { padding: 8px 0; }
+        /* ── 收起/展开按钮 ── */
+        .sidebar-toggle {
+            background: none; border: none; color: var(--text-muted); cursor: pointer;
+            width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center;
+            justify-content: center; transition: all 0.2s; flex-shrink: 0; font-size: 16px;
+        }
+        .sidebar-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .sidebar-toggle svg { transition: transform 0.25s ease; }
+        .sidebar.collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+        .sidebar-header { padding: 24px 20px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .sidebar-header-text { flex: 1; min-width: 0; overflow: hidden; }
         .sidebar-header h1 {
             font-size: 18px; font-weight: 700;
             background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
             -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 4px;
+            white-space: nowrap;
         }
-        .sidebar-header p { font-size: 12px; color: var(--text-muted); }
+        .sidebar-header p { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
         .sidebar-footer {
             margin-top: auto; padding: 12px 16px;
             border-top: 1px solid var(--border);
@@ -48,29 +79,31 @@
         }
         .user-info { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
         .user-avatar { font-size: 16px; }
-        .user-name { font-weight: 500; }
+        .user-name { font-weight: 500; white-space: nowrap; }
         .logout-btn {
             font-size: 12px; color: var(--text-muted); text-decoration: none;
             padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
-            transition: all 0.2s;
+            transition: all 0.2s; white-space: nowrap;
         }
         .logout-btn:hover { color: var(--accent-red); border-color: var(--accent-red); background: rgba(255,77,106,0.08); }
         .nav-section { padding: 12px 0; border-bottom: 1px solid var(--border); }
         .nav-section-title {
             font-size: 11px; font-weight: 600; color: var(--text-muted);
             text-transform: uppercase; letter-spacing: 0.5px; padding: 0 20px; margin-bottom: 4px;
+            white-space: nowrap; overflow: hidden;
         }
         a.nav-item {
             display: flex; align-items: center; padding: 8px 20px; cursor: pointer;
             font-size: 13px; color: var(--text-secondary); transition: all 0.15s;
-            gap: 10px; text-decoration: none;
+            gap: 10px; text-decoration: none; white-space: nowrap; overflow: hidden;
         }
         a.nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
         a.nav-item.active {
             background: rgba(74, 158, 255, 0.1); color: var(--accent-blue);
             border-left: 2px solid var(--accent-blue);
         }
-        .nav-icon { width: 18px; text-align: center; font-size: 14px; }
+        .nav-icon { width: 18px; text-align: center; font-size: 14px; flex-shrink: 0; }
+        .nav-item-text { overflow: hidden; text-overflow: ellipsis; }
         .main-content { flex: 1; overflow-y: auto; padding: 32px 40px; max-width: 1200px; }
         .page-title { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
         .page-subtitle { font-size: 14px; color: var(--text-secondary); margin-bottom: 32px; }
@@ -157,8 +190,19 @@
         .rank-1 { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #000; }
         .rank-2 { background: linear-gradient(135deg, #c0c0c0, #a0a0a0); color: #000; }
         .rank-3 { background: linear-gradient(135deg, #cd7f32, #a0622a); color: #fff; }
+        /* ── 收起状态下的 tooltip ── */
+        .sidebar.collapsed .nav-item { position: relative; }
+        .sidebar.collapsed .nav-item::after {
+            content: attr(data-tooltip);
+            position: absolute; left: 100%; top: 50%; transform: translateY(-50%);
+            background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border);
+            padding: 4px 10px; border-radius: 6px; font-size: 12px; white-space: nowrap;
+            pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 1000;
+            margin-left: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .sidebar.collapsed .nav-item:hover::after { opacity: 1; }
         @media (max-width: 900px) {
-            .sidebar { width: 220px; min-width: 220px; }
+            :root { --sidebar-w: 220px; }
             .main-content { padding: 24px 20px; }
             .principle-grid { grid-template-columns: 1fr; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -167,147 +211,152 @@
     </style>
 </head>
 <body>
-    <nav class="sidebar">
+    <nav class="sidebar" id="sidebar">
         <div class="sidebar-header">
-            <h1>技术分析平台</h1>
-            <p>六书融合 · ETH/USDT 回测</p>
+            <div class="sidebar-header-text">
+                <h1>技术分析平台</h1>
+                <p>六书融合 · ETH/USDT 回测</p>
+            </div>
+            <button class="sidebar-toggle" id="sidebarToggle" title="收起/展开菜单">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
         </div>
         <div class="nav-section">
             <div class="nav-section-title">书籍大纲</div>
-            <a class="nav-item {% if active_page == 'overview' %}active{% endif %}" href="/">
-                <span class="nav-icon">📖</span> 背离技术分析
+            <a class="nav-item {% if active_page == 'overview' %}active{% endif %}" href="/" data-tooltip="背离技术分析">
+                <span class="nav-icon">📖</span><span class="nav-item-text">背离技术分析</span>
             </a>
-            <a class="nav-item {% if active_page == 'book-ma' %}active{% endif %}" href="/book/ma">
-                <span class="nav-icon">📈</span> 均线技术分析
+            <a class="nav-item {% if active_page == 'book-ma' %}active{% endif %}" href="/book/ma" data-tooltip="均线技术分析">
+                <span class="nav-icon">📈</span><span class="nav-item-text">均线技术分析</span>
             </a>
-            <a class="nav-item {% if active_page == 'book-candlestick' %}active{% endif %}" href="/book/candlestick">
-                <span class="nav-icon">🕯️</span> 日本蜡烛图技术
+            <a class="nav-item {% if active_page == 'book-candlestick' %}active{% endif %}" href="/book/candlestick" data-tooltip="日本蜡烛图技术">
+                <span class="nav-icon">🕯️</span><span class="nav-item-text">日本蜡烛图技术</span>
             </a>
-            <a class="nav-item {% if active_page == 'book-bollinger' %}active{% endif %}" href="/book/bollinger">
-                <span class="nav-icon">📉</span> 布林线
+            <a class="nav-item {% if active_page == 'book-bollinger' %}active{% endif %}" href="/book/bollinger" data-tooltip="布林线">
+                <span class="nav-icon">📉</span><span class="nav-item-text">布林线</span>
             </a>
-            <a class="nav-item {% if active_page == 'book-volume-price' %}active{% endif %}" href="/book/volume-price">
-                <span class="nav-icon">📊</span> 量价分析
+            <a class="nav-item {% if active_page == 'book-volume-price' %}active{% endif %}" href="/book/volume-price" data-tooltip="量价分析">
+                <span class="nav-icon">📊</span><span class="nav-item-text">量价分析</span>
             </a>
-            <a class="nav-item {% if active_page == 'book-kdj' %}active{% endif %}" href="/book/kdj">
-                <span class="nav-icon">📈</span> KDJ波段操作
+            <a class="nav-item {% if active_page == 'book-kdj' %}active{% endif %}" href="/book/kdj" data-tooltip="KDJ波段操作">
+                <span class="nav-icon">📈</span><span class="nav-item-text">KDJ波段操作</span>
             </a>
-            <a class="nav-item {% if active_page == 'book-turtle' %}active{% endif %}" href="/book/turtle">
-                <span class="nav-icon">🐢</span> 海龟交易法则
+            <a class="nav-item {% if active_page == 'book-turtle' %}active{% endif %}" href="/book/turtle" data-tooltip="海龟交易法则">
+                <span class="nav-icon">🐢</span><span class="nav-item-text">海龟交易法则</span>
             </a>
-            <a class="nav-item {% if active_page == 'naked-kline' %}active{% endif %}" href="/strategy/naked-kline">
-                <span class="nav-icon">🕯️</span> 裸K线交易法
+            <a class="nav-item {% if active_page == 'naked-kline' %}active{% endif %}" href="/strategy/naked-kline" data-tooltip="裸K线交易法">
+                <span class="nav-icon">🕯️</span><span class="nav-item-text">裸K线交易法</span>
             </a>
-            <a class="nav-item {% if active_page == 'naked-kline-daily' %}active{% endif %}" href="/strategy/naked-kline-daily">
-                <span class="nav-icon">📅</span> 裸K线·逐日盈亏
+            <a class="nav-item {% if active_page == 'naked-kline-daily' %}active{% endif %}" href="/strategy/naked-kline-daily" data-tooltip="裸K线·逐日盈亏">
+                <span class="nav-icon">📅</span><span class="nav-item-text">裸K线·逐日盈亏</span>
             </a>
-            <a class="nav-item {% if active_page == 'architecture' %}active{% endif %}" href="/architecture">
-                <span class="nav-icon">🏗️</span> 项目架构
+            <a class="nav-item {% if active_page == 'architecture' %}active{% endif %}" href="/architecture" data-tooltip="项目架构">
+                <span class="nav-icon">🏗️</span><span class="nav-item-text">项目架构</span>
             </a>
         </div>
         <div class="nav-section">
             <div class="nav-section-title">代码实现</div>
-            <a class="nav-item {% if active_page == 'code-indicators' %}active{% endif %}" href="/code/indicators">
-                <span class="nav-icon">📊</span> 技术指标计算
+            <a class="nav-item {% if active_page == 'code-indicators' %}active{% endif %}" href="/code/indicators" data-tooltip="技术指标计算">
+                <span class="nav-icon">📊</span><span class="nav-item-text">技术指标计算</span>
             </a>
-            <a class="nav-item {% if active_page == 'code-pattern' %}active{% endif %}" href="/code/pattern">
-                <span class="nav-icon">📐</span> 几何形态背离
+            <a class="nav-item {% if active_page == 'code-pattern' %}active{% endif %}" href="/code/pattern" data-tooltip="几何形态背离">
+                <span class="nav-icon">📐</span><span class="nav-item-text">几何形态背离</span>
             </a>
-            <a class="nav-item {% if active_page == 'code-macd' %}active{% endif %}" href="/code/macd">
-                <span class="nav-icon">📈</span> MACD背离
+            <a class="nav-item {% if active_page == 'code-macd' %}active{% endif %}" href="/code/macd" data-tooltip="MACD背离">
+                <span class="nav-icon">📈</span><span class="nav-item-text">MACD背离</span>
             </a>
-            <a class="nav-item {% if active_page == 'code-exhaustion' %}active{% endif %}" href="/code/exhaustion">
-                <span class="nav-icon">⚡</span> 背离与背驰
+            <a class="nav-item {% if active_page == 'code-exhaustion' %}active{% endif %}" href="/code/exhaustion" data-tooltip="背离与背驰">
+                <span class="nav-icon">⚡</span><span class="nav-item-text">背离与背驰</span>
             </a>
-            <a class="nav-item {% if active_page == 'code-other' %}active{% endif %}" href="/code/other">
-                <span class="nav-icon">🔬</span> 其他指标背离
+            <a class="nav-item {% if active_page == 'code-other' %}active{% endif %}" href="/code/other" data-tooltip="其他指标背离">
+                <span class="nav-icon">🔬</span><span class="nav-item-text">其他指标背离</span>
             </a>
         </div>
         <div class="nav-section">
             <div class="nav-section-title">ETH/USDT 回测</div>
-            <a class="nav-item {% if active_page == 'global-strategy' %}active{% endif %}" href="/strategy/global">
-                <span class="nav-icon">🏆</span> 全局最优策略
+            <a class="nav-item {% if active_page == 'global-strategy' %}active{% endif %}" href="/strategy/global" data-tooltip="全局最优策略">
+                <span class="nav-icon">🏆</span><span class="nav-item-text">全局最优策略</span>
             </a>
-            <a class="nav-item {% if active_page == 'strategy-compare' %}active{% endif %}" href="/strategy/compare">
-                <span class="nav-icon">🔬</span> 策略优化对比
+            <a class="nav-item {% if active_page == 'strategy-compare' %}active{% endif %}" href="/strategy/compare" data-tooltip="策略优化对比">
+                <span class="nav-icon">🔬</span><span class="nav-item-text">策略优化对比</span>
             </a>
-            <a class="nav-item {% if active_page == 'strategy-futures' %}active{% endif %}" href="/strategy/futures">
-                <span class="nav-icon">📊</span> 合约做空策略
+            <a class="nav-item {% if active_page == 'strategy-futures' %}active{% endif %}" href="/strategy/futures" data-tooltip="合约做空策略">
+                <span class="nav-icon">📊</span><span class="nav-item-text">合约做空策略</span>
             </a>
-            <a class="nav-item {% if active_page == 'ma-strategy' %}active{% endif %}" href="/strategy/ma">
-                <span class="nav-icon">📈</span> 均线技术分析
+            <a class="nav-item {% if active_page == 'ma-strategy' %}active{% endif %}" href="/strategy/ma" data-tooltip="均线技术分析">
+                <span class="nav-icon">📈</span><span class="nav-item-text">均线技术分析</span>
             </a>
-            <a class="nav-item {% if active_page == 'combined-strategy' %}active{% endif %}" href="/strategy/combined">
-                <span class="nav-icon">🔗</span> 双书融合策略
+            <a class="nav-item {% if active_page == 'combined-strategy' %}active{% endif %}" href="/strategy/combined" data-tooltip="双书融合策略">
+                <span class="nav-icon">🔗</span><span class="nav-item-text">双书融合策略</span>
             </a>
-            <a class="nav-item {% if active_page == 'c6-detail' %}active{% endif %}" href="/strategy/c6-detail">
-                <span class="nav-icon">🔥</span> C6策略代码详解
+            <a class="nav-item {% if active_page == 'c6-detail' %}active{% endif %}" href="/strategy/c6-detail" data-tooltip="C6策略代码详解">
+                <span class="nav-icon">🔥</span><span class="nav-item-text">C6策略代码详解</span>
             </a>
         </div>
         <div class="nav-section">
             <div class="nav-section-title">新书策略 (三书)</div>
-            <a class="nav-item {% if active_page == 'candlestick' %}active{% endif %}" href="/strategy/candlestick">
-                <span class="nav-icon">🕯️</span> 蜡烛图形态
+            <a class="nav-item {% if active_page == 'candlestick' %}active{% endif %}" href="/strategy/candlestick" data-tooltip="蜡烛图形态">
+                <span class="nav-icon">🕯️</span><span class="nav-item-text">蜡烛图形态</span>
             </a>
-            <a class="nav-item {% if active_page == 'bollinger' %}active{% endif %}" href="/strategy/bollinger">
-                <span class="nav-icon">📉</span> 布林带策略
+            <a class="nav-item {% if active_page == 'bollinger' %}active{% endif %}" href="/strategy/bollinger" data-tooltip="布林带策略">
+                <span class="nav-icon">📉</span><span class="nav-item-text">布林带策略</span>
             </a>
-            <a class="nav-item {% if active_page == 'volume-price' %}active{% endif %}" href="/strategy/volume-price">
-                <span class="nav-icon">📊</span> 量价分析
+            <a class="nav-item {% if active_page == 'volume-price' %}active{% endif %}" href="/strategy/volume-price" data-tooltip="量价分析">
+                <span class="nav-icon">📊</span><span class="nav-item-text">量价分析</span>
             </a>
-            <a class="nav-item {% if active_page == 'five-book' %}active{% endif %}" href="/strategy/five-book">
-                <span class="nav-icon">⭐</span> 五书融合策略
+            <a class="nav-item {% if active_page == 'five-book' %}active{% endif %}" href="/strategy/five-book" data-tooltip="五书融合策略">
+                <span class="nav-icon">⭐</span><span class="nav-item-text">五书融合策略</span>
             </a>
-            <a class="nav-item {% if active_page == 'best-strategy' %}active{% endif %}" href="/strategy/best">
-                <span class="nav-icon">🏆</span> 最佳策略详解
+            <a class="nav-item {% if active_page == 'best-strategy' %}active{% endif %}" href="/strategy/best" data-tooltip="最佳策略详解">
+                <span class="nav-icon">🏆</span><span class="nav-item-text">最佳策略详解</span>
             </a>
-            <a class="nav-item {% if active_page == 'optimize-sl-tp' %}active{% endif %}" href="/strategy/optimize-sl-tp">
-                <span class="nav-icon">🔧</span> 止盈止损优化
+            <a class="nav-item {% if active_page == 'optimize-sl-tp' %}active{% endif %}" href="/strategy/optimize-sl-tp" data-tooltip="止盈止损优化">
+                <span class="nav-icon">🔧</span><span class="nav-item-text">止盈止损优化</span>
             </a>
-            <a class="nav-item {% if active_page == 'optimal-strategy' %}active{% endif %}" href="/strategy/optimal">
-                <span class="nav-icon">💎</span> 最优策略详解
+            <a class="nav-item {% if active_page == 'optimal-strategy' %}active{% endif %}" href="/strategy/optimal" data-tooltip="最优策略详解">
+                <span class="nav-icon">💎</span><span class="nav-item-text">最优策略详解</span>
             </a>
-            <a class="nav-item {% if active_page == 'six-book' %}active{% endif %}" href="/strategy/six-book">
-                <span class="nav-icon">⭐</span> 六书融合策略
+            <a class="nav-item {% if active_page == 'six-book' %}active{% endif %}" href="/strategy/six-book" data-tooltip="六书融合策略">
+                <span class="nav-icon">⭐</span><span class="nav-item-text">六书融合策略</span>
             </a>
-            <a class="nav-item {% if active_page == 'optimize-six-book' %}active{% endif %}" href="/strategy/optimize-six-book">
-                <span class="nav-icon">🚀</span> 六书优化(超越86.69%)
+            <a class="nav-item {% if active_page == 'optimize-six-book' %}active{% endif %}" href="/strategy/optimize-six-book" data-tooltip="六书优化(超越86.69%)">
+                <span class="nav-icon">🚀</span><span class="nav-item-text">六书优化(超越86.69%)</span>
             </a>
-            <a class="nav-item {% if active_page == 'multi-tf-backtest' %}active{% endif %}" href="/strategy/multi-tf-backtest">
-                <span class="nav-icon">🔗</span> 多周期联合决策回测
+            <a class="nav-item {% if active_page == 'multi-tf-backtest' %}active{% endif %}" href="/strategy/multi-tf-backtest" data-tooltip="多周期联合决策回测">
+                <span class="nav-icon">🔗</span><span class="nav-item-text">多周期联合决策回测</span>
             </a>
-            <a class="nav-item {% if active_page == 'multi-tf-backtest-30d-7d' %}active{% endif %}" href="/strategy/multi-tf-backtest-30d-7d">
-                <span class="nav-icon">📅</span> 多周期 60/30/7 回测
+            <a class="nav-item {% if active_page == 'multi-tf-backtest-30d-7d' %}active{% endif %}" href="/strategy/multi-tf-backtest-30d-7d" data-tooltip="多周期 60/30/7 回测">
+                <span class="nav-icon">📅</span><span class="nav-item-text">多周期 60/30/7 回测</span>
             </a>
-            <a class="nav-item {% if active_page == 'multi-tf-date-range-report' %}active{% endif %}" href="/strategy/multi-tf-date-range-report">
-                <span class="nav-icon">🗓️</span> 多周期区间回测(DB)
+            <a class="nav-item {% if active_page == 'multi-tf-date-range-report' %}active{% endif %}" href="/strategy/multi-tf-date-range-report" data-tooltip="多周期区间回测(DB)">
+                <span class="nav-icon">🗓️</span><span class="nav-item-text">多周期区间回测(DB)</span>
             </a>
-            <a class="nav-item {% if active_page == 'multi-tf-daily' %}active{% endif %}" href="/strategy/multi-tf-daily">
-                <span class="nav-icon">📋</span> 多周期·逐日盈亏
+            <a class="nav-item {% if active_page == 'multi-tf-daily' %}active{% endif %}" href="/strategy/multi-tf-daily" data-tooltip="多周期·逐日盈亏">
+                <span class="nav-icon">📋</span><span class="nav-item-text">多周期·逐日盈亏</span>
             </a>
-            <a class="nav-item {% if active_page == 'multi-tf-deep-dive' %}active{% endif %}" href="/strategy/multi-tf-deep-dive">
-                <span class="nav-icon">🧠</span> 多周期联合决策 · 代码详解
+            <a class="nav-item {% if active_page == 'multi-tf-deep-dive' %}active{% endif %}" href="/strategy/multi-tf-deep-dive" data-tooltip="多周期联合决策·代码详解">
+                <span class="nav-icon">🧠</span><span class="nav-item-text">多周期联合决策·代码详解</span>
             </a>
-            <a class="nav-item {% if active_page == 'six-book-deep-dive' %}active{% endif %}" href="/strategy/six-book-deep-dive">
-                <span class="nav-icon">📖</span> 六书优化 · 代码详解
+            <a class="nav-item {% if active_page == 'six-book-deep-dive' %}active{% endif %}" href="/strategy/six-book-deep-dive" data-tooltip="六书优化·代码详解">
+                <span class="nav-icon">📖</span><span class="nav-item-text">六书优化·代码详解</span>
             </a>
-            <a class="nav-item {% if active_page == 'backtest-30d-7d' %}active{% endif %}" href="/strategy/backtest-30d-7d">
-                <span class="nav-icon">📊</span> 30天 vs 7天回测
+            <a class="nav-item {% if active_page == 'backtest-30d-7d' %}active{% endif %}" href="/strategy/backtest-30d-7d" data-tooltip="30天 vs 7天回测">
+                <span class="nav-icon">📊</span><span class="nav-item-text">30天 vs 7天回测</span>
             </a>
-            <a class="nav-item {% if active_page == 'live-trading-guide' %}active{% endif %}" href="/strategy/live-trading-guide">
-                <span class="nav-icon">🔒</span> 实盘验证指南
+            <a class="nav-item {% if active_page == 'live-trading-guide' %}active{% endif %}" href="/strategy/live-trading-guide" data-tooltip="实盘验证指南">
+                <span class="nav-icon">🔒</span><span class="nav-item-text">实盘验证指南</span>
             </a>
-            <a class="nav-item {% if active_page == 'live-control' %}active{% endif %}" href="/strategy/live-control">
-                <span class="nav-icon">🎛️</span> 实盘控制面板
+            <a class="nav-item {% if active_page == 'live-control' %}active{% endif %}" href="/strategy/live-control" data-tooltip="实盘控制面板">
+                <span class="nav-icon">🎛️</span><span class="nav-item-text">实盘控制面板</span>
             </a>
         </div>
         <div class="nav-section">
             <div class="nav-section-title">其他回测</div>
-            <a class="nav-item {% if active_page == 'multi-compare' %}active{% endif %}" href="/strategy/multi">
-                <span class="nav-icon">📊</span> 多周期对比
+            <a class="nav-item {% if active_page == 'multi-compare' %}active{% endif %}" href="/strategy/multi" data-tooltip="多周期对比">
+                <span class="nav-icon">📊</span><span class="nav-item-text">多周期对比</span>
             </a>
-            <a class="nav-item {% if active_page == 'backtest' %}active{% endif %}" href="/strategy/backtest">
-                <span class="nav-icon">💰</span> 单周期回测
+            <a class="nav-item {% if active_page == 'backtest' %}active{% endif %}" href="/strategy/backtest" data-tooltip="单周期回测">
+                <span class="nav-icon">💰</span><span class="nav-item-text">单周期回测</span>
             </a>
         </div>
         <div class="sidebar-footer">
@@ -321,6 +370,21 @@
     <div class="main-content">
         {% block content %}{% endblock %}
     </div>
+    <script>
+    (function() {
+        var sidebar = document.getElementById('sidebar');
+        var toggle = document.getElementById('sidebarToggle');
+        var STORAGE_KEY = 'sidebar_collapsed';
+        // 从 localStorage 恢复状态
+        if (localStorage.getItem(STORAGE_KEY) === '1') {
+            sidebar.classList.add('collapsed');
+        }
+        toggle.addEventListener('click', function() {
+            sidebar.classList.toggle('collapsed');
+            localStorage.setItem(STORAGE_KEY, sidebar.classList.contains('collapsed') ? '1' : '0');
+        });
+    })();
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

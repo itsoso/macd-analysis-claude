@@ -394,6 +394,374 @@ def api_multi_tf_daily_export_trades():
     )
 
 
+# ── Excel 导出辅助函数 ──
+def _excel_styles():
+    """返回统一的 Excel 样式字典"""
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    return {
+        'header_font': Font(bold=True, color="FFFFFF", size=10),
+        'header_fill': PatternFill(start_color="2B3E50", end_color="2B3E50", fill_type="solid"),
+        'green_font': Font(color="228B22", bold=True),
+        'red_font': Font(color="DC143C", bold=True),
+        'bold_font': Font(bold=True, size=10),
+        'title_font': Font(bold=True, size=12, color="2B3E50"),
+        'thin_border': Border(
+            left=Side(style='thin', color='D0D0D0'),
+            right=Side(style='thin', color='D0D0D0'),
+            top=Side(style='thin', color='D0D0D0'),
+            bottom=Side(style='thin', color='D0D0D0'),
+        ),
+        'center': Alignment(horizontal='center', vertical='center'),
+    }
+
+
+def _load_run_data(run_id_param):
+    """加载指定 run 的数据，返回 (data, error_response)"""
+    from multi_tf_daily_db import load_latest_run, load_run_by_id
+    run_id = request.args.get('run_id', type=int) if run_id_param is None else run_id_param
+    if run_id:
+        data = load_run_by_id(run_id, MULTI_TF_DAILY_DB_FILE)
+    else:
+        data = load_latest_run(MULTI_TF_DAILY_DB_FILE)
+    if not data:
+        return None, (jsonify({"error": "未找到回测数据"}), 404)
+    return data, None
+
+
+def _build_monthly_summary(daily):
+    """从逐日记录构建月度汇总数据"""
+    month_map = {}
+    for d in daily:
+        mon = d.get('date', '')[:7]
+        if not mon:
+            continue
+        if mon not in month_map:
+            month_map[mon] = {'start': None, 'end': None, 'trades': 0, 'pnl': 0, 'days': 0,
+                              'max_dd': 0, 'positive_days': 0}
+        entry = month_map[mon]
+        if entry['start'] is None:
+            entry['start'] = d.get('total_value', 0)
+        entry['end'] = d.get('total_value', 0)
+        entry['trades'] += d.get('day_trades', 0)
+        entry['pnl'] += d.get('day_pnl', 0)
+        entry['days'] += 1
+        dd = abs(d.get('drawdown_pct', 0))
+        if dd > entry['max_dd']:
+            entry['max_dd'] = dd
+        if (d.get('day_pnl', 0) or 0) > 0:
+            entry['positive_days'] += 1
+    return month_map
+
+
+def _write_monthly_sheet(ws, monthly_map, styles):
+    """将月度汇总写入一个 worksheet"""
+    headers = ['月份', '期初资金', '期末资金', '月收益%', '交易次数',
+               '已实现PnL', '交易天数', '盈利天数', '月最大回撤%']
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = styles['header_font']
+        cell.fill = styles['header_fill']
+        cell.alignment = styles['center']
+        cell.border = styles['thin_border']
+
+    months = sorted(monthly_map.keys())
+    for i, mon in enumerate(months):
+        m = monthly_map[mon]
+        ret_pct = ((m['end'] - m['start']) / m['start'] * 100) if m['start'] else 0
+        vals = [mon, m['start'], m['end'], ret_pct, m['trades'],
+                m['pnl'], m['days'], m['positive_days'], -m['max_dd'] if m['max_dd'] else 0]
+        row = i + 2
+        for col, val in enumerate(vals, 1):
+            cell = ws.cell(row=row, column=col, value=val)
+            cell.border = styles['thin_border']
+            cell.alignment = styles['center']
+            if col in (2, 3) and isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+            if col == 4 and isinstance(val, (int, float)):
+                cell.number_format = '0.00'
+                cell.font = styles['green_font'] if val > 0 else styles['red_font'] if val < 0 else Font()
+            if col == 6 and isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+                cell.font = styles['green_font'] if val > 0 else styles['red_font'] if val < 0 else Font()
+            if col == 9 and isinstance(val, (int, float)):
+                cell.number_format = '0.00'
+                if val < 0:
+                    cell.font = styles['red_font']
+
+    # 合计行
+    total_row = len(months) + 2
+    ws.cell(row=total_row, column=1, value='合计').font = styles['bold_font']
+    total_start = monthly_map[months[0]]['start'] if months else 0
+    total_end = monthly_map[months[-1]]['end'] if months else 0
+    total_ret = ((total_end - total_start) / total_start * 100) if total_start else 0
+    total_trades = sum(m['trades'] for m in monthly_map.values())
+    total_pnl = sum(m['pnl'] for m in monthly_map.values())
+    total_days = sum(m['days'] for m in monthly_map.values())
+    total_pos_days = sum(m['positive_days'] for m in monthly_map.values())
+    totals = [None, total_start, total_end, total_ret, total_trades, total_pnl, total_days, total_pos_days, None]
+    for col, val in enumerate(totals, 1):
+        if val is not None:
+            cell = ws.cell(row=total_row, column=col, value=val)
+            cell.border = styles['thin_border']
+            cell.alignment = styles['center']
+            cell.font = styles['bold_font']
+            if col in (2, 3, 6) and isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+            if col == 4:
+                cell.number_format = '0.00'
+
+    # 自动列宽
+    widths = [10, 14, 14, 12, 10, 14, 10, 10, 12]
+    from openpyxl.utils import get_column_letter
+    for col, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    return total_row
+
+
+def _write_summary_sheet(ws, data, styles):
+    """将回测汇总信息写入一个 worksheet"""
+    from openpyxl.styles import Font
+    m = data.get('run_meta', {})
+    s = data.get('summary', {})
+    snap = data.get('strategy_snapshot', {})
+    trades = data.get('trade_details', [])
+    tag = data.get('version_tag', '')
+    rid = data.get('run_id', '')
+
+    items = [
+        ("回测版本", f"Run #{rid} {tag}"),
+        ("回测区间", f"{m.get('start_date', '')} ~ {m.get('end_date', '')}"),
+        ("杠杆", f"{m.get('leverage', 5)}x"),
+        ("策略组合", m.get('combo_name', '')),
+        ("", ""),
+        ("策略收益", f"{s.get('total_return_pct', 0):.2f}%"),
+        ("买入持有", f"{s.get('buy_hold_return_pct', 0):.2f}%"),
+        ("Alpha", f"{s.get('alpha_pct', 0):.2f}%"),
+        ("最大回撤", f"{s.get('max_drawdown_pct', 0):.2f}%"),
+        ("期末资金", f"${s.get('final_capital', 0):,.0f}"),
+        ("", ""),
+        ("总交易数", str(s.get('total_trades', len(trades)))),
+        ("平仓数", str(s.get('close_trades', 0))),
+        ("胜率", f"{s.get('win_rate_pct', 0):.1f}%"),
+        ("盈亏比", f"{s.get('profit_factor', 0):.2f}"),
+        ("总费用", f"${s.get('total_costs', 0):,.2f}"),
+        ("费用拖累", f"{s.get('fee_drag_pct', 0):.2f}%"),
+        ("强平次数", str(s.get('liquidations', 0))),
+        ("", ""),
+        ("趋势保护v3", "ON" if snap.get('use_trend_enhance') else "OFF"),
+        ("微结构", "ON" if snap.get('use_microstructure') else "OFF"),
+        ("双引擎", "ON" if snap.get('use_dual_engine') else "OFF"),
+        ("波动目标", "ON" if snap.get('use_vol_target') else "OFF"),
+        ("LiveGate", "ON" if snap.get('use_live_gate') else "OFF"),
+        ("Regime", "ON" if snap.get('use_regime_aware') else "OFF"),
+        ("风控保护", "ON" if snap.get('use_protections') else "OFF"),
+    ]
+    ws.column_dimensions['A'].width = 16
+    ws.column_dimensions['B'].width = 35
+    for i, (label, value) in enumerate(items):
+        if not label:
+            continue
+        cell_l = ws.cell(row=i + 1, column=1, value=label)
+        cell_l.font = styles['bold_font']
+        cell_v = ws.cell(row=i + 1, column=2, value=value)
+        if 'ON' == value:
+            cell_v.font = Font(color="228B22", bold=True)
+        elif 'OFF' == value:
+            cell_v.font = Font(color="999999")
+
+
+def _write_daily_sheet(ws, daily, styles):
+    """将逐日盈亏数据写入一个 worksheet"""
+    from openpyxl.styles import Font
+    headers = ['日期', '账户总值', 'USDT余额', 'ETH数量', 'ETH价值', 'ETH价格',
+               '冻结保证金', '多头持仓', '空头持仓', '多头入场价', '空头入场价',
+               '多头浮盈', '空头浮盈', '当日PnL', '当日交易数', '累计收益%', '回撤%']
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = styles['header_font']
+        cell.fill = styles['header_fill']
+        cell.alignment = styles['center']
+        cell.border = styles['thin_border']
+
+    initial = daily[0].get('total_value', 200000) if daily else 200000
+    for i, d in enumerate(daily):
+        row = i + 2
+        eq = d.get('total_value', 0)
+        cum_ret = (eq / initial - 1) * 100 if initial else 0
+        vals = [
+            d.get('date', ''), eq,
+            d.get('usdt', 0), d.get('eth_qty', 0), d.get('spot_eth_value', 0),
+            d.get('eth_price', 0), d.get('frozen_margin', 0),
+            1 if d.get('has_long') else 0, 1 if d.get('has_short') else 0,
+            d.get('long_entry', ''), d.get('short_entry', ''),
+            d.get('long_pnl', 0), d.get('short_pnl', 0),
+            d.get('day_pnl', 0), d.get('day_trades', 0),
+            cum_ret, -(abs(d.get('drawdown_pct', 0))),
+        ]
+        for col, val in enumerate(vals, 1):
+            cell = ws.cell(row=row, column=col, value=val)
+            cell.border = styles['thin_border']
+            cell.alignment = styles['center']
+            if col in (2, 3, 5, 7) and isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+            if col == 4 and isinstance(val, (int, float)):
+                cell.number_format = '0.0000'
+            if col == 6 and isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+            if col in (10, 11) and isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+            if col in (12, 13, 14) and isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+                cell.font = styles['green_font'] if val > 0 else styles['red_font'] if val < 0 else Font()
+            if col in (16, 17) and isinstance(val, (int, float)):
+                cell.number_format = '0.00'
+                if col == 17 and val < 0:
+                    cell.font = styles['red_font']
+
+    from openpyxl.utils import get_column_letter
+    widths = [12, 14, 14, 10, 14, 12, 12, 8, 8, 12, 12, 12, 12, 14, 10, 10, 10]
+    for col, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+
+def _write_trades_sheet(ws, trades, styles):
+    """将完整交易记录写入一个 worksheet"""
+    from openpyxl.styles import Font
+    headers = ['#', '时间', '操作', '方向', '市场价', '成交价', '数量',
+               '名义价值', '保证金', '杠杆', '手续费', '滑点', 'PnL',
+               '账户总值', '原因']
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = styles['header_font']
+        cell.fill = styles['header_fill']
+        cell.alignment = styles['center']
+        cell.border = styles['thin_border']
+
+    action_map = {
+        'OPEN_LONG': '开多', 'CLOSE_LONG': '平多',
+        'OPEN_SHORT': '开空', 'CLOSE_SHORT': '平空',
+        'LIQUIDATED': '强平', 'SPOT_BUY': '现买',
+        'SPOT_SELL': '现卖', 'PARTIAL_TP': '部分止盈',
+    }
+    dir_map = {'long': '多', 'short': '空'}
+
+    for i, t in enumerate(trades):
+        row = i + 2
+        pnl = t.get('pnl')
+        vals = [
+            i + 1,
+            str(t.get('time', '')).replace('T', ' ')[:19],
+            action_map.get(t.get('action', ''), t.get('action', '')),
+            dir_map.get(t.get('direction', ''), '-'),
+            t.get('market_price'), t.get('exec_price'), t.get('quantity'),
+            t.get('notional_value'), t.get('margin'), t.get('leverage'),
+            t.get('fee'), t.get('slippage_cost'), pnl,
+            t.get('after_total'), t.get('reason', ''),
+        ]
+        for col, val in enumerate(vals, 1):
+            cell = ws.cell(row=row, column=col, value=val)
+            cell.border = styles['thin_border']
+            if col in (5, 6, 7, 8, 9, 11, 12, 13, 14):
+                cell.alignment = styles['center']
+            if col == 13 and pnl is not None:
+                cell.font = styles['green_font'] if pnl > 0 else styles['red_font'] if pnl < 0 else Font()
+                cell.number_format = '#,##0.00'
+            if col in (5, 6, 8, 9, 14) and isinstance(val, (int, float)):
+                cell.number_format = '#,##0.00'
+            if col == 7 and isinstance(val, (int, float)):
+                cell.number_format = '0.0000'
+
+    from openpyxl.utils import get_column_letter
+    for col in range(1, len(headers) + 1):
+        max_len = len(str(headers[col - 1]))
+        for row_idx in range(2, min(len(trades) + 2, 52)):
+            val = ws.cell(row=row_idx, column=col).value
+            if val is not None:
+                max_len = max(max_len, min(len(str(val)), 40))
+        ws.column_dimensions[get_column_letter(col)].width = max_len + 3
+
+
+@app.route('/api/multi_tf_daily/export_monthly')
+def api_multi_tf_daily_export_monthly():
+    """导出月度汇总为 Excel 文件。"""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    data, err = _load_run_data(None)
+    if err:
+        return err
+
+    daily = data.get('daily_records', [])
+    actual_run_id = data.get('run_id', 'latest')
+    tag = data.get('version_tag', '')
+    styles = _excel_styles()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "月度汇总"
+    _write_monthly_sheet(ws, _build_monthly_summary(daily), styles)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"monthly_run{actual_run_id}_{tag.replace(' ', '_')}.xlsx" if tag else f"monthly_run{actual_run_id}.xlsx"
+    return send_file(output,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     as_attachment=True, download_name=filename)
+
+
+@app.route('/api/multi_tf_daily/export_all')
+def api_multi_tf_daily_export_all():
+    """导出整个页面所有数据为多 Sheet Excel 文件: 回测汇总 + 逐日盈亏 + 月度汇总 + 完整交易记录。"""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    data, err = _load_run_data(None)
+    if err:
+        return err
+
+    daily = data.get('daily_records', [])
+    trades = data.get('trade_details', [])
+    actual_run_id = data.get('run_id', 'latest')
+    tag = data.get('version_tag', '')
+    styles = _excel_styles()
+
+    wb = Workbook()
+
+    # Sheet 1: 回测汇总
+    ws1 = wb.active
+    ws1.title = "回测汇总"
+    _write_summary_sheet(ws1, data, styles)
+
+    # Sheet 2: 逐日盈亏 (全量字段)
+    if daily:
+        ws2 = wb.create_sheet("逐日盈亏")
+        _write_daily_sheet(ws2, daily, styles)
+
+    # Sheet 3: 月度汇总
+    if daily:
+        ws3 = wb.create_sheet("月度汇总")
+        _write_monthly_sheet(ws3, _build_monthly_summary(daily), styles)
+
+    # Sheet 4: 完整交易记录
+    if trades:
+        ws4 = wb.create_sheet("交易记录")
+        _write_trades_sheet(ws4, trades, styles)
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"全量报告_run{actual_run_id}_{tag.replace(' ', '_')}.xlsx" if tag else f"全量报告_run{actual_run_id}.xlsx"
+    return send_file(output,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     as_attachment=True, download_name=filename)
+
+
 # ======================================================
 #   实盘控制面板
 # ======================================================
