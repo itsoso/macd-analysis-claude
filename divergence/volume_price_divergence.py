@@ -30,6 +30,7 @@ class VolumePriceDivergenceAnalyzer:
         """
         signals = []
         df = self.df
+        _vol = df['volume'].values
         up_segs, _ = identify_trend_segments(df, order)
 
         for i in range(1, len(up_segs)):
@@ -40,8 +41,8 @@ class VolumePriceDivergenceAnalyzer:
                 continue
 
             # 比较两段的总成交量
-            prev_vol = df['volume'].iloc[prev['start_idx']:prev['end_idx'] + 1].sum()
-            curr_vol = df['volume'].iloc[curr['start_idx']:curr['end_idx'] + 1].sum()
+            prev_vol = np.sum(_vol[prev['start_idx']:prev['end_idx'] + 1])
+            curr_vol = np.sum(_vol[curr['start_idx']:curr['end_idx'] + 1])
 
             # 标准化: 按K线数量平均
             prev_avg_vol = prev_vol / max(prev['duration'], 1)
@@ -74,14 +75,15 @@ class VolumePriceDivergenceAnalyzer:
         """
         signals = []
         df = self.df
+        _vol = df['volume'].values
         _, down_segs = identify_trend_segments(df, order)
 
         for i in range(1, len(down_segs)):
             prev = down_segs[i - 1]
             curr = down_segs[i]
 
-            prev_vol = df['volume'].iloc[prev['start_idx']:prev['end_idx'] + 1].sum()
-            curr_vol = df['volume'].iloc[curr['start_idx']:curr['end_idx'] + 1].sum()
+            prev_vol = np.sum(_vol[prev['start_idx']:prev['end_idx'] + 1])
+            curr_vol = np.sum(_vol[curr['start_idx']:curr['end_idx'] + 1])
 
             prev_avg_vol = prev_vol / max(prev['duration'], 1)
             curr_avg_vol = curr_vol / max(curr['duration'], 1)
@@ -113,6 +115,9 @@ class VolumePriceDivergenceAnalyzer:
         """
         signals = []
         df = self.df
+        _vol = df['volume'].values
+        _close = df['close'].values
+        _vol_cumsum = np.cumsum(_vol)
 
         # 计算成交量的滚动最小值和平均值
         vol_min = df['volume'].rolling(window=lookback * 3, min_periods=lookback).min()
@@ -120,19 +125,19 @@ class VolumePriceDivergenceAnalyzer:
 
         for i in range(lookback * 3, len(df)):
             # 当前量是否接近历史地量
-            recent_vol = df['volume'].iloc[i - lookback:i]
-            recent_avg = recent_vol.mean()
-            overall_avg = df['volume'].iloc[:i].mean()
+            recent_vol = _vol[i - lookback:i]
+            recent_avg = np.mean(recent_vol)
+            overall_avg = _vol_cumsum[i - 1] / i
 
             if recent_avg < overall_avg * 0.3:
                 # 检查近期价格变化幅度(要求极小)
-                recent_price = df['close'].iloc[i - lookback:i]
-                price_range = (recent_price.max() - recent_price.min()) / recent_price.mean()
+                recent_price = _close[i - lookback:i]
+                price_range = (np.max(recent_price) - np.min(recent_price)) / np.mean(recent_price)
 
                 if price_range < 0.1:  # 价格波动小于10%
                     # 检查是否有放量启动迹象
                     if i < len(df) - 1:
-                        next_vol = df['volume'].iloc[i]
+                        next_vol = _vol[i]
                         if next_vol > recent_avg * 2:
                             signals.append({
                                 'type': 'volume_price_divergence',
@@ -140,7 +145,7 @@ class VolumePriceDivergenceAnalyzer:
                                 'direction': 'bottom',
                                 'idx': i,
                                 'date': df.index[i],
-                                'price': df['close'].iloc[i],
+                                'price': _close[i],
                                 'recent_avg_volume': recent_avg,
                                 'breakout_volume': next_vol,
                                 'volume_ratio': next_vol / recent_avg,

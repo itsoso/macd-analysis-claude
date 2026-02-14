@@ -46,6 +46,7 @@ class ExhaustionAnalyzer:
         - 底背驰: DIF从低位返回0轴附近
         """
         dif = self.df['DIF']
+        _dif = dif.values
         returns = []
 
         if direction == 'top':
@@ -53,14 +54,14 @@ class ExhaustionAnalyzer:
             was_high = False
             high_peak = 0
             for i in range(1, len(dif)):
-                if dif.iloc[i] > 0.5:  # 远离零轴
+                if _dif[i] > 0.5:  # 远离零轴
                     was_high = True
-                    high_peak = max(high_peak, dif.iloc[i])
-                elif was_high and abs(dif.iloc[i]) < high_peak * 0.2:
+                    high_peak = max(high_peak, _dif[i])
+                elif was_high and abs(_dif[i]) < high_peak * 0.2:
                     # 返回零轴附近
                     returns.append({
                         'idx': i,
-                        'dif': dif.iloc[i],
+                        'dif': _dif[i],
                         'peak': high_peak
                     })
                     was_high = False
@@ -70,13 +71,13 @@ class ExhaustionAnalyzer:
             was_low = False
             low_valley = 0
             for i in range(1, len(dif)):
-                if dif.iloc[i] < -0.5:
+                if _dif[i] < -0.5:
                     was_low = True
-                    low_valley = min(low_valley, dif.iloc[i])
-                elif was_low and abs(dif.iloc[i]) < abs(low_valley) * 0.2:
+                    low_valley = min(low_valley, _dif[i])
+                elif was_low and abs(_dif[i]) < abs(low_valley) * 0.2:
                     returns.append({
                         'idx': i,
-                        'dif': dif.iloc[i],
+                        'dif': _dif[i],
                         'valley': low_valley
                     })
                     was_low = False
@@ -97,6 +98,8 @@ class ExhaustionAnalyzer:
         """
         df = self.df
         groups = self.bar_groups
+        _high = df['high'].values
+        _low = df['low'].values
 
         target_type = 'red' if direction == 'top' else 'green'
         target_groups = [g for g in groups if g['type'] == target_type]
@@ -128,13 +131,13 @@ class ExhaustionAnalyzer:
             if area_ratio < 0.9 or length_ratio < 0.9:
                 # 确认股价条件
                 if direction == 'top':
-                    prev_high = df['high'].iloc[prev_g['start_idx']:prev_g['end_idx'] + 1].max()
-                    curr_high = df['high'].iloc[curr_g['start_idx']:curr_g['end_idx'] + 1].max()
+                    prev_high = np.max(_high[prev_g['start_idx']:prev_g['end_idx'] + 1])
+                    curr_high = np.max(_high[curr_g['start_idx']:curr_g['end_idx'] + 1])
                     if curr_high <= prev_high:
                         continue
                 else:
-                    prev_low = df['low'].iloc[prev_g['start_idx']:prev_g['end_idx'] + 1].min()
-                    curr_low = df['low'].iloc[curr_g['start_idx']:curr_g['end_idx'] + 1].min()
+                    prev_low = np.min(_low[prev_g['start_idx']:prev_g['end_idx'] + 1])
+                    curr_low = np.min(_low[curr_g['start_idx']:curr_g['end_idx'] + 1])
                     if curr_low >= prev_low:
                         continue
 
@@ -229,22 +232,24 @@ class ExhaustionAnalyzer:
     def _check_dif_divergence(self, div, direction):
         """检查DIF线是否在该隔堆背离处产生背离"""
         df = self.df
+        _dif = df['DIF'].values
         curr_g = div['curr_group']
         prev_g = div['prev_group']
 
         if direction == 'top':
-            dif_prev_max = df['DIF'].iloc[prev_g['start_idx']:prev_g['end_idx'] + 1].max()
-            dif_curr_max = df['DIF'].iloc[curr_g['start_idx']:curr_g['end_idx'] + 1].max()
+            dif_prev_max = np.max(_dif[prev_g['start_idx']:prev_g['end_idx'] + 1])
+            dif_curr_max = np.max(_dif[curr_g['start_idx']:curr_g['end_idx'] + 1])
             return dif_curr_max < dif_prev_max
         else:
-            dif_prev_min = df['DIF'].iloc[prev_g['start_idx']:prev_g['end_idx'] + 1].min()
-            dif_curr_min = df['DIF'].iloc[curr_g['start_idx']:curr_g['end_idx'] + 1].min()
+            dif_prev_min = np.min(_dif[prev_g['start_idx']:prev_g['end_idx'] + 1])
+            dif_curr_min = np.min(_dif[curr_g['start_idx']:curr_g['end_idx'] + 1])
             return dif_curr_min > dif_prev_min
 
     def _create_exhaustion_signal(self, div, direction, confidence, desc,
                                     separated_count, zero_return_count):
         """创建背驰信号"""
         df = self.df
+        _close = df['close'].values
         idx = div['idx']
         dir_cn = '顶' if direction == 'top' else '底'
 
@@ -253,7 +258,7 @@ class ExhaustionAnalyzer:
             'direction': direction,
             'idx': idx,
             'date': df.index[idx],
-            'price': df['close'].iloc[idx],
+            'price': _close[idx],
             'confidence': confidence,
             'separated_divergence_count': separated_count,
             'zero_return_count': zero_return_count,

@@ -40,6 +40,8 @@ class KDJDivergenceAnalyzer:
         """
         signals = []
         df = self.df
+        _high = df['high'].values
+        _k = df['K'].values
 
         swing_highs = find_swing_highs(df['high'], order)
         high_indices = [df.index.get_loc(i) for i in swing_highs[swing_highs].index]
@@ -48,13 +50,13 @@ class KDJDivergenceAnalyzer:
             idx_prev = high_indices[i - 1]
             idx_curr = high_indices[i]
 
-            price_prev = df['high'].iloc[idx_prev]
-            price_curr = df['high'].iloc[idx_curr]
+            price_prev = _high[idx_prev]
+            price_curr = _high[idx_curr]
 
             # KD值取附近区域的最大值
             window = 3
-            k_prev = df['K'].iloc[max(0, idx_prev - window):idx_prev + window + 1].max()
-            k_curr = df['K'].iloc[max(0, idx_curr - window):idx_curr + window + 1].max()
+            k_prev = np.max(_k[max(0, idx_prev - window):idx_prev + window + 1])
+            k_curr = np.max(_k[max(0, idx_curr - window):idx_curr + window + 1])
 
             if price_curr > price_prev and k_curr < k_prev and k_prev > cfg.KDJ_OVERBOUGHT * 0.8:
                 severity = (k_prev - k_curr) / k_prev if k_prev > 0 else 0
@@ -79,6 +81,8 @@ class KDJDivergenceAnalyzer:
         """
         signals = []
         df = self.df
+        _low = df['low'].values
+        _k = df['K'].values
 
         swing_lows = find_swing_lows(df['low'], order)
         low_indices = [df.index.get_loc(i) for i in swing_lows[swing_lows].index]
@@ -87,12 +91,12 @@ class KDJDivergenceAnalyzer:
             idx_prev = low_indices[i - 1]
             idx_curr = low_indices[i]
 
-            price_prev = df['low'].iloc[idx_prev]
-            price_curr = df['low'].iloc[idx_curr]
+            price_prev = _low[idx_prev]
+            price_curr = _low[idx_curr]
 
             window = 3
-            k_prev = df['K'].iloc[max(0, idx_prev - window):idx_prev + window + 1].min()
-            k_curr = df['K'].iloc[max(0, idx_curr - window):idx_curr + window + 1].min()
+            k_prev = np.min(_k[max(0, idx_prev - window):idx_prev + window + 1])
+            k_curr = np.min(_k[max(0, idx_curr - window):idx_curr + window + 1])
 
             if price_curr < price_prev and k_curr > k_prev and k_prev < cfg.KDJ_OVERSOLD * 1.2:
                 severity = (k_curr - k_prev) / abs(k_prev) if k_prev != 0 else 0

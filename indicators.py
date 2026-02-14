@@ -233,34 +233,36 @@ def find_swing_highs(high: pd.Series, order: int = 5) -> pd.Series:
     识别摆动高点 (更宽松的峰值识别, 用于趋势段划分)
     order: 高点两侧需要有多少根较低的K线
     """
-    n = len(high)
-    peaks = pd.Series(False, index=high.index)
+    arr = high.values
+    n = len(arr)
+    peaks_arr = np.zeros(n, dtype=bool)
     for i in range(order, n - order):
         is_peak = True
         for j in range(1, order + 1):
-            if high.iloc[i] <= high.iloc[i - j] or high.iloc[i] <= high.iloc[i + j]:
+            if arr[i] <= arr[i - j] or arr[i] <= arr[i + j]:
                 is_peak = False
                 break
         if is_peak:
-            peaks.iloc[i] = True
-    return peaks
+            peaks_arr[i] = True
+    return pd.Series(peaks_arr, index=high.index)
 
 
 def find_swing_lows(low: pd.Series, order: int = 5) -> pd.Series:
     """
     识别摆动低点 (更宽松的谷值识别, 用于趋势段划分)
     """
-    n = len(low)
-    valleys = pd.Series(False, index=low.index)
+    arr = low.values
+    n = len(arr)
+    valleys_arr = np.zeros(n, dtype=bool)
     for i in range(order, n - order):
         is_valley = True
         for j in range(1, order + 1):
-            if low.iloc[i] >= low.iloc[i - j] or low.iloc[i] >= low.iloc[i + j]:
+            if arr[i] >= arr[i - j] or arr[i] >= arr[i + j]:
                 is_valley = False
                 break
         if is_valley:
-            valleys.iloc[i] = True
-    return valleys
+            valleys_arr[i] = True
+    return pd.Series(valleys_arr, index=low.index)
 
 
 # ============================================================
@@ -338,34 +340,36 @@ def identify_bar_groups(bar: pd.Series):
         - 'max_bar_idx': 最长柱线位置
     """
     groups = []
-    if len(bar) == 0:
+    arr = bar.values
+    n = len(arr)
+    if n == 0:
         return groups
 
-    current_type = 'red' if bar.iloc[0] >= 0 else 'green'
+    current_type = 'red' if arr[0] >= 0 else 'green'
     start = 0
 
-    for i in range(1, len(bar) + 1):
-        if i < len(bar):
-            new_type = 'red' if bar.iloc[i] >= 0 else 'green'
+    for i in range(1, n + 1):
+        if i < n:
+            new_type = 'red' if arr[i] >= 0 else 'green'
         else:
             new_type = None
 
-        if new_type != current_type or i == len(bar):
+        if new_type != current_type or i == n:
             end = i - 1
-            segment = bar.iloc[start:i]
-            abs_segment = segment.abs()
+            segment = arr[start:i]
+            abs_segment = np.abs(segment)
 
             group = {
                 'type': current_type,
                 'start_idx': start,
                 'end_idx': end,
-                'max_length': abs_segment.max(),
-                'area': abs_segment.sum(),
-                'max_bar_idx': start + abs_segment.argmax()
+                'max_length': np.max(abs_segment),
+                'area': np.sum(abs_segment),
+                'max_bar_idx': start + np.argmax(abs_segment)
             }
             groups.append(group)
 
-            if i < len(bar):
+            if i < n:
                 start = i
                 current_type = new_type
 
@@ -385,10 +389,12 @@ def find_macd_crosses(dif: pd.Series, dea: pd.Series):
         {'type': 'golden'/'death', 'idx': int, 'position': 'above_zero'/'below_zero',
          'dif': float, 'dea': float}
     """
+    dif_arr = dif.values
+    dea_arr = dea.values
     crosses = []
-    for i in range(1, len(dif)):
-        prev_diff = dif.iloc[i - 1] - dea.iloc[i - 1]
-        curr_diff = dif.iloc[i] - dea.iloc[i]
+    for i in range(1, len(dif_arr)):
+        prev_diff = dif_arr[i - 1] - dea_arr[i - 1]
+        curr_diff = dif_arr[i] - dea_arr[i]
 
         if prev_diff <= 0 and curr_diff > 0:
             cross_type = 'golden'
@@ -397,14 +403,14 @@ def find_macd_crosses(dif: pd.Series, dea: pd.Series):
         else:
             continue
 
-        position = 'above_zero' if dif.iloc[i] > 0 else 'below_zero'
+        position = 'above_zero' if dif_arr[i] > 0 else 'below_zero'
 
         crosses.append({
             'type': cross_type,
             'idx': i,
             'position': position,
-            'dif': dif.iloc[i],
-            'dea': dea.iloc[i]
+            'dif': dif_arr[i],
+            'dea': dea_arr[i]
         })
 
     return crosses
@@ -419,45 +425,47 @@ def find_kdj_crosses(k: pd.Series, d: pd.Series):
     金叉: KD值在20以下, K上穿D
     死叉: KD值在80以上, K下穿D
     """
+    k_arr = k.values
+    d_arr = d.values
     crosses = []
-    for i in range(1, len(k)):
-        prev_diff = k.iloc[i - 1] - d.iloc[i - 1]
-        curr_diff = k.iloc[i] - d.iloc[i]
+    for i in range(1, len(k_arr)):
+        prev_diff = k_arr[i - 1] - d_arr[i - 1]
+        curr_diff = k_arr[i] - d_arr[i]
 
         if prev_diff <= 0 and curr_diff > 0:
             # K上穿D
-            if k.iloc[i] <= cfg.KDJ_OVERSOLD or d.iloc[i] <= cfg.KDJ_OVERSOLD:
+            if k_arr[i] <= cfg.KDJ_OVERSOLD or d_arr[i] <= cfg.KDJ_OVERSOLD:
                 crosses.append({
                     'type': 'golden',
                     'idx': i,
-                    'k': k.iloc[i],
-                    'd': d.iloc[i],
+                    'k': k_arr[i],
+                    'd': d_arr[i],
                     'valid': True  # 在20以下的金叉才有效
                 })
             else:
                 crosses.append({
                     'type': 'golden',
                     'idx': i,
-                    'k': k.iloc[i],
-                    'd': d.iloc[i],
+                    'k': k_arr[i],
+                    'd': d_arr[i],
                     'valid': False
                 })
         elif prev_diff >= 0 and curr_diff < 0:
             # K下穿D
-            if k.iloc[i] >= cfg.KDJ_OVERBOUGHT or d.iloc[i] >= cfg.KDJ_OVERBOUGHT:
+            if k_arr[i] >= cfg.KDJ_OVERBOUGHT or d_arr[i] >= cfg.KDJ_OVERBOUGHT:
                 crosses.append({
                     'type': 'death',
                     'idx': i,
-                    'k': k.iloc[i],
-                    'd': d.iloc[i],
+                    'k': k_arr[i],
+                    'd': d_arr[i],
                     'valid': True  # 在80以上的死叉才有效
                 })
             else:
                 crosses.append({
                     'type': 'death',
                     'idx': i,
-                    'k': k.iloc[i],
-                    'd': d.iloc[i],
+                    'k': k_arr[i],
+                    'd': d_arr[i],
                     'valid': False
                 })
 

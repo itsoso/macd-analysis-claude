@@ -37,6 +37,8 @@ class CCIDivergenceAnalyzer:
         """
         signals = []
         df = self.df
+        _high = df['high'].values
+        _cci = df['CCI'].values
 
         swing_highs = find_swing_highs(df['high'], order)
         high_indices = [df.index.get_loc(i) for i in swing_highs[swing_highs].index]
@@ -45,12 +47,12 @@ class CCIDivergenceAnalyzer:
             idx_prev = high_indices[i - 1]
             idx_curr = high_indices[i]
 
-            price_prev = df['high'].iloc[idx_prev]
-            price_curr = df['high'].iloc[idx_curr]
+            price_prev = _high[idx_prev]
+            price_curr = _high[idx_curr]
 
             window = 3
-            cci_prev = df['CCI'].iloc[max(0, idx_prev - window):idx_prev + window + 1].max()
-            cci_curr = df['CCI'].iloc[max(0, idx_curr - window):idx_curr + window + 1].max()
+            cci_prev = np.max(_cci[max(0, idx_prev - window):idx_prev + window + 1])
+            cci_curr = np.max(_cci[max(0, idx_curr - window):idx_curr + window + 1])
 
             # CCI顶背离必须在超买区
             if (price_curr > price_prev and cci_curr < cci_prev and
@@ -78,6 +80,8 @@ class CCIDivergenceAnalyzer:
         """
         signals = []
         df = self.df
+        _low = df['low'].values
+        _cci = df['CCI'].values
 
         swing_lows = find_swing_lows(df['low'], order)
         low_indices = [df.index.get_loc(i) for i in swing_lows[swing_lows].index]
@@ -87,12 +91,12 @@ class CCIDivergenceAnalyzer:
             idx_prev = low_indices[i - 1]
             idx_curr = low_indices[i]
 
-            price_prev = df['low'].iloc[idx_prev]
-            price_curr = df['low'].iloc[idx_curr]
+            price_prev = _low[idx_prev]
+            price_curr = _low[idx_curr]
 
             window = 3
-            cci_prev = df['CCI'].iloc[max(0, idx_prev - window):idx_prev + window + 1].min()
-            cci_curr = df['CCI'].iloc[max(0, idx_curr - window):idx_curr + window + 1].min()
+            cci_prev = np.min(_cci[max(0, idx_prev - window):idx_prev + window + 1])
+            cci_curr = np.min(_cci[max(0, idx_curr - window):idx_curr + window + 1])
 
             # CCI底背离必须在超卖区
             if (price_curr < price_prev and cci_curr > cci_prev and
@@ -120,29 +124,30 @@ class CCIDivergenceAnalyzer:
         """检测CCI突破春天线/跌破秋天线"""
         signals = []
         df = self.df
-        cci = df['CCI']
+        _cci = df['CCI'].values
+        _close = df['close'].values
 
-        for i in range(1, len(cci)):
+        for i in range(1, len(_cci)):
             # 突破+100春天线
-            if cci.iloc[i - 1] <= cfg.CCI_SPRING and cci.iloc[i] > cfg.CCI_SPRING:
+            if _cci[i - 1] <= cfg.CCI_SPRING and _cci[i] > cfg.CCI_SPRING:
                 signals.append({
                     'type': 'cci_spring_cross',
                     'direction': 'up',
                     'idx': i,
                     'date': df.index[i],
-                    'price': df['close'].iloc[i],
-                    'cci': cci.iloc[i],
+                    'price': _close[i],
+                    'cci': _cci[i],
                     'description': 'CCI突破+100春天线(顺势买入信号)'
                 })
             # 跌破-100秋天线
-            elif cci.iloc[i - 1] >= cfg.CCI_AUTUMN and cci.iloc[i] < cfg.CCI_AUTUMN:
+            elif _cci[i - 1] >= cfg.CCI_AUTUMN and _cci[i] < cfg.CCI_AUTUMN:
                 signals.append({
                     'type': 'cci_autumn_cross',
                     'direction': 'down',
                     'idx': i,
                     'date': df.index[i],
-                    'price': df['close'].iloc[i],
-                    'cci': cci.iloc[i],
+                    'price': _close[i],
+                    'cci': _cci[i],
                     'description': 'CCI跌破-100秋天线(顺势卖出信号)'
                 })
 

@@ -59,27 +59,27 @@ class PatternDivergenceAnalyzer:
 
         signals = []
         df = self.df
+        _close = df['close'].values
+        _open = df['open'].values
 
         for i in range(lookback, len(df)):
             # 计算当前K线的实体大小
-            body = abs(df['close'].iloc[i] - df['open'].iloc[i])
-            price = df['close'].iloc[i]
+            body = abs(_close[i] - _open[i])
+            price = _close[i]
             ratio = body / price if price > 0 else 0
 
             if ratio < body_ratio:
                 continue
 
             # 判断是阴线还是阳线
-            is_bearish = df['close'].iloc[i] < df['open'].iloc[i]
-            is_bullish = df['close'].iloc[i] > df['open'].iloc[i]
+            is_bearish = _close[i] < _open[i]
+            is_bullish = _close[i] > _open[i]
 
             # 判断近期趋势: 用lookback期内的价格变化
-            recent_close = df['close'].iloc[i - lookback:i]
-            trend_change = recent_close.iloc[-1] - recent_close.iloc[0]
+            trend_change = _close[i - 1] - _close[i - lookback]
 
             # 计算近期平均K线实体
-            recent_bodies = abs(df['close'].iloc[i - lookback:i] -
-                                df['open'].iloc[i - lookback:i])
+            recent_bodies = np.abs(_close[i - lookback:i] - _open[i - lookback:i])
             avg_body = recent_bodies.mean()
 
             # 当前K线实体是否显著大于平均水平
@@ -93,7 +93,7 @@ class PatternDivergenceAnalyzer:
                     'direction': 'top',
                     'idx': i,
                     'date': df.index[i] if hasattr(df.index, 'date') else i,
-                    'price': df['close'].iloc[i],
+                    'price': _close[i],
                     'body_size': body,
                     'avg_body': avg_body,
                     'strength': body / avg_body,  # 背离强度
@@ -106,7 +106,7 @@ class PatternDivergenceAnalyzer:
                     'direction': 'bottom',
                     'idx': i,
                     'date': df.index[i] if hasattr(df.index, 'date') else i,
-                    'price': df['close'].iloc[i],
+                    'price': _close[i],
                     'body_size': body,
                     'avg_body': avg_body,
                     'strength': body / avg_body,
@@ -282,18 +282,20 @@ class PatternDivergenceAnalyzer:
 
         signals = []
         df = self.df
+        _close = df['close'].values
+        _ma = df[ma_col].values
 
         for i in range(ma_period + 5, len(df)):
-            price = df['close'].iloc[i]
-            ma_val = df[ma_col].iloc[i]
-            prev_price = df['close'].iloc[i - 1]
-            prev_ma = df[ma_col].iloc[i - 1]
+            price = _close[i]
+            ma_val = _ma[i]
+            prev_price = _close[i - 1]
+            prev_ma = _ma[i - 1]
 
             # 均线方向: 看最近几天的均线斜率
-            ma_slope = (df[ma_col].iloc[i] - df[ma_col].iloc[i - 5]) / df[ma_col].iloc[i - 5]
+            ma_slope = (_ma[i] - _ma[i - 5]) / _ma[i - 5]
 
             # 股价穿越均线的速度(衡量暴涨/暴跌程度)
-            price_velocity = (price - df['close'].iloc[i - 5]) / df['close'].iloc[i - 5]
+            price_velocity = (price - _close[i - 5]) / _close[i - 5]
 
             # 向上交叉背离: 股价从下向上穿过均线, 但均线方向向下
             if (prev_price < prev_ma and price > ma_val and
@@ -371,17 +373,21 @@ class PatternDivergenceAnalyzer:
 
         # 计算短长均线差值
         diff = self.df[short_col] - self.df[long_col]
+        _diff = diff.values
+        _high = self.df['high'].values
+        _low = self.df['low'].values
+        _close = self.df['close'].values
 
         # 划分面积区间(按差值正负分段)
         areas = []
         start = long_period
-        current_sign = 1 if diff.iloc[start] >= 0 else -1
+        current_sign = 1 if _diff[start] >= 0 else -1
 
         for i in range(start + 1, len(diff)):
-            new_sign = 1 if diff.iloc[i] >= 0 else -1
+            new_sign = 1 if _diff[i] >= 0 else -1
             if new_sign != current_sign or i == len(diff) - 1:
                 end = i if new_sign != current_sign else i + 1
-                segment = diff.iloc[start:end].abs()
+                segment = np.abs(_diff[start:end])
                 area_val = segment.sum()
 
                 area_type = 'above' if current_sign > 0 else 'below'
@@ -408,8 +414,8 @@ class PatternDivergenceAnalyzer:
 
             if ratio < shrink_ratio:
                 # 确认股价创新高
-                prev_high = self.df['high'].iloc[prev['start_idx']:prev['end_idx'] + 1].max()
-                curr_high = self.df['high'].iloc[curr['start_idx']:curr['end_idx'] + 1].max()
+                prev_high = np.max(_high[prev['start_idx']:prev['end_idx'] + 1])
+                curr_high = np.max(_high[curr['start_idx']:curr['end_idx'] + 1])
 
                 if curr_high >= prev_high * 0.98:  # 允许一定容差
                     signals.append({
@@ -417,7 +423,7 @@ class PatternDivergenceAnalyzer:
                         'direction': 'top',
                         'idx': curr['end_idx'],
                         'date': self.df.index[curr['end_idx']],
-                        'price': self.df['close'].iloc[curr['end_idx']],
+                        'price': _close[curr['end_idx']],
                         'prev_area': prev['area'],
                         'curr_area': curr['area'],
                         'ratio': ratio,
@@ -434,8 +440,8 @@ class PatternDivergenceAnalyzer:
             ratio = curr['area'] / prev['area'] if prev['area'] > 0 else 1
 
             if ratio < shrink_ratio:
-                prev_low = self.df['low'].iloc[prev['start_idx']:prev['end_idx'] + 1].min()
-                curr_low = self.df['low'].iloc[curr['start_idx']:curr['end_idx'] + 1].min()
+                prev_low = np.min(_low[prev['start_idx']:prev['end_idx'] + 1])
+                curr_low = np.min(_low[curr['start_idx']:curr['end_idx'] + 1])
 
                 if curr_low <= prev_low * 1.02:
                     signals.append({
@@ -443,7 +449,7 @@ class PatternDivergenceAnalyzer:
                         'direction': 'bottom',
                         'idx': curr['end_idx'],
                         'date': self.df.index[curr['end_idx']],
-                        'price': self.df['close'].iloc[curr['end_idx']],
+                        'price': _close[curr['end_idx']],
                         'prev_area': prev['area'],
                         'curr_area': curr['area'],
                         'ratio': ratio,

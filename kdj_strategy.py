@@ -66,8 +66,9 @@ def compute_kdj(df, n=9, m1=3, m2=3):
     alpha_k = 1.0 / m1  # K线平滑系数 (默认 1/3)
     alpha_d = 1.0 / m2  # D线平滑系数 (默认 1/3, 但可以与m1不同)
     
+    rsv_arr = rsv.values  # 预提取numpy数组，避免iloc开销
     for i in range(n - 1, len(df)):  # 从n-1开始, 不跳过首个有效RSV
-        k_values[i] = (1 - alpha_k) * k_values[i-1] + alpha_k * rsv.iloc[i]
+        k_values[i] = (1 - alpha_k) * k_values[i-1] + alpha_k * rsv_arr[i]
         d_values[i] = (1 - alpha_d) * d_values[i-1] + alpha_d * k_values[i]
     
     df['kdj_rsv'] = rsv
@@ -108,20 +109,20 @@ def detect_divergence_top(df, i, lookback=30):
     if i < lookback + 5:
         return 0
     
-    price = df['close'].iloc[i]
-    k_val = df['kdj_k'].iloc[i]
+    close_arr = df['close'].values
+    k_arr = df['kdj_k'].values
     
-    # 在lookback范围内找前一个波峰
-    prices = df['close'].iloc[i-lookback:i]
-    k_vals = df['kdj_k'].iloc[i-lookback:i]
+    price = close_arr[i]
+    k_val = k_arr[i]
+    
+    # 在lookback范围内找前一个波峰 (numpy切片 = 视图, 不复制)
+    prices_slice = close_arr[i-lookback:i]
+    k_slice = k_arr[i-lookback:i]
     
     # 找前一个价格高点
-    prev_high_idx = prices.idxmax()
-    if prev_high_idx == df.index[i]:
-        return 0
-    
-    prev_high_price = prices[prev_high_idx]
-    prev_high_k = k_vals[prev_high_idx]
+    rel_idx = np.argmax(prices_slice)
+    prev_high_price = prices_slice[rel_idx]
+    prev_high_k = k_slice[rel_idx]
     
     # 价格创新高(或接近), 但K线更低
     if price >= prev_high_price * 0.998 and k_val < prev_high_k * 0.92:
@@ -141,18 +142,18 @@ def detect_divergence_bottom(df, i, lookback=30):
     if i < lookback + 5:
         return 0
     
-    price = df['close'].iloc[i]
-    k_val = df['kdj_k'].iloc[i]
+    close_arr = df['close'].values
+    k_arr = df['kdj_k'].values
     
-    prices = df['close'].iloc[i-lookback:i]
-    k_vals = df['kdj_k'].iloc[i-lookback:i]
+    price = close_arr[i]
+    k_val = k_arr[i]
     
-    prev_low_idx = prices.idxmin()
-    if prev_low_idx == df.index[i]:
-        return 0
+    prices_slice = close_arr[i-lookback:i]
+    k_slice = k_arr[i-lookback:i]
     
-    prev_low_price = prices[prev_low_idx]
-    prev_low_k = k_vals[prev_low_idx]
+    rel_idx = np.argmin(prices_slice)
+    prev_low_price = prices_slice[rel_idx]
+    prev_low_k = k_slice[rel_idx]
     
     # 价格创新低(或接近), 但K线更高
     if price <= prev_low_price * 1.002 and k_val > prev_low_k * 1.08:
@@ -172,7 +173,8 @@ def detect_four_touch(df, i, lookback=40, zone='top'):
     if i < lookback:
         return 0
     
-    k_vals = df['kdj_k'].iloc[i-lookback:i+1]
+    k_arr = df['kdj_k'].values
+    k_vals = k_arr[i-lookback:i+1]  # numpy切片, 不复制
     
     if zone == 'top':
         # 统计进入超买区间(>80)的次数
@@ -185,7 +187,7 @@ def detect_four_touch(df, i, lookback=40, zone='top'):
             elif kv < 70:
                 in_zone = False
         
-        if touches >= 4 and k_vals.iloc[-1] < 80:
+        if touches >= 4 and k_vals[-1] < 80:
             return min(35, touches * 8)
     
     elif zone == 'bottom':
@@ -198,7 +200,7 @@ def detect_four_touch(df, i, lookback=40, zone='top'):
             elif kv > 30:
                 in_zone = False
         
-        if touches >= 4 and k_vals.iloc[-1] > 20:
+        if touches >= 4 and k_vals[-1] > 20:
             return min(35, touches * 8)
     
     return 0
@@ -215,9 +217,10 @@ def detect_kd_macd_signal(df, i):
     sell_score = 0
     buy_score = 0
     
-    macd_val = df['kd_macd'].iloc[i]
-    macd_prev = df['kd_macd'].iloc[i-1]
-    macd_prev2 = df['kd_macd'].iloc[i-2]
+    kd_macd_arr = df['kd_macd'].values
+    macd_val = kd_macd_arr[i]
+    macd_prev = kd_macd_arr[i-1]
+    macd_prev2 = kd_macd_arr[i-2]
     
     # 缩头: 红柱从增长转为缩短 (书中第5章第2节)
     if macd_prev > 0 and macd_prev2 > 0 and macd_val > 0:
@@ -254,13 +257,16 @@ def detect_second_cross(df, i, lookback=20, direction='golden'):
     if i < lookback + 2:
         return 0
     
+    k_arr = df['kdj_k'].values
+    d_arr = df['kdj_d'].values
+    
     cross_count = 0
     
     for j in range(i - lookback, i):
-        k = df['kdj_k'].iloc[j]
-        d = df['kdj_d'].iloc[j]
-        k_prev = df['kdj_k'].iloc[j-1]
-        d_prev = df['kdj_d'].iloc[j-1]
+        k = k_arr[j]
+        d = d_arr[j]
+        k_prev = k_arr[j-1]
+        d_prev = d_arr[j-1]
         
         if direction == 'golden':
             if detect_golden_cross(k, d, k_prev, d_prev):
@@ -270,10 +276,10 @@ def detect_second_cross(df, i, lookback=20, direction='golden'):
                 cross_count += 1
     
     # 当前也是交叉
-    k = df['kdj_k'].iloc[i]
-    d = df['kdj_d'].iloc[i]
-    k_prev = df['kdj_k'].iloc[i-1]
-    d_prev = df['kdj_d'].iloc[i-1]
+    k = k_arr[i]
+    d = d_arr[i]
+    k_prev = k_arr[i-1]
+    d_prev = d_arr[i-1]
     
     is_current_cross = False
     if direction == 'golden':
@@ -299,12 +305,15 @@ def detect_pullback_hold(df, i):
     sell_score = 0
     buy_score = 0
     
-    k = df['kdj_k'].iloc[i]
-    d = df['kdj_d'].iloc[i]
-    k_prev = df['kdj_k'].iloc[i-1]
-    d_prev = df['kdj_d'].iloc[i-1]
-    k_prev2 = df['kdj_k'].iloc[i-2]
-    d_prev2 = df['kdj_d'].iloc[i-2]
+    k_arr = df['kdj_k'].values
+    d_arr = df['kdj_d'].values
+    
+    k = k_arr[i]
+    d = d_arr[i]
+    k_prev = k_arr[i-1]
+    d_prev = d_arr[i-1]
+    k_prev2 = k_arr[i-2]
+    d_prev2 = d_arr[i-2]
     
     # 回测不破: K回调接近D但不破, 然后再拉升
     # K在D上方运行, K先下降靠近D, 然后重新上升
@@ -345,35 +354,48 @@ def compute_kdj_scores(df):
     """
     df = compute_kdj(df)
     
-    sell_scores = pd.Series(0.0, index=df.index)
-    buy_scores = pd.Series(0.0, index=df.index)
-    signal_names = pd.Series('', index=df.index, dtype=str)
+    n = len(df)
+    ss_arr = np.zeros(n)
+    bs_arr = np.zeros(n)
+    sig_list = [''] * n
     
-    for i in range(15, len(df)):
+    # 预提取numpy数组 — 避免主循环内反复调用.iloc (核心优化)
+    _k = df['kdj_k'].values
+    _d = df['kdj_d'].values
+    _j = df['kdj_j'].values
+    _kd_macd = df['kd_macd'].values
+    _k_slope = df['kdj_k_slope'].values
+    
+    for i in range(15, n):
         ss = 0  # 卖出分
         bs = 0  # 买入分
+        sell_rc = 0  # 卖出理由计数 (替代字符串匹配)
+        buy_rc = 0   # 买入理由计数
         reasons = []
         
-        k = df['kdj_k'].iloc[i]
-        d = df['kdj_d'].iloc[i]
-        j = df['kdj_j'].iloc[i]
-        k_prev = df['kdj_k'].iloc[i-1]
-        d_prev = df['kdj_d'].iloc[i-1]
-        kd_macd = df['kd_macd'].iloc[i]
+        k = _k[i]
+        d = _d[i]
+        j = _j[i]
+        k_prev = _k[i-1]
+        d_prev = _d[i-1]
         
         # ========== 1. 超买超卖 (第1章+第3章第2节) ==========
         if k > 80 and d > 75:
             ss += 10
+            sell_rc += 1
             reasons.append('超买')
             if j > 100:
                 ss += 5
+                sell_rc += 1
                 reasons.append('J>100')
         
         if k < 20 and d < 25:
             bs += 10
+            buy_rc += 1
             reasons.append('超卖')
             if j < 0:
                 bs += 5
+                buy_rc += 1
                 reasons.append('J<0')
         
         # ========== 2. 金叉/死叉 (第4章第2-3节) ==========
@@ -382,92 +404,115 @@ def compute_kdj_scores(df):
         
         if is_golden:
             if k < 20 and d < 25:
-                # 超卖区金叉 — 最强买入信号
                 bs += 30
+                buy_rc += 1
                 reasons.append('低位金叉')
             elif k < 50:
                 bs += 20
+                buy_rc += 1
                 reasons.append('50下金叉')
             elif k < 80:
                 bs += 10
+                buy_rc += 1
                 reasons.append('高位金叉')
             else:
-                bs += 5  # 80以上金叉, 很弱
+                bs += 5
+                buy_rc += 1
                 reasons.append('极高金叉')
         
         if is_death:
             if k > 80 and d > 75:
-                # 超买区死叉 — 最强卖出信号
                 ss += 30
+                sell_rc += 1
                 reasons.append('高位死叉')
             elif k > 50:
                 ss += 20
+                sell_rc += 1
                 reasons.append('50上死叉')
             elif k > 20:
                 ss += 10
+                sell_rc += 1
                 reasons.append('低位死叉')
             else:
                 ss += 5
+                sell_rc += 1
                 reasons.append('极低死叉')
         
         # ========== 3. 50线穿越 (第3章第1节) ==========
-        k_prev3 = df['kdj_k'].iloc[i-3] if i >= 3 else 50
+        k_prev3 = _k[i-3] if i >= 3 else 50
         if k > 50 and k_prev3 < 50:
             bs += 8
+            buy_rc += 1
             reasons.append('K突破50')
         if k < 50 and k_prev3 > 50:
             ss += 8
+            sell_rc += 1
             reasons.append('K跌破50')
         
         # ========== 4. 背离 (第3章第5节 + 第6章第2节) ==========
         div_top = detect_divergence_top(df, i)
         if div_top > 0:
             ss += div_top
+            sell_rc += 1
             reasons.append(f'顶背离{div_top:.0f}')
         
         div_bottom = detect_divergence_bottom(df, i)
         if div_bottom > 0:
             bs += div_bottom
+            buy_rc += 1
             reasons.append(f'底背离{div_bottom:.0f}')
         
         # ========== 5. KD-MACD柱线信号 (第5章) ==========
         kd_ss, kd_bs = detect_kd_macd_signal(df, i)
         ss += kd_ss
         bs += kd_bs
-        if kd_ss > 0: reasons.append(f'KD柱空{kd_ss}')
-        if kd_bs > 0: reasons.append(f'KD柱多{kd_bs}')
+        if kd_ss > 0:
+            sell_rc += 1
+            reasons.append(f'KD柱空{kd_ss}')
+        if kd_bs > 0:
+            buy_rc += 1
+            reasons.append(f'KD柱多{kd_bs}')
         
         # ========== 6. 二次交叉 (第4章第4节) ==========
         second_golden = detect_second_cross(df, i, direction='golden')
         if second_golden > 0:
             bs += second_golden
+            buy_rc += 1
             reasons.append('二次金叉')
         
         second_death = detect_second_cross(df, i, direction='death')
         if second_death > 0:
             ss += second_death
+            sell_rc += 1
             reasons.append('二次死叉')
         
         # ========== 7. 四撞顶/底 (第6章第1节) ==========
         four_top = detect_four_touch(df, i, zone='top')
         if four_top > 0:
             ss += four_top
+            sell_rc += 1
             reasons.append(f'四撞顶{four_top}')
         
         four_bottom = detect_four_touch(df, i, zone='bottom')
         if four_bottom > 0:
             bs += four_bottom
+            buy_rc += 1
             reasons.append(f'四撞底{four_bottom}')
         
         # ========== 8. 回测不破 / 穿越不过 (第4章第5节) ==========
         pb_ss, pb_bs = detect_pullback_hold(df, i)
         ss += pb_ss
         bs += pb_bs
-        if pb_ss > 0: reasons.append('穿越不过')
-        if pb_bs > 0: reasons.append('回测不破')
+        if pb_ss > 0:
+            sell_rc += 1
+            reasons.append('穿越不过')
+        if pb_bs > 0:
+            buy_rc += 1
+            reasons.append('回测不破')
         
         # ========== 9. K方向加成 (第3章第1节) ==========
-        k_slope = df['kdj_k_slope'].iloc[i] if not np.isnan(df['kdj_k_slope'].iloc[i]) else 0
+        k_slope_val = _k_slope[i]
+        k_slope = k_slope_val if not np.isnan(k_slope_val) else 0
         if k_slope < -10 and k > 60:
             ss += 5  # K线快速下降 + 在高位
         if k_slope > 10 and k < 40:
@@ -476,32 +521,33 @@ def compute_kdj_scores(df):
         # ========== 10. J线极值强化 ==========
         if j > 110 and k_prev > k:  # J极超买+拐头
             ss += 8
+            sell_rc += 1
             reasons.append('J极超买拐头')
         if j < -10 and k_prev < k:  # J极超卖+拐头
             bs += 8
+            buy_rc += 1
             reasons.append('J极超卖拐头')
         
         # ========== 11. 多空分界线方向 (第8章第1节) ==========
-        # K和D都在50以上且上升 = 强多头
         if k > 50 and d > 50 and k_slope > 0:
             bs += 3
-        # K和D都在50以下且下降 = 强空头
         if k < 50 and d < 50 and k_slope < 0:
             ss += 3
         
-        # 可靠性乘数: 分方向计数，同方向来源越多越可靠
-        sell_reasons = sum(1 for r in reasons if any(k in r for k in
-            ['超买', '死叉', '跌破', '顶背离', 'KD柱空', '二次死叉', '四撞顶', '穿越不过', 'J>100', 'J极超买']))
-        buy_reasons = sum(1 for r in reasons if any(k in r for k in
-            ['超卖', '金叉', '突破', '底背离', 'KD柱多', '二次金叉', '四撞底', '回测不破', 'J<0', 'J极超卖']))
-        if sell_reasons >= 3:
+        # 可靠性乘数: 用整数计数替代字符串匹配 (性能优化)
+        if sell_rc >= 3:
             ss *= 1.15
-        if buy_reasons >= 3:
+        if buy_rc >= 3:
             bs *= 1.15
         
-        sell_scores.iloc[i] = min(100, ss)
-        buy_scores.iloc[i] = min(100, bs)
-        signal_names.iloc[i] = ' '.join(reasons[:5])
+        ss_arr[i] = min(100, ss)
+        bs_arr[i] = min(100, bs)
+        if reasons:
+            sig_list[i] = ' '.join(reasons[:5])
+    
+    sell_scores = pd.Series(ss_arr, index=df.index)
+    buy_scores = pd.Series(bs_arr, index=df.index)
+    signal_names = pd.Series(sig_list, index=df.index, dtype=str)
     
     return sell_scores, buy_scores, signal_names
 

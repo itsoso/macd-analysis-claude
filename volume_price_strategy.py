@@ -46,15 +46,12 @@ def compute_volume_indicators(df):
     low = df['low']
     volume = df['volume']
 
-    # === 1. OBV (能量潮) ===
-    obv = pd.Series(0.0, index=df.index)
-    for i in range(1, len(df)):
-        if close.iloc[i] > close.iloc[i - 1]:
-            obv.iloc[i] = obv.iloc[i - 1] + volume.iloc[i]
-        elif close.iloc[i] < close.iloc[i - 1]:
-            obv.iloc[i] = obv.iloc[i - 1] - volume.iloc[i]
-        else:
-            obv.iloc[i] = obv.iloc[i - 1]
+    # === 1. OBV (能量潮) — 向量化 (数学等价: sign(diff)*volume cumsum) ===
+    close_diff = close.diff()
+    direction = np.sign(close_diff.values)
+    direction[0] = 0  # 第一个元素无diff
+    obv_values = (direction * volume.values).cumsum()
+    obv = pd.Series(obv_values, index=df.index)
     df['obv'] = obv
     df['obv_sma20'] = obv.rolling(20, min_periods=5).mean()
     df['obv_sma5'] = obv.rolling(5, min_periods=3).mean()
@@ -77,17 +74,17 @@ def compute_volume_indicators(df):
     df['ad_line'] = ad
     df['ad_sma20'] = ad.rolling(20, min_periods=5).mean()
 
-    # === 5. MFI (资金流量指数, 14周期) ===
+    # === 5. MFI (资金流量指数, 14周期) — 向量化 (数学等价: np.where) ===
     mfi_period = 14
     tp = typical_price
     raw_mf = tp * volume
-    pos_mf = pd.Series(0.0, index=df.index)
-    neg_mf = pd.Series(0.0, index=df.index)
-    for i in range(1, len(df)):
-        if tp.iloc[i] > tp.iloc[i - 1]:
-            pos_mf.iloc[i] = raw_mf.iloc[i]
-        elif tp.iloc[i] < tp.iloc[i - 1]:
-            neg_mf.iloc[i] = raw_mf.iloc[i]
+    tp_diff = tp.diff()
+    tp_diff_arr = tp_diff.values
+    raw_mf_arr = raw_mf.values
+    pos_mf_arr = np.where(tp_diff_arr > 0, raw_mf_arr, 0.0)
+    neg_mf_arr = np.where(tp_diff_arr < 0, raw_mf_arr, 0.0)
+    pos_mf = pd.Series(pos_mf_arr, index=df.index)
+    neg_mf = pd.Series(neg_mf_arr, index=df.index)
 
     pos_sum = pos_mf.rolling(mfi_period, min_periods=mfi_period).sum()
     neg_sum = neg_mf.rolling(mfi_period, min_periods=mfi_period).sum()
@@ -111,21 +108,21 @@ def detect_volume_climax(df, i, lookback=50):
     """放量高潮: 成交量突然放大到平均的3倍+"""
     if i < lookback:
         return None
-    vol_ratio = df['vol_ratio'].iloc[i]
-    if pd.isna(vol_ratio):
+    vr_arr = df['vol_ratio'].values
+    pc_arr = df['price_change'].values
+    vol_ratio = vr_arr[i]
+    if np.isnan(vol_ratio):
         return None
 
     if vol_ratio >= 3.0:
-        price_change = df['price_change'].iloc[i]
-        if pd.isna(price_change):
+        price_change = pc_arr[i]
+        if np.isnan(price_change):
             return None
 
         if price_change > 0.02:
-            # 放量上涨 — 可能是买入高潮(见顶)
             return {'type': 'buying_climax', 'score': -35,
                     'reason': f'买入高潮(量比{vol_ratio:.1f}x)'}
         elif price_change < -0.02:
-            # 放量下跌 — 可能是卖出高潮(见底)
             return {'type': 'selling_climax', 'score': 35,
                     'reason': f'卖出高潮(量比{vol_ratio:.1f}x)'}
     return None
@@ -136,31 +133,40 @@ def detect_volume_divergence(df, i, lookback=20):
     if i < lookback + 5:
         return None
 
-    price_now = df['close'].iloc[i]
-    vol_now = df['vol_sma5'].iloc[i]
-    if pd.isna(vol_now):
+    close_arr = df['close'].values
+    vol5_arr = df['vol_sma5'].values
+
+    price_now = close_arr[i]
+    vol_now = vol5_arr[i]
+    if np.isnan(vol_now):
         return None
 
-    # 回看区间
-    prices = df['close'].iloc[max(0, i - lookback):i]
-    vols = df['vol_sma5'].iloc[max(0, i - lookback):i]
+    # 回看区间 (numpy切片)
+    start = max(0, i - lookback)
+    prices_slice = close_arr[start:i]
+    vols_slice = vol5_arr[start:i]
 
-    if len(prices) < 10 or len(vols.dropna()) < 10:
+    if len(prices_slice) < 10:
+        return None
+    valid_count = np.sum(~np.isnan(vols_slice))
+    if valid_count < 10:
         return None
 
-    price_max = prices.max()
-    price_min = prices.min()
-    vol_at_max = vols.iloc[prices.values.argmax()] if not pd.isna(vols.iloc[prices.values.argmax()]) else None
-    vol_at_min = vols.iloc[prices.values.argmin()] if not pd.isna(vols.iloc[prices.values.argmin()]) else None
+    price_max = np.nanmax(prices_slice)
+    price_min = np.nanmin(prices_slice)
+    max_idx = np.argmax(prices_slice)
+    min_idx = np.argmin(prices_slice)
+    vol_at_max = vols_slice[max_idx]
+    vol_at_min = vols_slice[min_idx]
 
-    # 顶背离: 价格接近或超过前高, 但量能下降
-    if price_now >= price_max * 0.98 and vol_at_max is not None:
+    # 顶背离
+    if price_now >= price_max * 0.98 and not np.isnan(vol_at_max):
         if vol_now < vol_at_max * 0.7:
             return {'type': 'bearish_divergence', 'score': -30,
                     'reason': f'量价顶背离(量降{(1-vol_now/vol_at_max)*100:.0f}%)'}
 
-    # 底背离: 价格接近或低于前低, 但量能下降(卖压减弱)
-    if price_now <= price_min * 1.02 and vol_at_min is not None:
+    # 底背离
+    if price_now <= price_min * 1.02 and not np.isnan(vol_at_min):
         if vol_now < vol_at_min * 0.7:
             return {'type': 'bullish_divergence', 'score': 30,
                     'reason': f'量价底背离(量降{(1-vol_now/vol_at_min)*100:.0f}%)'}
@@ -173,18 +179,22 @@ def detect_volume_breakout(df, i, lookback=20):
     if i < lookback + 5:
         return None
 
-    # 最近5期平均量比
-    recent_ratio = df['vol_ratio'].iloc[max(0, i - 2):i + 1].mean()
-    # 前面的量比(蓄势期)
-    prior_ratio = df['vol_ratio'].iloc[max(0, i - lookback):max(0, i - 3)].mean()
+    vr_arr = df['vol_ratio'].values
+    pc5_arr = df['price_change_5'].values
 
-    if pd.isna(recent_ratio) or pd.isna(prior_ratio):
+    # 最近3期平均量比
+    recent_slice = vr_arr[max(0, i - 2):i + 1]
+    recent_ratio = np.nanmean(recent_slice)
+    # 前面的量比(蓄势期)
+    prior_slice = vr_arr[max(0, i - lookback):max(0, i - 3)]
+    prior_ratio = np.nanmean(prior_slice) if len(prior_slice) > 0 else np.nan
+
+    if np.isnan(recent_ratio) or np.isnan(prior_ratio):
         return None
 
-    # 蓄势: 前期缩量(量比<0.7), 当前放量(量比>1.5)
     if prior_ratio < 0.7 and recent_ratio > 1.5:
-        price_change_5 = df['price_change_5'].iloc[i]
-        if pd.isna(price_change_5):
+        price_change_5 = pc5_arr[i]
+        if np.isnan(price_change_5):
             return None
 
         if price_change_5 > 0.02:
@@ -201,33 +211,34 @@ def detect_obv_divergence(df, i, lookback=20):
     if i < lookback + 5:
         return None
 
-    obv_now = df['obv'].iloc[i]
-    price_now = df['close'].iloc[i]
-    obv_sma = df['obv_sma20'].iloc[i]
+    obv_arr = df['obv'].values
+    close_arr = df['close'].values
+    obv_sma_arr = df['obv_sma20'].values
 
-    if pd.isna(obv_sma):
+    obv_now = obv_arr[i]
+    price_now = close_arr[i]
+    obv_sma = obv_sma_arr[i]
+
+    if np.isnan(obv_sma):
         return None
 
-    # OBV斜率 vs 价格斜率
-    obv_5_ago = df['obv'].iloc[max(0, i - 5)]
-    price_5_ago = df['close'].iloc[max(0, i - 5)]
+    obv_5_ago = obv_arr[max(0, i - 5)]
+    price_5_ago = close_arr[max(0, i - 5)]
 
     if price_5_ago == 0:
         return None
 
     price_slope = (price_now - price_5_ago) / price_5_ago
-    obv_range = df['obv'].iloc[max(0, i - 20):i + 1]
-    obv_std = obv_range.std()
+    obv_slice = obv_arr[max(0, i - 20):i + 1]
+    obv_std = np.std(obv_slice)
     if obv_std == 0:
         return None
     obv_slope = (obv_now - obv_5_ago) / obv_std
 
-    # 价格上涨但OBV下降 = 看跌
     if price_slope > 0.01 and obv_slope < -0.3:
         return {'type': 'obv_bearish_div', 'score': -25,
                 'reason': 'OBV背离(价涨量退)'}
 
-    # 价格下跌但OBV上升 = 看涨
     if price_slope < -0.01 and obv_slope > 0.3:
         return {'type': 'obv_bullish_div', 'score': 25,
                 'reason': 'OBV背离(价跌量增)'}
@@ -242,27 +253,39 @@ def compute_volume_price_scores(df):
     """计算每根K线的量价综合得分"""
     df = compute_volume_indicators(df)
 
-    sell_scores = pd.Series(0.0, index=df.index)
-    buy_scores = pd.Series(0.0, index=df.index)
-    signal_names = pd.Series('', index=df.index, dtype=str)
+    # 预提取numpy数组
+    _vr = df['vol_ratio'].values
+    _mfi = df['mfi'].values
+    _vwap = df['vwap'].values
+    _close = df['close'].values
+    _obv = df['obv'].values
+    _obv_sma = df['obv_sma20'].values
+    _ad = df['ad_line'].values
+    _ad_sma = df['ad_sma20'].values
+    _corr = df['vol_price_corr'].values
+    _pc = df['price_change'].values
+    n = len(df)
+    ss_arr = np.zeros(n)
+    bs_arr = np.zeros(n)
+    sig_list = [''] * n
 
-    for i in range(25, len(df)):
+    for i in range(25, n):
         ss = 0; bs = 0
         reasons = []
 
-        vol_ratio = df['vol_ratio'].iloc[i]
-        mfi = df['mfi'].iloc[i]
-        vwap = df['vwap'].iloc[i]
-        close = df['close'].iloc[i]
-        obv = df['obv'].iloc[i]
-        obv_sma = df['obv_sma20'].iloc[i]
-        ad = df['ad_line'].iloc[i]
-        ad_sma = df['ad_sma20'].iloc[i]
-        corr = df['vol_price_corr'].iloc[i]
-        price_chg = df['price_change'].iloc[i]
+        vol_ratio = _vr[i]
+        mfi = _mfi[i]
+        vwap = _vwap[i]
+        close = _close[i]
+        obv = _obv[i]
+        obv_sma = _obv_sma[i]
+        ad = _ad[i]
+        ad_sma = _ad_sma[i]
+        corr = _corr[i]
+        price_chg = _pc[i]
 
         # === 1. MFI 超买/超卖 ===
-        if not pd.isna(mfi):
+        if not np.isnan(mfi):
             if mfi > 80:
                 ss += 20
                 reasons.append(f'MFI超买({mfi:.0f})')
@@ -277,7 +300,7 @@ def compute_volume_price_scores(df):
                 reasons.append(f'MFI偏低({mfi:.0f})')
 
         # === 2. VWAP 关系 ===
-        if not pd.isna(vwap):
+        if not np.isnan(vwap):
             vwap_dist = (close - vwap) / vwap * 100
             if vwap_dist > 2:
                 ss += 10
@@ -287,18 +310,18 @@ def compute_volume_price_scores(df):
                 reasons.append(f'低于VWAP({vwap_dist:.1f}%)')
 
         # === 3. 量价关系(基本) ===
-        if not pd.isna(vol_ratio) and not pd.isna(price_chg):
+        if not np.isnan(vol_ratio) and not np.isnan(price_chg):
             if vol_ratio > 1.5:
                 if price_chg > 0.01:
                     # 放量上涨 - 趋势确认(但若MFI已超买则警惕)
-                    if not pd.isna(mfi) and mfi > 70:
+                    if not np.isnan(mfi) and mfi > 70:
                         ss += 10
                         reasons.append('放量上涨(高位警惕)')
                     else:
                         bs += 15
                         reasons.append(f'放量上涨({vol_ratio:.1f}x)')
                 elif price_chg < -0.01:
-                    if not pd.isna(mfi) and mfi < 30:
+                    if not np.isnan(mfi) and mfi < 30:
                         bs += 10
                         reasons.append('放量下跌(低位企稳)')
                     else:
@@ -313,7 +336,7 @@ def compute_volume_price_scores(df):
                     reasons.append('缩量下跌(卖压减弱)')
 
         # === 4. OBV 趋势 ===
-        if not pd.isna(obv_sma):
+        if not np.isnan(obv_sma):
             if obv > obv_sma * 1.05:
                 bs += 10
                 reasons.append('OBV在均线上方')
@@ -322,7 +345,7 @@ def compute_volume_price_scores(df):
                 reasons.append('OBV在均线下方')
 
         # === 5. A/D线 ===
-        if not pd.isna(ad_sma):
+        if not np.isnan(ad_sma):
             if ad > ad_sma:
                 bs += 8
             elif ad < ad_sma:
@@ -365,15 +388,19 @@ def compute_volume_price_scores(df):
             reasons.append(obv_div['reason'])
 
         # === 10. 量价相关性 ===
-        if not pd.isna(corr):
+        if not np.isnan(corr):
             if corr < -0.5:
-                # 负相关: 价格和成交量反向 = 警示
                 ss += 10
                 reasons.append(f'量价负相关({corr:.2f})')
 
-        sell_scores.iloc[i] = min(ss, 100)
-        buy_scores.iloc[i] = min(bs, 100)
-        signal_names.iloc[i] = ','.join(reasons[:3])
+        ss_arr[i] = min(ss, 100)
+        bs_arr[i] = min(bs, 100)
+        if reasons:
+            sig_list[i] = ','.join(reasons[:3])
+
+    sell_scores = pd.Series(ss_arr, index=df.index)
+    buy_scores = pd.Series(bs_arr, index=df.index)
+    signal_names = pd.Series(sig_list, index=df.index, dtype=str)
 
     return sell_scores, buy_scores, signal_names
 

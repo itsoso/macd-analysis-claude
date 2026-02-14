@@ -72,6 +72,10 @@ class MACDDivergenceAnalyzer:
         signals = []
         df = self.df
 
+        _high = df['high'].values
+        _low = df['low'].values
+        _dif = df['DIF'].values
+
         # 找股价的摆动高低点
         swing_highs = find_swing_highs(df['high'], order)
         swing_lows = find_swing_lows(df['low'], order)
@@ -84,10 +88,10 @@ class MACDDivergenceAnalyzer:
             idx_prev = high_indices[i - 1]
             idx_curr = high_indices[i]
 
-            price_prev = df['high'].iloc[idx_prev]
-            price_curr = df['high'].iloc[idx_curr]
-            dif_prev = df['DIF'].iloc[idx_prev]
-            dif_curr = df['DIF'].iloc[idx_curr]
+            price_prev = _high[idx_prev]
+            price_curr = _high[idx_curr]
+            dif_prev = _dif[idx_prev]
+            dif_curr = _dif[idx_curr]
 
             if price_curr > price_prev and dif_curr < dif_prev:
                 severity = (dif_prev - dif_curr) / abs(dif_prev) if dif_prev != 0 else 0
@@ -110,10 +114,10 @@ class MACDDivergenceAnalyzer:
             idx_prev = low_indices[i - 1]
             idx_curr = low_indices[i]
 
-            price_prev = df['low'].iloc[idx_prev]
-            price_curr = df['low'].iloc[idx_curr]
-            dif_prev = df['DIF'].iloc[idx_prev]
-            dif_curr = df['DIF'].iloc[idx_curr]
+            price_prev = _low[idx_prev]
+            price_curr = _low[idx_curr]
+            dif_prev = _dif[idx_prev]
+            dif_curr = _dif[idx_curr]
 
             if price_curr < price_prev and dif_curr > dif_prev:
                 severity = (dif_curr - dif_prev) / abs(dif_prev) if dif_prev != 0 else 0
@@ -176,6 +180,10 @@ class MACDDivergenceAnalyzer:
         """检测当堆背离: 同一柱堆内后续K线创新高/低但柱线缩短"""
         signals = []
         bar = df['MACD_BAR']
+        _bar = bar.values
+        _high = df['high'].values
+        _low = df['low'].values
+        _close = df['close'].values
 
         for group in self.bar_groups:
             start = group['start_idx']
@@ -188,12 +196,12 @@ class MACDDivergenceAnalyzer:
                 if i >= len(df):
                     break
 
-                abs_curr = abs(bar.iloc[i])
-                abs_prev = abs(bar.iloc[i - 1])
+                abs_curr = abs(_bar[i])
+                abs_prev = abs(_bar[i - 1])
 
                 if group['type'] == 'red':
                     # 股价创新高但红柱缩短
-                    if (df['high'].iloc[i] > df['high'].iloc[i - 1] and
+                    if (_high[i] > _high[i - 1] and
                             abs_curr < abs_prev * 0.9):
                         signals.append({
                             'type': 'bar_length_divergence',
@@ -201,7 +209,7 @@ class MACDDivergenceAnalyzer:
                             'direction': 'top',
                             'idx': i,
                             'date': df.index[i],
-                            'price': df['close'].iloc[i],
+                            'price': _close[i],
                             'bar_curr': abs_curr,
                             'bar_prev': abs_prev,
                             'severity': 1 - abs_curr / abs_prev if abs_prev > 0 else 0,
@@ -209,7 +217,7 @@ class MACDDivergenceAnalyzer:
                         })
                 elif group['type'] == 'green':
                     # 股价创新低但绿柱缩短
-                    if (df['low'].iloc[i] < df['low'].iloc[i - 1] and
+                    if (_low[i] < _low[i - 1] and
                             abs_curr < abs_prev * 0.9):
                         signals.append({
                             'type': 'bar_length_divergence',
@@ -217,7 +225,7 @@ class MACDDivergenceAnalyzer:
                             'direction': 'bottom',
                             'idx': i,
                             'date': df.index[i],
-                            'price': df['close'].iloc[i],
+                            'price': _close[i],
                             'bar_curr': abs_curr,
                             'bar_prev': abs_prev,
                             'severity': 1 - abs_curr / abs_prev if abs_prev > 0 else 0,
@@ -229,6 +237,8 @@ class MACDDivergenceAnalyzer:
     def _detect_group_length_divergence(self, df, same_color_groups, all_groups, direction):
         """检测邻堆/隔堆背离"""
         signals = []
+        _high = df['high'].values
+        _low = df['low'].values
 
         for i in range(1, len(same_color_groups)):
             prev_g = same_color_groups[i - 1]
@@ -255,14 +265,14 @@ class MACDDivergenceAnalyzer:
 
             # 确认股价创新高/新低
             if direction == 'top':
-                prev_high = df['high'].iloc[prev_g['start_idx']:prev_g['end_idx'] + 1].max()
-                curr_high = df['high'].iloc[curr_g['start_idx']:curr_g['end_idx'] + 1].max()
+                prev_high = np.max(_high[prev_g['start_idx']:prev_g['end_idx'] + 1])
+                curr_high = np.max(_high[curr_g['start_idx']:curr_g['end_idx'] + 1])
                 if curr_high <= prev_high:
                     continue
                 price = curr_high
             else:
-                prev_low = df['low'].iloc[prev_g['start_idx']:prev_g['end_idx'] + 1].min()
-                curr_low = df['low'].iloc[curr_g['start_idx']:curr_g['end_idx'] + 1].min()
+                prev_low = np.min(_low[prev_g['start_idx']:prev_g['end_idx'] + 1])
+                curr_low = np.min(_low[curr_g['start_idx']:curr_g['end_idx'] + 1])
                 if curr_low >= prev_low:
                     continue
                 price = curr_low
@@ -324,6 +334,8 @@ class MACDDivergenceAnalyzer:
     def _detect_group_area_divergence(self, df, same_color_groups, all_groups, direction):
         """检测邻堆/隔堆面积背离"""
         signals = []
+        _high = df['high'].values
+        _low = df['low'].values
 
         for i in range(1, len(same_color_groups)):
             prev_g = same_color_groups[i - 1]
@@ -350,14 +362,14 @@ class MACDDivergenceAnalyzer:
 
             # 确认股价创新高/新低
             if direction == 'top':
-                prev_high = df['high'].iloc[prev_g['start_idx']:prev_g['end_idx'] + 1].max()
-                curr_high = df['high'].iloc[curr_g['start_idx']:curr_g['end_idx'] + 1].max()
+                prev_high = np.max(_high[prev_g['start_idx']:prev_g['end_idx'] + 1])
+                curr_high = np.max(_high[curr_g['start_idx']:curr_g['end_idx'] + 1])
                 if curr_high <= prev_high:
                     continue
                 price = curr_high
             else:
-                prev_low = df['low'].iloc[prev_g['start_idx']:prev_g['end_idx'] + 1].min()
-                curr_low = df['low'].iloc[curr_g['start_idx']:curr_g['end_idx'] + 1].min()
+                prev_low = np.min(_low[prev_g['start_idx']:prev_g['end_idx'] + 1])
+                curr_low = np.min(_low[curr_g['start_idx']:curr_g['end_idx'] + 1])
                 if curr_low >= prev_low:
                     continue
                 price = curr_low
@@ -401,6 +413,10 @@ class MACDDivergenceAnalyzer:
         # DIF与DEA的差值就是BAR/2, 面积本质上等同于彩柱面积
         # 但这里单独从黄白线围合角度实现
         diff = df['DIF'] - df['DEA']
+        _diff = diff.values
+        _high = df['high'].values
+        _low = df['low'].values
+        _close = df['close'].values
 
         # 分段计算面积
         areas = []
@@ -408,13 +424,13 @@ class MACDDivergenceAnalyzer:
         if len(diff) == 0:
             return signals
 
-        current_sign = 1 if diff.iloc[0] >= 0 else -1
+        current_sign = 1 if _diff[0] >= 0 else -1
 
         for i in range(1, len(diff)):
-            new_sign = 1 if diff.iloc[i] >= 0 else -1
+            new_sign = 1 if _diff[i] >= 0 else -1
             if new_sign != current_sign or i == len(diff) - 1:
                 end = i if new_sign != current_sign else i + 1
-                segment = diff.iloc[start:end].abs()
+                segment = np.abs(_diff[start:end])
                 area_val = segment.sum()
 
                 areas.append({
@@ -443,13 +459,13 @@ class MACDDivergenceAnalyzer:
 
                 # 确认股价条件
                 if direction == 'top':
-                    prev_high = df['high'].iloc[prev['start_idx']:prev['end_idx'] + 1].max()
-                    curr_high = df['high'].iloc[curr['start_idx']:end_idx + 1].max()
+                    prev_high = np.max(_high[prev['start_idx']:prev['end_idx'] + 1])
+                    curr_high = np.max(_high[curr['start_idx']:end_idx + 1])
                     if curr_high <= prev_high:
                         continue
                 else:
-                    prev_low = df['low'].iloc[prev['start_idx']:prev['end_idx'] + 1].min()
-                    curr_low = df['low'].iloc[curr['start_idx']:end_idx + 1].min()
+                    prev_low = np.min(_low[prev['start_idx']:prev['end_idx'] + 1])
+                    curr_low = np.min(_low[curr['start_idx']:end_idx + 1])
                     if curr_low >= prev_low:
                         continue
 
@@ -459,7 +475,7 @@ class MACDDivergenceAnalyzer:
                     'direction': direction,
                     'idx': end_idx,
                     'date': df.index[end_idx],
-                    'price': df['close'].iloc[end_idx],
+                    'price': _close[end_idx],
                     'prev_area': prev['area'],
                     'curr_area': curr['area'],
                     'ratio': ratio,
@@ -485,11 +501,12 @@ class MACDDivergenceAnalyzer:
     # ============================================================
     def has_dif_returned_to_zero(self, start_idx: int, end_idx: int) -> bool:
         """检查DIF在指定区间内是否有返回零轴附近的过程"""
-        dif_segment = self.df['DIF'].iloc[start_idx:end_idx + 1]
+        _dif = self.df['DIF'].values
+        dif_segment = _dif[start_idx:end_idx + 1]
         # 查看是否有穿越零轴或接近零轴(绝对值很小)
-        zero_threshold = dif_segment.abs().max() * 0.1
-        return (dif_segment.abs() < zero_threshold).any() or \
-               (dif_segment.iloc[:-1] * dif_segment.iloc[1:].values < 0).any()
+        zero_threshold = np.abs(dif_segment).max() * 0.1
+        return (np.abs(dif_segment) < zero_threshold).any() or \
+               (dif_segment[:-1] * dif_segment[1:] < 0).any()
 
     # ============================================================
     # 综合MACD背离分析 (第三章第六节)

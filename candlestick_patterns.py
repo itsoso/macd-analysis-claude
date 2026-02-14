@@ -42,6 +42,13 @@ from indicators import add_all_indicators
 from strategy_futures import FuturesEngine
 
 
+def _arr(df, col):
+    """Get column as numpy array; use pre-extracted df._arr when available."""
+    if hasattr(df, '_arr') and df._arr is not None and col in df._arr:
+        return df._arr[col]
+    return df[col].values
+
+
 # ======================================================
 #   蜡烛线基本属性计算
 # ======================================================
@@ -85,14 +92,19 @@ def trend_at(df, i, lookback=10):
     if i < max(lookback, 20):
         return 'flat'
 
+    arr_close = _arr(df, 'close')
+    arr_sma5 = _arr(df, 'sma5')
+    arr_sma10 = _arr(df, 'sma10')
+    arr_sma20 = _arr(df, 'sma20')
+
     # 价格变化
-    prices = df['close'].iloc[max(0, i - lookback):i + 1]
-    pct = (prices.iloc[-1] - prices.iloc[0]) / prices.iloc[0] * 100
+    start = max(0, i - lookback)
+    pct = (arr_close[i] - arr_close[start]) / arr_close[start] * 100
 
     # 均线排列
-    sma5 = df['sma5'].iloc[i] if not pd.isna(df['sma5'].iloc[i]) else 0
-    sma10 = df['sma10'].iloc[i] if not pd.isna(df['sma10'].iloc[i]) else 0
-    sma20 = df['sma20'].iloc[i] if not pd.isna(df['sma20'].iloc[i]) else 0
+    sma5 = arr_sma5[i] if not np.isnan(arr_sma5[i]) else 0
+    sma10 = arr_sma10[i] if not np.isnan(arr_sma10[i]) else 0
+    sma20 = arr_sma20[i] if not np.isnan(arr_sma20[i]) else 0
 
     ma_bull = sma5 > sma10 > sma20 and sma5 > 0
     ma_bear = sma5 < sma10 < sma20 and sma5 > 0
@@ -108,8 +120,9 @@ def trend_strength(df, i, lookback=10):
     """趋势强度 0~100"""
     if i < lookback:
         return 0
-    prices = df['close'].iloc[max(0, i - lookback):i + 1]
-    pct = abs((prices.iloc[-1] - prices.iloc[0]) / prices.iloc[0] * 100)
+    arr_close = _arr(df, 'close')
+    start = max(0, i - lookback)
+    pct = abs((arr_close[i] - arr_close[start]) / arr_close[start] * 100)
     return min(pct * 15, 100)
 
 
@@ -120,11 +133,13 @@ def volume_confirm(df, i):
     """成交量确认系数: 放量=1.3~1.5, 正常=1.0, 缩量=0.7~0.9"""
     if i < 5:
         return 1.0
-    avg_vol = df['avg_volume'].iloc[i]
-    if pd.isna(avg_vol) or avg_vol < 1e-8:
+    arr_avg_vol = _arr(df, 'avg_volume')
+    arr_vol = _arr(df, 'volume')
+    avg_vol = arr_avg_vol[i]
+    if np.isnan(avg_vol) or avg_vol < 1e-8:
         return 1.0
 
-    cur_vol = df['volume'].iloc[i]
+    cur_vol = arr_vol[i]
     ratio = cur_vol / avg_vol
 
     if ratio >= 2.5:
@@ -149,12 +164,15 @@ def key_level_bonus(df, i):
     if i < 20:
         return 1.0
 
-    price = df['close'].iloc[i]
-    recent_h = df['recent_high'].iloc[i]
-    recent_l = df['recent_low'].iloc[i]
+    arr_close = _arr(df, 'close')
+    arr_recent_high = _arr(df, 'recent_high')
+    arr_recent_low = _arr(df, 'recent_low')
+    price = arr_close[i]
+    recent_h = arr_recent_high[i]
+    recent_l = arr_recent_low[i]
     rng = recent_h - recent_l
 
-    if pd.isna(rng) or rng < 1e-8:
+    if np.isnan(rng) or rng < 1e-8:
         return 1.0
 
     # 接近近期高点(阻力位) 或 接近近期低点(支撑位)
@@ -176,10 +194,15 @@ def detect_hammer(df, i):
     要点: 1)必须在下降趋势后 2)下影线越长信号越强 3)阳线锤子更强"""
     if i < 5:
         return None
-    body = df['body'].iloc[i]
-    lower = df['lower_shadow'].iloc[i]
-    upper = df['upper_shadow'].iloc[i]
-    rng = df['range'].iloc[i]
+    arr_body = _arr(df, 'body')
+    arr_lower = _arr(df, 'lower_shadow')
+    arr_upper = _arr(df, 'upper_shadow')
+    arr_range = _arr(df, 'range')
+    arr_is_bull = _arr(df, 'is_bull')
+    body = arr_body[i]
+    lower = arr_lower[i]
+    upper = arr_upper[i]
+    rng = arr_range[i]
     if rng < 1e-8 or body < 1e-8:
         return None
 
@@ -188,7 +211,7 @@ def detect_hammer(df, i):
         if trend == 'down':
             score = min(55 + int(lower / body) * 5, 80)
             # Nison: 阳线锤子比阴线锤子更有看涨意味
-            if df['is_bull'].iloc[i]:
+            if arr_is_bull[i]:
                 score += 8
             return {'name': '锤子线', 'score': score, 'reliability': 'high',
                     'type': 'bullish_reversal'}
@@ -200,10 +223,15 @@ def detect_hanging_man(df, i):
     要点: 1)必须获得验证(次日低开或收低) 2)单独可靠性低于锤子"""
     if i < 5:
         return None
-    body = df['body'].iloc[i]
-    lower = df['lower_shadow'].iloc[i]
-    upper = df['upper_shadow'].iloc[i]
-    rng = df['range'].iloc[i]
+    arr_body = _arr(df, 'body')
+    arr_lower = _arr(df, 'lower_shadow')
+    arr_upper = _arr(df, 'upper_shadow')
+    arr_range = _arr(df, 'range')
+    arr_is_bear = _arr(df, 'is_bear')
+    body = arr_body[i]
+    lower = arr_lower[i]
+    upper = arr_upper[i]
+    rng = arr_range[i]
     if rng < 1e-8 or body < 1e-8:
         return None
 
@@ -213,7 +241,7 @@ def detect_hanging_man(df, i):
             score = 45
             # 移除未来函数: 不再引用 i+1 验证, 改为用当前 bar 自身信息增强
             # 阴线上吊本身就是验证信号(收盘低于开盘)
-            if df['is_bear'].iloc[i]:
+            if arr_is_bear[i]:
                 score = 65  # 阴线上吊可靠性更高
             # 长下影 + 短实体比例越极端, 信号越强
             if lower >= body * 3:
@@ -228,10 +256,17 @@ def detect_shooting_star(df, i):
     要点: 1)上升趋势顶部 2)与前一根有跳空更理想 3)阴线流星更强"""
     if i < 5:
         return None
-    body = df['body'].iloc[i]
-    upper = df['upper_shadow'].iloc[i]
-    lower = df['lower_shadow'].iloc[i]
-    rng = df['range'].iloc[i]
+    arr_body = _arr(df, 'body')
+    arr_upper = _arr(df, 'upper_shadow')
+    arr_lower = _arr(df, 'lower_shadow')
+    arr_range = _arr(df, 'range')
+    arr_low = _arr(df, 'low')
+    arr_high = _arr(df, 'high')
+    arr_is_bear = _arr(df, 'is_bear')
+    body = arr_body[i]
+    upper = arr_upper[i]
+    lower = arr_lower[i]
+    rng = arr_range[i]
     if rng < 1e-8 or body < 1e-8:
         return None
 
@@ -240,9 +275,9 @@ def detect_shooting_star(df, i):
         if trend == 'up':
             score = min(50 + int(upper / body) * 5, 75)
             # 有跳空(gap up)加强
-            if df['low'].iloc[i] > df['high'].iloc[i - 1]:
+            if arr_low[i] > arr_high[i - 1]:
                 score += 10
-            if df['is_bear'].iloc[i]:
+            if arr_is_bear[i]:
                 score += 5
             return {'name': '流星线', 'score': -score, 'reliability': 'medium',
                     'type': 'bearish_reversal'}
@@ -254,10 +289,15 @@ def detect_inverted_hammer(df, i):
     要点: 需要次日验证(高开确认)"""
     if i < 5:
         return None
-    body = df['body'].iloc[i]
-    upper = df['upper_shadow'].iloc[i]
-    lower = df['lower_shadow'].iloc[i]
-    rng = df['range'].iloc[i]
+    arr_body = _arr(df, 'body')
+    arr_upper = _arr(df, 'upper_shadow')
+    arr_lower = _arr(df, 'lower_shadow')
+    arr_range = _arr(df, 'range')
+    arr_is_bull = _arr(df, 'is_bull')
+    body = arr_body[i]
+    upper = arr_upper[i]
+    lower = arr_lower[i]
+    rng = arr_range[i]
     if rng < 1e-8 or body < 1e-8:
         return None
 
@@ -267,7 +307,7 @@ def detect_inverted_hammer(df, i):
             score = 40
             # 移除未来函数: 不再引用 i+1 验证, 改为用当前 bar 自身信息增强
             # 阳线倒锤子本身就是看涨信号(收盘高于开盘)
-            if df['is_bull'].iloc[i]:
+            if arr_is_bull[i]:
                 score = 55  # 阳线倒锤子可靠性更高
             # 长上影 + 短实体比例越极端, 信号越强
             if upper >= body * 3:
@@ -283,17 +323,22 @@ def detect_doji(df, i):
     要点: 1)十字线=犹豫 2)上升趋势中的十字更有看跌含义 3)连续十字要注意"""
     if i < 5:
         return None
-    body = df['body'].iloc[i]
-    rng = df['range'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
-    if rng < 1e-8 or pd.isna(avg_body) or avg_body < 1e-8:
+    arr_body = _arr(df, 'body')
+    arr_range = _arr(df, 'range')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_upper = _arr(df, 'upper_shadow')
+    arr_lower = _arr(df, 'lower_shadow')
+    body = arr_body[i]
+    rng = arr_range[i]
+    avg_body = arr_avg_body[i]
+    if rng < 1e-8 or np.isnan(avg_body) or avg_body < 1e-8:
         return None
 
     # 实体极小(不到平均实体的10%)
     if body < avg_body * 0.1:
         trend = trend_at(df, i)
-        upper = df['upper_shadow'].iloc[i]
-        lower = df['lower_shadow'].iloc[i]
+        upper = arr_upper[i]
+        lower = arr_lower[i]
 
         # Nison四种十字分类
         long_legged = (upper > rng * 0.3) and (lower > rng * 0.3)
@@ -326,13 +371,18 @@ def detect_spinning_top(df, i):
     要点: 单独意义不大, 但在趋势极端位出现是警告信号"""
     if i < 5:
         return None
-    body = df['body'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
-    upper = df['upper_shadow'].iloc[i]
-    lower = df['lower_shadow'].iloc[i]
-    rng = df['range'].iloc[i]
+    arr_body = _arr(df, 'body')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_upper = _arr(df, 'upper_shadow')
+    arr_lower = _arr(df, 'lower_shadow')
+    arr_range = _arr(df, 'range')
+    body = arr_body[i]
+    avg_body = arr_avg_body[i]
+    upper = arr_upper[i]
+    lower = arr_lower[i]
+    rng = arr_range[i]
 
-    if pd.isna(avg_body) or rng < 1e-8:
+    if np.isnan(avg_body) or rng < 1e-8:
         return None
 
     # 小实体(不到平均的50%), 上下影线都有一定长度
@@ -356,18 +406,24 @@ def detect_marubozu(df, i):
     要点: 极强的趋势信号, 表示一方完全控制"""
     if i < 5:
         return None
-    body = df['body'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
-    upper = df['upper_shadow'].iloc[i]
-    lower = df['lower_shadow'].iloc[i]
-    rng = df['range'].iloc[i]
+    arr_body = _arr(df, 'body')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_upper = _arr(df, 'upper_shadow')
+    arr_lower = _arr(df, 'lower_shadow')
+    arr_range = _arr(df, 'range')
+    arr_is_bull = _arr(df, 'is_bull')
+    body = arr_body[i]
+    avg_body = arr_avg_body[i]
+    upper = arr_upper[i]
+    lower = arr_lower[i]
+    rng = arr_range[i]
 
-    if pd.isna(avg_body) or rng < 1e-8:
+    if np.isnan(avg_body) or rng < 1e-8:
         return None
 
     # 长实体(>1.8倍平均) + 极小影线
     if body > avg_body * 1.8 and body > rng * 0.90:
-        if df['is_bull'].iloc[i]:
+        if arr_is_bull[i]:
             return {'name': '阳线光头光脚', 'score': 40, 'reliability': 'medium',
                     'type': 'bullish_continuation'}
         else:
@@ -381,22 +437,29 @@ def detect_belt_hold(df, i):
     要点: 1)实体越长信号越强 2)此后价格不应重返实体另一端"""
     if i < 5:
         return None
-    body = df['body'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
-    rng = df['range'].iloc[i]
-    if pd.isna(avg_body) or rng < 1e-8:
+    arr_body = _arr(df, 'body')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_range = _arr(df, 'range')
+    arr_lower = _arr(df, 'lower_shadow')
+    arr_upper = _arr(df, 'upper_shadow')
+    arr_is_bull = _arr(df, 'is_bull')
+    arr_is_bear = _arr(df, 'is_bear')
+    body = arr_body[i]
+    avg_body = arr_avg_body[i]
+    rng = arr_range[i]
+    if np.isnan(avg_body) or rng < 1e-8:
         return None
 
     if body > avg_body * 1.5 and body > rng * 0.80:
         trend = trend_at(df, i)
-        if df['is_bull'].iloc[i] and trend == 'down':
+        if arr_is_bull[i] and trend == 'down':
             # 看涨提腰带: 开盘=最低价(或接近)
-            if df['lower_shadow'].iloc[i] < body * 0.05:
+            if arr_lower[i] < body * 0.05:
                 return {'name': '看涨提腰带线', 'score': 55, 'reliability': 'medium',
                         'type': 'bullish_reversal'}
-        elif df['is_bear'].iloc[i] and trend == 'up':
+        elif arr_is_bear[i] and trend == 'up':
             # 看跌提腰带: 开盘=最高价(或接近)
-            if df['upper_shadow'].iloc[i] < body * 0.05:
+            if arr_upper[i] < body * 0.05:
                 return {'name': '看跌提腰带线', 'score': -55, 'reliability': 'medium',
                         'type': 'bearish_reversal'}
     return None
@@ -411,17 +474,23 @@ def detect_engulfing(df, i):
     4)吞没发生在长期趋势的极端位 5)第二根吞没多根则更强"""
     if i < 2:
         return None
-    o0, c0 = df['open'].iloc[i - 1], df['close'].iloc[i - 1]
-    o1, c1 = df['open'].iloc[i], df['close'].iloc[i]
-    body0 = df['body'].iloc[i - 1]
-    body1 = df['body'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
+    arr_open = _arr(df, 'open')
+    arr_close = _arr(df, 'close')
+    arr_body = _arr(df, 'body')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_is_bull = _arr(df, 'is_bull')
+    o0, c0 = arr_open[i - 1], arr_close[i - 1]
+    o1, c1 = arr_open[i], arr_close[i]
+    body0 = arr_body[i - 1]
+    body1 = arr_body[i]
+    avg_body = arr_avg_body[i]
 
-    if body0 < 1e-8 or body1 < 1e-8 or pd.isna(avg_body):
+    if body0 < 1e-8 or body1 < 1e-8 or np.isnan(avg_body):
         return None
 
     # 看涨吞没
-    if df['is_bear'].iloc[i - 1] and df['is_bull'].iloc[i]:
+    if arr_is_bear[i - 1] and arr_is_bull[i]:
         if o1 <= c0 and c1 >= o0:
             trend = trend_at(df, i)
             if trend == 'down' or trend == 'flat':
@@ -436,7 +505,7 @@ def detect_engulfing(df, i):
                         'type': 'bullish_reversal'}
 
     # 看跌吞没
-    if df['is_bull'].iloc[i - 1] and df['is_bear'].iloc[i]:
+    if arr_is_bull[i - 1] and arr_is_bear[i]:
         if o1 >= c0 and c1 <= o0:
             trend = trend_at(df, i)
             if trend == 'up' or trend == 'flat':
@@ -456,12 +525,17 @@ def detect_dark_cloud(df, i):
     要点: 穿入越深看跌越强, 穿入不到50%则为待入线(弱信号)"""
     if i < 2:
         return None
-    if not (df['is_bull'].iloc[i - 1] and df['is_bear'].iloc[i]):
+    arr_open = _arr(df, 'open')
+    arr_close = _arr(df, 'close')
+    arr_high = _arr(df, 'high')
+    arr_is_bull = _arr(df, 'is_bull')
+    arr_is_bear = _arr(df, 'is_bear')
+    if not (arr_is_bull[i - 1] and arr_is_bear[i]):
         return None
 
-    prev_o, prev_c = df['open'].iloc[i - 1], df['close'].iloc[i - 1]
-    curr_o, curr_c = df['open'].iloc[i], df['close'].iloc[i]
-    prev_h = df['high'].iloc[i - 1]
+    prev_o, prev_c = arr_open[i - 1], arr_close[i - 1]
+    curr_o, curr_c = arr_open[i], arr_close[i]
+    prev_h = arr_high[i - 1]
     prev_mid = (prev_o + prev_c) / 2
 
     if curr_o >= prev_h and curr_c < prev_mid and curr_c > prev_o:
@@ -486,12 +560,17 @@ def detect_piercing(df, i):
     """刺透形态(第6章): 下降趋势, 阴+阳, 阳线开低收穿入阴线50%+"""
     if i < 2:
         return None
-    if not (df['is_bear'].iloc[i - 1] and df['is_bull'].iloc[i]):
+    arr_open = _arr(df, 'open')
+    arr_close = _arr(df, 'close')
+    arr_low = _arr(df, 'low')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_is_bull = _arr(df, 'is_bull')
+    if not (arr_is_bear[i - 1] and arr_is_bull[i]):
         return None
 
-    prev_o, prev_c = df['open'].iloc[i - 1], df['close'].iloc[i - 1]
-    curr_o, curr_c = df['open'].iloc[i], df['close'].iloc[i]
-    prev_l = df['low'].iloc[i - 1]
+    prev_o, prev_c = arr_open[i - 1], arr_close[i - 1]
+    curr_o, curr_c = arr_open[i], arr_close[i]
+    prev_l = arr_low[i - 1]
     prev_mid = (prev_o + prev_c) / 2
 
     if curr_o <= prev_l and curr_c > prev_mid and curr_c < prev_o:
@@ -509,15 +588,21 @@ def detect_harami(df, i):
     Nison: 十字孕线比普通孕线更有力"""
     if i < 2:
         return None
-    body0 = df['body'].iloc[i - 1]
-    body1 = df['body'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body) or body0 < 1e-8:
+    arr_body = _arr(df, 'body')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_body_high = _arr(df, 'body_high')
+    arr_body_low = _arr(df, 'body_low')
+    arr_is_bull = _arr(df, 'is_bull')
+    arr_is_bear = _arr(df, 'is_bear')
+    body0 = arr_body[i - 1]
+    body1 = arr_body[i]
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body) or body0 < 1e-8:
         return None
 
     if body0 > avg_body * 1.0 and body1 < body0 * 0.5:
-        hi0, lo0 = df['body_high'].iloc[i - 1], df['body_low'].iloc[i - 1]
-        hi1, lo1 = df['body_high'].iloc[i], df['body_low'].iloc[i]
+        hi0, lo0 = arr_body_high[i - 1], arr_body_low[i - 1]
+        hi1, lo1 = arr_body_high[i], arr_body_low[i]
 
         if lo0 <= lo1 and hi0 >= hi1:
             trend = trend_at(df, i)
@@ -525,11 +610,11 @@ def detect_harami(df, i):
             base_score = 65 if is_doji else 45
             name_suffix = '十字孕线' if is_doji else '孕线'
 
-            if trend == 'up' and df['is_bull'].iloc[i - 1]:
+            if trend == 'up' and arr_is_bull[i - 1]:
                 return {'name': f'看跌{name_suffix}', 'score': -base_score,
                         'reliability': 'high' if is_doji else 'medium',
                         'type': 'bearish_reversal'}
-            elif trend == 'down' and df['is_bear'].iloc[i - 1]:
+            elif trend == 'down' and arr_is_bear[i - 1]:
                 return {'name': f'看涨{name_suffix}', 'score': base_score,
                         'reliability': 'high' if is_doji else 'medium',
                         'type': 'bullish_reversal'}
@@ -541,21 +626,26 @@ def detect_tweezers(df, i):
     Nison: 平头与其他形态结合时更有效"""
     if i < 2:
         return None
-    h0, h1 = df['high'].iloc[i - 1], df['high'].iloc[i]
-    l0, l1 = df['low'].iloc[i - 1], df['low'].iloc[i]
-    avg_range = df['avg_range'].iloc[i]
-    if pd.isna(avg_range) or avg_range < 1e-8:
+    arr_high = _arr(df, 'high')
+    arr_low = _arr(df, 'low')
+    arr_avg_range = _arr(df, 'avg_range')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_is_bull = _arr(df, 'is_bull')
+    h0, h1 = arr_high[i - 1], arr_high[i]
+    l0, l1 = arr_low[i - 1], arr_low[i]
+    avg_range = arr_avg_range[i]
+    if np.isnan(avg_range) or avg_range < 1e-8:
         return None
 
     threshold = avg_range * 0.03
 
     trend = trend_at(df, i)
     # 平头顶: 两根高点一致, 第二根阴线
-    if abs(h0 - h1) < threshold and trend == 'up' and df['is_bear'].iloc[i]:
+    if abs(h0 - h1) < threshold and trend == 'up' and arr_is_bear[i]:
         return {'name': '平头顶部', 'score': -45, 'reliability': 'medium',
                 'type': 'bearish_reversal'}
     # 平头底: 两根低点一致, 第二根阳线
-    if abs(l0 - l1) < threshold and trend == 'down' and df['is_bull'].iloc[i]:
+    if abs(l0 - l1) < threshold and trend == 'down' and arr_is_bull[i]:
         return {'name': '平头底部', 'score': 45, 'reliability': 'medium',
                 'type': 'bullish_reversal'}
     return None
@@ -566,19 +656,24 @@ def detect_counterattack(df, i):
     要点: 两根实体都必须是长实体"""
     if i < 2:
         return None
-    c0, c1 = df['close'].iloc[i - 1], df['close'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body) or avg_body < 1e-8:
+    arr_close = _arr(df, 'close')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_body = _arr(df, 'body')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_is_bull = _arr(df, 'is_bull')
+    c0, c1 = arr_close[i - 1], arr_close[i]
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body) or avg_body < 1e-8:
         return None
 
     if abs(c0 - c1) < avg_body * 0.05:
-        body0, body1 = df['body'].iloc[i - 1], df['body'].iloc[i]
+        body0, body1 = arr_body[i - 1], arr_body[i]
         if body0 > avg_body * 0.8 and body1 > avg_body * 0.8:
             trend = trend_at(df, i)
-            if df['is_bear'].iloc[i - 1] and df['is_bull'].iloc[i] and trend == 'down':
+            if arr_is_bear[i - 1] and arr_is_bull[i] and trend == 'down':
                 return {'name': '看涨反击线', 'score': 50, 'reliability': 'medium',
                         'type': 'bullish_reversal'}
-            if df['is_bull'].iloc[i - 1] and df['is_bear'].iloc[i] and trend == 'up':
+            if arr_is_bull[i - 1] and arr_is_bear[i] and trend == 'up':
                 return {'name': '看跌反击线', 'score': -50, 'reliability': 'medium',
                         'type': 'bearish_reversal'}
     return None
@@ -590,13 +685,16 @@ def detect_window(df, i):
     窗口是强力趋势信号, 也是支撑/阻力"""
     if i < 2:
         return None
-    prev_h = df['high'].iloc[i - 1]
-    prev_l = df['low'].iloc[i - 1]
-    curr_h = df['high'].iloc[i]
-    curr_l = df['low'].iloc[i]
-    avg_range = df['avg_range'].iloc[i]
+    arr_high = _arr(df, 'high')
+    arr_low = _arr(df, 'low')
+    arr_avg_range = _arr(df, 'avg_range')
+    prev_h = arr_high[i - 1]
+    prev_l = arr_low[i - 1]
+    curr_h = arr_high[i]
+    curr_l = arr_low[i]
+    avg_range = arr_avg_range[i]
 
-    if pd.isna(avg_range) or avg_range < 1e-8:
+    if np.isnan(avg_range) or avg_range < 1e-8:
         return None
 
     gap_threshold = avg_range * 0.3  # 缺口要有意义需达到平均振幅的30%
@@ -621,22 +719,28 @@ def detect_morning_star(df, i):
     十字启明星(星线为十字)更强"""
     if i < 3:
         return None
-    body0 = df['body'].iloc[i - 2]
-    body1 = df['body'].iloc[i - 1]
-    body2 = df['body'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body) or avg_body < 1e-8:
+    arr_body = _arr(df, 'body')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_open = _arr(df, 'open')
+    arr_close = _arr(df, 'close')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_is_bull = _arr(df, 'is_bull')
+    body0 = arr_body[i - 2]
+    body1 = arr_body[i - 1]
+    body2 = arr_body[i]
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body) or avg_body < 1e-8:
         return None
 
-    if not (df['is_bear'].iloc[i - 2] and body0 > avg_body * 0.8):
+    if not (arr_is_bear[i - 2] and body0 > avg_body * 0.8):
         return None
     if body1 > avg_body * 0.5:
         return None
-    if not (df['is_bull'].iloc[i] and body2 > avg_body * 0.5):
+    if not (arr_is_bull[i] and body2 > avg_body * 0.5):
         return None
 
-    o0, c0 = df['open'].iloc[i - 2], df['close'].iloc[i - 2]
-    c2 = df['close'].iloc[i]
+    o0, c0 = arr_open[i - 2], arr_close[i - 2]
+    c2 = arr_close[i]
     mid0 = (o0 + c0) / 2
 
     if c2 > mid0:
@@ -654,22 +758,28 @@ def detect_evening_star(df, i):
     """黄昏星(第6章): 长阳+小实体(星)+长阴"""
     if i < 3:
         return None
-    body0 = df['body'].iloc[i - 2]
-    body1 = df['body'].iloc[i - 1]
-    body2 = df['body'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body) or avg_body < 1e-8:
+    arr_body = _arr(df, 'body')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_open = _arr(df, 'open')
+    arr_close = _arr(df, 'close')
+    arr_is_bull = _arr(df, 'is_bull')
+    arr_is_bear = _arr(df, 'is_bear')
+    body0 = arr_body[i - 2]
+    body1 = arr_body[i - 1]
+    body2 = arr_body[i]
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body) or avg_body < 1e-8:
         return None
 
-    if not (df['is_bull'].iloc[i - 2] and body0 > avg_body * 0.8):
+    if not (arr_is_bull[i - 2] and body0 > avg_body * 0.8):
         return None
     if body1 > avg_body * 0.5:
         return None
-    if not (df['is_bear'].iloc[i] and body2 > avg_body * 0.5):
+    if not (arr_is_bear[i] and body2 > avg_body * 0.5):
         return None
 
-    o0, c0 = df['open'].iloc[i - 2], df['close'].iloc[i - 2]
-    c2 = df['close'].iloc[i]
+    o0, c0 = arr_open[i - 2], arr_close[i - 2]
+    c2 = arr_close[i]
     mid0 = (o0 + c0) / 2
 
     if c2 < mid0:
@@ -688,9 +798,15 @@ def detect_abandoned_baby(df, i):
     极其罕见但非常可靠"""
     if i < 3:
         return None
-    body1 = df['body'].iloc[i - 1]
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body):
+    arr_body = _arr(df, 'body')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_high = _arr(df, 'high')
+    arr_low = _arr(df, 'low')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_is_bull = _arr(df, 'is_bull')
+    body1 = arr_body[i - 1]
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body):
         return None
 
     # 星线必须是十字
@@ -698,24 +814,24 @@ def detect_abandoned_baby(df, i):
         return None
 
     # 第一根和第三根必须是长实体
-    body0 = df['body'].iloc[i - 2]
-    body2 = df['body'].iloc[i]
+    body0 = arr_body[i - 2]
+    body2 = arr_body[i]
     if body0 < avg_body * 0.6 or body2 < avg_body * 0.6:
         return None
 
     # 检查缺口: 星线的high/low不与前后重叠
-    star_h = df['high'].iloc[i - 1]
-    star_l = df['low'].iloc[i - 1]
+    star_h = arr_high[i - 1]
+    star_l = arr_low[i - 1]
 
     # 看涨弃婴: 阴+十字(gap下)+阳(gap上)
-    if (df['is_bear'].iloc[i - 2] and df['is_bull'].iloc[i] and
-            star_h < df['low'].iloc[i - 2] and star_l < df['low'].iloc[i]):
+    if (arr_is_bear[i - 2] and arr_is_bull[i] and
+            star_h < arr_low[i - 2] and star_l < arr_low[i]):
         return {'name': '看涨弃婴', 'score': 90, 'reliability': 'high',
                 'type': 'bullish_reversal'}
 
     # 看跌弃婴
-    if (df['is_bull'].iloc[i - 2] and df['is_bear'].iloc[i] and
-            star_l > df['high'].iloc[i - 2] and star_h > df['high'].iloc[i]):
+    if (arr_is_bull[i - 2] and arr_is_bear[i] and
+            star_l > arr_high[i - 2] and star_h > arr_high[i]):
         return {'name': '看跌弃婴', 'score': -90, 'reliability': 'high',
                 'type': 'bearish_reversal'}
     return None
@@ -726,27 +842,35 @@ def detect_three_black_crows(df, i):
     要点: 1)每根开盘在前一根实体内 2)每根收盘接近最低价 3)上升趋势后"""
     if i < 3:
         return None
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body):
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_body = _arr(df, 'body')
+    arr_lower_shadow = _arr(df, 'lower_shadow')
+    arr_close = _arr(df, 'close')
+    arr_body_low = _arr(df, 'body_low')
+    arr_body_high = _arr(df, 'body_high')
+    arr_open = _arr(df, 'open')
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body):
         return None
 
     for j in range(3):
         idx = i - 2 + j
-        if not df['is_bear'].iloc[idx]:
+        if not arr_is_bear[idx]:
             return None
-        if df['body'].iloc[idx] < avg_body * 0.6:
+        if arr_body[idx] < avg_body * 0.6:
             return None
         # Nison: 收盘应接近最低价(小下影线)
-        if df['lower_shadow'].iloc[idx] > df['body'].iloc[idx] * 0.4:
+        if arr_lower_shadow[idx] > arr_body[idx] * 0.4:
             return None
 
     for j in range(1, 3):
         curr_idx = i - 2 + j
         prev_idx = curr_idx - 1
-        if df['close'].iloc[curr_idx] >= df['close'].iloc[prev_idx]:
+        if arr_close[curr_idx] >= arr_close[prev_idx]:
             return None
         # 开盘在前一根实体内
-        if not (df['body_low'].iloc[prev_idx] <= df['open'].iloc[curr_idx] <= df['body_high'].iloc[prev_idx]):
+        if not (arr_body_low[prev_idx] <= arr_open[curr_idx] <= arr_body_high[prev_idx]):
             return None
 
     trend = trend_at(df, i, lookback=15)
@@ -761,21 +885,26 @@ def detect_three_white_soldiers(df, i):
     Nison区分: 标准三兵 vs 前方受阻(第三根有长上影) vs 停顿(第三根小实体)"""
     if i < 3:
         return None
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body):
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_is_bull = _arr(df, 'is_bull')
+    arr_body = _arr(df, 'body')
+    arr_close = _arr(df, 'close')
+    arr_upper_shadow = _arr(df, 'upper_shadow')
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body):
         return None
 
     for j in range(3):
         idx = i - 2 + j
-        if not df['is_bull'].iloc[idx]:
+        if not arr_is_bull[idx]:
             return None
-        if df['body'].iloc[idx] < avg_body * 0.5:
+        if arr_body[idx] < avg_body * 0.5:
             return None
 
     for j in range(1, 3):
         curr_idx = i - 2 + j
         prev_idx = curr_idx - 1
-        if df['close'].iloc[curr_idx] <= df['close'].iloc[prev_idx]:
+        if arr_close[curr_idx] <= arr_close[prev_idx]:
             return None
 
     trend = trend_at(df, i, lookback=15)
@@ -783,14 +912,14 @@ def detect_three_white_soldiers(df, i):
         return None
 
     # Nison: 检查是否"前方受阻"(第三根上影线长)
-    last_body = df['body'].iloc[i]
-    last_upper = df['upper_shadow'].iloc[i]
+    last_body = arr_body[i]
+    last_upper = arr_upper_shadow[i]
     if last_upper > last_body * 0.8:
         return {'name': '三兵前方受阻', 'score': 40, 'reliability': 'low',
                 'type': 'bullish_weakening'}
 
     # 检查"停顿形态"(第三根实体明显缩小)
-    if last_body < df['body'].iloc[i - 1] * 0.5:
+    if last_body < arr_body[i - 1] * 0.5:
         return {'name': '三兵停顿', 'score': 45, 'reliability': 'low',
                 'type': 'bullish_weakening'}
 
@@ -802,32 +931,40 @@ def detect_three_inside(df, i):
     """三内升降(第7章): 孕线 + 确认(第三根延续第二根方向)"""
     if i < 3:
         return None
-    body0 = df['body'].iloc[i - 2]
-    body1 = df['body'].iloc[i - 1]
-    body2 = df['body'].iloc[i]
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body) or body0 < 1e-8:
+    arr_body = _arr(df, 'body')
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_body_high = _arr(df, 'body_high')
+    arr_body_low = _arr(df, 'body_low')
+    arr_close = _arr(df, 'close')
+    arr_open = _arr(df, 'open')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_is_bull = _arr(df, 'is_bull')
+    body0 = arr_body[i - 2]
+    body1 = arr_body[i - 1]
+    body2 = arr_body[i]
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body) or body0 < 1e-8:
         return None
 
     # 先检查是否是孕线(前两根)
     if body0 < avg_body * 0.8 or body1 >= body0 * 0.5:
         return None
-    hi0, lo0 = df['body_high'].iloc[i - 2], df['body_low'].iloc[i - 2]
-    hi1, lo1 = df['body_high'].iloc[i - 1], df['body_low'].iloc[i - 1]
+    hi0, lo0 = arr_body_high[i - 2], arr_body_low[i - 2]
+    hi1, lo1 = arr_body_high[i - 1], arr_body_low[i - 1]
     if not (lo0 <= lo1 and hi0 >= hi1):
         return None
 
     # 三内升: 阴+小阳(被包)+确认阳(收盘高于第一根开盘)
-    if df['is_bear'].iloc[i - 2] and df['is_bull'].iloc[i - 1] and df['is_bull'].iloc[i]:
-        if df['close'].iloc[i] > df['open'].iloc[i - 2]:
+    if arr_is_bear[i - 2] and arr_is_bull[i - 1] and arr_is_bull[i]:
+        if arr_close[i] > arr_open[i - 2]:
             trend = trend_at(df, i)
             if trend == 'down' or trend == 'flat':
                 return {'name': '三内升', 'score': 70, 'reliability': 'high',
                         'type': 'bullish_reversal'}
 
     # 三内降
-    if df['is_bull'].iloc[i - 2] and df['is_bear'].iloc[i - 1] and df['is_bear'].iloc[i]:
-        if df['close'].iloc[i] < df['open'].iloc[i - 2]:
+    if arr_is_bull[i - 2] and arr_is_bear[i - 1] and arr_is_bear[i]:
+        if arr_close[i] < arr_open[i - 2]:
             trend = trend_at(df, i)
             if trend == 'up' or trend == 'flat':
                 return {'name': '三内降', 'score': -70, 'reliability': 'high',
@@ -839,27 +976,32 @@ def detect_three_outside(df, i):
     """三外升降(第7章): 吞没 + 确认(第三根延续方向)"""
     if i < 3:
         return None
-    body0 = df['body'].iloc[i - 2]
-    body1 = df['body'].iloc[i - 1]
+    arr_body = _arr(df, 'body')
+    arr_open = _arr(df, 'open')
+    arr_close = _arr(df, 'close')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_is_bull = _arr(df, 'is_bull')
+    body0 = arr_body[i - 2]
+    body1 = arr_body[i - 1]
     if body0 < 1e-8 or body1 < 1e-8:
         return None
 
-    o0, c0 = df['open'].iloc[i - 2], df['close'].iloc[i - 2]
-    o1, c1 = df['open'].iloc[i - 1], df['close'].iloc[i - 1]
+    o0, c0 = arr_open[i - 2], arr_close[i - 2]
+    o1, c1 = arr_open[i - 1], arr_close[i - 1]
 
     # 三外升: 阴+看涨吞没+确认阳
-    if (df['is_bear'].iloc[i - 2] and df['is_bull'].iloc[i - 1] and
-            o1 <= c0 and c1 >= o0 and df['is_bull'].iloc[i]):
-        if df['close'].iloc[i] > c1:
+    if (arr_is_bear[i - 2] and arr_is_bull[i - 1] and
+            o1 <= c0 and c1 >= o0 and arr_is_bull[i]):
+        if arr_close[i] > c1:
             trend = trend_at(df, i)
             if trend == 'down' or trend == 'flat':
                 return {'name': '三外升', 'score': 75, 'reliability': 'high',
                         'type': 'bullish_reversal'}
 
     # 三外降
-    if (df['is_bull'].iloc[i - 2] and df['is_bear'].iloc[i - 1] and
-            o1 >= c0 and c1 <= o0 and df['is_bear'].iloc[i]):
-        if df['close'].iloc[i] < c1:
+    if (arr_is_bull[i - 2] and arr_is_bear[i - 1] and
+            o1 >= c0 and c1 <= o0 and arr_is_bear[i]):
+        if arr_close[i] < c1:
             trend = trend_at(df, i)
             if trend == 'up' or trend == 'flat':
                 return {'name': '三外降', 'score': -75, 'reliability': 'high',
@@ -871,24 +1013,29 @@ def detect_rising_three(df, i):
     """上升三法(第7章): 长阳+2~3根小体(不跌破阳线低点)+长阳(创新高)"""
     if i < 5:
         return None
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body):
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_is_bull = _arr(df, 'is_bull')
+    arr_body = _arr(df, 'body')
+    arr_low = _arr(df, 'low')
+    arr_close = _arr(df, 'close')
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body):
         return None
 
-    if not (df['is_bull'].iloc[i - 4] and df['body'].iloc[i - 4] > avg_body):
+    if not (arr_is_bull[i - 4] and arr_body[i - 4] > avg_body):
         return None
-    first_lo = df['low'].iloc[i - 4]
-    first_hi = df['close'].iloc[i - 4]
+    first_lo = arr_low[i - 4]
+    first_hi = arr_close[i - 4]
 
     for j in range(i - 3, i):
-        if df['body'].iloc[j] > avg_body * 0.6:
+        if arr_body[j] > avg_body * 0.6:
             return None
-        if df['low'].iloc[j] < first_lo:
+        if arr_low[j] < first_lo:
             return None
 
-    if not (df['is_bull'].iloc[i] and df['body'].iloc[i] > avg_body):
+    if not (arr_is_bull[i] and arr_body[i] > avg_body):
         return None
-    if df['close'].iloc[i] <= first_hi:
+    if arr_close[i] <= first_hi:
         return None
 
     return {'name': '上升三法', 'score': 65, 'reliability': 'high',
@@ -899,24 +1046,29 @@ def detect_falling_three(df, i):
     """下降三法(第7章): 长阴+2~3根小体(不突破阴线高点)+长阴(创新低)"""
     if i < 5:
         return None
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body):
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_body = _arr(df, 'body')
+    arr_high = _arr(df, 'high')
+    arr_close = _arr(df, 'close')
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body):
         return None
 
-    if not (df['is_bear'].iloc[i - 4] and df['body'].iloc[i - 4] > avg_body):
+    if not (arr_is_bear[i - 4] and arr_body[i - 4] > avg_body):
         return None
-    first_hi = df['high'].iloc[i - 4]
-    first_lo = df['close'].iloc[i - 4]
+    first_hi = arr_high[i - 4]
+    first_lo = arr_close[i - 4]
 
     for j in range(i - 3, i):
-        if df['body'].iloc[j] > avg_body * 0.6:
+        if arr_body[j] > avg_body * 0.6:
             return None
-        if df['high'].iloc[j] > first_hi:
+        if arr_high[j] > first_hi:
             return None
 
-    if not (df['is_bear'].iloc[i] and df['body'].iloc[i] > avg_body):
+    if not (arr_is_bear[i] and arr_body[i] > avg_body):
         return None
-    if df['close'].iloc[i] >= first_lo:
+    if arr_close[i] >= first_lo:
         return None
 
     return {'name': '下降三法', 'score': -65, 'reliability': 'high',
@@ -928,22 +1080,26 @@ def detect_tower(df, i):
     塔形底: 长阴→数根小线→长阳  塔形顶: 长阳→数根小线→长阴"""
     if i < 6:
         return None
-    avg_body = df['avg_body'].iloc[i]
-    if pd.isna(avg_body):
+    arr_avg_body = _arr(df, 'avg_body')
+    arr_is_bull = _arr(df, 'is_bull')
+    arr_is_bear = _arr(df, 'is_bear')
+    arr_body = _arr(df, 'body')
+    avg_body = arr_avg_body[i]
+    if np.isnan(avg_body):
         return None
 
     # 塔形底: 寻找前面的长阴, 中间的小实体, 以及当前的长阳
-    if df['is_bull'].iloc[i] and df['body'].iloc[i] > avg_body * 1.2:
+    if arr_is_bull[i] and arr_body[i] > avg_body * 1.2:
         # 回溯找长阴
         for lookback in range(3, 7):
             if i - lookback < 0:
                 break
             first_idx = i - lookback
-            if df['is_bear'].iloc[first_idx] and df['body'].iloc[first_idx] > avg_body * 1.0:
+            if arr_is_bear[first_idx] and arr_body[first_idx] > avg_body * 1.0:
                 # 中间应该是小实体
                 all_small = True
                 for mid_idx in range(first_idx + 1, i):
-                    if df['body'].iloc[mid_idx] > avg_body * 0.7:
+                    if arr_body[mid_idx] > avg_body * 0.7:
                         all_small = False
                         break
                 if all_small:
@@ -954,15 +1110,15 @@ def detect_tower(df, i):
                 break
 
     # 塔形顶
-    if df['is_bear'].iloc[i] and df['body'].iloc[i] > avg_body * 1.2:
+    if arr_is_bear[i] and arr_body[i] > avg_body * 1.2:
         for lookback in range(3, 7):
             if i - lookback < 0:
                 break
             first_idx = i - lookback
-            if df['is_bull'].iloc[first_idx] and df['body'].iloc[first_idx] > avg_body * 1.0:
+            if arr_is_bull[first_idx] and arr_body[first_idx] > avg_body * 1.0:
                 all_small = True
                 for mid_idx in range(first_idx + 1, i):
-                    if df['body'].iloc[mid_idx] > avg_body * 0.7:
+                    if arr_body[mid_idx] > avg_body * 0.7:
                         all_small = False
                         break
                 if all_small:
@@ -984,7 +1140,10 @@ def detect_pattern_failure(df, i, recent_patterns):
     if i < 3:
         return results
 
-    price = df['close'].iloc[i]
+    arr_close = _arr(df, 'close')
+    arr_low = _arr(df, 'low')
+    arr_high = _arr(df, 'high')
+    price = arr_close[i]
 
     # 检查最近3~5根K线内的形态
     for check_idx in range(max(0, i - 5), i):
@@ -997,7 +1156,7 @@ def detect_pattern_failure(df, i, recent_patterns):
 
             # 看涨形态失败: 价格跌破形态区间低点
             if p['score'] > 0 and p['type'].endswith('reversal'):
-                pattern_low = df['low'].iloc[check_idx]
+                pattern_low = arr_low[check_idx]
                 if price < pattern_low:
                     fail_score = min(abs(p['score']) * 0.8, 70)
                     results.append({
@@ -1009,7 +1168,7 @@ def detect_pattern_failure(df, i, recent_patterns):
 
             # 看跌形态失败
             elif p['score'] < 0 and p['type'].endswith('reversal'):
-                pattern_high = df['high'].iloc[check_idx]
+                pattern_high = arr_high[check_idx]
                 if price > pattern_high:
                     fail_score = min(abs(p['score']) * 0.8, 70)
                     results.append({
@@ -1045,6 +1204,30 @@ def scan_patterns(df):
     """扫描DataFrame中所有K线形态, 含Nison增强:
     1. 成交量确认  2. 关键位加成  3. 形态失败检测"""
     df = candle_features(df)
+    # Pre-extract arrays once for faster access in detectors
+    object.__setattr__(df, '_arr', {
+        'open': _arr(df, 'open'),
+        'high': _arr(df, 'high'),
+        'low': _arr(df, 'low'),
+        'close': _arr(df, 'close'),
+        'body': _arr(df, 'body'),
+        'upper_shadow': _arr(df, 'upper_shadow'),
+        'lower_shadow': _arr(df, 'lower_shadow'),
+        'range': _arr(df, 'range'),
+        'volume': _arr(df, 'volume'),
+        'avg_body': _arr(df, 'avg_body'),
+        'avg_range': _arr(df, 'avg_range'),
+        'avg_volume': _arr(df, 'avg_volume'),
+        'sma5': _arr(df, 'sma5'),
+        'sma10': _arr(df, 'sma10'),
+        'sma20': _arr(df, 'sma20'),
+        'recent_high': _arr(df, 'recent_high'),
+        'recent_low': _arr(df, 'recent_low'),
+        'body_high': _arr(df, 'body_high'),
+        'body_low': _arr(df, 'body_low'),
+        'is_bull': _arr(df, 'is_bull'),
+        'is_bear': _arr(df, 'is_bear'),
+    })
     results = {}
 
     for i in range(5, len(df)):
@@ -1086,9 +1269,11 @@ def compute_candlestick_scores(df):
     返回 sell_score, buy_score, pattern_names (Series)"""
     patterns = scan_patterns(df)
 
-    sell_scores = pd.Series(0.0, index=df.index)
-    buy_scores = pd.Series(0.0, index=df.index)
-    pattern_names = pd.Series('', index=df.index, dtype=str)
+    n = len(df)
+    sell_arr = np.zeros(n)
+    buy_arr = np.zeros(n)
+    names_arr = np.empty(n, dtype=object)
+    names_arr[:] = ''
 
     for idx, plist in patterns.items():
         total_bearish = 0
@@ -1111,9 +1296,13 @@ def compute_candlestick_scores(df):
             names.append(p['name'])
 
         # Nison: 同一时间多个同向形态 = 信号增强
-        sell_scores.iloc[idx] = min(total_bearish, 100)
-        buy_scores.iloc[idx] = min(total_bullish, 100)
-        pattern_names.iloc[idx] = ','.join(names)
+        sell_arr[idx] = min(total_bearish, 100)
+        buy_arr[idx] = min(total_bullish, 100)
+        names_arr[idx] = ','.join(names)
+
+    sell_scores = pd.Series(sell_arr, index=df.index)
+    buy_scores = pd.Series(buy_arr, index=df.index)
+    pattern_names = pd.Series(names_arr, index=df.index)
 
     return sell_scores, buy_scores, pattern_names
 

@@ -73,17 +73,18 @@ def detect_squeeze(df, i, lookback=120):
     if i < lookback:
         return False, 0
 
-    bw = df['bb_bandwidth'].iloc[max(0, i - lookback):i + 1]
-    bw_valid = bw.dropna()
+    bw_arr = df['bb_bandwidth'].values
+    bw_slice = bw_arr[max(0, i - lookback):i + 1]
+    bw_valid = bw_slice[~np.isnan(bw_slice)]
     if len(bw_valid) < 20:
         return False, 0
 
-    current_bw = df['bb_bandwidth'].iloc[i]
-    if pd.isna(current_bw):
+    current_bw = bw_arr[i]
+    if np.isnan(current_bw):
         return False, 0
 
-    percentile = (bw_valid < current_bw).sum() / len(bw_valid) * 100
-    is_squeeze = percentile < 20  # 低于20百分位 = Squeeze
+    percentile = np.sum(bw_valid < current_bw) / len(bw_valid) * 100
+    is_squeeze = percentile < 20
     return is_squeeze, percentile
 
 
@@ -92,33 +93,33 @@ def detect_w_bottom(df, i, lookback=30):
     if i < lookback + 5:
         return False, 0
 
-    pct_b = df['bb_pct_b'].iloc[max(0, i - lookback):i + 1]
-    close = df['close'].iloc[max(0, i - lookback):i + 1]
+    start = max(0, i - lookback)
+    pctb_arr = df['bb_pct_b'].values
+    close_arr = df['close'].values
+    pct_b = pctb_arr[start:i + 1]
+    close = close_arr[start:i + 1]
 
     # 找到最近两个%B低于0.2的点
     low_points = []
     in_low = False
     for j in range(len(pct_b)):
-        val = pct_b.iloc[j]
-        if pd.isna(val):
+        val = pct_b[j]
+        if np.isnan(val):
             continue
         if val < 0.2 and not in_low:
             in_low = True
-            low_points.append((j, val, close.iloc[j]))
+            low_points.append((j, val, close[j]))
         elif val > 0.5:
             in_low = False
 
     if len(low_points) < 2:
         return False, 0
 
-    # 最近两个低点
     p1, p2 = low_points[-2], low_points[-1]
 
-    # W底: 第二个低点的价格更低或差不多, 但%B更高
     if p2[1] > p1[1] and p2[2] <= p1[2] * 1.02:
-        # 中间有反弹(%B > 0.5)
-        mid_vals = pct_b.iloc[p1[0]:p2[0]]
-        if any(v > 0.5 for v in mid_vals if not pd.isna(v)):
+        mid_vals = pct_b[p1[0]:p2[0]]
+        if any(v > 0.5 for v in mid_vals if not np.isnan(v)):
             score = min(int((p2[1] - p1[1]) * 100) + 30, 80)
             return True, score
 
@@ -130,18 +131,21 @@ def detect_m_top(df, i, lookback=30):
     if i < lookback + 5:
         return False, 0
 
-    pct_b = df['bb_pct_b'].iloc[max(0, i - lookback):i + 1]
-    close = df['close'].iloc[max(0, i - lookback):i + 1]
+    start = max(0, i - lookback)
+    pctb_arr = df['bb_pct_b'].values
+    close_arr = df['close'].values
+    pct_b = pctb_arr[start:i + 1]
+    close = close_arr[start:i + 1]
 
     high_points = []
     in_high = False
     for j in range(len(pct_b)):
-        val = pct_b.iloc[j]
-        if pd.isna(val):
+        val = pct_b[j]
+        if np.isnan(val):
             continue
         if val > 0.8 and not in_high:
             in_high = True
-            high_points.append((j, val, close.iloc[j]))
+            high_points.append((j, val, close[j]))
         elif val < 0.5:
             in_high = False
 
@@ -151,8 +155,8 @@ def detect_m_top(df, i, lookback=30):
     p1, p2 = high_points[-2], high_points[-1]
 
     if p2[1] < p1[1] and p2[2] >= p1[2] * 0.98:
-        mid_vals = pct_b.iloc[p1[0]:p2[0]]
-        if any(v < 0.5 for v in mid_vals if not pd.isna(v)):
+        mid_vals = pct_b[p1[0]:p2[0]]
+        if any(v < 0.5 for v in mid_vals if not np.isnan(v)):
             score = min(int((p1[1] - p2[1]) * 100) + 30, 80)
             return True, score
 
@@ -166,24 +170,35 @@ def compute_bollinger_scores(df):
     """计算每根K线的布林带综合得分"""
     df = compute_bollinger(df)
 
-    sell_scores = pd.Series(0.0, index=df.index)
-    buy_scores = pd.Series(0.0, index=df.index)
-    signal_names = pd.Series('', index=df.index, dtype=str)
+    n = len(df)
+    ss_arr = np.zeros(n)
+    bs_arr = np.zeros(n)
+    sig_list = [''] * n
 
-    for i in range(25, len(df)):
+    # 预提取numpy数组
+    _pctb = df['bb_pct_b'].values
+    _bw = df['bb_bandwidth'].values
+    _slope = df['bb_mid_slope'].values
+    _close = df['close'].values
+    _upper = df['bb_upper'].values
+    _lower = df['bb_lower'].values
+    _mid = df['bb_mid'].values
+    _bw_sma = df['bb_bw_sma'].values
+
+    for i in range(25, n):
         ss = 0  # 卖出分
         bs = 0  # 买入分
         reasons = []
 
-        pct_b = df['bb_pct_b'].iloc[i]
-        bw = df['bb_bandwidth'].iloc[i]
-        slope = df['bb_mid_slope'].iloc[i]
-        close = df['close'].iloc[i]
-        upper = df['bb_upper'].iloc[i]
-        lower = df['bb_lower'].iloc[i]
-        mid = df['bb_mid'].iloc[i]
+        pct_b = _pctb[i]
+        bw = _bw[i]
+        slope = _slope[i]
+        close = _close[i]
+        upper = _upper[i]
+        lower = _lower[i]
+        mid = _mid[i]
 
-        if pd.isna(pct_b) or pd.isna(bw):
+        if np.isnan(pct_b) or np.isnan(bw):
             continue
 
         # === 1. %B 超买/超卖 ===
@@ -232,8 +247,8 @@ def compute_bollinger_scores(df):
                 reasons.append(f"Squeeze({squeeze_pct:.0f}%)")
 
         # === 3. 带宽扩张(波动率增大) ===
-        bw_sma = df['bb_bw_sma'].iloc[i]
-        if not pd.isna(bw_sma) and bw > bw_sma * 1.5:
+        bw_sma = _bw_sma[i]
+        if not np.isnan(bw_sma) and bw > bw_sma * 1.5:
             # 带宽扩张 = 趋势行情
             if close > upper:
                 bs += 15
@@ -254,7 +269,7 @@ def compute_bollinger_scores(df):
             reasons.append(f"M顶({m_score})")
 
         # === 5. 中轨支撑/阻力 ===
-        prev_close = df['close'].iloc[i - 1]
+        prev_close = _close[i - 1]
         if prev_close < mid and close > mid and slope > 0:
             bs += 10
             reasons.append("上穿中轨")
@@ -264,13 +279,13 @@ def compute_bollinger_scores(df):
 
         # === 6. 收缩后方向确认 ===
         if i >= 5:
-            recent_bw = df['bb_bandwidth'].iloc[i - 5:i + 1]
+            recent_bw = _bw[i - 5:i + 1]
             bw_expanding = all(
-                recent_bw.iloc[j] > recent_bw.iloc[j - 1]
+                recent_bw[j] > recent_bw[j - 1]
                 for j in range(1, len(recent_bw))
-                if not pd.isna(recent_bw.iloc[j]) and not pd.isna(recent_bw.iloc[j - 1])
+                if not np.isnan(recent_bw[j]) and not np.isnan(recent_bw[j - 1])
             )
-            if bw_expanding and len(recent_bw.dropna()) >= 4:
+            if bw_expanding and np.sum(~np.isnan(recent_bw)) >= 4:
                 if close > upper:
                     bs += 15
                     reasons.append("带宽连续扩张+上破")
@@ -278,9 +293,14 @@ def compute_bollinger_scores(df):
                     ss += 15
                     reasons.append("带宽连续扩张+下破")
 
-        sell_scores.iloc[i] = min(ss, 100)
-        buy_scores.iloc[i] = min(bs, 100)
-        signal_names.iloc[i] = ','.join(reasons[:3])
+        ss_arr[i] = min(ss, 100)
+        bs_arr[i] = min(bs, 100)
+        if reasons:
+            sig_list[i] = ','.join(reasons[:3])
+
+    sell_scores = pd.Series(ss_arr, index=df.index)
+    buy_scores = pd.Series(bs_arr, index=df.index)
+    signal_names = pd.Series(sig_list, index=df.index, dtype=str)
 
     return sell_scores, buy_scores, signal_names
 

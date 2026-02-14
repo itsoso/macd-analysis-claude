@@ -372,6 +372,8 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     parser.add_argument('--start', type=str, default=None, help='回测起始日 (YYYY-MM-DD)')
     parser.add_argument('--end', type=str, default=None, help='回测结束日 (YYYY-MM-DD)')
     parser.add_argument('--tag', type=str, default=None, help='策略版本标签')
+    parser.add_argument('--fast', action='store_true', default=False,
+                        help='使用P0向量化信号计算(大幅加速回测)')
     args, _ = parser.parse_known_args()
 
     TRADE_START = args.start or trade_start or DEFAULT_TRADE_START
@@ -386,8 +388,10 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     if version_tag:
         print(f"  版本标签: {version_tag}")
     print(f"  主TF: {PRIMARY_TF}  |  决策TFs: {', '.join(DECISION_TFS)}")
+    use_fast_signals = args.fast
     allow_api_fallback = os.getenv('BACKTEST_DAILY_ALLOW_API_FALLBACK', '0') == '1'
     print(f"  K线数据源: {'本地优先+API回退' if allow_api_fallback else '仅本地'}")
+    print(f"  信号加速: {'ON (P0向量化)' if use_fast_signals else 'OFF (原版)'}")
     # 显示关键开关状态
     print(f"  趋势保护v3: {'ON' if DEFAULT_CONFIG.get('use_trend_enhance') else 'OFF'}"
           f"  |  微结构: {'ON' if DEFAULT_CONFIG.get('use_microstructure') else 'OFF'}"
@@ -493,7 +497,7 @@ def main(trade_start=None, trade_end=None, version_tag=None):
         for tf in score_tfs:
             t_tf = time.time()
             print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")
-            all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=0)
+            all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=0, fast=use_fast_signals)
             elapsed_tf = time.time() - t_tf
             print(f"    {tf} 信号完成  [{elapsed_tf:.2f}s]")
     else:
@@ -503,7 +507,7 @@ def main(trade_start=None, trade_end=None, version_tag=None):
             for tf in score_tfs:
                 print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")
                 start_map[tf] = time.time()
-                futures[executor.submit(compute_signals_six, all_data[tf], tf, all_data, 0)] = tf
+                futures[executor.submit(compute_signals_six, all_data[tf], tf, all_data, 0, use_fast_signals)] = tf
             for future in as_completed(futures):
                 tf = futures[future]
                 elapsed_tf = time.time() - start_map.get(tf, time.time())

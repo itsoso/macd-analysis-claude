@@ -36,6 +36,8 @@ class RSIDivergenceAnalyzer:
         """
         signals = []
         df = self.df
+        _high = df['high'].values
+        _rsi = df[rsi_col].values
 
         swing_highs = find_swing_highs(df['high'], order)
         high_indices = [df.index.get_loc(i) for i in swing_highs[swing_highs].index]
@@ -44,12 +46,12 @@ class RSIDivergenceAnalyzer:
             idx_prev = high_indices[i - 1]
             idx_curr = high_indices[i]
 
-            price_prev = df['high'].iloc[idx_prev]
-            price_curr = df['high'].iloc[idx_curr]
+            price_prev = _high[idx_prev]
+            price_curr = _high[idx_curr]
 
             window = 3
-            rsi_prev = df[rsi_col].iloc[max(0, idx_prev - window):idx_prev + window + 1].max()
-            rsi_curr = df[rsi_col].iloc[max(0, idx_curr - window):idx_curr + window + 1].max()
+            rsi_prev = np.max(_rsi[max(0, idx_prev - window):idx_prev + window + 1])
+            rsi_curr = np.max(_rsi[max(0, idx_curr - window):idx_curr + window + 1])
 
             if (price_curr > price_prev and rsi_curr < rsi_prev and
                     rsi_prev > cfg.RSI_OVERBOUGHT * 0.9):
@@ -75,6 +77,8 @@ class RSIDivergenceAnalyzer:
         """
         signals = []
         df = self.df
+        _low = df['low'].values
+        _rsi = df[rsi_col].values
 
         swing_lows = find_swing_lows(df['low'], order)
         low_indices = [df.index.get_loc(i) for i in swing_lows[swing_lows].index]
@@ -83,12 +87,12 @@ class RSIDivergenceAnalyzer:
             idx_prev = low_indices[i - 1]
             idx_curr = low_indices[i]
 
-            price_prev = df['low'].iloc[idx_prev]
-            price_curr = df['low'].iloc[idx_curr]
+            price_prev = _low[idx_prev]
+            price_curr = _low[idx_curr]
 
             window = 3
-            rsi_prev = df[rsi_col].iloc[max(0, idx_prev - window):idx_prev + window + 1].min()
-            rsi_curr = df[rsi_col].iloc[max(0, idx_curr - window):idx_curr + window + 1].min()
+            rsi_prev = np.min(_rsi[max(0, idx_prev - window):idx_prev + window + 1])
+            rsi_curr = np.min(_rsi[max(0, idx_curr - window):idx_curr + window + 1])
 
             if (price_curr < price_prev and rsi_curr > rsi_prev and
                     rsi_prev < cfg.RSI_OVERSOLD * 1.2):
@@ -97,7 +101,7 @@ class RSIDivergenceAnalyzer:
                 # 检查后续RSI是否突破50线(买入确认)
                 rsi_breaks_50 = False
                 for j in range(idx_curr, min(idx_curr + 20, len(df))):
-                    if df[rsi_col].iloc[j] > 50:
+                    if _rsi[j] > 50:
                         rsi_breaks_50 = True
                         break
 

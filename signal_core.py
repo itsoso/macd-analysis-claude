@@ -7,6 +7,7 @@
 
 性能优化:
 - compute_signals_six: 子模块 profiling
+- compute_signals_six_fast: P0 向量化版本 (全模块)
 - calc_fusion_score_six_batch: 批量向量化评分（P1优化核心）
 - get_signal_at: 二分查找替代线性扫描
 """
@@ -25,7 +26,7 @@ from volume_price_strategy import compute_volume_price_scores
 from kdj_strategy import compute_kdj_scores
 
 
-def compute_signals_six(df, tf, data_all, max_bars=0):
+def compute_signals_six(df, tf, data_all, max_bars=0, fast=False):
     """为指定时间框架计算六维信号(含KDJ)
 
     参数:
@@ -34,10 +35,14 @@ def compute_signals_six(df, tf, data_all, max_bars=0):
         data_all: 多周期数据 dict
         max_bars: >0 时只保留尾部 max_bars 根K线用于计算，大幅降低耗时。
                   0 = 不限制 (全量计算，用于回测)。
+        fast: True 时使用 P0 向量化版本 (回测推荐)
 
     返回:
         signals: dict + 额外 '_perf' key 记录子模块耗时
     """
+    if fast:
+        return _compute_signals_six_fast(df, tf, data_all, max_bars)
+
     # ---- 尾部截断优化 ----
     if max_bars > 0 and len(df) > max_bars:
         df = df.iloc[-max_bars:].copy()
@@ -89,6 +94,75 @@ def compute_signals_six(df, tf, data_all, max_bars=0):
     # 6. KDJ
     t0 = time.time()
     kdj_sell, kdj_buy, _kdj_names = compute_kdj_scores(df)
+    signals["kdj_sell"] = kdj_sell
+    signals["kdj_buy"] = kdj_buy
+    perf['kdj'] = time.time() - t0
+
+    signals['_perf'] = perf
+    return signals
+
+
+def _compute_signals_six_fast(df, tf, data_all, max_bars=0):
+    """P0 向量化版信号计算 — 全模块向量化，回测耗时从 ~1476s → ~120-180s"""
+    from signal_vectorized import (
+        compute_kdj_scores_vec,
+        compute_bollinger_scores_vec,
+        compute_volume_price_scores_vec,
+        compute_candlestick_scores_vec,
+        analyze_signals_enhanced_fast,
+    )
+
+    if max_bars > 0 and len(df) > max_bars:
+        df = df.iloc[-max_bars:].copy()
+
+    signals = {}
+    perf = {}
+
+    # 1. 背离信号(主周期) — 快速版
+    t0 = time.time()
+    lookback = max(60, min(200, len(df) // 3))
+    div_signals = analyze_signals_enhanced_fast(df, lookback)
+    signals["div"] = div_signals
+    perf['div_main'] = time.time() - t0
+
+    # 8h辅助背离
+    t0 = time.time()
+    signals["div_8h"] = {}
+    if "8h" in data_all and tf not in ("8h", "12h", "16h", "24h"):
+        df_8h = data_all["8h"]
+        signals["div_8h"] = analyze_signals_enhanced_fast(df_8h, 90)
+    perf['div_8h'] = time.time() - t0
+
+    # 2. 均线信号 (已经很快, 保持原版)
+    t0 = time.time()
+    ma_signals = compute_ma_signals(df, timeframe=tf)
+    signals["ma"] = ma_signals
+    perf['ma'] = time.time() - t0
+
+    # 3. 蜡烛图 — 向量化版
+    t0 = time.time()
+    cs_sell, cs_buy, _ = compute_candlestick_scores_vec(df)
+    signals["cs_sell"] = cs_sell
+    signals["cs_buy"] = cs_buy
+    perf['candlestick'] = time.time() - t0
+
+    # 4. 布林带 — 向量化版
+    t0 = time.time()
+    bb_sell, bb_buy, _ = compute_bollinger_scores_vec(df)
+    signals["bb_sell"] = bb_sell
+    signals["bb_buy"] = bb_buy
+    perf['bollinger'] = time.time() - t0
+
+    # 5. 量价 — 向量化版
+    t0 = time.time()
+    vp_sell, vp_buy, _ = compute_volume_price_scores_vec(df)
+    signals["vp_sell"] = vp_sell
+    signals["vp_buy"] = vp_buy
+    perf['volume_price'] = time.time() - t0
+
+    # 6. KDJ — 向量化版
+    t0 = time.time()
+    kdj_sell, kdj_buy, _ = compute_kdj_scores_vec(df)
     signals["kdj_sell"] = kdj_sell
     signals["kdj_buy"] = kdj_buy
     perf['kdj'] = time.time() - t0
