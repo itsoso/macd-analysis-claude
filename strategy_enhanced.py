@@ -53,7 +53,7 @@ def analyze_signals_enhanced(df, window):
     while i < len(df):
         window_df = df.iloc[max(0, i - window):i].copy()
         try:
-            analyzer = ComprehensiveAnalyzer(window_df)
+            analyzer = ComprehensiveAnalyzer(window_df, _skip_copy=True)
             results = analyzer.analyze_all()
             sc = results.get('comprehensive_score', {})
             recs = results.get('trade_recommendations', [])

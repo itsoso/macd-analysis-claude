@@ -23,15 +23,18 @@ from .volume_price_divergence import VolumePriceDivergenceAnalyzer
 class ComprehensiveAnalyzer:
     """综合背离分析器"""
 
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
-        self.pattern = PatternDivergenceAnalyzer(df)
-        self.macd = MACDDivergenceAnalyzer(df)
-        self.exhaustion = ExhaustionAnalyzer(df)
-        self.kdj = KDJDivergenceAnalyzer(df)
-        self.cci = CCIDivergenceAnalyzer(df)
-        self.rsi = RSIDivergenceAnalyzer(df)
-        self.volume = VolumePriceDivergenceAnalyzer(df)
+    def __init__(self, df: pd.DataFrame, _skip_copy: bool = False):
+        # _skip_copy=True: 调用方已保证 df 是独立副本, 跳过 9 次冗余 copy
+        # 所有子分析器共享同一份 df, _ensure_* 添加的列互不冲突
+        shared_df = df if _skip_copy else df.copy()
+        self.df = shared_df
+        self.pattern = PatternDivergenceAnalyzer(shared_df, _skip_copy=True)
+        self.macd = MACDDivergenceAnalyzer(shared_df, _skip_copy=True)
+        self.exhaustion = ExhaustionAnalyzer(shared_df, _skip_copy=True)
+        self.kdj = KDJDivergenceAnalyzer(shared_df, _skip_copy=True)
+        self.cci = CCIDivergenceAnalyzer(shared_df, _skip_copy=True)
+        self.rsi = RSIDivergenceAnalyzer(shared_df, _skip_copy=True)
+        self.volume = VolumePriceDivergenceAnalyzer(shared_df, _skip_copy=True)
 
     def analyze_all(self) -> dict:
         """执行全面综合分析"""

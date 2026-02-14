@@ -20,12 +20,12 @@ from indicators import (
 class PatternDivergenceAnalyzer:
     """几何形态背离分析器"""
 
-    def __init__(self, df: pd.DataFrame):
+    def __init__(self, df: pd.DataFrame, _skip_copy: bool = False):
         """
         初始化
         df: 包含 open, high, low, close, volume 及均线列的DataFrame
         """
-        self.df = df.copy()
+        self.df = df if _skip_copy else df.copy()
         self._ensure_ma_columns()
 
     def _ensure_ma_columns(self):

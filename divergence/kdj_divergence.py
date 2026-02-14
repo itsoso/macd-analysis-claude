@@ -21,8 +21,8 @@ from indicators import calc_kdj, find_kdj_crosses, find_swing_highs, find_swing_
 class KDJDivergenceAnalyzer:
     """KDJ指标背离分析器"""
 
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
+    def __init__(self, df: pd.DataFrame, _skip_copy: bool = False):
+        self.df = df if _skip_copy else df.copy()
         self._ensure_kdj()
 
     def _ensure_kdj(self):

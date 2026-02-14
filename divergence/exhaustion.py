@@ -22,8 +22,8 @@ from indicators import (
 class ExhaustionAnalyzer:
     """背离与背驰分析器"""
 
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
+    def __init__(self, df: pd.DataFrame, _skip_copy: bool = False):
+        self.df = df if _skip_copy else df.copy()
         self._ensure_macd()
         self.bar_groups = identify_bar_groups(self.df['MACD_BAR'])
 

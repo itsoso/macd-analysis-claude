@@ -18,8 +18,8 @@ from indicators import find_swing_highs, find_swing_lows, identify_trend_segment
 class VolumePriceDivergenceAnalyzer:
     """量价背离分析器"""
 
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
+    def __init__(self, df: pd.DataFrame, _skip_copy: bool = False):
+        self.df = df if _skip_copy else df.copy()
 
     def detect_price_up_volume_down(self, order: int = 5) -> list:
         """

@@ -20,8 +20,8 @@ from indicators import calc_rsi, find_swing_highs, find_swing_lows
 class RSIDivergenceAnalyzer:
     """RSI指标背离分析器"""
 
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
+    def __init__(self, df: pd.DataFrame, _skip_copy: bool = False):
+        self.df = df if _skip_copy else df.copy()
         self._ensure_rsi()
 
     def _ensure_rsi(self):
