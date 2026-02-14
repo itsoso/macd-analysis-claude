@@ -104,7 +104,7 @@ def test_inverted_hammer_does_not_depend_on_next_bar():
 
 def test_execution_uses_next_bar_open_after_signal_close():
     df = _make_ohlcv(n=100, start=100, step=1.0)
-    warmup = max(60, int(len(df) * 0.05))
+    warmup = 200
 
     def score_provider(idx, _dt, _price):
         if idx == warmup:
@@ -124,6 +124,63 @@ def test_execution_uses_next_bar_open_after_signal_close():
     assert open_short["time"] == df.index[expected_idx].isoformat()
     market_price = open_short.get("price", open_short.get("market_price"))
     assert market_price == pytest.approx(float(df["open"].iloc[expected_idx]), abs=1e-9)
+
+
+def test_run_strategy_core_blocks_dual_futures_open(monkeypatch):
+    """策略层不应在已有空单时再开多（反向同理）。"""
+    df = _make_ohlcv(n=400, start=100, step=0.1)
+    warmup = 200
+
+    def score_provider(idx, _dt, _price):
+        if idx < warmup:
+            return 0.0, 0.0
+        # 先触发开空，随后持续给做多信号；若缺少持仓互斥保护，会在空单未平时开多
+        if idx == warmup:
+            return 85.0, 0.0
+        return 0.0, 85.0
+
+    class _GuardEngine(opt_six.FuturesEngine):
+        def open_long(self, price, dt, margin, leverage, reason):
+            assert self.futures_short is None, "OPEN_LONG called while short position is active"
+            return super().open_long(price, dt, margin, leverage, reason)
+
+        def open_short(self, price, dt, margin, leverage, reason):
+            assert self.futures_long is None, "OPEN_SHORT called while long position is active"
+            return super().open_short(price, dt, margin, leverage, reason)
+
+    monkeypatch.setattr(opt_six, "FuturesEngine", _GuardEngine)
+
+    cfg = _base_exec_config()
+    cfg.update(
+        {
+            "short_threshold": 20,
+            "long_threshold": 20,
+            "close_short_bs": 999,
+            "close_long_ss": 999,
+            "short_sl": -0.99,
+            "long_sl": -0.99,
+            "hard_stop_loss": -0.99,
+            "short_max_hold": 9999,
+            "long_max_hold": 9999,
+            "use_partial_tp": False,
+            "use_partial_tp_2": False,
+            "use_trend_enhance": False,
+            "cooldown": 1,
+            "spot_cooldown": 1,
+        }
+    )
+
+    result = opt_six._run_strategy_core(
+        primary_df=df,
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+        score_provider=score_provider,
+    )
+
+    # 测试有效性：确实开过空；且不存在在空单存续期间开多
+    assert any(t["action"] == "OPEN_SHORT" for t in result["trades"])
+    assert not any(t["action"] == "OPEN_LONG" for t in result["trades"])
 
 
 def test_trade_days_60_is_windowed_not_full_history():

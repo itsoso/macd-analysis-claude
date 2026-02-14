@@ -8,7 +8,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import timedelta
+from datetime import timedelta, datetime
 from functools import wraps
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1063,6 +1063,220 @@ def _read_latest_balance_from_log():
     return None
 
 
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_log_timestamp(ts_text):
+    if not ts_text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S,%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(ts_text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _iter_live_jsonl_entries(days=30):
+    """遍历最近 N 天的交易 JSONL 记录（按时间正序）。"""
+    log_dir = os.path.join(BASE_DIR, 'logs', 'live')
+    files = sorted(glob.glob(os.path.join(log_dir, 'trade_*.jsonl')))
+    if not files:
+        return []
+
+    if days and days > 0:
+        cutoff = datetime.now().date() - timedelta(days=max(1, days) - 1)
+        selected = []
+        for path in files:
+            base = os.path.basename(path)
+            try:
+                date_token = base.split('_', 1)[1].split('.', 1)[0]
+                f_date = datetime.strptime(date_token, "%Y%m%d").date()
+                if f_date >= cutoff:
+                    selected.append(path)
+            except Exception:
+                # 文件名异常时保留，避免漏数据
+                selected.append(path)
+        files = selected
+
+    entries = []
+    for path in files:
+        try:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                for raw in f:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                        entries.append(item)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception:
+            continue
+    return entries
+
+
+def _build_live_history_payload(days=30, limit=120):
+    """聚合实盘日志: 历史交易 / 逐日盈亏 / 交易统计。"""
+    entries = _iter_live_jsonl_entries(days=days)
+
+    daily_map = {}
+    trade_records = []
+    latest_balance = None
+    latest_balance_sort = None
+
+    def get_day_row(date_key):
+        row = daily_map.get(date_key)
+        if row is None:
+            row = {
+                "date": date_key,
+                "trade_count": 0,
+                "realized_count": 0,
+                "wins": 0,
+                "losses": 0,
+                "realized_pnl": 0.0,
+                "fees": 0.0,
+                "slippage": 0.0,
+                "funding": 0.0,
+                "open_equity": None,
+                "close_equity": None,
+                "high_equity": None,
+                "low_equity": None,
+            }
+            daily_map[date_key] = row
+        return row
+
+    for entry in entries:
+        level = str(entry.get("level", "")).upper()
+        data = entry.get("data") or {}
+        ts_text = entry.get("timestamp", "")
+        dt = _parse_log_timestamp(ts_text)
+        sort_key = dt.timestamp() if dt else 0.0
+        date_key = dt.date().isoformat() if dt else (ts_text[:10] if ts_text else "unknown")
+        day = get_day_row(date_key)
+
+        if level == "TRADE":
+            action = str(data.get("action", "")).upper()
+            pnl = _safe_float(data.get("pnl"), 0.0)
+            fee = _safe_float(data.get("fee"), 0.0)
+            slippage = _safe_float(data.get("slippage"), 0.0)
+            price = _safe_float(data.get("price"), 0.0)
+            qty = _safe_float(data.get("qty"), 0.0)
+            notional = price * qty
+
+            day["trade_count"] += 1
+            day["fees"] += fee
+            day["slippage"] += slippage
+
+            is_realized = (
+                action.startswith("CLOSE")
+                or action.startswith("PARTIAL")
+                or action in {"STOP_LOSS", "LIQUIDATION"}
+                or abs(pnl) > 1e-12
+            )
+            if is_realized:
+                day["realized_count"] += 1
+                day["realized_pnl"] += pnl
+                if pnl > 0:
+                    day["wins"] += 1
+                elif pnl < 0:
+                    day["losses"] += 1
+
+            trade_records.append({
+                "timestamp": ts_text,
+                "date": date_key,
+                "action": action or "--",
+                "symbol": data.get("symbol", "--"),
+                "side": data.get("side", "--"),
+                "price": price,
+                "qty": qty,
+                "notional": notional,
+                "pnl": pnl,
+                "fee": fee,
+                "slippage": slippage,
+                "leverage": int(_safe_float(data.get("leverage"), 0)),
+                "reason": data.get("reason", ""),
+                "order_id": data.get("order_id", ""),
+                "_sort_key": sort_key,
+            })
+
+        elif level == "BALANCE":
+            equity = _safe_float(data.get("total_equity"), None)
+            if equity is None:
+                continue
+            if day["open_equity"] is None:
+                day["open_equity"] = equity
+            day["close_equity"] = equity
+            day["high_equity"] = equity if day["high_equity"] is None else max(day["high_equity"], equity)
+            day["low_equity"] = equity if day["low_equity"] is None else min(day["low_equity"], equity)
+
+            if latest_balance_sort is None or sort_key >= latest_balance_sort:
+                latest_balance_sort = sort_key
+                latest_balance = {
+                    "timestamp": ts_text,
+                    "total_equity": equity,
+                    "usdt": _safe_float(data.get("usdt"), 0.0),
+                    "unrealized_pnl": _safe_float(data.get("unrealized_pnl"), 0.0),
+                    "frozen_margin": _safe_float(data.get("frozen_margin"), 0.0),
+                    "available_margin": _safe_float(data.get("available_margin"), 0.0),
+                    "positions": data.get("positions", []),
+                }
+
+        elif level == "FUNDING":
+            day["funding"] += _safe_float(data.get("amount"), 0.0)
+
+    daily_records = []
+    for date_key in sorted(daily_map.keys(), reverse=True):
+        row = daily_map[date_key]
+        realized_count = row["realized_count"]
+        row["win_rate_pct"] = (row["wins"] / realized_count * 100.0) if realized_count > 0 else 0.0
+        # 口径说明: realized_pnl 来自日志中的 pnl，fees/funding 单独展示；net_pnl 仅供监控近似使用
+        row["net_pnl"] = row["realized_pnl"] - row["fees"] + row["funding"]
+        daily_records.append(row)
+
+    trade_records.sort(key=lambda x: x["_sort_key"], reverse=True)
+    for r in trade_records:
+        r.pop("_sort_key", None)
+    recent_trades = trade_records[:max(20, min(limit, 500))]
+
+    total_realized = sum(r["realized_pnl"] for r in daily_records)
+    total_fees = sum(r["fees"] for r in daily_records)
+    total_slippage = sum(r["slippage"] for r in daily_records)
+    total_funding = sum(r["funding"] for r in daily_records)
+    total_realized_count = sum(r["realized_count"] for r in daily_records)
+    total_wins = sum(r["wins"] for r in daily_records)
+    total_losses = sum(r["losses"] for r in daily_records)
+    total_trade_count = len(trade_records)
+    total_net = total_realized - total_fees + total_funding
+
+    stats = {
+        "days": days,
+        "total_trade_count": total_trade_count,
+        "total_realized_count": total_realized_count,
+        "wins": total_wins,
+        "losses": total_losses,
+        "win_rate_pct": (total_wins / total_realized_count * 100.0) if total_realized_count > 0 else 0.0,
+        "realized_pnl": total_realized,
+        "fees": total_fees,
+        "slippage": total_slippage,
+        "funding": total_funding,
+        "net_pnl": total_net,
+        "avg_realized_pnl": (total_realized / total_realized_count) if total_realized_count > 0 else 0.0,
+    }
+
+    return {
+        "trade_stats": stats,
+        "daily_records": daily_records,
+        "trade_records": recent_trades,
+        "latest_balance": latest_balance,
+    }
+
+
 @app.route('/api/live/status')
 def api_live_status():
     """获取引擎状态 - 通过文件 + 进程检测，不依赖内存变量"""
@@ -1159,6 +1373,17 @@ def api_live_status():
             }
 
     return jsonify({"success": True, **result})
+
+
+@app.route('/api/live/history')
+def api_live_history():
+    """实盘历史聚合: 交易记录 + 逐日盈亏 + 统计"""
+    days = request.args.get('days', 30, type=int) or 30
+    limit = request.args.get('limit', 120, type=int) or 120
+    days = max(1, min(days, 180))
+    limit = max(20, min(limit, 500))
+    payload = _build_live_history_payload(days=days, limit=limit)
+    return jsonify({"success": True, **payload})
 
 
 @app.route('/api/live/start', methods=['POST'])

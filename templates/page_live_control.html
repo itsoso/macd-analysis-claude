@@ -110,6 +110,49 @@
     .info-item .value.green { color: var(--accent-green); }
     .info-item .value.red { color: var(--accent-red); }
 
+    .history-toolbar {
+        display: flex; justify-content: space-between; align-items: center;
+        gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
+    }
+    .history-select {
+        padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+        background: var(--bg-secondary); color: var(--text-primary); font-size: 13px;
+    }
+    .history-grid {
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 10px;
+    }
+    .history-metric {
+        background: var(--bg-secondary); border: 1px solid rgba(255,255,255,0.04);
+        border-radius: 8px; padding: 10px 12px;
+    }
+    .history-metric .label {
+        font-size: 11px; color: var(--text-muted); text-transform: uppercase;
+    }
+    .history-metric .value {
+        margin-top: 4px; font-size: 17px; font-weight: 700;
+    }
+    .history-metric .value.green { color: var(--accent-green); }
+    .history-metric .value.red { color: var(--accent-red); }
+
+    .table-wrap { overflow-x: auto; }
+    .history-table {
+        width: 100%; border-collapse: collapse; font-size: 12px;
+    }
+    .history-table th {
+        text-align: left; padding: 8px 10px; font-size: 11px; font-weight: 600;
+        color: var(--text-muted); text-transform: uppercase; border-bottom: 1px solid var(--border);
+        white-space: nowrap;
+    }
+    .history-table td {
+        padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.04);
+        white-space: nowrap; font-family: 'JetBrains Mono', monospace;
+    }
+    .history-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .history-note {
+        margin-top: 8px; font-size: 11px; color: var(--text-muted);
+    }
+
     /* 多TF信号检测 */
     .tf-checkbox-grid {
         display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;
@@ -452,6 +495,76 @@
                 <div class="info-item"><div class="label">总手续费</div><div class="value" id="p_fees">--</div></div>
                 <div class="info-item"><div class="label">峰值权益</div><div class="value" id="p_peak">--</div></div>
                 <div class="info-item"><div class="label">当前权益</div><div class="value" id="p_equity">--</div></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="ctrl-card" style="margin-bottom: 20px;">
+        <div class="history-toolbar">
+            <h3>📈 实盘交易统计</h3>
+            <div class="btn-group">
+                <select id="historyDays" class="history-select" onchange="refreshLiveHistoryData()">
+                    <option value="7">最近7天</option>
+                    <option value="14">最近14天</option>
+                    <option value="30" selected>最近30天</option>
+                    <option value="60">最近60天</option>
+                </select>
+                <button class="btn btn-outline btn-sm" onclick="refreshLiveHistoryData()">刷新交易记录</button>
+            </div>
+        </div>
+        <div class="history-grid">
+            <div class="history-metric"><div class="label">总交易</div><div class="value" id="h_total_trades">--</div></div>
+            <div class="history-metric"><div class="label">已实现交易</div><div class="value" id="h_realized">--</div></div>
+            <div class="history-metric"><div class="label">胜率</div><div class="value" id="h_win_rate">--</div></div>
+            <div class="history-metric"><div class="label">已实现PnL</div><div class="value" id="h_realized_pnl">--</div></div>
+            <div class="history-metric"><div class="label">手续费</div><div class="value" id="h_fees">--</div></div>
+            <div class="history-metric"><div class="label">净PnL(估算)</div><div class="value" id="h_net_pnl">--</div></div>
+        </div>
+        <div class="history-note" id="historyBalanceNote">最新余额快照: --</div>
+    </div>
+
+    <div class="grid-2">
+        <div class="ctrl-card">
+            <h3>📆 逐日盈亏</h3>
+            <div class="table-wrap">
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>日期</th>
+                            <th>交易</th>
+                            <th>已实现PnL</th>
+                            <th>费用</th>
+                            <th>Funding</th>
+                            <th>净PnL</th>
+                            <th>胜率</th>
+                            <th>收盘权益</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dailyPnlBody">
+                        <tr><td colspan="8" style="color:var(--text-muted);">暂无数据</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="ctrl-card">
+            <h3>🧾 历史交易记录</h3>
+            <div class="table-wrap">
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>动作</th>
+                            <th>方向</th>
+                            <th>数量@价格</th>
+                            <th>PnL</th>
+                            <th>费用</th>
+                            <th>原因</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tradeHistoryBody">
+                        <tr><td colspan="7" style="color:var(--text-muted);">暂无数据</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -1082,6 +1195,132 @@ async function saveConfig() {
 // ============================================================
 // 状态监控
 // ============================================================
+function formatUsd(value) {
+    if (value == null || Number.isNaN(Number(value))) return '--';
+    return '$' + Number(value).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+}
+
+function formatSignedUsd(value) {
+    if (value == null || Number.isNaN(Number(value))) return '--';
+    const n = Number(value);
+    return (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+}
+
+function formatPct(value, digits = 1) {
+    if (value == null || Number.isNaN(Number(value))) return '--';
+    return Number(value).toFixed(digits) + '%';
+}
+
+function escapeHtml(text) {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function setMetricValue(id, text, cls = '') {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'value' + (cls ? ' ' + cls : '');
+}
+
+function renderLiveHistory(data) {
+    const stats = data.trade_stats || {};
+    const latestBalance = data.latest_balance || null;
+    const dailyRows = data.daily_records || [];
+    const tradeRows = data.trade_records || [];
+
+    setMetricValue('h_total_trades', String(stats.total_trade_count ?? 0));
+    setMetricValue('h_realized', String(stats.total_realized_count ?? 0));
+    setMetricValue('h_win_rate', formatPct(stats.win_rate_pct, 1),
+        Number(stats.win_rate_pct || 0) >= 50 ? 'green' : 'red');
+    setMetricValue('h_realized_pnl', formatSignedUsd(stats.realized_pnl),
+        Number(stats.realized_pnl || 0) >= 0 ? 'green' : 'red');
+    setMetricValue('h_fees', formatUsd(stats.fees));
+    setMetricValue('h_net_pnl', formatSignedUsd(stats.net_pnl),
+        Number(stats.net_pnl || 0) >= 0 ? 'green' : 'red');
+
+    const noteEl = document.getElementById('historyBalanceNote');
+    if (noteEl) {
+        if (latestBalance) {
+            noteEl.textContent = `最新余额快照: ${latestBalance.timestamp || '--'} · ` +
+                `权益 ${formatUsd(latestBalance.total_equity)} · ` +
+                `USDT ${formatUsd(latestBalance.usdt)} · ` +
+                `未实现 ${formatSignedUsd(latestBalance.unrealized_pnl)}`;
+        } else {
+            noteEl.textContent = '最新余额快照: --';
+        }
+    }
+
+    const dailyBody = document.getElementById('dailyPnlBody');
+    if (dailyBody) {
+        if (!dailyRows.length) {
+            dailyBody.innerHTML = '<tr><td colspan="8" style="color:var(--text-muted);">暂无逐日数据</td></tr>';
+        } else {
+            dailyBody.innerHTML = dailyRows.slice(0, 60).map(r => {
+                const realized = Number(r.realized_pnl || 0);
+                const net = Number(r.net_pnl || 0);
+                const wr = Number(r.win_rate_pct || 0);
+                return `<tr>
+                    <td>${escapeHtml(r.date)}</td>
+                    <td>${Number(r.trade_count || 0)} / ${Number(r.realized_count || 0)}</td>
+                    <td style="color:${realized >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">${formatSignedUsd(realized)}</td>
+                    <td>${formatUsd(r.fees)}</td>
+                    <td style="color:${Number(r.funding || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">${formatSignedUsd(r.funding || 0)}</td>
+                    <td style="color:${net >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">${formatSignedUsd(net)}</td>
+                    <td style="color:${wr >= 50 ? 'var(--accent-green)' : 'var(--accent-red)'}">${formatPct(wr, 0)}</td>
+                    <td>${r.close_equity != null ? formatUsd(r.close_equity) : '--'}</td>
+                </tr>`;
+            }).join('');
+        }
+    }
+
+    const tradeBody = document.getElementById('tradeHistoryBody');
+    if (tradeBody) {
+        if (!tradeRows.length) {
+            tradeBody.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);">暂无历史交易记录</td></tr>';
+        } else {
+            tradeBody.innerHTML = tradeRows.slice(0, 160).map(t => {
+                const pnl = Number(t.pnl || 0);
+                const side = escapeHtml(t.side || '--');
+                const action = escapeHtml(t.action || '--');
+                const reason = escapeHtml(t.reason || '');
+                const qty = Number(t.qty || 0).toFixed(4);
+                const price = formatUsd(t.price);
+                return `<tr>
+                    <td>${escapeHtml(t.timestamp || '--')}</td>
+                    <td>${action}</td>
+                    <td style="color:${side.includes('LONG') ? 'var(--accent-green)' : side.includes('SHORT') ? 'var(--accent-red)' : 'var(--text-secondary)'}">${side}</td>
+                    <td>${qty} @ ${price}</td>
+                    <td style="color:${pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">${formatSignedUsd(pnl)}</td>
+                    <td>${formatUsd(t.fee)}</td>
+                    <td title="${reason}">${reason || '--'}</td>
+                </tr>`;
+            }).join('');
+        }
+    }
+}
+
+async function refreshLiveHistoryData() {
+    const daysEl = document.getElementById('historyDays');
+    const days = Number(daysEl?.value || 30);
+    try {
+        const data = await apiCall(`/api/live/history?days=${days}&limit=180`);
+        if (data.success) {
+            renderLiveHistory(data);
+        }
+    } catch (e) {
+        console.error('History refresh failed:', e);
+    }
+}
+
 async function refreshStatus() {
     try {
         const data = await apiCall('/api/live/status');
@@ -1341,6 +1580,9 @@ async function refreshStatus() {
         } else {
             eqEl.textContent = '--';
         }
+
+        // 历史交易/逐日盈亏/统计
+        await refreshLiveHistoryData();
 
     } catch(e) {
         console.error('Status refresh failed:', e);

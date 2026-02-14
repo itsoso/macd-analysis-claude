@@ -286,7 +286,7 @@ class FuturesEngine:
         self.spot_eth -= qty
         self.total_spot_fees += fee
         self.total_slippage_cost += slippage_cost
-        self._record_trade(dt, price, 'SPOT_SELL', 'long', qty, revenue, fee, 1, reason,
+        self._record_trade(dt, price, 'SPOT_SELL', 'short', qty, revenue, fee, 1, reason,
                            exec_price=actual_p, slippage_cost=slippage_cost,
                            pnl=real_pnl)  # 修正: 记录真实已实现PnL(成本法)
 
