@@ -114,7 +114,11 @@ details summary:hover { color: var(--accent); }
 document.addEventListener('DOMContentLoaded', async () => {
     const root = document.getElementById('mtd-root');
 
-    // ═══ 1. 并行加载 runs 列表 + 当前版本数据 ═══
+    // ═══ 1. 并行加载 runs 列表(分页) + 当前版本数据 ═══
+    const RUNS_PAGE_SIZE = 20;
+    let _runsOffset = 0;
+    let _runsHasMore = true;
+
     async function loadRun(runId) {
         const url = runId ? `/api/multi_tf_daily?run_id=${runId}` : '/api/multi_tf_daily';
         const resp = await fetch(url);
@@ -122,16 +126,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         return await resp.json();
     }
 
+    async function fetchRunsPage(offset, limit) {
+        const resp = await fetch(`/api/multi_tf_daily/runs?limit=${limit}&offset=${offset}`);
+        return resp.ok ? resp.json() : [];
+    }
+
     const urlParams = new URLSearchParams(window.location.search);
     const initialRunId = urlParams.get('run_id');
 
     // 两个请求并行发出，不串行等待
     const [runsResult, dataResult] = await Promise.allSettled([
-        fetch('/api/multi_tf_daily/runs').then(r => r.ok ? r.json() : []),
+        fetchRunsPage(0, RUNS_PAGE_SIZE),
         loadRun(initialRunId),
     ]);
 
     let allRuns = runsResult.status === 'fulfilled' ? runsResult.value : [];
+    _runsOffset = allRuns.length;
+    _runsHasMore = allRuns.length >= RUNS_PAGE_SIZE;
 
     let data;
     if (dataResult.status === 'fulfilled') {
@@ -141,6 +152,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
     }
     if (data.error) { root.innerHTML = `<div class="loading" style="color:var(--red)">${data.error}</div>`; return; }
+
+    // 如果当前 run 不在已加载的列表中（比如老版本通过 URL 直接访问），补入列表头部
+    if (data.run_id && !allRuns.some(r => r.run_id === data.run_id)) {
+        allRuns.unshift({
+            run_id: data.run_id,
+            version_tag: data.version_tag || `Run #${data.run_id}`,
+            created_at: (data.run_meta || {}).created_at || '',
+            start_date: (data.run_meta || {}).start_date || '',
+            end_date: (data.run_meta || {}).end_date || '',
+            total_return_pct: (data.summary || {}).total_return_pct,
+            max_drawdown_pct: (data.summary || {}).max_drawdown_pct,
+        });
+    }
 
     // 对比状态
     let compareRunId = null;
@@ -179,16 +203,20 @@ document.addEventListener('DOMContentLoaded', async () => {
                style="margin-left:16px;display:inline-block;padding:4px 14px;font-size:0.78rem;background:linear-gradient(135deg,#5b8af5,#a78bfa);color:#fff;border-radius:6px;text-decoration:none;font-weight:600;vertical-align:middle;letter-spacing:0.5px">📥 导出全部Excel</a>
         </div>`;
 
-        // ═══ 版本选择器 ═══
+        // ═══ 版本选择器（分页） ═══
+        function _runOptText(r) {
+            const ret = r.total_return_pct != null ? `${r.total_return_pct > 0 ? '+' : ''}${r.total_return_pct.toFixed(1)}%` : '';
+            const dd = r.max_drawdown_pct != null ? `DD:${r.max_drawdown_pct.toFixed(1)}%` : '';
+            return `#${r.run_id} ${r.version_tag} | ${ret} ${dd} | ${r.start_date}~${r.end_date} | ${(r.created_at||'').slice(0,16)}`;
+        }
         html += `<div class="version-bar">
             <label>当前版本:</label>
             <select id="runSelector">`;
         allRuns.forEach(r => {
             const sel = r.run_id == data.run_id ? 'selected' : '';
-            const ret = r.total_return_pct != null ? `${r.total_return_pct > 0 ? '+' : ''}${r.total_return_pct.toFixed(1)}%` : '';
-            const dd = r.max_drawdown_pct != null ? `DD:${r.max_drawdown_pct.toFixed(1)}%` : '';
-            html += `<option value="${r.run_id}" ${sel}>#${r.run_id} ${r.version_tag} | ${ret} ${dd} | ${r.start_date}~${r.end_date} | ${(r.created_at||'').slice(0,16)}</option>`;
+            html += `<option value="${r.run_id}" ${sel}>${_runOptText(r)}</option>`;
         });
+        if (_runsHasMore) html += `<option value="__load_more__">── 加载更多历史记录 ──</option>`;
         html += `</select>
             <label>对比:</label>
             <select id="cmpSelector"><option value="">不对比</option>`;
@@ -198,6 +226,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const ret = r.total_return_pct != null ? `${r.total_return_pct > 0 ? '+' : ''}${r.total_return_pct.toFixed(1)}%` : '';
             html += `<option value="${r.run_id}" ${sel}>#${r.run_id} ${r.version_tag} | ${ret}</option>`;
         });
+        if (_runsHasMore) html += `<option value="__load_more__">── 加载更多历史记录 ──</option>`;
         html += `</select></div>`;
 
         // ═══ 策略快照 ═══
@@ -545,15 +574,36 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         }
 
-        // ═══ 事件绑定 ═══
+        // ═══ 事件绑定（含加载更多） ═══
+        async function _loadMoreRuns() {
+            const more = await fetchRunsPage(_runsOffset, RUNS_PAGE_SIZE);
+            if (more.length > 0) {
+                // 去重（按 run_id）
+                const existIds = new Set(allRuns.map(r => r.run_id));
+                more.forEach(r => { if (!existIds.has(r.run_id)) allRuns.push(r); });
+                _runsOffset += more.length;
+            }
+            if (more.length < RUNS_PAGE_SIZE) _runsHasMore = false;
+        }
+
         document.getElementById('runSelector').addEventListener('change', async e => {
             const rid = e.target.value;
+            if (rid === '__load_more__') {
+                await _loadMoreRuns();
+                renderPage(data, compareData);
+                return;
+            }
             window.history.replaceState(null, '', `?run_id=${rid}`);
             data = await loadRun(rid);
             renderPage(data, compareData);
         });
         document.getElementById('cmpSelector').addEventListener('change', async e => {
             const rid = e.target.value;
+            if (rid === '__load_more__') {
+                await _loadMoreRuns();
+                renderPage(data, compareData);
+                return;
+            }
             if (rid) {
                 compareData = await loadRun(rid);
             } else {
