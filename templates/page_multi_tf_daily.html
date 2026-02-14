@@ -28,6 +28,22 @@
 
 .chart-box { width: 100%; height: 300px; position: relative; }
 
+/* 版本选择器 */
+.version-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; margin-bottom: 18px; padding: 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; }
+.version-bar label { font-size: 0.85rem; color: var(--text-muted); font-weight: 600; }
+.version-bar select { background: var(--bg-card2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 0.82rem; min-width: 300px; }
+.version-bar button { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 6px 16px; font-size: 0.82rem; cursor: pointer; font-weight: 600; }
+.version-bar button:hover { opacity: 0.85; }
+.version-bar button.active { background: var(--green); }
+
+/* 对比表 */
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.cmp-table th { background: var(--bg-card2); padding: 10px 8px; text-align: left; font-weight: 600; border-bottom: 2px solid var(--border); font-size: 0.78rem; }
+.cmp-table td { padding: 8px; border-bottom: 1px solid var(--border); }
+.cmp-table tr:hover { background: rgba(91,138,245,0.06); }
+.cmp-table .better { color: var(--green); font-weight: 700; }
+.cmp-table .worse { color: var(--red); font-weight: 700; }
+
 /* 持仓时间线 */
 .timeline { position: relative; }
 .tl-row { display: flex; align-items: stretch; min-height: 40px; border-bottom: 1px solid var(--border); font-size: 0.78rem; transition: background 0.15s; }
@@ -82,429 +98,429 @@ details summary:hover { color: var(--accent); }
 .filter-bar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
 .filter-bar select, .filter-bar input { background: var(--bg-card2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 0.78rem; }
 .filter-bar label { font-size: 0.78rem; color: var(--text-muted); }
+
+/* 策略开关标签 */
+.switch-tag { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 600; margin: 1px 2px; }
+.switch-tag.on { background: rgba(34,197,94,0.2); color: var(--green); }
+.switch-tag.off { background: rgba(239,68,68,0.1); color: var(--text-muted); }
 </style>
 
 <div class="mtd" id="mtd-root">
-    <div class="loading"><div class="spin"></div><div>加载多周期逐日盈亏数据...</div></div>
+    <div class="loading"><div class="spin"></div><div>加载数据...</div></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
 document.addEventListener('DOMContentLoaded', async () => {
     const root = document.getElementById('mtd-root');
+
+    // ═══ 1. 加载全部运行列表 ═══
+    let allRuns = [];
+    try {
+        const runsResp = await fetch('/api/multi_tf_daily/runs');
+        if (runsResp.ok) allRuns = await runsResp.json();
+    } catch(e) {}
+
+    // ═══ 2. 加载指定版本数据 ═══
+    async function loadRun(runId) {
+        const url = runId ? `/api/multi_tf_daily?run_id=${runId}` : '/api/multi_tf_daily';
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('数据加载失败');
+        return await resp.json();
+    }
+
+    // 获取URL参数中的run_id
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialRunId = urlParams.get('run_id');
+
     let data;
     try {
-        const resp = await fetch('/api/multi_tf_daily');
-        if (!resp.ok) throw new Error('未找到数据，请先运行 python backtest_multi_tf_daily.py');
-        data = await resp.json();
+        data = await loadRun(initialRunId);
     } catch (e) {
-        root.innerHTML = `<div class="loading" style="color:var(--red)">❌ ${e.message}</div>`;
+        root.innerHTML = `<div class="loading" style="color:var(--red)">加载失败: ${e.message}</div>`;
         return;
     }
-    if (data.error) { root.innerHTML = `<div class="loading" style="color:var(--red)">❌ ${data.error}</div>`; return; }
+    if (data.error) { root.innerHTML = `<div class="loading" style="color:var(--red)">${data.error}</div>`; return; }
 
-    const m = data.run_meta || {};
-    const s = data.summary || {};
-    const daily = data.daily_records || [];
-    const trades = data.trade_details || [];
-    const equity = data.equity_curve || [];
+    // 对比状态
+    let compareRunId = null;
+    let compareData = null;
 
-    const fv = v => v != null ? (typeof v === 'number' ? v.toFixed(2) : v) : '-';
-    const fc = v => v != null ? '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}) : '-';
-    const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu';
+    function switchTag(on, label) {
+        return `<span class="switch-tag ${on?'on':'off'}">${on?'ON':'OFF'} ${label}</span>`;
+    }
 
-    // 构建交易日期索引: date -> [{trade}]
-    const tradeByDate = {};
-    trades.forEach(t => {
-        const d = (t.time || '').slice(0, 10);
-        if (!tradeByDate[d]) tradeByDate[d] = [];
-        tradeByDate[d].push(t);
-    });
+    function renderPage(data, cmpData) {
+        const m = data.run_meta || {};
+        const s = data.summary || {};
+        const daily = data.daily_records || [];
+        const trades = data.trade_details || [];
+        const equity = data.equity_curve || [];
+        const snap = data.strategy_snapshot || {};
+        const vTag = data.version_tag || `Run #${data.run_id}`;
 
-    let html = `
-    <h1>📊 <span>多周期联合决策</span> · 逐日持仓盈亏</h1>
-    <div class="sub">六书评分 × 多周期融合 · ETH/USDT · 每日完整持仓与交易记录</div>
-    <div class="meta-bar">
-        <span class="mbadge"><b>📅</b>${m.start_date||''} ~ ${m.end_date||''}</span>
-        <span class="mbadge"><b>💰</b>$${(m.initial_capital||200000).toLocaleString()}</span>
-        <span class="mbadge"><b>⚡</b>${m.leverage||5}x</span>
-        <span class="mbadge"><b>🎯</b>组合: ${m.combo_name||''}</span>
-        <span class="mbadge"><b>🔄</b>主TF: ${m.primary_tf||'1h'} | 决策: ${(m.decision_tfs||[]).join('+')}</span>
-        <span class="mbadge"><b>🖥️</b>${m.host||''}</span>
-        <span class="mbadge"><b>🕐</b>${m.run_time||''}</span>
-    </div>`;
+        const fv = v => v != null ? (typeof v === 'number' ? v.toFixed(2) : v) : '-';
+        const fc = v => v != null ? '$' + Number(v).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0}) : '-';
+        const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : 'neu';
 
-    // ══════ 汇总卡片 ══════
-    // 预计算各类交易统计
-    const _spotSells = trades.filter(t => t.action === 'SPOT_SELL');
-    const _futuresClose = trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action));
-    const _partialTP = trades.filter(t => t.action === 'PARTIAL_TP');
-    const _spotPnl = _spotSells.reduce((s,t) => s+(t.pnl||0), 0);
-    const _futuresPnl = _futuresClose.reduce((s,t) => s+(t.pnl||0), 0) + _partialTP.reduce((s,t) => s+(t.pnl||0), 0);
+        // 交易日期索引
+        const tradeByDate = {};
+        trades.forEach(t => {
+            const d = (t.time || '').slice(0, 10);
+            if (!tradeByDate[d]) tradeByDate[d] = [];
+            tradeByDate[d].push(t);
+        });
 
-    html += `<div class="card"><div class="title"><span class="icon">📊</span>回测汇总</div>
-    <div class="mg">
-        <div class="mi"><div class="lb">策略收益</div><div class="vl ${cls(s.total_return_pct)}">${fv(s.total_return_pct)}%</div></div>
-        <div class="mi"><div class="lb">买入持有</div><div class="vl ${cls(s.buy_hold_return_pct)}">${fv(s.buy_hold_return_pct)}%</div></div>
-        <div class="mi"><div class="lb">Alpha</div><div class="vl ${cls(s.alpha_pct)}">${fv(s.alpha_pct)}%</div></div>
-        <div class="mi"><div class="lb">最大回撤</div><div class="vl neg">${fv(s.max_drawdown_pct)}%</div></div>
-        <div class="mi"><div class="lb">期末资金</div><div class="vl">${fc(s.final_capital)}</div></div>
-        <div class="mi"><div class="lb">强平次数</div><div class="vl ${(s.liquidations||0)>0?'neg':'pos'}">${s.liquidations||0}</div></div>
-    </div>
-    <div style="margin-top:6px;">
-    <div class="mg">
-        <div class="mi"><div class="lb">总交易</div><div class="vl neu">${s.total_trades||0}笔</div></div>
-        <div class="mi"><div class="lb">现货卖出</div><div class="vl neu">${_spotSells.length}笔</div></div>
-        <div class="mi"><div class="lb">合约平仓</div><div class="vl neu">${_futuresClose.length}笔</div></div>
-        <div class="mi"><div class="lb">部分止盈</div><div class="vl neu">${_partialTP.length}笔</div></div>
-        <div class="mi"><div class="lb">合约胜率</div><div class="vl ${(s.win_rate_pct||0)>=50?'pos':'neg'}">${fv(s.win_rate_pct)}%</div></div>
-        <div class="mi"><div class="lb">盈亏比</div><div class="vl ${(s.profit_factor||0)>=1.5?'pos':'neu'}">${fv(s.profit_factor)}</div></div>
-    </div></div>
-    <div style="margin-top:6px;">
-    <div class="mg">
-        <div class="mi"><div class="lb">现货已实现PnL</div><div class="vl ${cls(_spotPnl)}">${fc(_spotPnl)}</div></div>
-        <div class="mi"><div class="lb">合约已实现PnL</div><div class="vl ${cls(_futuresPnl)}">${fc(_futuresPnl)}</div></div>
-        <div class="mi"><div class="lb">总费用</div><div class="vl">${fc(s.total_costs)}</div></div>
-        <div class="mi"><div class="lb">费用拖累</div><div class="vl neg">${fv(s.fee_drag_pct)}%</div></div>
-        <div class="mi"><div class="lb">净Funding</div><div class="vl ${cls(s.net_funding)}">${fc(s.net_funding)}</div></div>
-    </div></div>
-    </div>`;
+        let html = `
+        <h1><span>多周期联合决策</span> · 逐日持仓盈亏</h1>
+        <div class="sub">六书评分 x 多周期融合 · ETH/USDT · 版本对比分析</div>`;
 
-    // ══════ 资金曲线 + 回撤 ══════
-    html += `<div class="card">
-        <div class="title"><span class="icon">📈</span>资金曲线 & 回撤 & ETH价格</div>
-        <div class="chart-box"><canvas id="mainChart"></canvas></div>
-    </div>`;
+        // ═══ 版本选择器 ═══
+        html += `<div class="version-bar">
+            <label>当前版本:</label>
+            <select id="runSelector">`;
+        allRuns.forEach(r => {
+            const sel = r.run_id == data.run_id ? 'selected' : '';
+            const ret = r.total_return_pct != null ? `${r.total_return_pct > 0 ? '+' : ''}${r.total_return_pct.toFixed(1)}%` : '';
+            const dd = r.max_drawdown_pct != null ? `DD:${r.max_drawdown_pct.toFixed(1)}%` : '';
+            html += `<option value="${r.run_id}" ${sel}>#${r.run_id} ${r.version_tag} | ${ret} ${dd} | ${r.start_date}~${r.end_date} | ${(r.created_at||'').slice(0,16)}</option>`;
+        });
+        html += `</select>
+            <label>对比:</label>
+            <select id="cmpSelector"><option value="">不对比</option>`;
+        allRuns.forEach(r => {
+            if (r.run_id == data.run_id) return;
+            const sel = (cmpData && r.run_id == cmpData.run_id) ? 'selected' : '';
+            const ret = r.total_return_pct != null ? `${r.total_return_pct > 0 ? '+' : ''}${r.total_return_pct.toFixed(1)}%` : '';
+            html += `<option value="${r.run_id}" ${sel}>#${r.run_id} ${r.version_tag} | ${ret}</option>`;
+        });
+        html += `</select></div>`;
 
-    // ══════ 逐日盈亏+持仓时间线 ══════
-    html += `<div class="card">
-        <div class="title"><span class="icon">📋</span>逐日持仓盈亏 (${daily.length} 天)</div>
-        <div class="filter-bar">
-            <label>筛选:</label>
-            <select id="posFilter">
-                <option value="all">全部</option>
-                <option value="long">仅多头日</option>
-                <option value="short">仅空头日</option>
-                <option value="trade">有交易日</option>
-                <option value="empty">无持仓日</option>
-            </select>
-            <label>搜索:</label>
-            <input id="dateSearch" placeholder="日期如 2025-03" style="width:120px;">
+        // ═══ 策略快照 ═══
+        html += `<div class="meta-bar">
+            <span class="mbadge"><b>Run#${data.run_id}</b>${vTag}</span>
+            <span class="mbadge"><b>区间</b>${m.start_date||''} ~ ${m.end_date||''}</span>
+            <span class="mbadge"><b>杠杆</b>${m.leverage||5}x</span>
+            <span class="mbadge"><b>组合</b>${m.combo_name||''}</span>
+            <span class="mbadge"><b>主TF</b>${m.primary_tf||'1h'}</span>
+            <span class="mbadge"><b>机器</b>${m.host||''}</span>
         </div>
-        <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px;">
-            日期 | ETH价格 | USDT/ETH持仓 | 合约持仓 | 未实现PnL | 账户总值 | 回撤 | 当日交易
-        </div>
-        <div class="timeline scroll-y" id="timeline">
-            <div class="tl-header">
-                <div class="tl-date">日期</div>
-                <div class="tl-price">ETH价格</div>
-                <div class="tl-assets">USDT / ETH资产</div>
-                <div class="tl-bar">合约持仓</div>
-                <div class="tl-pnl">未实现PnL</div>
-                <div class="tl-total">账户总值</div>
-                <div class="tl-dd">回撤</div>
-                <div class="tl-trade">当日交易</div>
+        <div style="text-align:center;margin-bottom:16px;">
+            ${switchTag(snap.use_trend_enhance, '趋势保护v3')}
+            ${switchTag(snap.use_microstructure, '微结构')}
+            ${switchTag(snap.use_dual_engine, '双引擎')}
+            ${switchTag(snap.use_vol_target, '波动目标')}
+            ${switchTag(snap.use_live_gate, 'LiveGate')}
+            ${switchTag(snap.use_regime_aware, 'Regime')}
+            ${switchTag(snap.use_protections, '风控保护')}
+        </div>`;
+
+        // ═══ 对比表 (如果有对比数据) ═══
+        if (cmpData) {
+            const cs = cmpData.summary || {};
+            const cSnap = cmpData.strategy_snapshot || {};
+            const cTag = cmpData.version_tag || `Run #${cmpData.run_id}`;
+
+            function cmpCell(a, b, higherBetter) {
+                if (a == null || b == null) return `<td>${fv(a)}</td><td>${fv(b)}</td><td>-</td>`;
+                const diff = a - b;
+                const better = higherBetter ? diff > 0 : diff < 0;
+                const diffStr = diff > 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
+                return `<td>${fv(a)}</td><td>${fv(b)}</td><td class="${better?'better':'worse'}">${diffStr}</td>`;
+            }
+
+            html += `<div class="card"><div class="title">对比: #${data.run_id} ${vTag} vs #${cmpData.run_id} ${cTag}</div>
+            <div style="margin-bottom:10px;">
+                <b>当前:</b> ${switchTag(snap.use_trend_enhance,'趋势v3')} ${switchTag(snap.use_microstructure,'微结构')} ${switchTag(snap.use_dual_engine,'双引擎')} ${switchTag(snap.use_vol_target,'波动目标')}<br>
+                <b>对比:</b> ${switchTag(cSnap.use_trend_enhance,'趋势v3')} ${switchTag(cSnap.use_microstructure,'微结构')} ${switchTag(cSnap.use_dual_engine,'双引擎')} ${switchTag(cSnap.use_vol_target,'波动目标')}
             </div>
-            <div id="tl-body"></div>
+            <table class="cmp-table"><thead><tr>
+                <th>指标</th><th>#${data.run_id} (当前)</th><th>#${cmpData.run_id} (对比)</th><th>差异</th>
+            </tr></thead><tbody>
+                <tr><td>策略收益%</td>${cmpCell(s.total_return_pct, cs.total_return_pct, true)}</tr>
+                <tr><td>Alpha%</td>${cmpCell(s.alpha_pct, cs.alpha_pct, true)}</tr>
+                <tr><td>最大回撤%</td>${cmpCell(s.max_drawdown_pct, cs.max_drawdown_pct, false)}</tr>
+                <tr><td>胜率%</td>${cmpCell(s.win_rate_pct, cs.win_rate_pct, true)}</tr>
+                <tr><td>盈亏比</td>${cmpCell(s.profit_factor, cs.profit_factor, true)}</tr>
+                <tr><td>总交易数</td>${cmpCell(s.total_trades, cs.total_trades, false)}</tr>
+                <tr><td>平仓数</td>${cmpCell(s.close_trades, cs.close_trades, false)}</tr>
+                <tr><td>期末资金</td>${cmpCell(s.final_capital, cs.final_capital, true)}</tr>
+                <tr><td>总费用</td>${cmpCell(s.total_costs, cs.total_costs, false)}</tr>
+                <tr><td>强平次数</td>${cmpCell(s.liquidations, cs.liquidations, false)}</tr>
+            </tbody></table></div>`;
+        }
+
+        // ═══ 汇总卡片 ═══
+        const _spotSells = trades.filter(t => t.action === 'SPOT_SELL');
+        const _futuresClose = trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action));
+        const _partialTP = trades.filter(t => t.action === 'PARTIAL_TP');
+        const _spotPnl = _spotSells.reduce((s2,t) => s2+(t.pnl||0), 0);
+        const _futuresPnl = _futuresClose.reduce((s2,t) => s2+(t.pnl||0), 0) + _partialTP.reduce((s2,t) => s2+(t.pnl||0), 0);
+
+        html += `<div class="card"><div class="title"><span class="icon"></span>回测汇总</div>
+        <div class="mg">
+            <div class="mi"><div class="lb">策略收益</div><div class="vl ${cls(s.total_return_pct)}">${fv(s.total_return_pct)}%</div></div>
+            <div class="mi"><div class="lb">买入持有</div><div class="vl ${cls(s.buy_hold_return_pct)}">${fv(s.buy_hold_return_pct)}%</div></div>
+            <div class="mi"><div class="lb">Alpha</div><div class="vl ${cls(s.alpha_pct)}">${fv(s.alpha_pct)}%</div></div>
+            <div class="mi"><div class="lb">最大回撤</div><div class="vl neg">${fv(s.max_drawdown_pct)}%</div></div>
+            <div class="mi"><div class="lb">期末资金</div><div class="vl">${fc(s.final_capital)}</div></div>
+            <div class="mi"><div class="lb">强平次数</div><div class="vl ${(s.liquidations||0)>0?'neg':'pos'}">${s.liquidations||0}</div></div>
         </div>
-    </div>`;
+        <div class="mg">
+            <div class="mi"><div class="lb">总交易</div><div class="vl neu">${s.total_trades||0}笔</div></div>
+            <div class="mi"><div class="lb">现货卖出</div><div class="vl neu">${_spotSells.length}笔</div></div>
+            <div class="mi"><div class="lb">合约平仓</div><div class="vl neu">${_futuresClose.length}笔</div></div>
+            <div class="mi"><div class="lb">部分止盈</div><div class="vl neu">${_partialTP.length}笔</div></div>
+            <div class="mi"><div class="lb">合约胜率</div><div class="vl ${(s.win_rate_pct||0)>=50?'pos':'neg'}">${fv(s.win_rate_pct)}%</div></div>
+            <div class="mi"><div class="lb">盈亏比</div><div class="vl ${(s.profit_factor||0)>=1.5?'pos':'neu'}">${fv(s.profit_factor)}</div></div>
+        </div>
+        <div class="mg">
+            <div class="mi"><div class="lb">现货已实现PnL</div><div class="vl ${cls(_spotPnl)}">${fc(_spotPnl)}</div></div>
+            <div class="mi"><div class="lb">合约已实现PnL</div><div class="vl ${cls(_futuresPnl)}">${fc(_futuresPnl)}</div></div>
+            <div class="mi"><div class="lb">总费用</div><div class="vl">${fc(s.total_costs)}</div></div>
+            <div class="mi"><div class="lb">费用拖累</div><div class="vl neg">${fv(s.fee_drag_pct)}%</div></div>
+            <div class="mi"><div class="lb">净Funding</div><div class="vl ${cls(s.net_funding)}">${fc(s.net_funding)}</div></div>
+        </div></div>`;
 
-    // ══════ 完整交易记录 ══════
-    html += `<div class="card"><details open>
-        <summary class="title" style="cursor:pointer"><span class="icon">💹</span>完整交易记录 (${trades.length} 笔)</summary>
-        <div style="overflow-x:auto;margin-top:10px;">
-        <table class="dt" style="font-size:0.72rem;white-space:nowrap;"><thead><tr>
-            <th>#</th><th>时间</th><th>操作</th><th>方向</th>
-            <th class="center">市场价</th><th class="center">成交价</th>
-            <th class="center">数量</th><th class="center">名义价值</th>
-            <th class="center">保证金</th><th class="center">杠杆</th>
-            <th class="center">手续费</th><th class="center">滑点</th>
-            <th class="center">PnL</th>
-            <th class="center">账户总值</th><th>原因</th>
-        </tr></thead><tbody>`;
-    trades.forEach((t, i) => {
-        const pCls = (t.pnl||0) > 0 ? 'color:var(--green)' : (t.pnl||0) < 0 ? 'color:var(--red)' : '';
-        const actionMap = {
-            'OPEN_LONG':'开多', 'CLOSE_LONG':'平多', 'OPEN_SHORT':'开空',
-            'CLOSE_SHORT':'平空', 'LIQUIDATED':'强平', 'SPOT_BUY':'现买',
-            'SPOT_SELL':'现卖', 'PARTIAL_TP':'部分止盈',
-        };
-        const isOpen = t.action && t.action.startsWith('OPEN');
-        const isLiq = t.action === 'LIQUIDATED';
-        html += `<tr>
-            <td>${i+1}</td><td>${(t.time||'').replace('T',' ').slice(0,16)}</td>
-            <td style="font-weight:600;${isLiq?'color:var(--red)':isOpen?'color:var(--cyan)':'color:var(--orange)'}">${actionMap[t.action]||t.action}</td>
-            <td>${t.direction==='long'?'🟢多':t.direction==='short'?'🔴空':'-'}</td>
-            <td class="center">$${fv(t.market_price)}</td>
-            <td class="center">$${fv(t.exec_price)}</td>
-            <td class="center">${fv(t.quantity)}</td>
-            <td class="center">${fc(t.notional_value)}</td>
-            <td class="center">${fc(t.margin)}</td>
-            <td class="center">${t.leverage||'-'}x</td>
-            <td class="center">$${fv(t.fee)}</td>
-            <td class="center">$${fv(t.slippage_cost)}</td>
-            <td class="center" style="${pCls};font-weight:700">${t.pnl!=null?'$'+fv(t.pnl):'-'}</td>
-            <td class="center">${fc(t.after_total)}</td>
-            <td style="font-size:0.68rem;max-width:250px;overflow:hidden;text-overflow:ellipsis">${t.reason||''}</td>
-        </tr>`;
-    });
-    html += '</tbody></table></div></details></div>';
+        // ═══ 资金曲线 ═══
+        html += `<div class="card">
+            <div class="title"><span class="icon"></span>资金曲线 & 回撤${cmpData ? ' (含对比)' : ''}</div>
+            <div class="chart-box"><canvas id="mainChart"></canvas></div>
+        </div>`;
 
-    // ══════ 交易统计 (分类) ══════
-    // 按类型分组
-    const actionGroups = {};
-    trades.forEach(t => { const a = t.action||'UNKNOWN'; if (!actionGroups[a]) actionGroups[a]=[]; actionGroups[a].push(t); });
-    const futuresClose = trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action));
-    const partialTP = trades.filter(t => t.action === 'PARTIAL_TP');
-    const spotSells = trades.filter(t => t.action === 'SPOT_SELL');
-    const spotBuys = trades.filter(t => t.action === 'SPOT_BUY');
-    const futuresOpen = trades.filter(t => ['OPEN_LONG','OPEN_SHORT'].includes(t.action));
-    // 所有有已实现PnL的交易
-    const allPnlTrades = trades.filter(t => (t.pnl||0) !== 0);
-    const allWins = allPnlTrades.filter(t => (t.pnl||0) > 0);
-    const allLosses = allPnlTrades.filter(t => (t.pnl||0) < 0);
-    const totalRealizedPnl = allPnlTrades.reduce((s,t) => s+(t.pnl||0), 0);
-    // 期货平仓统计
-    const fWins = futuresClose.filter(t => (t.pnl||0) > 0);
-    const fLosses = futuresClose.filter(t => (t.pnl||0) <= 0);
-    const fTotalPnl = futuresClose.reduce((s,t) => s+(t.pnl||0), 0);
-    const ptPnl = partialTP.reduce((s,t) => s+(t.pnl||0), 0);
-    const spotPnl = spotSells.reduce((s,t) => s+(t.pnl||0), 0);
+        // ═══ 逐日时间线 ═══
+        html += `<div class="card">
+            <div class="title"><span class="icon"></span>逐日持仓盈亏 (${daily.length} 天)</div>
+            <div class="filter-bar">
+                <label>筛选:</label>
+                <select id="posFilter">
+                    <option value="all">全部</option>
+                    <option value="long">仅多头日</option>
+                    <option value="short">仅空头日</option>
+                    <option value="trade">有交易日</option>
+                    <option value="empty">无持仓日</option>
+                </select>
+                <label>搜索:</label>
+                <input id="dateSearch" placeholder="日期如 2025-03" style="width:120px;">
+            </div>
+            <div class="timeline scroll-y" id="timeline">
+                <div class="tl-header">
+                    <div class="tl-date">日期</div>
+                    <div class="tl-price">ETH价格</div>
+                    <div class="tl-assets">USDT / ETH资产</div>
+                    <div class="tl-bar">合约持仓</div>
+                    <div class="tl-pnl">未实现PnL</div>
+                    <div class="tl-total">账户总值</div>
+                    <div class="tl-dd">回撤</div>
+                    <div class="tl-trade">当日交易</div>
+                </div>
+                <div id="tl-body"></div>
+            </div>
+        </div>`;
 
-    // ── 交易构成概览 ──
-    html += `<div class="card"><div class="title"><span class="icon">📊</span>交易构成总览 (${trades.length}笔)</div>
-    <div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:12px;">
-        441笔交易包含多种操作类型，以下按类别分别统计已实现PnL
-    </div>
-    <div style="overflow-x:auto;"><table class="dt"><thead><tr>
-        <th>操作类型</th><th class="center">笔数</th><th class="center">已实现PnL</th><th class="center">占比</th><th>说明</th>
-    </tr></thead><tbody>`;
-    const typeRows = [
-        {name:'SPOT_SELL(现货卖出)', items:spotSells, desc:'卖出持有的ETH现货'},
-        {name:'SPOT_BUY(现货买入)', items:spotBuys, desc:'买入ETH现货'},
-        {name:'OPEN_SHORT/LONG(开仓)', items:futuresOpen, desc:'开启合约仓位'},
-        {name:'CLOSE_SHORT/LONG(平仓)', items:futuresClose, desc:'关闭合约仓位'},
-        {name:'PARTIAL_TP(部分止盈)', items:partialTP, desc:'合约部分止盈'},
-    ];
-    typeRows.forEach(r => {
-        const pnl = r.items.reduce((s,t) => s+(t.pnl||0), 0);
-        const pct = totalRealizedPnl ? (pnl/totalRealizedPnl*100) : 0;
-        html += `<tr>
-            <td style="font-weight:600">${r.name}</td>
-            <td class="center">${r.items.length}</td>
-            <td class="center"><span class="${cls(pnl)}" style="font-weight:700">${fc(pnl)}</span></td>
-            <td class="center">${pnl!==0?pct.toFixed(1)+'%':'-'}</td>
-            <td style="color:var(--text-muted);font-size:0.72rem">${r.desc}</td>
-        </tr>`;
-    });
-    html += `<tr style="border-top:2px solid var(--border);font-weight:700">
-        <td>合计</td><td class="center">${trades.length}</td>
-        <td class="center"><span class="${cls(totalRealizedPnl)}">${fc(totalRealizedPnl)}</span></td>
-        <td class="center">100%</td><td></td>
-    </tr>`;
-    html += '</tbody></table></div></div>';
+        // ═══ 交易记录 ═══
+        html += `<div class="card"><details>
+            <summary class="title" style="cursor:pointer">完整交易记录 (${trades.length} 笔)</summary>
+            <div style="overflow-x:auto;margin-top:10px;">
+            <table class="dt" style="font-size:0.72rem;white-space:nowrap;"><thead><tr>
+                <th>#</th><th>时间</th><th>操作</th><th>方向</th>
+                <th class="center">市场价</th><th class="center">成交价</th>
+                <th class="center">数量</th><th class="center">名义价值</th>
+                <th class="center">保证金</th><th class="center">杠杆</th>
+                <th class="center">手续费</th><th class="center">滑点</th>
+                <th class="center">PnL</th>
+                <th class="center">账户总值</th><th>原因</th>
+            </tr></thead><tbody>`;
+        trades.forEach((t, i) => {
+            const pCls = (t.pnl||0) > 0 ? 'color:var(--green)' : (t.pnl||0) < 0 ? 'color:var(--red)' : '';
+            const actionMap = {'OPEN_LONG':'开多', 'CLOSE_LONG':'平多', 'OPEN_SHORT':'开空', 'CLOSE_SHORT':'平空', 'LIQUIDATED':'强平', 'SPOT_BUY':'现买', 'SPOT_SELL':'现卖', 'PARTIAL_TP':'部分止盈'};
+            const isOpen = t.action && t.action.startsWith('OPEN');
+            const isLiq = t.action === 'LIQUIDATED';
+            html += `<tr>
+                <td>${i+1}</td><td>${(t.time||'').replace('T',' ').slice(0,16)}</td>
+                <td style="font-weight:600;${isLiq?'color:var(--red)':isOpen?'color:var(--cyan)':'color:var(--orange)'}">${actionMap[t.action]||t.action}</td>
+                <td>${t.direction==='long'?'多':t.direction==='short'?'空':'-'}</td>
+                <td class="center">$${fv(t.market_price)}</td>
+                <td class="center">$${fv(t.exec_price)}</td>
+                <td class="center">${fv(t.quantity)}</td>
+                <td class="center">${fc(t.notional_value)}</td>
+                <td class="center">${fc(t.margin)}</td>
+                <td class="center">${t.leverage||'-'}x</td>
+                <td class="center">$${fv(t.fee)}</td>
+                <td class="center">$${fv(t.slippage_cost)}</td>
+                <td class="center" style="${pCls};font-weight:700">${t.pnl!=null?'$'+fv(t.pnl):'-'}</td>
+                <td class="center">${fc(t.after_total)}</td>
+                <td style="font-size:0.68rem;max-width:250px;overflow:hidden;text-overflow:ellipsis">${t.reason||''}</td>
+            </tr>`;
+        });
+        html += '</tbody></table></div></details></div>';
 
-    // ── 合约交易统计 ──
-    html += `<div class="card"><div class="title"><span class="icon">💹</span>合约交易统计 (平仓${futuresClose.length}笔 + 部分止盈${partialTP.length}笔)</div>
-    <div class="mg">
-        <div class="mi"><div class="lb">平仓盈利</div><div class="vl pos">${fWins.length}笔</div></div>
-        <div class="mi"><div class="lb">平仓亏损</div><div class="vl neg">${fLosses.length}笔</div></div>
-        <div class="mi"><div class="lb">胜率</div><div class="vl ${(fWins.length/(futuresClose.length||1)*100)>=50?'pos':'neg'}">${(fWins.length/(futuresClose.length||1)*100).toFixed(1)}%</div></div>
-        <div class="mi"><div class="lb">平均盈利</div><div class="vl pos">$${fv(fWins.reduce((s,t)=>s+(t.pnl||0),0)/(fWins.length||1))}</div></div>
-        <div class="mi"><div class="lb">平均亏损</div><div class="vl neg">$${fv(fLosses.reduce((s,t)=>s+(t.pnl||0),0)/(fLosses.length||1))}</div></div>
-        <div class="mi"><div class="lb">最大单笔盈利</div><div class="vl pos">$${fv(Math.max(0,...futuresClose.map(t=>t.pnl||0)))}</div></div>
-        <div class="mi"><div class="lb">最大单笔亏损</div><div class="vl neg">$${fv(Math.min(0,...futuresClose.map(t=>t.pnl||0)))}</div></div>
-        <div class="mi"><div class="lb">合约总PnL</div><div class="vl ${cls(fTotalPnl+ptPnl)}">${fc(fTotalPnl+ptPnl)}</div></div>
-    </div>
-    <div style="margin-top:14px;"><div class="chart-box" style="height:220px"><canvas id="pnlChart"></canvas></div></div>
-    </div>`;
-
-    // ── 现货交易统计 ──
-    const spotWins = spotSells.filter(t => (t.pnl||0) > 0);
-    const spotLosses = spotSells.filter(t => (t.pnl||0) <= 0);
-    html += `<div class="card"><div class="title"><span class="icon">🪙</span>现货交易统计 (卖出${spotSells.length}笔 / 买入${spotBuys.length}笔)</div>
-    <div class="mg">
-        <div class="mi"><div class="lb">盈利卖出</div><div class="vl pos">${spotWins.length}笔</div></div>
-        <div class="mi"><div class="lb">亏损卖出</div><div class="vl neg">${spotLosses.length}笔</div></div>
-        <div class="mi"><div class="lb">现货总PnL</div><div class="vl ${cls(spotPnl)}">${fc(spotPnl)}</div></div>
-        <div class="mi"><div class="lb">平均单笔PnL</div><div class="vl ${cls(spotPnl)}">${fc(spotPnl/(spotSells.length||1))}</div></div>
-        <div class="mi"><div class="lb">最大单笔盈利</div><div class="vl pos">${fc(Math.max(0,...spotSells.map(t=>t.pnl||0)))}</div></div>
-        <div class="mi"><div class="lb">占总PnL比</div><div class="vl neu">${totalRealizedPnl?(spotPnl/totalRealizedPnl*100).toFixed(1)+'%':'-'}</div></div>
-    </div>
-    <div style="margin-top:8px;font-size:0.78rem;color:var(--text-muted);">
-        注: 现货PnL = (卖出价 - 持仓均价) × 数量。策略初始分配50%资金买入ETH现货，后续根据信号进行现货买卖。
-    </div></div>`;
-
-    // ══════ 月度汇总 ══════
-    const monthMap = {};
-    daily.forEach(d => {
-        const mon = d.date.slice(0,7);
-        if (!monthMap[mon]) monthMap[mon] = { start: null, end: null, trades: 0, pnl: 0 };
-        if (!monthMap[mon].start) monthMap[mon].start = d.total_value;
-        monthMap[mon].end = d.total_value;
-        monthMap[mon].trades += d.day_trades || 0;
-        monthMap[mon].pnl += d.day_pnl || 0;
-    });
-    const months = Object.keys(monthMap).sort();
-    html += `<div class="card"><div class="title"><span class="icon">📆</span>月度汇总</div>
-    <div style="overflow-x:auto;"><table class="dt"><thead><tr>
-        <th>月份</th><th class="center">期初</th><th class="center">期末</th>
-        <th class="center">月收益</th><th class="center">交易次数</th><th class="center">已实现PnL</th>
-    </tr></thead><tbody>`;
-    months.forEach(mon => {
-        const m2 = monthMap[mon];
-        const ret = m2.start ? ((m2.end - m2.start) / m2.start * 100) : 0;
-        html += `<tr>
-            <td style="font-weight:600">${mon}</td>
-            <td class="center">${fc(m2.start)}</td>
-            <td class="center">${fc(m2.end)}</td>
-            <td class="center"><span class="${cls(ret)}" style="font-weight:700">${ret.toFixed(2)}%</span></td>
-            <td class="center">${m2.trades}</td>
-            <td class="center"><span class="${cls(m2.pnl)}">${fc(m2.pnl)}</span></td>
-        </tr>`;
-    });
-    html += '</tbody></table></div></div>';
-
-    root.innerHTML = html;
-
-    // ═══ 时间线渲染 ═══
-    function renderTimeline(filter, search) {
-        const body = document.getElementById('tl-body');
-        let rows = '';
+        // ═══ 月度汇总 ═══
+        const monthMap = {};
         daily.forEach(d => {
-            const dayTr = tradeByDate[d.date] || [];
-            const hasL = d.has_long;
-            const hasS = d.has_short;
+            const mon = d.date.slice(0,7);
+            if (!monthMap[mon]) monthMap[mon] = { start: null, end: null, trades: 0, pnl: 0 };
+            if (!monthMap[mon].start) monthMap[mon].start = d.total_value;
+            monthMap[mon].end = d.total_value;
+            monthMap[mon].trades += d.day_trades || 0;
+            monthMap[mon].pnl += d.day_pnl || 0;
+        });
+        const months = Object.keys(monthMap).sort();
+        html += `<div class="card"><div class="title">月度汇总</div>
+        <div style="overflow-x:auto;"><table class="dt"><thead><tr>
+            <th>月份</th><th class="center">期初</th><th class="center">期末</th>
+            <th class="center">月收益</th><th class="center">交易次数</th><th class="center">已实现PnL</th>
+        </tr></thead><tbody>`;
+        months.forEach(mon => {
+            const m2 = monthMap[mon];
+            const ret = m2.start ? ((m2.end - m2.start) / m2.start * 100) : 0;
+            html += `<tr>
+                <td style="font-weight:600">${mon}</td>
+                <td class="center">${fc(m2.start)}</td>
+                <td class="center">${fc(m2.end)}</td>
+                <td class="center"><span class="${cls(ret)}" style="font-weight:700">${ret.toFixed(2)}%</span></td>
+                <td class="center">${m2.trades}</td>
+                <td class="center"><span class="${cls(m2.pnl)}">${fc(m2.pnl)}</span></td>
+            </tr>`;
+        });
+        html += '</tbody></table></div></div>';
 
-            // 筛选
-            if (filter === 'long' && !hasL) return;
-            if (filter === 'short' && !hasS) return;
-            if (filter === 'trade' && dayTr.length === 0) return;
-            if (filter === 'empty' && (hasL || hasS)) return;
-            if (search && !d.date.includes(search)) return;
+        root.innerHTML = html;
 
-            const posClass = hasL && hasS ? 'pos-both' : hasL ? 'pos-long' : hasS ? 'pos-short' : 'pos-none';
+        // ═══ 时间线渲染 ═══
+        function renderTimeline(filter, search) {
+            const body = document.getElementById('tl-body');
+            let rows = '';
+            daily.forEach(d => {
+                const dayTr = tradeByDate[d.date] || [];
+                const hasL = d.has_long;
+                const hasS = d.has_short;
+                if (filter === 'long' && !hasL) return;
+                if (filter === 'short' && !hasS) return;
+                if (filter === 'trade' && dayTr.length === 0) return;
+                if (filter === 'empty' && (hasL || hasS)) return;
+                if (search && !d.date.includes(search)) return;
 
-            let posHtml = '<span style="color:var(--text-muted)">-</span>';
-            if (hasL || hasS) {
-                posHtml = '';
-                if (hasL) posHtml += `<span class="pos-pill long">多</span>`;
-                if (hasS) posHtml += `<span class="pos-pill short">空</span>`;
-                if (d.long_entry) posHtml += `<span style="font-size:0.68rem;color:var(--text-muted)"> L@${fv(d.long_entry)}</span>`;
-                if (d.short_entry) posHtml += `<span style="font-size:0.68rem;color:var(--text-muted)"> S@${fv(d.short_entry)}</span>`;
-            }
-
-            const unrealPnl = (d.long_pnl||0) + (d.short_pnl||0);
-            let pnlHtml = '<span style="color:var(--text-muted)">-</span>';
-            if (hasL || hasS) {
-                pnlHtml = `<span class="${cls(unrealPnl)}" style="font-weight:600">$${fv(unrealPnl)}</span>`;
-            }
-
-            let tradeHtml = '';
-            dayTr.forEach(t => {
-                const actionMap = {'OPEN_LONG':'开多','CLOSE_LONG':'平多','OPEN_SHORT':'开空','CLOSE_SHORT':'平空','LIQUIDATED':'强平','PARTIAL_TP':'止盈'};
-                const isOpen = t.action && t.action.startsWith('OPEN');
-                const isLiq = t.action === 'LIQUIDATED';
-                const markCls = isLiq ? 'liq' : isOpen ? 'open' : 'close';
-                tradeHtml += `<span class="trade-mark ${markCls}">${actionMap[t.action]||t.action}</span>`;
-                if (!isOpen && t.pnl != null) {
-                    tradeHtml += `<span class="${cls(t.pnl)}" style="font-size:0.68rem;font-weight:600">$${fv(t.pnl)}</span> `;
+                const posClass = hasL && hasS ? 'pos-both' : hasL ? 'pos-long' : hasS ? 'pos-short' : 'pos-none';
+                let posHtml = '<span style="color:var(--text-muted)">-</span>';
+                if (hasL || hasS) {
+                    posHtml = '';
+                    if (hasL) posHtml += `<span class="pos-pill long">多</span>`;
+                    if (hasS) posHtml += `<span class="pos-pill short">空</span>`;
+                    if (d.long_entry) posHtml += `<span style="font-size:0.68rem;color:var(--text-muted)"> L@${fv(d.long_entry)}</span>`;
+                    if (d.short_entry) posHtml += `<span style="font-size:0.68rem;color:var(--text-muted)"> S@${fv(d.short_entry)}</span>`;
                 }
+
+                const unrealPnl = (d.long_pnl||0) + (d.short_pnl||0);
+                let pnlHtml = '<span style="color:var(--text-muted)">-</span>';
+                if (hasL || hasS) pnlHtml = `<span class="${cls(unrealPnl)}" style="font-weight:600">$${fv(unrealPnl)}</span>`;
+
+                let tradeHtml = '';
+                dayTr.forEach(t => {
+                    const actionMap = {'OPEN_LONG':'开多','CLOSE_LONG':'平多','OPEN_SHORT':'开空','CLOSE_SHORT':'平空','LIQUIDATED':'强平','PARTIAL_TP':'止盈','SPOT_BUY':'现买','SPOT_SELL':'现卖'};
+                    const isOpen = t.action && (t.action.startsWith('OPEN') || t.action === 'SPOT_BUY');
+                    const isLiq = t.action === 'LIQUIDATED';
+                    const markCls = isLiq ? 'liq' : isOpen ? 'open' : 'close';
+                    tradeHtml += `<span class="trade-mark ${markCls}">${actionMap[t.action]||t.action}</span>`;
+                    if (!isOpen && t.pnl != null) tradeHtml += `<span class="${cls(t.pnl)}" style="font-size:0.68rem;font-weight:600">$${fv(t.pnl)}</span> `;
+                });
+
+                const ddPct = Math.abs(d.drawdown_pct || 0);
+                const ddWidth = Math.min(100, ddPct * 3);
+                const usdt = d.usdt || 0;
+                const ethVal = d.spot_eth_value || 0;
+                const frozenM = d.frozen_margin || 0;
+                const ethQty = d.eth_price > 0 ? (ethVal / d.eth_price) : 0;
+
+                rows += `<div class="tl-row ${posClass}">
+                    <div class="tl-date">${d.date}</div>
+                    <div class="tl-price">$${fv(d.eth_price)}</div>
+                    <div class="tl-assets">
+                        <div class="a-row"><span class="a-label">USDT</span><span class="a-val">${fc(usdt)}</span></div>
+                        <div class="a-row"><span class="a-label">ETH</span><span class="a-val" style="color:var(--orange)">${ethQty.toFixed(2)} (${fc(ethVal)})</span></div>
+                        ${frozenM > 0 ? '<div class="a-row"><span class="a-label">冻结</span><span class="a-val" style="color:var(--purple)">'+fc(frozenM)+'</span></div>' : ''}
+                    </div>
+                    <div class="tl-bar">${posHtml}</div>
+                    <div class="tl-pnl">${pnlHtml}</div>
+                    <div class="tl-total"><span class="${cls(d.return_pct)}">${fc(d.total_value)}</span></div>
+                    <div class="tl-dd"><span class="neg">${ddPct > 0 ? '-'+ddPct.toFixed(1)+'%' : '-'}</span>
+                        <div class="dd-bar" style="width:50px"><div class="dd-fill" style="width:${ddWidth}%"></div></div>
+                    </div>
+                    <div class="tl-trade">${tradeHtml || '<span style="color:var(--text-muted)">-</span>'}</div>
+                </div>`;
             });
-
-            const ddPct = Math.abs(d.drawdown_pct || 0);
-            const ddWidth = Math.min(100, ddPct * 3);
-            const retCls = cls(d.return_pct);
-
-            // USDT / ETH 资产明细
-            const usdt = d.usdt || 0;
-            const ethVal = d.spot_eth_value || 0;
-            const frozenM = d.frozen_margin || 0;
-            const ethQty = d.eth_price > 0 ? (ethVal / d.eth_price) : 0;
-
-            rows += `<div class="tl-row ${posClass}">
-                <div class="tl-date">${d.date}</div>
-                <div class="tl-price">$${fv(d.eth_price)}</div>
-                <div class="tl-assets">
-                    <div class="a-row"><span class="a-label">USDT</span><span class="a-val">${fc(usdt)}</span></div>
-                    <div class="a-row"><span class="a-label">ETH</span><span class="a-val" style="color:var(--orange)">${ethQty.toFixed(2)} (${fc(ethVal)})</span></div>
-                    ${frozenM > 0 ? '<div class="a-row"><span class="a-label">冻结</span><span class="a-val" style="color:var(--purple)">'+fc(frozenM)+'</span></div>' : ''}
-                </div>
-                <div class="tl-bar">${posHtml}</div>
-                <div class="tl-pnl">${pnlHtml}</div>
-                <div class="tl-total"><span class="${retCls}">${fc(d.total_value)}</span></div>
-                <div class="tl-dd"><span class="neg">${ddPct > 0 ? '-'+ddPct.toFixed(1)+'%' : '-'}</span>
-                    <div class="dd-bar" style="width:50px"><div class="dd-fill" style="width:${ddWidth}%"></div></div>
-                </div>
-                <div class="tl-trade">${tradeHtml || '<span style="color:var(--text-muted)">-</span>'}</div>
-            </div>`;
+            body.innerHTML = rows;
+        }
+        renderTimeline('all', '');
+        document.getElementById('posFilter').addEventListener('change', e => {
+            renderTimeline(e.target.value, document.getElementById('dateSearch').value);
         });
-        body.innerHTML = rows;
-    }
+        document.getElementById('dateSearch').addEventListener('input', e => {
+            renderTimeline(document.getElementById('posFilter').value, e.target.value);
+        });
 
-    renderTimeline('all', '');
-    document.getElementById('posFilter').addEventListener('change', e => {
-        renderTimeline(e.target.value, document.getElementById('dateSearch').value);
-    });
-    document.getElementById('dateSearch').addEventListener('input', e => {
-        renderTimeline(document.getElementById('posFilter').value, e.target.value);
-    });
+        // ═══ 图表 ═══
+        if (equity.length > 0) {
+            const labels = equity.map(e => e.date);
+            const datasets = [
+                { label: '账户总值', data: equity.map(e=>e.total), borderColor: '#5b8af5', backgroundColor: 'rgba(91,138,245,0.08)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y' },
+                { label: 'ETH价格', data: equity.map(e=>e.price), borderColor: '#f59e0b', borderWidth: 1.5, tension: 0.3, pointRadius: 0, borderDash: [4,2], yAxisID: 'y1' },
+                { label: '回撤%', data: equity.map(e=> -(e.drawdown||0)), borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1, yAxisID: 'y2' },
+            ];
 
-    // ═══════════════════════════
-    // Chart 1: 资金曲线 + 回撤 + 价格
-    // ═══════════════════════════
-    if (equity.length > 0) {
-        const labels = equity.map(e => e.date);
-        new Chart(document.getElementById('mainChart'), {
-            type: 'line',
-            data: {
-                labels,
-                datasets: [
-                    { label: '账户总值', data: equity.map(e=>e.total), borderColor: '#5b8af5', backgroundColor: 'rgba(91,138,245,0.08)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y' },
-                    { label: 'ETH价格', data: equity.map(e=>e.price), borderColor: '#f59e0b', borderWidth: 1.5, tension: 0.3, pointRadius: 0, borderDash: [4,2], yAxisID: 'y1' },
-                    { label: '回撤%', data: equity.map(e=> -(e.drawdown||0)), borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1, yAxisID: 'y2' },
-                ],
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                interaction: { mode: 'index', intersect: false },
-                plugins: { legend: { labels: { color: '#8b8fa8', font: { size: 10 } } } },
-                scales: {
-                    x: { ticks: { color: '#8b8fa8', maxTicksLimit: 15, font: { size: 9 } }, grid: { color: 'rgba(42,46,66,0.5)' } },
-                    y: { position: 'left', ticks: { color: '#5b8af5', font: { size: 9 } }, grid: { color: 'rgba(42,46,66,0.3)' } },
-                    y1: { position: 'right', ticks: { color: '#f59e0b', font: { size: 9 } }, grid: { drawOnChartArea: false } },
-                    y2: { position: 'right', ticks: { color: '#ef4444', font: { size: 9 }, callback: v=>v+'%' }, grid: { drawOnChartArea: false }, max: 0, min: Math.min(-5, (s.max_drawdown_pct||15)*1.2) },
+            // 对比曲线
+            if (cmpData && cmpData.equity_curve) {
+                const cmpEquity = cmpData.equity_curve;
+                const cmpMap = {};
+                cmpEquity.forEach(e => cmpMap[e.date] = e.total);
+                datasets.push({
+                    label: `对比#${cmpData.run_id}`,
+                    data: labels.map(d => cmpMap[d] || null),
+                    borderColor: '#a78bfa',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    pointRadius: 0,
+                    borderDash: [6,3],
+                    yAxisID: 'y',
+                });
+            }
+
+            new Chart(document.getElementById('mainChart'), {
+                type: 'line',
+                data: { labels, datasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: { legend: { labels: { color: '#8b8fa8', font: { size: 10 } } } },
+                    scales: {
+                        x: { ticks: { color: '#8b8fa8', maxTicksLimit: 15, font: { size: 9 } }, grid: { color: 'rgba(42,46,66,0.5)' } },
+                        y: { position: 'left', ticks: { color: '#5b8af5', font: { size: 9 } }, grid: { color: 'rgba(42,46,66,0.3)' } },
+                        y1: { position: 'right', ticks: { color: '#f59e0b', font: { size: 9 } }, grid: { drawOnChartArea: false } },
+                        y2: { position: 'right', ticks: { color: '#ef4444', font: { size: 9 }, callback: v=>v+'%' }, grid: { drawOnChartArea: false }, max: 0, min: Math.min(-5, (s.max_drawdown_pct||15)*1.2) },
+                    },
                 },
-            },
+            });
+        }
+
+        // ═══ 事件绑定 ═══
+        document.getElementById('runSelector').addEventListener('change', async e => {
+            const rid = e.target.value;
+            window.history.replaceState(null, '', `?run_id=${rid}`);
+            data = await loadRun(rid);
+            renderPage(data, compareData);
+        });
+        document.getElementById('cmpSelector').addEventListener('change', async e => {
+            const rid = e.target.value;
+            if (rid) {
+                compareData = await loadRun(rid);
+            } else {
+                compareData = null;
+            }
+            renderPage(data, compareData);
         });
     }
 
-    // ═══════════════════════════
-    // Chart 2: 每笔交易PnL瀑布图
-    // ═══════════════════════════
-    if (closeTrades.length > 0) {
-        new Chart(document.getElementById('pnlChart'), {
-            type: 'bar',
-            data: {
-                labels: closeTrades.map((t,i) => `#${i+1}`),
-                datasets: [{
-                    label: '单笔PnL',
-                    data: closeTrades.map(t => t.pnl||0),
-                    backgroundColor: closeTrades.map(t => (t.pnl||0) >= 0 ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'),
-                    borderColor: closeTrades.map(t => (t.pnl||0) >= 0 ? '#22c55e' : '#ef4444'),
-                    borderWidth: 1,
-                }],
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    x: { ticks: { color: '#8b8fa8', font: { size: 9 } }, grid: { color: 'rgba(42,46,66,0.3)' } },
-                    y: { ticks: { color: '#8b8fa8', font: { size: 9 }, callback: v=>'$'+v }, grid: { color: 'rgba(42,46,66,0.3)' } },
-                },
-            },
-        });
-    }
+    renderPage(data, null);
 });
 </script>
 {% endblock %}

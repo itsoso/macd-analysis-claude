@@ -25,6 +25,7 @@ import sys
 import os
 import time
 import re
+from bisect import bisect_right
 from datetime import datetime
 from itertools import product
 
@@ -44,6 +45,7 @@ from signal_core import (
     compute_signals_six as _compute_signals_six_core,
     calc_fusion_score_six as _calc_fusion_score_six_core,
 )
+from multi_tf_consensus import fuse_tf_scores
 
 
 # ======================================================
@@ -132,6 +134,7 @@ def _init_protection_state(config, initial_equity):
             'daily_lock_count': 0,
             'streak_lock_count': 0,
             'global_halt_triggered': 0,
+            'global_halt_recovered': 0,
             'blocked_bars': 0,
             'max_loss_streak': 0,
             'blocked_reason_counts': {},
@@ -167,10 +170,18 @@ def _update_protection_risk_state(state, dt, equity, idx, config):
     else:
         state['drawdown_from_peak_pct'] = 0.0
 
-    global_dd_limit = float(config.get('prot_global_dd_limit_pct', 0.12))
+    global_dd_limit = float(config.get('prot_global_dd_limit_pct', 0.15))
     if (not state.get('global_halt', False)) and state['drawdown_from_peak_pct'] <= -global_dd_limit:
         state['global_halt'] = True
         state['stats']['global_halt_triggered'] += 1
+
+    # ── global_halt 恢复机制: 回撤收窄到恢复阈值时解除停机 ──
+    # 避免一次大回撤永久杀死策略
+    if state.get('global_halt', False):
+        recovery_threshold = float(config.get('prot_global_halt_recovery_pct', 0.06))
+        if state['drawdown_from_peak_pct'] > -recovery_threshold:
+            state['global_halt'] = False
+            state['stats']['global_halt_recovered'] = int(state['stats'].get('global_halt_recovered', 0)) + 1
 
     return state
 
@@ -214,7 +225,44 @@ def _protection_entry_allowed(state, idx):
     return True, None
 
 
-def _compute_regime_controls(primary_df, idx, config):
+def _build_regime_precomputed(primary_df, config):
+    """预计算 regime 所需滚动统计，减少逐 bar 切片开销。"""
+    if not config.get('use_regime_aware', False):
+        return None
+
+    lookback = max(2, int(config.get('regime_lookback_bars', 48)))
+    atr_bars = max(2, int(config.get('regime_atr_bars', 14)))
+    close = primary_df['close']
+    high = primary_df['high']
+    low = primary_df['low']
+
+    ret = close.pct_change()
+    vol_window = max(2, lookback - 1)
+    regime_vol = ret.rolling(vol_window, min_periods=8).std()
+
+    ma_fast = close.rolling(12, min_periods=1).mean()
+    ma_slow = close.rolling(48, min_periods=1).mean()
+
+    close_prev = close.shift(1)
+    tr = pd.concat(
+        [
+            (high - low).abs(),
+            (high - close_prev).abs(),
+            (low - close_prev).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr_pct = (tr.rolling(atr_bars + 1, min_periods=3).mean() / close).replace([np.inf, -np.inf], np.nan)
+
+    return {
+        'regime_vol': regime_vol,
+        'ma_fast': ma_fast,
+        'ma_slow': ma_slow,
+        'atr_pct': atr_pct,
+    }
+
+
+def _compute_regime_controls(primary_df, idx, config, precomputed=None):
     """
     根据当前市场状态动态调整阈值与风险参数。
     仅使用 <= idx 的历史数据, 防止未来函数。
@@ -238,42 +286,55 @@ def _compute_regime_controls(primary_df, idx, config):
     if idx < max(20, lookback):
         return base
 
-    start = max(0, idx - lookback + 1)
-    win = primary_df.iloc[start:idx + 1]
-    if len(win) < 20:
-        return base
-
-    close = win['close']
-    price = float(primary_df['close'].iloc[idx]) if idx < len(primary_df) else float(close.iloc[-1])
+    price = float(primary_df['close'].iloc[idx]) if idx < len(primary_df) else float(primary_df['close'].iloc[-1])
     if price <= 0:
         return base
 
-    returns = close.pct_change().dropna()
-    if len(returns) < 8:
-        return base
-    vol = float(returns.std())
+    if precomputed is not None:
+        vol_s = precomputed.get('regime_vol')
+        ma_fast_s = precomputed.get('ma_fast')
+        ma_slow_s = precomputed.get('ma_slow')
+        atr_pct_s = precomputed.get('atr_pct')
+        vol = float(vol_s.iloc[idx]) if vol_s is not None and idx < len(vol_s) else float('nan')
+        ma_fast = float(ma_fast_s.iloc[idx]) if ma_fast_s is not None and idx < len(ma_fast_s) else float('nan')
+        ma_slow = float(ma_slow_s.iloc[idx]) if ma_slow_s is not None and idx < len(ma_slow_s) else float('nan')
+        atr_pct = float(atr_pct_s.iloc[idx]) if atr_pct_s is not None and idx < len(atr_pct_s) else 0.0
+        if not np.isfinite(vol):
+            return base
+        if not np.isfinite(ma_fast) or not np.isfinite(ma_slow):
+            return base
+        if not np.isfinite(atr_pct):
+            atr_pct = 0.0
+    else:
+        start = max(0, idx - lookback + 1)
+        win = primary_df.iloc[start:idx + 1]
+        if len(win) < 20:
+            return base
+        close = win['close']
+        returns = close.pct_change().dropna()
+        if len(returns) < 8:
+            return base
+        vol = float(returns.std())
+        ma_fast = float(close.tail(min(12, len(close))).mean())
+        ma_slow = float(close.tail(min(48, len(close))).mean())
 
-    # 价格趋势强度: 快慢均值差 / 当前价
-    ma_fast = float(close.tail(min(12, len(close))).mean())
-    ma_slow = float(close.tail(min(48, len(close))).mean())
+        atr_start = max(0, idx - atr_bars)
+        h = primary_df['high'].iloc[atr_start:idx + 1]
+        l = primary_df['low'].iloc[atr_start:idx + 1]
+        c_prev = primary_df['close'].shift(1).iloc[atr_start:idx + 1]
+        min_len = min(len(h), len(l), len(c_prev))
+        atr_pct = 0.0
+        if min_len > 2:
+            tr = pd.Series(
+                [
+                    max(hi - lo, abs(hi - cp), abs(lo - cp))
+                    for hi, lo, cp in zip(h.tail(min_len), l.tail(min_len), c_prev.tail(min_len))
+                ]
+            )
+            atr_pct = float(tr.mean() / price) if price > 0 else 0.0
+
     trend = (ma_fast - ma_slow) / price
     abs_trend = abs(trend)
-
-    # ATR 百分比
-    atr_start = max(0, idx - atr_bars)
-    h = primary_df['high'].iloc[atr_start:idx + 1]
-    l = primary_df['low'].iloc[atr_start:idx + 1]
-    c_prev = primary_df['close'].shift(1).iloc[atr_start:idx + 1]
-    min_len = min(len(h), len(l), len(c_prev))
-    atr_pct = 0.0
-    if min_len > 2:
-        tr = pd.Series(
-            [
-                max(hi - lo, abs(hi - cp), abs(lo - cp))
-                for hi, lo, cp in zip(h.tail(min_len), l.tail(min_len), c_prev.tail(min_len))
-            ]
-        )
-        atr_pct = float(tr.mean() / price) if price > 0 else 0.0
 
     vol_high = float(config.get('regime_vol_high', 0.020))
     vol_low = float(config.get('regime_vol_low', 0.007))
@@ -356,6 +417,244 @@ def _compute_regime_controls(primary_df, idx, config):
     }
 
 
+def _build_microstructure_features(primary_df, config):
+    """
+    预计算微结构特征（资金费率/基差/持仓代理/主动买卖失衡）。
+    仅使用当前K线中可得字段；缺失时自动回退到中性代理，确保兼容旧数据。
+    """
+    lookback = max(8, int(config.get('micro_lookback_bars', 48)))
+    minp = max(5, lookback // 3)
+
+    close = pd.to_numeric(primary_df.get('close', pd.Series(0.0, index=primary_df.index)), errors='coerce')
+    volume = pd.to_numeric(primary_df.get('volume', pd.Series(0.0, index=primary_df.index)), errors='coerce')
+    quote_volume = primary_df.get('quote_volume')
+    if quote_volume is None:
+        quote_volume = close * volume
+    quote_volume = pd.to_numeric(quote_volume, errors='coerce').replace(0, np.nan)
+
+    taker_buy_quote = primary_df.get('taker_buy_quote')
+    if taker_buy_quote is None:
+        taker_buy_quote = quote_volume * 0.5
+    taker_buy_quote = pd.to_numeric(taker_buy_quote, errors='coerce')
+
+    # 主动买卖失衡: [-1, 1]
+    taker_buy_ratio = (taker_buy_quote / quote_volume).clip(0.0, 1.0).fillna(0.5)
+    taker_imbalance = ((taker_buy_ratio - 0.5) * 2.0).clip(-1.0, 1.0)
+
+    # 成交参与度（作为 OI 缺失时的代理）
+    qv_median = quote_volume.rolling(lookback, min_periods=minp).median()
+    participation = (quote_volume / qv_median.replace(0, np.nan)).clip(0.0, 6.0).fillna(1.0)
+
+    # 基差: 优先使用外部提供字段，否则用价格相对滚动VWAP偏离作为代理
+    if 'basis' in primary_df.columns:
+        basis_raw = pd.to_numeric(primary_df['basis'], errors='coerce')
+    else:
+        pv = (close * quote_volume).rolling(lookback, min_periods=minp).sum()
+        qv = quote_volume.rolling(lookback, min_periods=minp).sum().replace(0, np.nan)
+        vwap = pv / qv
+        basis_raw = (close - vwap) / vwap.replace(0, np.nan)
+    basis_mean = basis_raw.rolling(lookback, min_periods=minp).mean()
+    basis_std = basis_raw.rolling(lookback, min_periods=minp).std(ddof=0).replace(0, np.nan)
+    basis_z = ((basis_raw - basis_mean) / basis_std).clip(-5.0, 5.0).fillna(0.0)
+
+    # 持仓量: 优先真实 OI；缺失时用 quote_volume 作为资金参与代理
+    oi_series = None
+    for col in ('open_interest', 'oi'):
+        if col in primary_df.columns:
+            oi_series = pd.to_numeric(primary_df[col], errors='coerce')
+            break
+    if oi_series is None:
+        oi_series = quote_volume
+    oi_mean = oi_series.rolling(lookback, min_periods=minp).mean()
+    oi_std = oi_series.rolling(lookback, min_periods=minp).std(ddof=0).replace(0, np.nan)
+    oi_z = ((oi_series - oi_mean) / oi_std).clip(-5.0, 5.0).fillna(0.0)
+
+    # 资金费率: 优先真实 funding_rate；缺失时用基差映射为资金费代理
+    if 'funding_rate' in primary_df.columns:
+        funding_rate = pd.to_numeric(primary_df['funding_rate'], errors='coerce').fillna(0.0)
+    else:
+        funding_mult = float(config.get('micro_funding_proxy_mult', 0.35))
+        funding_rate = (basis_raw * funding_mult).clip(-0.0020, 0.0020).fillna(0.0)
+    fr_mean = funding_rate.rolling(lookback, min_periods=minp).mean()
+    fr_std = funding_rate.rolling(lookback, min_periods=minp).std(ddof=0).replace(0, np.nan)
+    funding_z = ((funding_rate - fr_mean) / fr_std).clip(-5.0, 5.0).fillna(0.0)
+
+    return pd.DataFrame(
+        {
+            'taker_imbalance': taker_imbalance,
+            'participation': participation,
+            'basis_z': basis_z,
+            'oi_z': oi_z,
+            'funding_rate': funding_rate,
+            'funding_z': funding_z,
+        },
+        index=primary_df.index,
+    )
+
+
+def _compute_microstructure_state(micro_df, idx, config):
+    """
+    计算当前bar的微结构方向偏置:
+      - long_score / short_score: 趋势延续或拥挤反转共识得分
+      - mode_hint: trend / reversion / neutral
+    """
+    neutral = {
+        'valid': False,
+        'long_score': 0.0,
+        'short_score': 0.0,
+        'mode_hint': 'neutral',
+        'basis_z': 0.0,
+        'oi_z': 0.0,
+        'funding_rate': 0.0,
+        'taker_imbalance': 0.0,
+        'participation': 1.0,
+    }
+    if micro_df is None or idx <= 0 or idx >= len(micro_df):
+        return neutral
+
+    row = micro_df.iloc[idx - 1]  # 决策在当前bar open执行，只能用上一bar完成值
+    vals = {
+        'basis_z': float(row.get('basis_z', 0.0) or 0.0),
+        'oi_z': float(row.get('oi_z', 0.0) or 0.0),
+        'funding_rate': float(row.get('funding_rate', 0.0) or 0.0),
+        'taker_imbalance': float(row.get('taker_imbalance', 0.0) or 0.0),
+        'participation': float(row.get('participation', 1.0) or 1.0),
+    }
+
+    imb_thr = float(config.get('micro_imbalance_threshold', 0.08))
+    oi_thr = float(config.get('micro_oi_trend_z', 0.8))
+    basis_thr = float(config.get('micro_basis_extreme_z', 1.2))
+    funding_thr = float(config.get('micro_funding_extreme', 0.0006))
+    part_thr = float(config.get('micro_participation_trend', 1.15))
+
+    long_score = 0.0
+    short_score = 0.0
+
+    # 主动成交失衡（延续）
+    if vals['taker_imbalance'] >= imb_thr:
+        long_score += 1.0
+    elif vals['taker_imbalance'] <= -imb_thr:
+        short_score += 1.0
+
+    # OI/资金参与放大（延续）
+    if vals['oi_z'] >= oi_thr and vals['participation'] >= part_thr:
+        if vals['taker_imbalance'] >= 0:
+            long_score += 1.0
+        if vals['taker_imbalance'] <= 0:
+            short_score += 1.0
+
+    # 基差 + 资金费拥挤（反转）
+    if vals['basis_z'] >= basis_thr and vals['funding_rate'] >= funding_thr:
+        short_score += 1.5
+    if vals['basis_z'] <= -basis_thr and vals['funding_rate'] <= -funding_thr:
+        long_score += 1.5
+
+    mode_hint = 'neutral'
+    if abs(vals['basis_z']) >= basis_thr * 1.3 and vals['participation'] < 1.0:
+        mode_hint = 'reversion'
+    elif vals['oi_z'] >= oi_thr and abs(vals['taker_imbalance']) >= imb_thr:
+        mode_hint = 'trend'
+
+    return {
+        'valid': True,
+        'long_score': float(long_score),
+        'short_score': float(short_score),
+        'mode_hint': mode_hint,
+        **vals,
+    }
+
+
+def _apply_microstructure_overlay(ss, bs, micro_state, config):
+    """将微结构偏置叠加到融合分数与开仓限制。"""
+    overlay = {
+        'block_long': False,
+        'block_short': False,
+        'margin_mult': 1.0,
+    }
+    if not config.get('use_microstructure', False):
+        return ss, bs, overlay
+    if not isinstance(micro_state, dict) or not micro_state.get('valid', False):
+        return ss, bs, overlay
+
+    diff = float(micro_state.get('long_score', 0.0)) - float(micro_state.get('short_score', 0.0))
+    diff = float(np.clip(diff, -4.0, 4.0))
+    boost = float(config.get('micro_score_boost', 0.08))
+    damp = float(config.get('micro_score_dampen', 0.10))
+    margin_step = float(config.get('micro_margin_mult_step', 0.06))
+
+    if diff > 0:
+        bs *= 1.0 + boost * diff
+        ss *= max(0.20, 1.0 - damp * diff)
+        overlay['margin_mult'] *= 1.0 + margin_step * diff
+        if diff >= 2.5:
+            overlay['block_short'] = True
+    elif diff < 0:
+        d = abs(diff)
+        ss *= 1.0 + boost * d
+        bs *= max(0.20, 1.0 - damp * d)
+        overlay['margin_mult'] *= 1.0 + margin_step * d
+        if d >= 2.5:
+            overlay['block_long'] = True
+
+    # 拥挤状态降风险（即使方向一致也避免过热追单）
+    if abs(float(micro_state.get('basis_z', 0.0))) >= float(config.get('micro_basis_crowded_z', 2.2)):
+        overlay['margin_mult'] *= 0.80
+
+    overlay['margin_mult'] = float(np.clip(overlay['margin_mult'], 0.50, 1.35))
+    return float(ss), float(bs), overlay
+
+
+def _resolve_engine_mode(regime_label, micro_state, config):
+    """
+    双引擎切换:
+      - trend: 趋势跟随
+      - reversion: 均值回归/反转
+    """
+    if not config.get('use_dual_engine', False):
+        return 'single'
+
+    mode = 'trend' if regime_label in ('trend', 'low_vol_trend') else 'reversion'
+    if config.get('micro_mode_override', True) and isinstance(micro_state, dict):
+        hint = micro_state.get('mode_hint', 'neutral')
+        if hint in ('trend', 'reversion'):
+            mode = hint
+    return mode
+
+
+def _build_realized_vol_series(primary_df, primary_tf, config):
+    """构建年化波动率序列（用于波动目标仓位）。"""
+    if not config.get('use_vol_target', False):
+        return None
+
+    tf_hours = {
+        '10m': 1 / 6, '15m': 0.25, '30m': 0.5, '1h': 1, '2h': 2, '3h': 3,
+        '4h': 4, '6h': 6, '8h': 8, '12h': 12, '16h': 16, '24h': 24,
+    }
+    tf_h = float(tf_hours.get(primary_tf, 1.0))
+    bars_per_year = max(1, int(round(24.0 * 365.0 / tf_h)))
+    lookback = max(10, int(config.get('vol_target_lookback_bars', 48)))
+    minp = max(6, lookback // 3)
+    ret = primary_df['close'].pct_change()
+    vol_ann = ret.rolling(lookback, min_periods=minp).std(ddof=0) * np.sqrt(bars_per_year)
+    return vol_ann.replace([np.inf, -np.inf], np.nan)
+
+
+def _compute_vol_target_scale(vol_ann, idx, config):
+    """根据实时年化波动率计算仓位缩放。"""
+    if vol_ann is None or idx <= 0 or idx > len(vol_ann):
+        return 1.0, None, False
+
+    rv = float(vol_ann.iloc[idx - 1])  # 仅使用上一bar完成数据
+    if not np.isfinite(rv) or rv <= 0:
+        return 1.0, rv, False
+
+    target = float(config.get('vol_target_annual', 0.85))
+    min_s = float(config.get('vol_target_min_scale', 0.45))
+    max_s = float(config.get('vol_target_max_scale', 1.35))
+    scale = float(np.clip(target / rv, min_s, max_s))
+    return scale, rv, True
+
+
 # ======================================================
 #   通用回测引擎(六书版)
 # ======================================================
@@ -367,8 +666,12 @@ def _run_strategy_core(
     score_provider,
     trade_start_dt=None,
     trade_end_dt=None,
+    tf_score_map=None,
+    decision_tfs=None,
 ):
-    """统一交易执行循环: 单TF/多TF共用。"""
+    """统一交易执行循环: 单TF/多TF共用。
+    tf_score_map, decision_tfs: 可选, 供趋势做多直接读取大周期原始信号。
+    """
     eng = FuturesEngine(config.get('name', 'opt'), max_leverage=config.get('max_lev', 5))
 
     def _norm_ts(ts):
@@ -385,12 +688,20 @@ def _run_strategy_core(
     if start_dt is None and trade_days and trade_days > 0:
         start_dt = primary_df.index[-1] - pd.Timedelta(days=trade_days)
 
+    index_values = primary_df.index
+    close_series = primary_df['close']
+    open_series = primary_df['open']
+    high_series = primary_df['high']
+    low_series = primary_df['low']
+    close_prices = close_series.to_numpy(dtype=float, copy=False)
+    open_prices = open_series.to_numpy(dtype=float, copy=False)
+
     init_idx = 0
     if start_dt:
-        init_idx = primary_df.index.searchsorted(start_dt)
+        init_idx = index_values.searchsorted(start_dt)
         if init_idx >= len(primary_df):
             init_idx = 0
-    eng.spot_eth = eng.initial_eth_value / primary_df['close'].iloc[init_idx]
+    eng.spot_eth = eng.initial_eth_value / float(close_prices[init_idx])
 
     eng.max_single_margin = eng.initial_total * config.get('single_pct', 0.20)
     eng.max_margin_total = eng.initial_total * config.get('total_pct', 0.50)
@@ -435,6 +746,9 @@ def _run_strategy_core(
     short_partial_done = False; long_partial_done = False
     short_partial2_done = False; long_partial2_done = False
 
+    # 趋势持续状态 (跨bar持久, 带滞后)
+    _trend_up_active = False  # 上升趋势一旦激活, 直到明确反转才关闭
+
     warmup = max(60, int(len(primary_df) * 0.05))
 
     tf_hours = {
@@ -453,14 +767,40 @@ def _run_strategy_core(
     prot_state = _init_protection_state(config, eng.total_value(primary_df['close'].iloc[init_idx]))
     global_halt_closed = False
     trade_cursor = 0
+    micro_df = _build_microstructure_features(primary_df, config) if config.get('use_microstructure', False) else None
+    vol_ann = _build_realized_vol_series(primary_df, primary_tf, config)
+    regime_precomputed = _build_regime_precomputed(primary_df, config)
+
+    atr_pct_series = None
+    if use_atr_sl:
+        close_prev = close_series.shift(1)
+        tr = pd.concat(
+            [
+                (high_series - low_series).abs(),
+                (high_series - close_prev).abs(),
+                (low_series - close_prev).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        atr_pct_series = (tr.rolling(14, min_periods=3).mean() / close_series).replace([np.inf, -np.inf], np.nan)
+
+    dyn_vol_series = None
+    if use_dynamic_tp:
+        dyn_vol_series = close_series.pct_change().rolling(19, min_periods=6).std().replace([np.inf, -np.inf], np.nan)
+
+    trend_ema10 = None
+    trend_ema30 = None
+    if bool(config.get('use_trend_enhance', False)):
+        trend_ema10 = close_series.ewm(span=10, adjust=False).mean()
+        trend_ema30 = close_series.ewm(span=30, adjust=False).mean()
 
     for idx in range(warmup, len(primary_df)):
-        dt = primary_df.index[idx]
+        dt = index_values[idx]
         if end_dt is not None and dt > end_dt:
             break
-        price = primary_df['close'].iloc[idx]
+        price = float(close_prices[idx])
         # 交易执行价 = 当前 bar 的 open (模拟"收到上根信号后在下根开盘执行")
-        exec_price = primary_df['open'].iloc[idx]
+        exec_price = float(open_prices[idx])
 
         if start_dt and dt < start_dt:
             if idx % record_interval == 0:
@@ -529,42 +869,27 @@ def _run_strategy_core(
         # 如果还没有 pending 信号(第一根交易bar), 使用前一根 bar 的信号
         if not has_pending_signal and idx > warmup:
             pending_ss, pending_bs = score_provider(idx - 1,
-                                                     primary_df.index[idx - 1],
-                                                     primary_df['close'].iloc[idx - 1])
+                                                     index_values[idx - 1],
+                                                     float(close_prices[idx - 1]))
             has_pending_signal = True
 
         ss, bs = (pending_ss, pending_bs) if has_pending_signal else (0.0, 0.0)
 
-        in_conflict = False
-        if ss > 0 and bs > 0:
-            ratio = min(ss, bs) / max(ss, bs)
-            in_conflict = ratio >= 0.6 and min(ss, bs) >= 15
-
         # ATR自适应止损
         actual_short_sl = short_sl
         actual_long_sl = long_sl
-        if use_atr_sl and idx >= 20:
-            high = primary_df['high'].iloc[max(0, idx - 14):idx]
-            low = primary_df['low'].iloc[max(0, idx - 14):idx]
-            close_prev = primary_df['close'].iloc[max(0, idx - 15):idx - 1]
-            if len(high) > 0 and len(close_prev) > 0:
-                min_len = min(len(high), len(low), len(close_prev))
-                tr = pd.Series([
-                    max(h - l, abs(h - c), abs(l - c))
-                    for h, l, c in zip(high[-min_len:], low[-min_len:], close_prev[-min_len:])
-                ])
-                atr = tr.mean()
-                atr_pct = atr / price
+        if atr_pct_series is not None and idx >= 20:
+            atr_pct = float(atr_pct_series.iloc[idx - 1]) if idx - 1 < len(atr_pct_series) else float('nan')
+            if np.isfinite(atr_pct) and atr_pct > 0:
                 actual_short_sl = max(short_sl, -(atr_pct * atr_sl_mult))
                 actual_long_sl = max(long_sl, -(atr_pct * atr_sl_mult))
 
         # 动态止盈
         actual_short_tp = short_tp
         actual_long_tp = long_tp
-        if use_dynamic_tp and idx >= 20:
-            recent_returns = primary_df['close'].iloc[max(0, idx - 20):idx].pct_change().dropna()
-            if len(recent_returns) > 5:
-                vol = recent_returns.std()
+        if dyn_vol_series is not None and idx >= 20:
+            vol = float(dyn_vol_series.iloc[idx - 1]) if idx - 1 < len(dyn_vol_series) else float('nan')
+            if np.isfinite(vol):
                 if vol > 0.03:
                     actual_short_tp = short_tp * 1.3
                     actual_long_tp = long_tp * 1.3
@@ -573,7 +898,7 @@ def _run_strategy_core(
                     actual_long_tp = long_tp * 0.7
 
         # Regime-aware 动态阈值与风险控制 (仅使用历史数据)
-        regime_ctl = _compute_regime_controls(primary_df, idx, config)
+        regime_ctl = _compute_regime_controls(primary_df, idx, config, precomputed=regime_precomputed)
         # 注入 regime_label 供多周期融合动态调权 (P1-2)
         config['_regime_label'] = regime_ctl.get('regime_label', 'neutral')
         cur_sell_threshold = float(regime_ctl['sell_threshold'])
@@ -585,34 +910,133 @@ def _run_strategy_core(
         cur_lev = int(regime_ctl['lev'])
         cur_margin_use = float(regime_ctl['margin_use'])
 
-        # ── 趋势持仓保护 (Trend Floor) ──
-        # 上升趋势中设定最低ETH占比, 防止频繁卖出导致牛市踏空。
+        # 微结构状态（资金费率/基差/OI/主动买卖）
+        micro_state = _compute_microstructure_state(micro_df, idx, config)
+
+        # 双引擎切换: 趋势跟随 vs 反转回归
+        engine_mode = _resolve_engine_mode(regime_ctl.get('regime_label', 'neutral'), micro_state, config)
+        entry_mult = 1.0
+        exit_mult = 1.0
+        hold_mult = 1.0
+        risk_mult = 1.0
+        entry_dom_ratio = float(config.get('entry_dominance_ratio', 1.5))
+        if engine_mode == 'trend':
+            entry_mult = float(config.get('trend_engine_entry_mult', 0.95))
+            exit_mult = float(config.get('trend_engine_exit_mult', 1.05))
+            hold_mult = float(config.get('trend_engine_hold_mult', 1.35))
+            risk_mult = float(config.get('trend_engine_risk_mult', 1.10))
+            entry_dom_ratio = float(config.get('trend_engine_dominance_ratio', 1.35))
+        elif engine_mode == 'reversion':
+            entry_mult = float(config.get('reversion_engine_entry_mult', 1.12))
+            exit_mult = float(config.get('reversion_engine_exit_mult', 0.90))
+            hold_mult = float(config.get('reversion_engine_hold_mult', 0.70))
+            risk_mult = float(config.get('reversion_engine_risk_mult', 0.75))
+            entry_dom_ratio = float(config.get('reversion_engine_dominance_ratio', 1.75))
+
+        cur_sell_threshold = float(np.clip(cur_sell_threshold * entry_mult, 5.0, 95.0))
+        cur_buy_threshold = float(np.clip(cur_buy_threshold * entry_mult, 5.0, 95.0))
+        cur_short_threshold = float(np.clip(cur_short_threshold * entry_mult, 5.0, 95.0))
+        cur_long_threshold = float(np.clip(cur_long_threshold * entry_mult, 5.0, 95.0))
+        cur_close_short_bs = float(np.clip(cur_close_short_bs * exit_mult, 5.0, 95.0))
+        cur_close_long_ss = float(np.clip(cur_close_long_ss * exit_mult, 5.0, 95.0))
+        cur_lev = int(max(1, round(cur_lev * risk_mult)))
+        cur_margin_use = float(np.clip(cur_margin_use * risk_mult, 0.05, 0.95))
+
+        # 微结构叠加到融合分数 + 开仓限制
+        ss, bs, micro_overlay = _apply_microstructure_overlay(ss, bs, micro_state, config)
+        micro_block_long = bool(micro_overlay.get('block_long', False))
+        micro_block_short = bool(micro_overlay.get('block_short', False))
+        cur_margin_use = float(np.clip(cur_margin_use * float(micro_overlay.get('margin_mult', 1.0)), 0.05, 0.95))
+
+        # 波动目标仓位: 高波动自动降风险，低波动允许恢复风险预算
+        vol_scale, _rv_ann, vol_active = _compute_vol_target_scale(vol_ann, idx, config)
+        if vol_active:
+            cur_margin_use = float(np.clip(cur_margin_use * vol_scale, 0.05, 0.95))
+            cur_lev = int(max(1, round(cur_lev * np.sqrt(vol_scale))))
+
+        # 冲突区间过滤
+        in_conflict = False
+        if ss > 0 and bs > 0:
+            ratio = min(ss, bs) / max(ss, bs)
+            in_conflict = ratio >= 0.6 and min(ss, bs) >= 15
+
+        # 是否启用趋势增强（反转引擎中禁用趋势偏置）
+        trend_enhance_active = bool(config.get('use_trend_enhance', False)) and engine_mode != 'reversion'
+
+        # ── 趋势持仓保护 (Trend Floor v3 — 带滞后 + 事后检查) ──
         trend_floor_active = False
         effective_sell_pct = sell_pct
-        if config.get('use_trend_enhance', False) and idx >= 60:
-            close_arr = primary_df['close'].iloc[max(0, idx - 80):idx + 1]
-            if len(close_arr) >= 60:
-                ema20 = float(close_arr.ewm(span=20, adjust=False).mean().iloc[-1])
-                ema60 = float(close_arr.ewm(span=60, adjust=False).mean().iloc[-1])
-                trend_floor_ratio = float(config.get('trend_floor_ratio', 0.40))
-                # 上升趋势: EMA20 > EMA60
-                if ema20 > ema60:
-                    total_val = eng.total_value(price)
-                    eth_val = eng.spot_eth * price
-                    eth_ratio = eth_val / total_val if total_val > 0 else 0
-                    if eth_ratio <= trend_floor_ratio:
-                        trend_floor_active = True
-                    elif eth_ratio <= trend_floor_ratio + 0.15:
-                        effective_sell_pct = sell_pct * 0.3
+        effective_sell_threshold = cur_sell_threshold
+        effective_spot_cooldown = spot_cooldown
+        trend_is_up = False  # 供后续做多/抑空逻辑使用
+        if trend_enhance_active and idx >= 30 and trend_ema10 is not None and trend_ema30 is not None:
+            ema10 = float(trend_ema10.iloc[idx])
+            ema30 = float(trend_ema30.iloc[idx])
+
+            # 趋势激活条件: EMA10 > EMA30 (不要求price > ema10, 避免敏感波动)
+            trend_enter = ema10 > ema30 * 1.005  # 略高于1:1才激活
+            # 趋势退出条件: EMA10 < EMA30 * 0.98 (明确反转才退出, 滞后保护)
+            trend_exit = ema10 < ema30 * 0.98
+
+            if trend_enter:
+                _trend_up_active = True
+            elif trend_exit:
+                _trend_up_active = False
+            # else: 保持上一个bar的趋势状态 (滞后)
+
+            if _trend_up_active:
+                trend_is_up = True
+                trend_floor_ratio = float(config.get('trend_floor_ratio', 0.50))
+                total_val = eng.total_value(price)
+                eth_val = eng.spot_eth * price
+                eth_ratio = eth_val / total_val if total_val > 0 else 0
+
+                if eth_ratio <= trend_floor_ratio:
+                    trend_floor_active = True  # 低于 floor, 完全禁止卖出
+                else:
+                    # 超出 floor 的部分可以少量卖出 (最多10%)
+                    effective_sell_pct = min(sell_pct, 0.10)
+                # 提高卖出阈值: 只有很强的卖出信号才触发
+                effective_sell_threshold = max(cur_sell_threshold, 55)
+                # 拉长现货冷却期到48bar (防快速连续卖出)
+                effective_spot_cooldown = max(spot_cooldown, 48)
+
+        # 永久最低持仓保护: 任何情况下不卖穿 min_base_eth_ratio
+        # 使用"事后检查": 模拟卖出后的ETH比例, 若低于底线则阻止
+        if not trend_floor_active and trend_enhance_active:
+            total_val = eng.total_value(price)
+            eth_val = eng.spot_eth * price
+            eth_ratio = eth_val / total_val if total_val > 0 else 0
+            min_base_ratio = float(config.get('min_base_eth_ratio', 0.15))
+            if eth_ratio <= min_base_ratio:
+                trend_floor_active = True
+            else:
+                # 事后检查: 如果卖出后会低于底线, 也阻止
+                post_sell_eth_val = eth_val * (1 - effective_sell_pct)
+                # 卖出后 USDT 增加, 总值近似不变 (短期)
+                post_sell_ratio = post_sell_eth_val / total_val if total_val > 0 else 0
+                floor_check = trend_floor_ratio if trend_is_up else min_base_ratio
+                if post_sell_ratio < floor_check:
+                    # 缩小卖出比例, 恰好卖到底线
+                    max_sell = 1.0 - (floor_check * total_val / eth_val) if eth_val > 0 else 0
+                    if max_sell <= 0.02:
+                        trend_floor_active = True  # 几乎不能卖
+                    else:
+                        effective_sell_pct = max(0.02, max_sell)
 
         # 卖出现货 (用 exec_price 执行, 即本bar open)
-        if not trend_floor_active and ss >= cur_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500:
+        if not trend_floor_active and ss >= effective_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500:
             eng.spot_sell(exec_price, dt, effective_sell_pct, f"卖出 SS={ss:.0f}")
-            spot_cd = spot_cooldown
+            spot_cd = effective_spot_cooldown
 
         # 开空 (用 exec_price 执行, 即本bar open)
-        sell_dom = (ss > bs * 1.5) if bs > 0 else True
-        if short_cd == 0 and ss >= cur_short_threshold and not eng.futures_short and sell_dom and not in_conflict and can_open_risk:
+        sell_dom = (ss > bs * entry_dom_ratio) if bs > 0 else True
+        # 趋势中抑制做空: 提高阈值 + 要求更强的卖方优势
+        effective_short_threshold = cur_short_threshold
+        if trend_is_up and trend_enhance_active:
+            effective_short_threshold = max(cur_short_threshold, 55)
+            sell_dom = (ss > bs * max(2.5, entry_dom_ratio)) if bs > 0 else True
+        if short_cd == 0 and ss >= effective_short_threshold and not eng.futures_short and sell_dom and not in_conflict and can_open_risk and not micro_block_short:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
             eng.open_short(exec_price, dt, margin, actual_lev, f"开空 {actual_lev}x")
@@ -692,7 +1116,7 @@ def _run_strategy_core(
                 if eng.futures_short and pnl_r < actual_short_sl:
                     eng.close_short(price, dt, f"止损 {pnl_r*100:.0f}%")
                     short_max_pnl = 0; short_cd = cooldown * 4; short_bars = 0
-                if eng.futures_short and short_bars >= short_max_hold:
+                if eng.futures_short and short_bars >= int(max(3, short_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_short(exec_price, dt, "超时")
                     short_max_pnl = 0; short_cd = cooldown; short_bars = 0
@@ -700,13 +1124,55 @@ def _run_strategy_core(
             short_bars = 1
 
         # 买入现货 (用 exec_price 执行, 即本bar open)
-        if bs >= cur_buy_threshold and spot_cd == 0 and not in_conflict and eng.available_usdt() > 500 and can_open_risk:
-            eng.spot_buy(exec_price, dt, eng.available_usdt() * 0.25, f"买入 BS={bs:.0f}")
+        # 趋势中主动补仓: 降低买入门槛, 加大买入比例
+        effective_buy_threshold = cur_buy_threshold
+        effective_buy_pct = 0.25
+        if trend_is_up and trend_enhance_active:
+            total_val = eng.total_value(exec_price)
+            eth_val = eng.spot_eth * exec_price
+            eth_ratio = eth_val / total_val if total_val > 0 else 0
+            target_ratio = float(config.get('trend_floor_ratio', 0.50))
+            if eth_ratio < target_ratio:
+                # ETH不足目标, 积极补仓
+                effective_buy_threshold = min(cur_buy_threshold, 18)
+                effective_buy_pct = min(0.50, (target_ratio - eth_ratio) + 0.15)
+        if bs >= effective_buy_threshold and spot_cd == 0 and not in_conflict and eng.available_usdt() > 500 and can_open_risk:
+            eng.spot_buy(exec_price, dt, eng.available_usdt() * effective_buy_pct, f"买入 BS={bs:.0f}")
             spot_cd = spot_cooldown
 
         # 开多 (用 exec_price 执行, 即本bar open)
-        buy_dom = (bs > ss * 1.5) if ss > 0 else True
-        if long_cd == 0 and bs >= cur_long_threshold and not eng.futures_long and buy_dom and not in_conflict and can_open_risk:
+        buy_dom = (bs > ss * entry_dom_ratio) if ss > 0 else True
+        # 趋势跟踪做多: 当 live gate 过滤后 bs=0 时, 直接用大周期原始信号判断
+        effective_long_threshold = cur_long_threshold
+        trend_long_bs = bs  # 默认用 gate 后的分数
+        if trend_is_up and trend_enhance_active:
+            effective_long_threshold = min(cur_long_threshold, 25)
+            buy_dom = (bs > ss) if ss > 0 else True
+            # 如果 gate 后 bs 为 0 但趋势明确, 查看大周期原始信号
+            if bs < 10 and tf_score_map and decision_tfs:
+                # 从 4h 和 24h 直接获取原始评分
+                raw_bs_list = []
+                for tf in decision_tfs:
+                    tf_mins = _MTF_MINUTES.get(tf, 60)
+                    if tf_mins >= 240:  # 只看 4h 及以上
+                        raw_ss, raw_bs = _get_tf_score_at(tf_score_map, tf, dt)
+                        if raw_bs > 0:
+                            raw_bs_list.append(raw_bs)
+                # 至少1个大周期看多, 且无大周期看空
+                if raw_bs_list:
+                    raw_big_bs = sum(raw_bs_list) / len(raw_bs_list)
+                    raw_big_ss_list = []
+                    for tf in decision_tfs:
+                        tf_mins = _MTF_MINUTES.get(tf, 60)
+                        if tf_mins >= 240:
+                            raw_ss, _ = _get_tf_score_at(tf_score_map, tf, dt)
+                            if raw_ss > 0:
+                                raw_big_ss_list.append(raw_ss)
+                    raw_big_ss = sum(raw_big_ss_list) / len(raw_big_ss_list) if raw_big_ss_list else 0
+                    if raw_big_bs > raw_big_ss * 1.2:  # 大周期买方占优
+                        trend_long_bs = raw_big_bs
+                        buy_dom = True
+        if long_cd == 0 and trend_long_bs >= effective_long_threshold and not eng.futures_long and buy_dom and not in_conflict and can_open_risk and not micro_block_long:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
             eng.open_long(exec_price, dt, margin, actual_lev, f"开多 {actual_lev}x")
@@ -786,7 +1252,7 @@ def _run_strategy_core(
                 if eng.futures_long and pnl_r < actual_long_sl:
                     eng.close_long(price, dt, f"止损 {pnl_r*100:.0f}%")
                     long_max_pnl = 0; long_cd = cooldown * 4; long_bars = 0
-                if eng.futures_long and long_bars >= long_max_hold:
+                if eng.futures_long and long_bars >= int(max(3, long_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_long(exec_price, dt, "超时")
                     long_max_pnl = 0; long_cd = cooldown; long_bars = 0
@@ -901,22 +1367,46 @@ def _build_tf_score_index(all_data, all_signals, tfs, config):
     """
     预计算每个 TF 在每个时间戳的 (sell_score, buy_score)。
     返回 {tf: {timestamp: (ss, bs)}} 的字典, 供回测快速查询。
+
+    P1 优化: 使用 calc_fusion_score_six_batch 向量化批量计算,
+    从逐 bar 循环 (41s) 降至 <3s。
     """
-    tf_score_map = {}
+    from signal_core import calc_fusion_score_six_batch
+
+    tf_score_map = {'__lookup_cache__': {}}
     for tf in tfs:
         df = all_data[tf]
         sigs = all_signals[tf]
-        score_dict = {}
         warmup = max(60, int(len(df) * 0.05))
-        for idx in range(warmup, len(df)):
-            dt = df.index[idx]
-            ss, bs = calc_fusion_score_six(sigs, df, idx, dt, config)
-            score_dict[dt] = (float(ss), float(bs))
+
+        score_dict, ordered_ts = calc_fusion_score_six_batch(
+            sigs, df, config, warmup=warmup,
+        )
+
         tf_score_map[tf] = score_dict
+        tf_score_map['__lookup_cache__'][tf] = {
+            'times': ordered_ts,
+            'cursor': 0,
+            'n': len(ordered_ts),
+        }
     return tf_score_map
 
 
-def _get_tf_score_at(tf_score_map, tf, dt):
+def _ensure_tf_lookup_cache(tf_score_map, tf, scores):
+    """确保 tf 的有序时间缓存可用。"""
+    cache_root = tf_score_map.setdefault('__lookup_cache__', {})
+    cache = cache_root.get(tf)
+    n_scores = len(scores)
+    if cache is None or int(cache.get('n', -1)) != n_scores:
+        ordered_ts = list(scores.keys())
+        if ordered_ts and any(ordered_ts[i] > ordered_ts[i + 1] for i in range(len(ordered_ts) - 1)):
+            ordered_ts = sorted(ordered_ts)
+        cache = {'times': ordered_ts, 'cursor': 0, 'n': n_scores}
+        cache_root[tf] = cache
+    return cache
+
+
+def _get_tf_score_at(tf_score_map, tf, dt, with_valid=False):
     """
     在 tf 的评分索引中查找离 dt 最近且 <= dt 的评分。
     使用时效衰减: 评分随年龄(age)平滑衰减，而非二值截断，
@@ -924,17 +1414,39 @@ def _get_tf_score_at(tf_score_map, tf, dt):
     """
     scores = tf_score_map.get(tf)
     if not scores:
-        return 0.0, 0.0
+        return (0.0, 0.0, False) if with_valid else (0.0, 0.0)
 
     # 精确匹配
     if dt in scores:
-        return scores[dt]
+        ss, bs = scores[dt]
+        ss = float(ss)
+        bs = float(bs)
+        return (ss, bs, True) if with_valid else (ss, bs)
 
-    # 查找最近的 <= dt 的时间戳
-    candidates = [t for t in scores if t <= dt]
-    if not candidates:
-        return 0.0, 0.0
-    nearest = max(candidates)
+    cache = _ensure_tf_lookup_cache(tf_score_map, tf, scores)
+    times = cache.get('times', [])
+    if not times:
+        return (0.0, 0.0, False) if with_valid else (0.0, 0.0)
+
+    if dt < times[0]:
+        return (0.0, 0.0, False) if with_valid else (0.0, 0.0)
+
+    if dt >= times[-1]:
+        pos = len(times) - 1
+    else:
+        cursor = int(cache.get('cursor', 0))
+        if cursor < 0 or cursor >= len(times):
+            cursor = 0
+        if times[cursor] <= dt:
+            while cursor + 1 < len(times) and times[cursor + 1] <= dt:
+                cursor += 1
+            pos = cursor
+        else:
+            pos = bisect_right(times, dt) - 1
+            if pos < 0:
+                return (0.0, 0.0, False) if with_valid else (0.0, 0.0)
+    cache['cursor'] = pos
+    nearest = times[pos]
 
     # 时效衰减: 1个周期内=100%, 2个周期=50%, 3个周期=25%, >4个周期≈0
     tf_mins = _MTF_MINUTES.get(tf, 60)
@@ -951,10 +1463,12 @@ def _get_tf_score_at(tf_score_map, tf, dt):
         decay = max(0.0, 1.0 - (age_periods - 1.0) / 3.0)
 
     if decay <= 0.01:
-        return 0.0, 0.0
+        return (0.0, 0.0, False) if with_valid else (0.0, 0.0)
 
     ss, bs = scores[nearest]
-    return float(ss) * decay, float(bs) * decay
+    ss = float(ss) * decay
+    bs = float(bs) * decay
+    return (ss, bs, True) if with_valid else (ss, bs)
 
 
 def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
@@ -966,13 +1480,12 @@ def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
 
     返回: (consensus_ss, consensus_bs, meta_dict)
     """
-    from multi_tf_consensus import fuse_tf_scores
-
     # 从预计算索引中查找当前时刻各TF的分数
     tf_scores = {}
     for tf in decision_tfs:
-        ss, bs = _get_tf_score_at(tf_score_map, tf, dt)
-        tf_scores[tf] = (ss, bs)
+        ss, bs, valid = _get_tf_score_at(tf_score_map, tf, dt, with_valid=True)
+        if valid:
+            tf_scores[tf] = (ss, bs)
 
     # 覆盖率门控可配置:
     # - 传统回测: coverage_min=0.0 (不门控)
@@ -1048,6 +1561,8 @@ def run_strategy_multi_tf(
         score_provider=_multi_tf_score,
         trade_start_dt=trade_start_dt,
         trade_end_dt=trade_end_dt,
+        tf_score_map=tf_score_map,
+        decision_tfs=decision_tfs,
     )
 
 

@@ -186,14 +186,26 @@ MULTI_TF_DAILY_DB_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'multi_tf_d
 
 @app.route('/api/multi_tf_daily')
 def api_multi_tf_daily():
-    """从 SQLite DB 加载多周期联合决策最新回测的逐日盈亏数据。"""
-    from multi_tf_daily_db import load_latest_run
-    data = load_latest_run(MULTI_TF_DAILY_DB_FILE)
+    """从 SQLite DB 加载回测数据。支持 ?run_id=N 指定版本，默认最新。"""
+    from multi_tf_daily_db import load_latest_run, load_run_by_id
+    run_id = request.args.get('run_id', type=int)
+    if run_id:
+        data = load_run_by_id(run_id, MULTI_TF_DAILY_DB_FILE)
+    else:
+        data = load_latest_run(MULTI_TF_DAILY_DB_FILE)
     if data:
         return jsonify(data)
     return jsonify({
         "error": "未找到多周期逐日回测数据，请先运行 python backtest_multi_tf_daily.py",
     }), 404
+
+
+@app.route('/api/multi_tf_daily/runs')
+def api_multi_tf_daily_runs():
+    """列出所有回测版本，用于版本选择器和对比。"""
+    from multi_tf_daily_db import list_runs
+    runs = list_runs(MULTI_TF_DAILY_DB_FILE)
+    return jsonify(runs)
 
 
 # ======================================================

@@ -2,14 +2,16 @@
 """
 多周期联合决策 — 逐日盈亏回测
 ===================================
-回测 2025-01-01 ~ 2026-01-31 全区间，
 将每日持仓快照与完整交易明细写入 SQLite DB，
 供专属 Web 页面展示。
 
 用法:
-    python backtest_multi_tf_daily.py
+    python backtest_multi_tf_daily.py                           # 默认区间
+    python backtest_multi_tf_daily.py --start 2025-06-01 --end 2025-12-31
+    python backtest_multi_tf_daily.py --start 2025-01-01 --end 2026-01-31 --tag "趋势v3基线"
 """
 
+import argparse
 import json
 import os
 import platform
@@ -17,6 +19,7 @@ import socket
 import sys
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import numpy as np
@@ -24,10 +27,11 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from binance_fetcher import fetch_binance_klines
 from indicators import add_all_indicators
 from ma_indicators import add_moving_averages
 from signal_core import compute_signals_six
+from live_config import StrategyConfig
+from kline_store import load_klines
 from optimize_six_book import (
     _build_tf_score_index,
     run_strategy_multi_tf,
@@ -35,76 +39,123 @@ from optimize_six_book import (
 from multi_tf_daily_db import save_run, _default_db_path
 
 # ──────────────────────────────────────────────────────────
-# 参数
+# 参数 (可通过 CLI 覆盖)
 # ──────────────────────────────────────────────────────────
-TRADE_START = '2025-01-01'
-TRADE_END = '2026-01-31'
-PRIMARY_TF = '1h'
+DEFAULT_TRADE_START = '2025-01-01'
+DEFAULT_TRADE_END = '2026-01-31'
+_LIVE_DEFAULT = StrategyConfig()
+PRIMARY_TF = _LIVE_DEFAULT.timeframe
 
-AVAILABLE_TFS = ['15m', '1h', '4h', '24h']
-DECISION_TFS = ['15m', '1h', '4h', '24h']
-COMBO_NAME = '四TF联合(15m+1h+4h+24h)'
+DECISION_TFS = list(_LIVE_DEFAULT.decision_timeframes)
+FALLBACK_DECISION_TFS = list(_LIVE_DEFAULT.decision_timeframes_fallback)
+AVAILABLE_TFS = list(dict.fromkeys([PRIMARY_TF, *DECISION_TFS, *FALLBACK_DECISION_TFS]))
+COMBO_NAME = f"四TF联合({'+'.join(DECISION_TFS)})"
 
 # 默认策略参数（与最优配置对齐）
-DEFAULT_CONFIG = {
-    'name': f'多TF逐日_{COMBO_NAME}@{PRIMARY_TF}',
-    'single_pct': 0.20,
-    'total_pct': 0.50,
-    'lifetime_pct': 5.0,
-    'sell_threshold': 18,
-    'buy_threshold': 25,
-    'short_threshold': 25,
-    'long_threshold': 40,
-    'close_short_bs': 40,
-    'close_long_ss': 40,
-    'sell_pct': 0.55,
-    'margin_use': 0.70,
-    'lev': 5,
-    'max_lev': 5,
-    'short_sl': -0.25,
-    'short_tp': 0.60,
-    'short_trail': 0.25,
-    'short_max_hold': 72,
-    'long_sl': -0.08,
-    'long_tp': 0.30,
-    'long_trail': 0.20,
-    'long_max_hold': 72,
-    'trail_pullback': 0.60,
-    'cooldown': 4,
-    'spot_cooldown': 12,
-    'use_partial_tp': True,
-    'partial_tp_1': 0.20,
-    'partial_tp_1_pct': 0.30,
-    'use_partial_tp_2': False,
-    'partial_tp_2': 0.50,
-    'partial_tp_2_pct': 0.30,
-    'use_atr_sl': False,
-    'atr_sl_mult': 3.0,
-    'fusion_mode': 'c6_veto_4',
-    'veto_threshold': 25,
-    'kdj_bonus': 0.09,
-    'kdj_weight': 0.15,
-    'kdj_strong_mult': 1.25,
-    'kdj_normal_mult': 1.12,
-    'kdj_reverse_mult': 0.70,
-    'kdj_gate_threshold': 10,
-    'veto_dampen': 0.30,
-    # ── 实盘口径对齐（与 backtest_multi_tf_date_range_db.py 一致）──
-    'use_live_gate': True,
-    'consensus_min_strength': 40,
-    'coverage_min': 0.5,
-    'use_regime_aware': True,
-    'use_protections': True,
-    'prot_loss_streak_limit': 3,
-    'prot_loss_streak_cooldown_bars': 24,
-    'prot_daily_loss_limit_pct': 0.03,
-    'prot_global_dd_limit_pct': 0.12,
-    'prot_close_on_global_halt': True,
-    # ── 趋势持仓保护 ──
-    # 上升趋势中(EMA20>EMA60)限制现货卖出, 保持最低ETH敞口, 减少牛市踏空。
-    'use_trend_enhance': True,
-    'trend_floor_ratio': 0.40,  # 上升趋势中最低ETH占比
-}
+def _build_default_config():
+    cfg = {
+        'name': f'多TF逐日_{COMBO_NAME}@{PRIMARY_TF}',
+        'single_pct': _LIVE_DEFAULT.single_pct,
+        'total_pct': _LIVE_DEFAULT.total_pct,
+        'lifetime_pct': 5.0,
+        'sell_threshold': _LIVE_DEFAULT.sell_threshold,
+        'buy_threshold': _LIVE_DEFAULT.buy_threshold,
+        'short_threshold': _LIVE_DEFAULT.short_threshold,
+        'long_threshold': _LIVE_DEFAULT.long_threshold,
+        'close_short_bs': _LIVE_DEFAULT.close_short_bs,
+        'close_long_ss': _LIVE_DEFAULT.close_long_ss,
+        'sell_pct': _LIVE_DEFAULT.sell_pct,
+        'margin_use': _LIVE_DEFAULT.margin_use,
+        'lev': _LIVE_DEFAULT.leverage,
+        'max_lev': _LIVE_DEFAULT.max_lev,
+        'short_sl': _LIVE_DEFAULT.short_sl,
+        'short_tp': _LIVE_DEFAULT.short_tp,
+        'short_trail': _LIVE_DEFAULT.short_trail,
+        'short_max_hold': _LIVE_DEFAULT.short_max_hold,
+        'long_sl': _LIVE_DEFAULT.long_sl,
+        'long_tp': _LIVE_DEFAULT.long_tp,
+        'long_trail': _LIVE_DEFAULT.long_trail,
+        'long_max_hold': _LIVE_DEFAULT.long_max_hold,
+        'trail_pullback': _LIVE_DEFAULT.trail_pullback,
+        'cooldown': _LIVE_DEFAULT.cooldown,
+        'spot_cooldown': _LIVE_DEFAULT.spot_cooldown,
+        'use_partial_tp': _LIVE_DEFAULT.use_partial_tp,
+        'partial_tp_1': _LIVE_DEFAULT.partial_tp_1,
+        'partial_tp_1_pct': _LIVE_DEFAULT.partial_tp_1_pct,
+        'use_partial_tp_2': _LIVE_DEFAULT.use_partial_tp_2,
+        'partial_tp_2': _LIVE_DEFAULT.partial_tp_2,
+        'partial_tp_2_pct': _LIVE_DEFAULT.partial_tp_2_pct,
+        'use_atr_sl': _LIVE_DEFAULT.use_atr_sl,
+        'atr_sl_mult': _LIVE_DEFAULT.atr_sl_mult,
+        'fusion_mode': _LIVE_DEFAULT.fusion_mode,
+        'veto_threshold': _LIVE_DEFAULT.veto_threshold,
+        'kdj_bonus': _LIVE_DEFAULT.kdj_bonus,
+        'kdj_weight': _LIVE_DEFAULT.kdj_weight,
+        'div_weight': _LIVE_DEFAULT.div_weight,
+        'kdj_strong_mult': _LIVE_DEFAULT.kdj_strong_mult,
+        'kdj_normal_mult': _LIVE_DEFAULT.kdj_normal_mult,
+        'kdj_reverse_mult': _LIVE_DEFAULT.kdj_reverse_mult,
+        'kdj_gate_threshold': _LIVE_DEFAULT.kdj_gate_threshold,
+        'veto_dampen': _LIVE_DEFAULT.veto_dampen,
+        'bb_bonus': _LIVE_DEFAULT.bb_bonus,
+        'vp_bonus': _LIVE_DEFAULT.vp_bonus,
+        'cs_bonus': _LIVE_DEFAULT.cs_bonus,
+        # ── 实盘口径对齐（与 live 引擎一致） ──
+        'use_live_gate': True,
+        'consensus_min_strength': _LIVE_DEFAULT.consensus_min_strength,
+        'coverage_min': _LIVE_DEFAULT.coverage_min,
+        'use_regime_aware': True,
+        'use_protections': True,
+        'prot_loss_streak_limit': 3,
+        'prot_loss_streak_cooldown_bars': 24,
+        'prot_daily_loss_limit_pct': 0.03,
+        'prot_global_dd_limit_pct': 0.12,
+        'prot_close_on_global_halt': True,
+        # ── 趋势持仓保护 ──
+        'use_trend_enhance': True,
+        'trend_floor_ratio': 0.50,  # 上调至0.50: 趋势中持有更多ETH，减少过度卖出
+        'min_base_eth_ratio': 0.0,  # 禁用最低持仓限制, 允许灵活调仓
+        # ── global_halt 恢复机制 ──
+        'prot_global_dd_limit_pct': 0.15,  # 15%回撤触发停机(放宽)
+        'prot_global_halt_recovery_pct': 0.06,  # 回撤收窄到6%时恢复交易
+        # ── 微结构增强 ── (回测中关闭, 隔离趋势保护v3效果)
+        'use_microstructure': False,  # _LIVE_DEFAULT.use_microstructure,
+        'micro_lookback_bars': _LIVE_DEFAULT.micro_lookback_bars,
+        'micro_imbalance_threshold': _LIVE_DEFAULT.micro_imbalance_threshold,
+        'micro_oi_trend_z': _LIVE_DEFAULT.micro_oi_trend_z,
+        'micro_basis_extreme_z': _LIVE_DEFAULT.micro_basis_extreme_z,
+        'micro_basis_crowded_z': _LIVE_DEFAULT.micro_basis_crowded_z,
+        'micro_funding_extreme': _LIVE_DEFAULT.micro_funding_extreme,
+        'micro_participation_trend': _LIVE_DEFAULT.micro_participation_trend,
+        'micro_funding_proxy_mult': _LIVE_DEFAULT.micro_funding_proxy_mult,
+        'micro_score_boost': _LIVE_DEFAULT.micro_score_boost,
+        'micro_score_dampen': _LIVE_DEFAULT.micro_score_dampen,
+        'micro_margin_mult_step': _LIVE_DEFAULT.micro_margin_mult_step,
+        'micro_mode_override': _LIVE_DEFAULT.micro_mode_override,
+        # ── 双引擎 ── (回测中关闭, 隔离趋势保护v3效果)
+        'use_dual_engine': False,  # _LIVE_DEFAULT.use_dual_engine,
+        'entry_dominance_ratio': _LIVE_DEFAULT.entry_dominance_ratio,
+        'trend_engine_entry_mult': _LIVE_DEFAULT.trend_engine_entry_mult,
+        'trend_engine_exit_mult': _LIVE_DEFAULT.trend_engine_exit_mult,
+        'trend_engine_hold_mult': _LIVE_DEFAULT.trend_engine_hold_mult,
+        'trend_engine_risk_mult': _LIVE_DEFAULT.trend_engine_risk_mult,
+        'trend_engine_dominance_ratio': _LIVE_DEFAULT.trend_engine_dominance_ratio,
+        'reversion_engine_entry_mult': _LIVE_DEFAULT.reversion_engine_entry_mult,
+        'reversion_engine_exit_mult': _LIVE_DEFAULT.reversion_engine_exit_mult,
+        'reversion_engine_hold_mult': _LIVE_DEFAULT.reversion_engine_hold_mult,
+        'reversion_engine_risk_mult': _LIVE_DEFAULT.reversion_engine_risk_mult,
+        'reversion_engine_dominance_ratio': _LIVE_DEFAULT.reversion_engine_dominance_ratio,
+        # ── 波动目标仓位 ── (回测中关闭, 隔离趋势保护v3效果)
+        'use_vol_target': False,  # _LIVE_DEFAULT.use_vol_target,
+        'vol_target_annual': _LIVE_DEFAULT.vol_target_annual,
+        'vol_target_lookback_bars': _LIVE_DEFAULT.vol_target_lookback_bars,
+        'vol_target_min_scale': _LIVE_DEFAULT.vol_target_min_scale,
+        'vol_target_max_scale': _LIVE_DEFAULT.vol_target_max_scale,
+    }
+    return cfg
+
+
+DEFAULT_CONFIG = _build_default_config()
 
 TF_HOURS = {
     '10m': 1/6, '15m': 0.25, '30m': 0.5, '1h': 1, '2h': 2, '3h': 3,
@@ -123,11 +174,19 @@ def _scale_runtime_config(base_config, primary_tf):
     return config
 
 
-def fetch_data_for_tf(tf, days):
-    """获取指定时间框架和天数的数据"""
+def fetch_data_for_tf(tf, days, allow_api_fallback=False):
+    """优先从本地K线库读取；可配置是否允许API回退。"""
     fetch_days = days + 30
+    start_dt = (pd.Timestamp.now().tz_localize(None) - pd.Timedelta(days=fetch_days)).strftime('%Y-%m-%d')
     try:
-        df = fetch_binance_klines("ETHUSDT", interval=tf, days=fetch_days)
+        df = load_klines(
+            symbol="ETHUSDT",
+            interval=tf,
+            start=start_dt,
+            end=None,
+            with_indicators=False,
+            allow_api_fallback=allow_api_fallback,
+        )
         if df is not None and len(df) > 50:
             df = add_all_indicators(df)
             add_moving_averages(df, timeframe=tf)
@@ -157,6 +216,37 @@ def _history_to_daily(history, trades, initial_capital, trade_start, trade_end):
         day_str = (t.get('time') or '')[:10]
         trades_by_day[day_str].append(t)
 
+    day_trade_stats = {}
+    for day_str, day_trades in trades_by_day.items():
+        day_pnl = sum(t.get('pnl', 0) for t in day_trades if t.get('pnl'))
+        has_long = False
+        has_short = False
+        long_entry = None
+        long_qty = None
+        short_entry = None
+        short_qty = None
+        for t in reversed(day_trades):
+            if not has_long and t.get('has_long') and t.get('long_entry'):
+                has_long = True
+                long_entry = t.get('long_entry')
+                long_qty = t.get('long_qty')
+            if not has_short and t.get('has_short') and t.get('short_entry'):
+                has_short = True
+                short_entry = t.get('short_entry')
+                short_qty = t.get('short_qty')
+            if has_long and has_short:
+                break
+        day_trade_stats[day_str] = {
+            'day_trades': len(day_trades),
+            'day_pnl': round(day_pnl, 2),
+            'has_long': has_long,
+            'has_short': has_short,
+            'long_entry': long_entry,
+            'long_qty': long_qty,
+            'short_entry': short_entry,
+            'short_qty': short_qty,
+        }
+
     # 生成日期范围
     start = pd.Timestamp(trade_start)
     end = pd.Timestamp(trade_end)
@@ -181,8 +271,18 @@ def _history_to_daily(history, trades, initial_capital, trade_start, trade_end):
         drawdown = round((total - peak) / peak * 100, 2) if peak > 0 else 0
         return_pct = round((total / initial_capital - 1) * 100, 2)
 
-        day_trades = trades_by_day.get(day_str, [])
-        day_pnl = sum(t.get('pnl', 0) for t in day_trades if t.get('pnl'))
+        day_stat = day_trade_stats.get(day_str)
+        if day_stat is None:
+            day_stat = {
+                'day_trades': 0,
+                'day_pnl': 0.0,
+                'has_long': False,
+                'has_short': False,
+                'long_entry': None,
+                'long_qty': None,
+                'short_entry': None,
+                'short_qty': None,
+            }
 
         rec = {
             'date': day_str,
@@ -197,27 +297,17 @@ def _history_to_daily(history, trades, initial_capital, trade_start, trade_end):
             'drawdown_pct': drawdown,
             'has_long': snap.get('long_pnl', 0) != 0,
             'has_short': snap.get('short_pnl', 0) != 0,
-            'long_entry': None,
-            'long_qty': None,
-            'short_entry': None,
-            'short_qty': None,
-            'day_trades': len(day_trades),
-            'day_pnl': round(day_pnl, 2),
+            'long_entry': day_stat['long_entry'],
+            'long_qty': day_stat['long_qty'],
+            'short_entry': day_stat['short_entry'],
+            'short_qty': day_stat['short_qty'],
+            'day_trades': day_stat['day_trades'],
+            'day_pnl': day_stat['day_pnl'],
         }
-
-        # 从 trade 记录中提取最新持仓信息
-        for t in reversed(day_trades):
-            if t.get('has_long') and t.get('long_entry'):
-                rec['has_long'] = True
-                rec['long_entry'] = t['long_entry']
-                rec['long_qty'] = t.get('long_qty')
-                break
-        for t in reversed(day_trades):
-            if t.get('has_short') and t.get('short_entry'):
-                rec['has_short'] = True
-                rec['short_entry'] = t['short_entry']
-                rec['short_qty'] = t.get('short_qty')
-                break
+        if day_stat['has_long']:
+            rec['has_long'] = True
+        if day_stat['has_short']:
+            rec['has_short'] = True
 
         # 也从 history 快照推断 (如果当天没交易但有持仓)
         if snap.get('long_pnl', 0) != 0:
@@ -274,32 +364,107 @@ def _normalize_trade(t):
     }
 
 
-def main():
+def main(trade_start=None, trade_end=None, version_tag=None):
     t0 = time.time()
+    perf_log = {}  # 性能日志: 阶段 -> 耗时(秒)
+
+    # CLI 参数解析
+    parser = argparse.ArgumentParser(description='多周期联合决策回测')
+    parser.add_argument('--start', type=str, default=None, help='回测起始日 (YYYY-MM-DD)')
+    parser.add_argument('--end', type=str, default=None, help='回测结束日 (YYYY-MM-DD)')
+    parser.add_argument('--tag', type=str, default=None, help='策略版本标签')
+    args, _ = parser.parse_known_args()
+
+    TRADE_START = args.start or trade_start or DEFAULT_TRADE_START
+    TRADE_END = args.end or trade_end or DEFAULT_TRADE_END
+    if args.tag:
+        version_tag = args.tag
+
+    preferred_combo_name = f"四TF联合({'+'.join(DECISION_TFS)})"
     print("=" * 80)
     print("  多周期联合决策 — 逐日盈亏回测")
     print(f"  区间: {TRADE_START} ~ {TRADE_END}")
+    if version_tag:
+        print(f"  版本标签: {version_tag}")
     print(f"  主TF: {PRIMARY_TF}  |  决策TFs: {', '.join(DECISION_TFS)}")
+    allow_api_fallback = os.getenv('BACKTEST_DAILY_ALLOW_API_FALLBACK', '0') == '1'
+    print(f"  K线数据源: {'本地优先+API回退' if allow_api_fallback else '仅本地'}")
+    # 显示关键开关状态
+    print(f"  趋势保护v3: {'ON' if DEFAULT_CONFIG.get('use_trend_enhance') else 'OFF'}"
+          f"  |  微结构: {'ON' if DEFAULT_CONFIG.get('use_microstructure') else 'OFF'}"
+          f"  |  双引擎: {'ON' if DEFAULT_CONFIG.get('use_dual_engine') else 'OFF'}"
+          f"  |  波动目标: {'ON' if DEFAULT_CONFIG.get('use_vol_target') else 'OFF'}")
     print("=" * 80)
 
     # ── 1. 获取数据 ──
     # 需要足够长的历史来覆盖 trade_start 之前的预热期
-    # 从现在回溯到 2024-09-01 约 530 天，加缓冲取 560 天
-    history_days = 560
+    # 动态计算: 从现在到 TRADE_START 的天数 + 缓冲
+    _days_to_start = (pd.Timestamp.now() - pd.Timestamp(TRADE_START)).days
+    history_days = max(560, _days_to_start + 90)
     print(f"\n[1/4] 获取数据 ({history_days}天)...")
 
+    t_phase1 = time.time()
+    fetch_workers = max(1, min(len(AVAILABLE_TFS), int(os.getenv('BACKTEST_DAILY_FETCH_WORKERS', '3'))))
+    print(f"  抓取并发: {fetch_workers}")
     all_data = {}
-    for tf in AVAILABLE_TFS:
-        print(f"  获取 {tf} 数据...")
-        df = fetch_data_for_tf(tf, history_days)
-        if df is not None:
-            all_data[tf] = df
-            print(f"    {tf}: {len(df)} 条K线, {df.index[0]} ~ {df.index[-1]}")
-        else:
-            print(f"    {tf}: 失败!")
+
+    def _fetch_tf_batch(tf_list):
+        if not tf_list:
+            return
+        if fetch_workers == 1:
+            for tf in tf_list:
+                t_tf = time.time()
+                print(f"  获取 {tf} 数据...")
+                df = fetch_data_for_tf(tf, history_days, allow_api_fallback=allow_api_fallback)
+                if df is not None:
+                    all_data[tf] = df
+                    elapsed_tf = time.time() - t_tf
+                    print(f"    {tf}: {len(df)} 条K线, {df.index[0]} ~ {df.index[-1]}  [{elapsed_tf:.2f}s]")
+                else:
+                    print(f"    {tf}: 失败!")
+            return
+
+        start_map = {}
+        with ThreadPoolExecutor(max_workers=fetch_workers) as executor:
+            futures = {}
+            for tf in tf_list:
+                print(f"  获取 {tf} 数据...")
+                start_map[tf] = time.time()
+                futures[executor.submit(fetch_data_for_tf, tf, history_days, allow_api_fallback)] = tf
+            for future in as_completed(futures):
+                tf = futures[future]
+                elapsed_tf = time.time() - start_map.get(tf, time.time())
+                try:
+                    df = future.result()
+                except Exception as e:
+                    df = None
+                    print(f"    {tf}: 失败! {e}")
+                if df is not None:
+                    all_data[tf] = df
+                    print(f"    {tf}: {len(df)} 条K线, {df.index[0]} ~ {df.index[-1]}  [{elapsed_tf:.2f}s]")
+                else:
+                    print(f"    {tf}: 失败!")
+
+    # 阶段1: 先抓主TF + 优先决策TF
+    phase1_tfs = list(dict.fromkeys([PRIMARY_TF, *DECISION_TFS]))
+    _fetch_tf_batch(phase1_tfs)
+
+    # 阶段2: 仅当优先决策TF不足时，再补抓 fallback TF
+    pref_decision_available = [tf for tf in DECISION_TFS if tf in all_data]
+    if len(pref_decision_available) < 2:
+        phase2_tfs = [tf for tf in FALLBACK_DECISION_TFS if tf not in all_data]
+        if phase2_tfs:
+            print("  优先决策TF不足，补抓 fallback TF...")
+            _fetch_tf_batch(phase2_tfs)
+
+    perf_log['1_data_load'] = time.time() - t_phase1
 
     available_tfs = [tf for tf in AVAILABLE_TFS if tf in all_data]
     decision_tfs = [tf for tf in DECISION_TFS if tf in available_tfs]
+    tf_source = "preferred"
+    if len(decision_tfs) < 2:
+        decision_tfs = [tf for tf in FALLBACK_DECISION_TFS if tf in available_tfs]
+        tf_source = "fallback"
     if len(decision_tfs) < 2:
         print("❌ 可用TF不足2个, 无法执行多周期决策")
         sys.exit(1)
@@ -308,30 +473,77 @@ def main():
         print(f"❌ 主TF {PRIMARY_TF} 数据获取失败")
         sys.exit(1)
 
+    combo_name = f"多TF联合({'+'.join(decision_tfs)})"
     print(f"\n  可用TFs: {', '.join(available_tfs)}")
-    print(f"  决策TFs: {', '.join(decision_tfs)}")
+    print(f"  决策TFs({tf_source}): {', '.join(decision_tfs)}")
+    if tf_source == "fallback":
+        print(f"  说明: 优先组合 {preferred_combo_name} 不完整，已自动回退")
+
+    score_tfs = list(dict.fromkeys([PRIMARY_TF, *decision_tfs]))
 
     # ── 2. 计算信号 ──
     # ⚠️ 必须使用 max_bars=0 全量计算！
     # max_bars>0 会截断df到尾部N根，但 _build_tf_score_index 用全量df的idx
     # 去 .iloc 索引截断后的信号Series，导致严重错位（100%不一致）。
     print(f"\n[2/4] 计算六维信号 (全量, max_bars=0)...")
+    t_phase2 = time.time()
+    signal_workers = max(1, min(len(score_tfs), int(os.getenv('BACKTEST_DAILY_SIGNAL_WORKERS', '2'))))
+    print(f"  信号并发: {signal_workers}  |  目标TF: {', '.join(score_tfs)}")
     all_signals = {}
-    for tf in available_tfs:
-        print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")
-        all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=0)
-    print(f"  信号计算完成: {len(all_signals)} 个TF")
+    if signal_workers == 1:
+        for tf in score_tfs:
+            t_tf = time.time()
+            print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")
+            all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=0)
+            elapsed_tf = time.time() - t_tf
+            print(f"    {tf} 信号完成  [{elapsed_tf:.2f}s]")
+    else:
+        start_map = {}
+        with ThreadPoolExecutor(max_workers=signal_workers) as executor:
+            futures = {}
+            for tf in score_tfs:
+                print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")
+                start_map[tf] = time.time()
+                futures[executor.submit(compute_signals_six, all_data[tf], tf, all_data, 0)] = tf
+            for future in as_completed(futures):
+                tf = futures[future]
+                elapsed_tf = time.time() - start_map.get(tf, time.time())
+                try:
+                    all_signals[tf] = future.result()
+                    print(f"    {tf} 信号完成  [{elapsed_tf:.2f}s]")
+                except Exception as e:
+                    print(f"    {tf} 信号失败: {e}")
+                    raise
+    perf_log['2_signal_calc'] = time.time() - t_phase2
+    print(f"  信号计算完成: {len(all_signals)} 个TF  [总计 {perf_log['2_signal_calc']:.2f}s]")
+
+    # 打印子模块 profiling
+    sub_perf_total = {}
+    for tf in score_tfs:
+        sub_perf = all_signals[tf].get('_perf', {})
+        if sub_perf:
+            parts = '  '.join(f"{k}={v:.1f}s" for k, v in sorted(sub_perf.items()))
+            print(f"    {tf:>4s} 细分: {parts}")
+            for k, v in sub_perf.items():
+                sub_perf_total[k] = sub_perf_total.get(k, 0) + v
+    if sub_perf_total:
+        print(f"    {'合计':>4s} 细分: {'  '.join(f'{k}={v:.1f}s' for k, v in sorted(sub_perf_total.items()))}")
 
     # ── 3. 构建评分索引 ──
     print(f"\n[3/4] 构建TF评分索引...")
+    t_phase3 = time.time()
     config = _scale_runtime_config(DEFAULT_CONFIG, PRIMARY_TF)
-    tf_score_index = _build_tf_score_index(all_data, all_signals, available_tfs, config)
-    for tf in available_tfs:
+    config['name'] = f"多TF逐日_{combo_name}@{PRIMARY_TF}"
+    tf_score_index = _build_tf_score_index(all_data, all_signals, score_tfs, config)
+    perf_log['3_score_index'] = time.time() - t_phase3
+    for tf in score_tfs:
         n_scores = len(tf_score_index.get(tf, {}))
         print(f"    {tf}: {n_scores} 个评分点")
+    print(f"  评分索引构建完成  [总计 {perf_log['3_score_index']:.2f}s]")
 
     # ── 4. 运行多周期回测 ──
     print(f"\n[4/4] 运行多周期联合决策回测...")
+    t_phase4 = time.time()
     trade_start_dt = pd.Timestamp(TRADE_START)
     trade_end_dt = pd.Timestamp(TRADE_END) + pd.Timedelta(hours=23, minutes=59)
 
@@ -346,6 +558,7 @@ def main():
         trade_start_dt=trade_start_dt,
         trade_end_dt=trade_end_dt,
     )
+    perf_log['4_strategy_run'] = time.time() - t_phase4
 
     # ── 结果提取 ──
     history = result.get('history', [])
@@ -369,10 +582,18 @@ def main():
     )
 
     # 计算胜率等交易统计
-    close_actions = ['CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED']
-    close_trades = [t for t in trades if t['action'] in close_actions]
-    wins = [t for t in close_trades if (t.get('pnl') or 0) > 0]
-    losses = [t for t in close_trades if (t.get('pnl') or 0) <= 0]
+    close_actions = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED'}
+    close_trades = []
+    wins = []
+    losses = []
+    for t in trades:
+        if t['action'] not in close_actions:
+            continue
+        close_trades.append(t)
+        if (t.get('pnl') or 0) > 0:
+            wins.append(t)
+        else:
+            losses.append(t)
     win_rate = round(len(wins) / len(close_trades) * 100, 2) if close_trades else 0
     avg_win = round(sum(t['pnl'] for t in wins) / len(wins), 2) if wins else 0
     avg_loss = round(sum(t['pnl'] for t in losses) / len(losses), 2) if losses else 0
@@ -412,7 +633,7 @@ def main():
         'end_date': TRADE_END,
         'primary_tf': PRIMARY_TF,
         'decision_tfs': decision_tfs,
-        'combo_name': COMBO_NAME,
+        'combo_name': combo_name,
         'leverage': config.get('lev', 5),
         'initial_capital': initial_capital,
         'runner': 'backtest_multi_tf_daily.py',
@@ -440,6 +661,7 @@ def main():
     print(f"  逐日记录:    {len(daily_records)} 天")
 
     # ── 保存到 DB ──
+    t_db = time.time()
     db_path = _default_db_path()
     run_id = save_run(
         db_path=db_path,
@@ -447,8 +669,22 @@ def main():
         summary=summary,
         daily_records=daily_records,
         trades=trades,
+        version_tag=version_tag,
     )
+    perf_log['5_db_save'] = time.time() - t_db
     print(f"\n💾 结果已写入 DB: {db_path} (run_id={run_id})")
+
+    # ── 性能瓶颈日志 ──
+    total_elapsed = time.time() - t0
+    perf_log['total'] = total_elapsed
+    print(f"\n{'─' * 60}")
+    print(f"  性能分析 (瓶颈诊断)")
+    print(f"{'─' * 60}")
+    for phase, sec in sorted(perf_log.items()):
+        pct = sec / total_elapsed * 100 if total_elapsed > 0 else 0
+        bar = '█' * int(pct / 2)
+        print(f"  {phase:<20} {sec:>7.2f}s  ({pct:>5.1f}%)  {bar}")
+    print(f"{'─' * 60}")
 
     return run_id
 

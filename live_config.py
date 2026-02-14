@@ -172,15 +172,15 @@ class StrategyConfig:
     close_long_ss: float = 40
     sell_pct: float = 0.55
     # 止损止盈
-    short_sl: float = -0.30
-    short_tp: float = 0.80
-    long_sl: float = -0.15
-    long_tp: float = 0.50
+    short_sl: float = -0.25
+    short_tp: float = 0.60
+    long_sl: float = -0.08
+    long_tp: float = 0.30
     short_trail: float = 0.25
     long_trail: float = 0.20
     trail_pullback: float = 0.60
     # 部分止盈
-    use_partial_tp: bool = False
+    use_partial_tp: bool = True
     partial_tp_1: float = 0.20
     partial_tp_1_pct: float = 0.30
     use_partial_tp_2: bool = False
@@ -214,13 +214,13 @@ class StrategyConfig:
     # 数据参数
     lookback_days: int = 60
     # 最大持仓K线数
-    short_max_hold: int = 48
-    long_max_hold: int = 48
+    short_max_hold: int = 72
+    long_max_hold: int = 72
 
     # ── 多周期联合决策 ──
     use_multi_tf: bool = True                    # 是否启用多周期共识
     decision_timeframes: List[str] = field(      # 参与决策的时间框架
-        default_factory=lambda: ['15m', '1h', '4h', '12h']
+        default_factory=lambda: ['15m', '1h', '4h', '24h']
     )
     decision_timeframes_fallback: List[str] = field(  # 回退时间框架(可配置)
         default_factory=lambda: ['15m', '30m', '1h', '4h', '8h', '24h']
@@ -228,6 +228,42 @@ class StrategyConfig:
     consensus_min_strength: int = 40             # 共识最低强度才可开仓 (0-100)
     coverage_min: float = 0.5                    # 多周期覆盖率下限
     consensus_position_scale: bool = True        # 是否按共识强度缩放仓位
+
+    # ── 微结构增强(资金费率/基差/OI代理) ──
+    use_microstructure: bool = True
+    micro_lookback_bars: int = 48
+    micro_imbalance_threshold: float = 0.08
+    micro_oi_trend_z: float = 0.8
+    micro_basis_extreme_z: float = 1.2
+    micro_basis_crowded_z: float = 2.2
+    micro_funding_extreme: float = 0.0006
+    micro_participation_trend: float = 1.15
+    micro_funding_proxy_mult: float = 0.35
+    micro_score_boost: float = 0.08
+    micro_score_dampen: float = 0.10
+    micro_margin_mult_step: float = 0.06
+    micro_mode_override: bool = True
+
+    # ── 双引擎(趋势/反转) ──
+    use_dual_engine: bool = True
+    entry_dominance_ratio: float = 1.5
+    trend_engine_entry_mult: float = 0.95
+    trend_engine_exit_mult: float = 1.05
+    trend_engine_hold_mult: float = 1.35
+    trend_engine_risk_mult: float = 1.10
+    trend_engine_dominance_ratio: float = 1.35
+    reversion_engine_entry_mult: float = 1.12
+    reversion_engine_exit_mult: float = 0.90
+    reversion_engine_hold_mult: float = 0.70
+    reversion_engine_risk_mult: float = 0.75
+    reversion_engine_dominance_ratio: float = 1.75
+
+    # ── 波动目标仓位 ──
+    use_vol_target: bool = True
+    vol_target_annual: float = 0.85
+    vol_target_lookback_bars: int = 48
+    vol_target_min_scale: float = 0.45
+    vol_target_max_scale: float = 1.35
 
     @classmethod
     def from_optimize_result(cls, filepath: str, timeframe: str = None) -> 'StrategyConfig':
@@ -404,10 +440,14 @@ class LiveTradingConfig:
                 "symbol": "ETHUSDT",
                 "timeframe": "1h",
                 "use_multi_tf": True,
-                "decision_timeframes": ["15m", "1h", "4h", "12h"],
+                "decision_timeframes": ["15m", "1h", "4h", "24h"],
                 "decision_timeframes_fallback": ["15m", "30m", "1h", "4h", "8h", "24h"],
                 "consensus_min_strength": 40,
                 "coverage_min": 0.5,
+                "use_microstructure": True,
+                "use_dual_engine": True,
+                "use_vol_target": True,
+                "vol_target_annual": 0.85,
             },
             "risk": {
                 "max_leverage": 2,

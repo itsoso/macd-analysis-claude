@@ -394,6 +394,108 @@ def test_oos_selection_uses_multi_tf_objective(monkeypatch):
     assert meta["decision_tfs"] == ["15m", "1h", "4h", "12h"]
 
 
+def test_oos_combo_selection_selects_per_combo_primary(monkeypatch):
+    df_ref = _make_ohlcv(n=24 * 220, start=100, step=0.02)
+    all_data = {
+        "15m": df_ref.copy(),
+        "1h": df_ref.copy(),
+        "2h": df_ref.copy(),
+        "4h": df_ref.copy(),
+        "12h": df_ref.copy(),
+    }
+
+    def fake_compute_signals_six(_df, _tf, _all, max_bars=0):
+        return {"ok": True, "max_bars": max_bars}
+
+    def fake_build_tf_score_index(_all_data, _all_signals, _tfs, _cfg):
+        return {"dummy": {}}
+
+    def fake_run_strategy_multi_tf(primary_df=None, tf_score_map=None, decision_tfs=None, config=None, primary_tf="1h", **_kwargs):
+        key = f"{'+'.join(decision_tfs)}@{primary_tf}"
+        tag = config.get("tag", "")
+        alpha_map = {
+            "15m+1h+4h+12h@1h": {"candidate_top": 16.0, "candidate_best": 7.0, "fallback_cfg": 10.0},
+            "1h+2h+4h@2h": {"candidate_top": 4.0, "candidate_best": 12.0, "fallback_cfg": 8.0},
+        }
+        alpha = alpha_map.get(key, {}).get(tag, 0.0)
+        return {
+            "alpha": alpha,
+            "max_drawdown": -6.0,
+            "strategy_return": alpha,
+            "buy_hold_return": 0.0,
+            "total_trades": 4,
+            "liquidations": 0,
+            "fees": {"total_costs": 0.0},
+        }
+
+    monkeypatch.setattr(bt_60307, "compute_signals_six", fake_compute_signals_six)
+    monkeypatch.setattr(bt_60307, "_build_tf_score_index", fake_build_tf_score_index)
+    monkeypatch.setattr(bt_60307, "run_strategy_multi_tf", fake_run_strategy_multi_tf)
+
+    opt_result = {
+        "global_best": {"config": {"tag": "candidate_best"}},
+        "global_top30": [{"config": {"tag": "candidate_top"}}],
+    }
+    fallback_cfg = {"tag": "fallback_cfg", "coverage_min": 0.5}
+    combos = [
+        ("均衡搭配", ["15m", "1h", "4h", "12h"]),
+        ("中大周期", ["1h", "2h", "4h"]),
+    ]
+
+    combo_map, meta = bt_60307._select_oos_combo_configs(
+        opt_result=opt_result,
+        all_data=all_data,
+        test_days=60,
+        train_days=60,
+        tf_hours={"15m": 0.25, "1h": 1, "2h": 2, "4h": 4, "12h": 12},
+        fallback_config=fallback_cfg,
+        ref_tf="1h",
+        combos=combos,
+        primary_tfs=["1h", "2h"],
+        top_n=2,
+        conservative=False,
+    )
+
+    key_a = bt_60307._combo_primary_key("均衡搭配", "1h", ["15m", "1h", "4h", "12h"])
+    key_b = bt_60307._combo_primary_key("中大周期", "2h", ["1h", "2h", "4h"])
+    assert combo_map[key_a]["tag"] == "candidate_top"
+    assert combo_map[key_b]["tag"] == "candidate_best"
+    assert meta["mode"] == "strict_oos_combo"
+    assert meta["objective_mode"] == "multi_tf_combo"
+    assert meta["selected_targets"] >= 2
+
+
+def test_microstructure_overlay_can_block_crowded_direction():
+    ss, bs, overlay = opt_six._apply_microstructure_overlay(
+        ss=20.0,
+        bs=20.0,
+        micro_state={"valid": True, "long_score": 0.0, "short_score": 3.0, "basis_z": 0.5},
+        config={"use_microstructure": True},
+    )
+
+    assert overlay["block_long"] is True
+    assert overlay["block_short"] is False
+    assert ss > 20.0
+    assert bs < 20.0
+
+
+def test_vol_target_scale_uses_previous_completed_bar():
+    vol_ann = pd.Series([np.nan, 1.70, 0.30], index=pd.date_range("2025-01-01", periods=3, freq="h"))
+    scale, rv, active = opt_six._compute_vol_target_scale(
+        vol_ann,
+        idx=2,
+        config={
+            "vol_target_annual": 0.85,
+            "vol_target_min_scale": 0.45,
+            "vol_target_max_scale": 1.35,
+        },
+    )
+
+    assert active is True
+    assert rv == pytest.approx(1.70)
+    assert scale == pytest.approx(0.5, abs=1e-6)
+
+
 def test_run_strategy_multi_tf_live_gate_blocks_non_actionable(monkeypatch):
     df = _make_ohlcv(n=180, start=100, step=0.2)
 

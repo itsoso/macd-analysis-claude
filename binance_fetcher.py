@@ -1,8 +1,9 @@
 """
 币安 ETH/USDT 数据获取模块
-使用币安公开API获取K线数据, 无需API Key
+优先使用本地 Parquet 缓存, 无本地数据时回退到币安API
 """
 
+import os
 import pandas as pd
 import numpy as np
 import json
@@ -21,22 +22,88 @@ INTERVAL_MAP = {
     '10m': '15m',  # 币安没有10m, 用15m代替后重采样
 }
 
+# ── 本地缓存路径 ──
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_KLINE_DIR = os.path.join(_BASE_DIR, 'data', 'klines')
+
+
+def _try_load_local(symbol: str, interval: str, days: int) -> pd.DataFrame | None:
+    """
+    尝试从本地 Parquet 加载K线数据。
+    策略: 本地有数据就用本地, 最大化利用缓存 (回测数据不需要实时)。
+    只有在本地数据太少 (<100条) 或完全没有时才返回 None。
+    """
+    path = os.path.join(_KLINE_DIR, symbol, f'{interval}.parquet')
+    if not os.path.exists(path):
+        return None
+
+    try:
+        df = pd.read_parquet(path)
+    except Exception:
+        return None
+
+    if df is None or len(df) < 100:
+        return None
+
+    # 计算请求的起止时间
+    end_dt = pd.Timestamp.now()
+    start_dt = end_dt - pd.Timedelta(days=days)
+
+    local_start = df.index[0]
+    local_end = df.index[-1]
+
+    # 如果请求的起始时间早于本地数据, 仍然使用本地数据
+    # (回测时 days 往往设很大做buffer, 实际只需要本地覆盖范围)
+    # 只有当本地数据完全不覆盖请求范围时才放弃
+    if local_end < start_dt:
+        return None
+
+    # 如果请求起始早于本地数据起始, 从本地起始开始
+    actual_start = max(start_dt - pd.Timedelta(days=5), local_start)
+    df = df[df.index >= actual_start]
+
+    # 确保去时区
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+
+    # 只保留标准列 (与API返回格式一致)
+    standard_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
+    keep = [c for c in standard_cols if c in df.columns]
+    df = df[keep].copy()
+    df = df[~df.index.duplicated(keep='first')]
+    df = df.sort_index()
+
+    print(f"  [本地] {symbol} {interval} 加载 {len(df)} 条K线 "
+          f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+          f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+
+    return df
+
 
 def fetch_binance_klines(symbol: str = "ETHUSDT",
                          interval: str = "15m",
                          days: int = 30,
-                         limit_per_request: int = 1000) -> pd.DataFrame:
+                         limit_per_request: int = 1000,
+                         force_api: bool = False) -> pd.DataFrame:
     """
-    从币安获取K线数据
+    获取K线数据: 优先本地 Parquet, 无则走API
 
     参数:
         symbol: 交易对 (如 ETHUSDT)
-        interval: K线周期 (1m/5m/15m/30m/1h/4h/1d)
+        interval: K线周期 (1m/5m/15m/30m/1h/4h/1d/24h)
         days: 获取最近多少天的数据
-        limit_per_request: 每次请求最多返回条数
+        limit_per_request: 每次API请求最多返回条数
+        force_api: 强制走API (跳过本地缓存)
 
-    返回: DataFrame with open, high, low, close, volume
+    返回: DataFrame with open, high, low, close, volume, quote_volume
     """
+    # ── 先尝试本地缓存 ──
+    if not force_api:
+        local_df = _try_load_local(symbol, interval, days)
+        if local_df is not None:
+            return local_df
+
+    # ── 本地无数据, 走API ──
     all_klines = []
     end_time = int(datetime.now().timestamp() * 1000)
     start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
@@ -62,7 +129,7 @@ def fetch_binance_klines(symbol: str = "ETHUSDT",
 
     current_start = start_time
 
-    print(f"正在从币安获取 {symbol} {interval} K线数据 (最近{days}天)...")
+    print(f"正在从币安API获取 {symbol} {interval} K线数据 (最近{days}天)...")
 
     while current_start < end_time:
         url = (f"{BINANCE_KLINE_URL}?symbol={symbol}"

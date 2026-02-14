@@ -291,41 +291,27 @@ def _summarize_walk_forward_rankings(window_rows, min_windows=2):
     return rankings
 
 
-def _select_oos_base_config(
-    opt_result,
-    all_data,
-    test_days,
-    train_days,
-    tf_hours,
-    fallback_config,
-    ref_tf,
-    top_n=8,
-    conservative=False,
-    decision_tfs=None,
-):
-    """
-    从优化候选中做一次严格样本外筛选:
-      - 训练窗口: [T-test_days-train_days, T-test_days)
-      - 测试窗口: [T-test_days, T]
-    """
-    if ref_tf not in all_data:
-        return dict(fallback_config), {"mode": "fallback", "reason": f"ref_tf {ref_tf} 不可用"}
+def _combo_primary_key(combo_name, primary_tf, decision_tfs):
+    return f"{combo_name}@{primary_tf}|{'+'.join(decision_tfs)}"
 
+
+def _build_oos_candidate_configs(opt_result, fallback_config, top_n=8, conservative=False):
+    """构建并去重 OOS 候选配置池。"""
     top = opt_result.get("global_top30") or []
-    candidates = []
+    raw_candidates = []
 
     gb_cfg = (opt_result.get("global_best") or {}).get("config")
     if isinstance(gb_cfg, dict):
-        candidates.append(dict(gb_cfg))
+        raw_candidates.append(dict(gb_cfg))
 
     for row in top:
         cfg = row.get("config")
         if isinstance(cfg, dict):
-            candidates.append(dict(cfg))
-        if len(candidates) >= top_n:
+            raw_candidates.append(dict(cfg))
+        if len(raw_candidates) >= top_n:
             break
 
-    candidates.append(dict(fallback_config))
+    raw_candidates.append(dict(fallback_config))
 
     # ── 增加通用"非优化"候选配置, 降低对优化期数据的依赖 ──
     generic_candidates = [
@@ -345,23 +331,31 @@ def _select_oos_base_config(
          "buy_threshold": 35, "close_short_bs": 50, "close_long_ss": 50,
          "short_sl": -0.18, "long_sl": -0.10, "short_tp": 0.45, "long_tp": 0.30},
     ]
-    for gc in generic_candidates:
-        merged_gc = {**fallback_config, **gc}
-        candidates.append(merged_gc)
+    raw_candidates.extend(generic_candidates)
 
-    # 去重
+    # 去重并合并 fallback 基线
     seen = set()
     uniq = []
-    for cfg in candidates:
-        key = json.dumps(cfg, sort_keys=True, ensure_ascii=False)
+    for cfg in raw_candidates:
+        merged = {**fallback_config, **cfg}
+        if conservative:
+            merged = _apply_conservative_risk(merged)
+        key = json.dumps(merged, sort_keys=True, ensure_ascii=False)
         if key in seen:
             continue
         seen.add(key)
-        uniq.append(cfg)
+        uniq.append(merged)
+    return uniq
+
+
+def _prepare_oos_train_data(all_data, ref_tf, test_days, train_days):
+    """按 OOS 窗口切分并预计算训练集信号。"""
+    if ref_tf not in all_data:
+        return None, None, {"mode": "fallback", "reason": f"ref_tf {ref_tf} 不可用"}
 
     train_df = _slice_train_window(all_data[ref_tf], test_days=test_days, train_days=train_days)
     if train_df is None or len(train_df) < 120:
-        return dict(fallback_config), {
+        return None, None, {
             "mode": "fallback",
             "reason": f"训练窗口不足: {0 if train_df is None else len(train_df)} bars",
         }
@@ -375,62 +369,131 @@ def _select_oos_base_config(
             train_data_all[tf] = sliced
 
     if ref_tf not in train_data_all:
-        return dict(fallback_config), {
+        return None, None, {
             "mode": "fallback",
             "reason": f"训练窗口缺少 ref_tf={ref_tf}",
         }
 
-    # 训练信号与配置无关，计算一次复用（每个TF都要算，供多TF目标函数）
     train_signals_all = {}
     for tf in train_data_all:
         train_signals_all[tf] = compute_signals_six(
             train_data_all[tf], tf, train_data_all, max_bars=0
         )
 
+    return train_data_all, train_signals_all, None
+
+
+def _select_usable_decision_tfs(train_data_all, target_decision_tfs, ref_tf):
+    usable_decision_tfs = [tf for tf in target_decision_tfs if tf in train_data_all]
+    if len(usable_decision_tfs) >= 2:
+        return usable_decision_tfs
+
+    tf_rank = sorted(
+        train_data_all.keys(),
+        key=lambda t: ALL_TIMEFRAMES.index(t) if t in ALL_TIMEFRAMES else 999
+    )
+    if ref_tf in tf_rank:
+        tf_rank.remove(ref_tf)
+    usable_decision_tfs = [ref_tf] + tf_rank[:3]
+    usable_decision_tfs = [tf for tf in usable_decision_tfs if tf in train_data_all]
+    return usable_decision_tfs
+
+
+def _score_oos_candidate(
+    candidate_cfg,
+    primary_tf,
+    decision_tfs,
+    train_days,
+    tf_hours,
+    train_data_all,
+    score_index,
+    idx,
+):
+    runtime_cfg = _scale_runtime_config(candidate_cfg, primary_tf, tf_hours, f"oos_train_{idx+1}_{primary_tf}")
+    r = run_strategy_multi_tf(
+        primary_df=train_data_all[primary_tf],
+        tf_score_map=score_index,
+        decision_tfs=decision_tfs,
+        config=runtime_cfg,
+        primary_tf=primary_tf,
+        trade_days=train_days,
+    )
+    objective = float(r["alpha"]) - max(0.0, abs(float(r["max_drawdown"])) - 20.0) * 0.5
+    return {
+        "objective": objective,
+        "alpha": float(r["alpha"]),
+        "max_drawdown": float(r["max_drawdown"]),
+        "config": dict(candidate_cfg),
+        "tag": candidate_cfg.get("tag", f"candidate_{idx+1}"),
+    }
+
+
+def _select_oos_base_config(
+    opt_result,
+    all_data,
+    test_days,
+    train_days,
+    tf_hours,
+    fallback_config,
+    ref_tf,
+    top_n=8,
+    conservative=False,
+    decision_tfs=None,
+):
+    """
+    从优化候选中做一次严格样本外筛选:
+      - 训练窗口: [T-test_days-train_days, T-test_days)
+      - 测试窗口: [T-test_days, T]
+    """
+    candidates = _build_oos_candidate_configs(
+        opt_result=opt_result,
+        fallback_config=fallback_config,
+        top_n=top_n,
+        conservative=conservative,
+    )
+
+    train_data_all, train_signals_all, prep_err = _prepare_oos_train_data(
+        all_data=all_data,
+        ref_tf=ref_tf,
+        test_days=test_days,
+        train_days=train_days,
+    )
+    if prep_err:
+        return dict(fallback_config), prep_err
+
     # OOS 目标函数使用的决策TF（默认与 live 默认一致）
     target_decision_tfs = list(decision_tfs or StrategyConfig().decision_timeframes)
-    usable_decision_tfs = [tf for tf in target_decision_tfs if tf in train_data_all]
-    if len(usable_decision_tfs) < 2:
-        tf_rank = sorted(
-            train_data_all.keys(),
-            key=lambda t: ALL_TIMEFRAMES.index(t) if t in ALL_TIMEFRAMES else 999
-        )
-        if ref_tf in tf_rank:
-            tf_rank.remove(ref_tf)
-        usable_decision_tfs = [ref_tf] + tf_rank[:3]
-    usable_decision_tfs = [tf for tf in usable_decision_tfs if tf in train_data_all]
+    usable_decision_tfs = _select_usable_decision_tfs(train_data_all, target_decision_tfs, ref_tf)
     if len(usable_decision_tfs) < 2:
         return dict(fallback_config), {
             "mode": "fallback",
             "reason": f"训练窗口可用决策TF不足: {usable_decision_tfs}",
         }
 
+    train_tf_keys = list(train_data_all.keys())
+    score_index_cache = {}
+    candidate_entries = []
+    for i, cand_cfg in enumerate(candidates):
+        cand_key = json.dumps(cand_cfg, sort_keys=True, ensure_ascii=False)
+        if cand_key not in score_index_cache:
+            score_index_cache[cand_key] = _build_tf_score_index(
+                train_data_all, train_signals_all, train_tf_keys, cand_cfg
+            )
+        candidate_entries.append((i, cand_cfg, cand_key))
+
     scored = []
-    for i, cand_cfg in enumerate(uniq):
-        merged = {**fallback_config, **cand_cfg}
-        if conservative:
-            merged = _apply_conservative_risk(merged)
-        runtime_cfg = _scale_runtime_config(merged, ref_tf, tf_hours, f"oos_train_{i+1}_{ref_tf}")
-        train_score_index = _build_tf_score_index(
-            train_data_all, train_signals_all, list(train_data_all.keys()), runtime_cfg
-        )
-        r = run_strategy_multi_tf(
-            primary_df=train_data_all[ref_tf],
-            tf_score_map=train_score_index,
-            decision_tfs=usable_decision_tfs,
-            config=runtime_cfg,
-            primary_tf=ref_tf,
-            trade_days=train_days,
-        )
-        objective = float(r["alpha"]) - max(0.0, abs(float(r["max_drawdown"])) - 20.0) * 0.5
+    for i, cand_cfg, cand_key in candidate_entries:
         scored.append(
-            {
-                "objective": objective,
-                "alpha": float(r["alpha"]),
-                "max_drawdown": float(r["max_drawdown"]),
-                "config": merged,
-                "tag": merged.get("tag", f"candidate_{i+1}"),
-            }
+            _score_oos_candidate(
+                candidate_cfg=cand_cfg,
+                primary_tf=ref_tf,
+                decision_tfs=usable_decision_tfs,
+                train_days=train_days,
+                tf_hours=tf_hours,
+                train_data_all=train_data_all,
+                score_index=score_index_cache[cand_key],
+                idx=i,
+            )
         )
 
     scored.sort(key=lambda x: x["objective"], reverse=True)
@@ -455,6 +518,7 @@ def _select_oos_base_config(
         "objective_mode": "multi_tf",
         "decision_tfs": usable_decision_tfs,
         "candidates": len(scored),
+        "score_cache": len(score_index_cache),
         "contamination_risk": contamination_risk,
         "contamination_note": contamination_note,
         "selected_tag": best["tag"],
@@ -463,6 +527,135 @@ def _select_oos_base_config(
         "selected_objective_train": round(best["objective"], 2),
     }
     return dict(best["config"]), meta
+
+
+def _select_oos_combo_configs(
+    opt_result,
+    all_data,
+    test_days,
+    train_days,
+    tf_hours,
+    fallback_config,
+    ref_tf,
+    combos,
+    primary_tfs,
+    top_n=8,
+    conservative=False,
+):
+    """
+    按 (combo, primary_tf) 维度做严格 OOS 选参，避免全局单配置覆盖所有组合。
+    """
+    combo_map = {}
+    details = {}
+    for combo_name, combo_tfs in combos:
+        for ptf in primary_tfs:
+            key = _combo_primary_key(combo_name, ptf, combo_tfs)
+            combo_map[key] = dict(fallback_config)
+            details[key] = {"mode": "fallback", "reason": "not_selected"}
+
+    candidates = _build_oos_candidate_configs(
+        opt_result=opt_result,
+        fallback_config=fallback_config,
+        top_n=top_n,
+        conservative=conservative,
+    )
+    train_data_all, train_signals_all, prep_err = _prepare_oos_train_data(
+        all_data=all_data,
+        ref_tf=ref_tf,
+        test_days=test_days,
+        train_days=train_days,
+    )
+    if prep_err:
+        return combo_map, {
+            "mode": "fallback",
+            "reason": prep_err.get("reason", "train_data_unavailable"),
+            "objective_mode": "multi_tf_combo",
+            "candidates": len(candidates),
+            "combo_targets": len(combo_map),
+            "selected_targets": 0,
+            "selection_details": details,
+        }
+
+    train_tf_keys = list(train_data_all.keys())
+    score_index_cache = {}
+    candidate_entries = []
+    for i, cand_cfg in enumerate(candidates):
+        cand_key = json.dumps(cand_cfg, sort_keys=True, ensure_ascii=False)
+        if cand_key not in score_index_cache:
+            score_index_cache[cand_key] = _build_tf_score_index(
+                train_data_all, train_signals_all, train_tf_keys, cand_cfg
+            )
+        candidate_entries.append((i, cand_cfg, cand_key))
+
+    candidate_eval_cache = {}
+    selected_targets = 0
+
+    for combo_name, combo_tfs in combos:
+        usable_tfs = [tf for tf in combo_tfs if tf in train_data_all]
+        for ptf in primary_tfs:
+            key = _combo_primary_key(combo_name, ptf, combo_tfs)
+
+            if ptf not in train_data_all:
+                details[key] = {"mode": "fallback", "reason": f"missing_primary_tf:{ptf}"}
+                continue
+            if len(usable_tfs) < 2:
+                details[key] = {"mode": "fallback", "reason": f"insufficient_decision_tfs:{usable_tfs}"}
+                continue
+
+            scored = []
+            usable_tfs_key = tuple(usable_tfs)
+            for i, cand_cfg, cand_key in candidate_entries:
+                eval_key = (cand_key, ptf, usable_tfs_key)
+                if eval_key not in candidate_eval_cache:
+                    candidate_eval_cache[eval_key] = _score_oos_candidate(
+                        candidate_cfg=cand_cfg,
+                        primary_tf=ptf,
+                        decision_tfs=usable_tfs,
+                        train_days=train_days,
+                        tf_hours=tf_hours,
+                        train_data_all=train_data_all,
+                        score_index=score_index_cache[cand_key],
+                        idx=i,
+                    )
+                scored.append(candidate_eval_cache[eval_key])
+
+            scored.sort(key=lambda x: x["objective"], reverse=True)
+            best = scored[0]
+            combo_map[key] = dict(best["config"])
+            details[key] = {
+                "mode": "strict_oos_combo",
+                "combo_name": combo_name,
+                "primary_tf": ptf,
+                "decision_tfs": usable_tfs,
+                "selected_tag": best["tag"],
+                "selected_alpha_train": round(best["alpha"], 2),
+                "selected_mdd_train": round(best["max_drawdown"], 2),
+                "selected_objective_train": round(best["objective"], 2),
+            }
+            selected_targets += 1
+
+    tag_counts = {}
+    for info in details.values():
+        tag = info.get("selected_tag")
+        if not tag:
+            continue
+        tag_counts[tag] = int(tag_counts.get(tag, 0)) + 1
+
+    meta = {
+        "mode": "strict_oos_combo",
+        "ref_tf": ref_tf,
+        "train_days": train_days,
+        "test_days": test_days,
+        "objective_mode": "multi_tf_combo",
+        "candidates": len(candidates),
+        "combo_targets": len(combo_map),
+        "selected_targets": selected_targets,
+        "score_cache": len(score_index_cache),
+        "eval_cache": len(candidate_eval_cache),
+        "selected_tag_counts": tag_counts,
+        "selection_details": details,
+    }
+    return combo_map, meta
 
 
 def main(args):
@@ -530,8 +723,6 @@ def main(args):
         ('中大周期', ['1h', '2h', '4h', '8h', '12h']),
         ('快慢双层', ['15m', '30m', '4h', '24h']),
     ]
-    oos_decision_tfs = list(StrategyConfig().decision_timeframes)
-
     # 基础参数
     live_defaults = StrategyConfig()
     f12_base = {
@@ -597,6 +788,39 @@ def main(args):
         'prot_daily_loss_limit_pct': args.prot_daily_loss_limit_pct,
         'prot_global_dd_limit_pct': args.prot_global_dd_limit_pct,
         'prot_close_on_global_halt': not args.disable_prot_close_on_halt,
+        # 微结构增强
+        'use_microstructure': best_config.get('use_microstructure', live_defaults.use_microstructure),
+        'micro_lookback_bars': best_config.get('micro_lookback_bars', live_defaults.micro_lookback_bars),
+        'micro_imbalance_threshold': best_config.get('micro_imbalance_threshold', live_defaults.micro_imbalance_threshold),
+        'micro_oi_trend_z': best_config.get('micro_oi_trend_z', live_defaults.micro_oi_trend_z),
+        'micro_basis_extreme_z': best_config.get('micro_basis_extreme_z', live_defaults.micro_basis_extreme_z),
+        'micro_basis_crowded_z': best_config.get('micro_basis_crowded_z', live_defaults.micro_basis_crowded_z),
+        'micro_funding_extreme': best_config.get('micro_funding_extreme', live_defaults.micro_funding_extreme),
+        'micro_participation_trend': best_config.get('micro_participation_trend', live_defaults.micro_participation_trend),
+        'micro_funding_proxy_mult': best_config.get('micro_funding_proxy_mult', live_defaults.micro_funding_proxy_mult),
+        'micro_score_boost': best_config.get('micro_score_boost', live_defaults.micro_score_boost),
+        'micro_score_dampen': best_config.get('micro_score_dampen', live_defaults.micro_score_dampen),
+        'micro_margin_mult_step': best_config.get('micro_margin_mult_step', live_defaults.micro_margin_mult_step),
+        'micro_mode_override': best_config.get('micro_mode_override', live_defaults.micro_mode_override),
+        # 双引擎(趋势/反转)
+        'use_dual_engine': best_config.get('use_dual_engine', live_defaults.use_dual_engine),
+        'entry_dominance_ratio': best_config.get('entry_dominance_ratio', live_defaults.entry_dominance_ratio),
+        'trend_engine_entry_mult': best_config.get('trend_engine_entry_mult', live_defaults.trend_engine_entry_mult),
+        'trend_engine_exit_mult': best_config.get('trend_engine_exit_mult', live_defaults.trend_engine_exit_mult),
+        'trend_engine_hold_mult': best_config.get('trend_engine_hold_mult', live_defaults.trend_engine_hold_mult),
+        'trend_engine_risk_mult': best_config.get('trend_engine_risk_mult', live_defaults.trend_engine_risk_mult),
+        'trend_engine_dominance_ratio': best_config.get('trend_engine_dominance_ratio', live_defaults.trend_engine_dominance_ratio),
+        'reversion_engine_entry_mult': best_config.get('reversion_engine_entry_mult', live_defaults.reversion_engine_entry_mult),
+        'reversion_engine_exit_mult': best_config.get('reversion_engine_exit_mult', live_defaults.reversion_engine_exit_mult),
+        'reversion_engine_hold_mult': best_config.get('reversion_engine_hold_mult', live_defaults.reversion_engine_hold_mult),
+        'reversion_engine_risk_mult': best_config.get('reversion_engine_risk_mult', live_defaults.reversion_engine_risk_mult),
+        'reversion_engine_dominance_ratio': best_config.get('reversion_engine_dominance_ratio', live_defaults.reversion_engine_dominance_ratio),
+        # 波动目标仓位
+        'use_vol_target': best_config.get('use_vol_target', live_defaults.use_vol_target),
+        'vol_target_annual': best_config.get('vol_target_annual', live_defaults.vol_target_annual),
+        'vol_target_lookback_bars': best_config.get('vol_target_lookback_bars', live_defaults.vol_target_lookback_bars),
+        'vol_target_min_scale': best_config.get('vol_target_min_scale', live_defaults.vol_target_min_scale),
+        'vol_target_max_scale': best_config.get('vol_target_max_scale', live_defaults.vol_target_max_scale),
     }
     if use_conservative:
         f12_base = _apply_conservative_risk(f12_base)
@@ -647,13 +871,14 @@ def main(args):
         '4h': 4, '6h': 6, '8h': 8, '12h': 12, '16h': 16, '24h': 24,
     }
 
+    combo_oos_configs = {}
     oos_meta = {
         "mode": "disabled",
         "reason": "disable_oos=true" if not use_oos else "not_applied",
     }
-    if use_oos and primary_tf_candidates:
+    if use_oos and primary_tf_candidates and multi_tf_combos:
         ref_tf = best_tf if best_tf in available_tfs else primary_tf_candidates[0]
-        selected_cfg, oos_meta = _select_oos_base_config(
+        combo_oos_configs, oos_meta = _select_oos_combo_configs(
             opt_result=opt_result,
             all_data=all_data,
             test_days=60,
@@ -661,21 +886,32 @@ def main(args):
             tf_hours=tf_hours,
             fallback_config=f12_base,
             ref_tf=ref_tf,
+            combos=multi_tf_combos,
+            primary_tfs=primary_tf_candidates,
             top_n=args.oos_candidates,
             conservative=use_conservative,
-            decision_tfs=oos_decision_tfs,
         )
-        f12_base = selected_cfg
-        print("\n[2.5/4] 严格样本外筛选完成:")
+        print("\n[2.5/4] 组合级严格样本外筛选完成:")
         print(f"  参考TF: {oos_meta.get('ref_tf', ref_tf)}")
         print(f"  候选数: {oos_meta.get('candidates', 0)}")
-        print(f"  选中: {oos_meta.get('selected_tag', '-')}")
-        print(f"  训练集α: {oos_meta.get('selected_alpha_train', 0):+.2f}%")
-        print(f"  训练集回撤: {oos_meta.get('selected_mdd_train', 0):.2f}%")
+        print(f"  目标组合数: {oos_meta.get('combo_targets', 0)}")
+        print(f"  有效选中数: {oos_meta.get('selected_targets', 0)}")
+        top_tags = oos_meta.get("selected_tag_counts", {})
+        if top_tags:
+            ranked_tags = sorted(top_tags.items(), key=lambda x: x[1], reverse=True)[:5]
+            print(f"  TOP选中标签: {ranked_tags}")
 
-    # 构建评分索引
+    # 构建评分索引缓存（按配置复用）
     print(f"\n[3/4] 构建TF评分索引...")
-    tf_score_index = _build_tf_score_index(all_data, all_signals, available_tfs, f12_base)
+    tf_score_cache = {}
+
+    def _get_tf_score_index_for_cfg(base_cfg):
+        key = json.dumps(base_cfg, sort_keys=True, ensure_ascii=False)
+        if key not in tf_score_cache:
+            tf_score_cache[key] = _build_tf_score_index(all_data, all_signals, available_tfs, base_cfg)
+        return tf_score_cache[key]
+
+    tf_score_index = _get_tf_score_index_for_cfg(f12_base)
     for tf in available_tfs:
         n_scores = len(tf_score_index.get(tf, {}))
         print(f"    {tf}: {n_scores} 个评分点")
@@ -732,8 +968,6 @@ def main(args):
             sp = df['close'].iloc[start_idx]
             ep = df['close'].iloc[-1]
             bh_by_tf[tf] = round((ep / sp - 1) * 100, 2)
-        bh_1h = bh_by_tf.get('1h', 0)
-
         # 单TF基线
         print(f"\n  单TF基线:")
         for ptf in primary_tf_candidates:
@@ -756,7 +990,11 @@ def main(args):
                 if ptf not in all_data:
                     continue
 
-                config = _scale_runtime_config(f12_base, ptf, tf_hours, f'多TF_{combo_name}@{ptf}_{days}d')
+                combo_key = _combo_primary_key(combo_name, ptf, combo_tfs)
+                base_cfg = combo_oos_configs.get(combo_key, f12_base)
+                combo_oos_info = (oos_meta.get("selection_details", {}) or {}).get(combo_key, {})
+                config = _scale_runtime_config(base_cfg, ptf, tf_hours, f'多TF_{combo_name}@{ptf}_{days}d')
+                tf_score_index = _get_tf_score_index_for_cfg(base_cfg)
 
                 r = run_strategy_multi_tf(
                     all_data[ptf], tf_score_index, combo_tfs, config,
@@ -782,6 +1020,7 @@ def main(args):
                     'total_cost': fees.get('total_costs', 0),
                     'fees': fees,
                     'vs_single_tf': round(vs_single, 2),
+                    'oos_tag': combo_oos_info.get('selected_tag'),
                     'protections': r.get('protections', {}),
                     # 完整交易明细 (每笔含时间/价格/数量/费用/PnL/仓位快照)
                     'trade_details': r.get('trades', []),
@@ -983,31 +1222,54 @@ def main(args):
                 if wf_ref_tf not in wf_available_tfs or not wf_primary_tfs or not wf_combos:
                     continue
 
-                selected_cfg, wf_oos_meta = _select_oos_base_config(
-                    opt_result=opt_result,
-                    all_data=window_data,
-                    test_days=args.wf_test_days,
-                    train_days=args.wf_train_days,
-                    tf_hours=tf_hours,
-                    fallback_config=f12_base,
-                    ref_tf=wf_ref_tf,
-                    top_n=args.oos_candidates,
-                    conservative=use_conservative,
-                    decision_tfs=oos_decision_tfs,
-                )
-                wf_score_index = _build_tf_score_index(
-                    window_data, all_signals, wf_available_tfs, selected_cfg
-                )
+                window_signals = {}
+                for tf in wf_available_tfs:
+                    window_signals[tf] = compute_signals_six(
+                        window_data[tf], tf, window_data, max_bars=0
+                    )
+
+                wf_combo_cfg_map = {}
+                wf_oos_meta = {
+                    "mode": "disabled",
+                    "reason": "disable_oos=true" if not use_oos else "not_applied",
+                }
+                if use_oos:
+                    wf_combo_cfg_map, wf_oos_meta = _select_oos_combo_configs(
+                        opt_result=opt_result,
+                        all_data=window_data,
+                        test_days=args.wf_test_days,
+                        train_days=args.wf_train_days,
+                        tf_hours=tf_hours,
+                        fallback_config=f12_base,
+                        ref_tf=wf_ref_tf,
+                        combos=wf_combos,
+                        primary_tfs=wf_primary_tfs,
+                        top_n=args.oos_candidates,
+                        conservative=use_conservative,
+                    )
+
+                wf_score_cache = {}
+
+                def _wf_get_tf_score_index(base_cfg):
+                    cache_key = json.dumps(base_cfg, sort_keys=True, ensure_ascii=False)
+                    if cache_key not in wf_score_cache:
+                        wf_score_cache[cache_key] = _build_tf_score_index(
+                            window_data, window_signals, wf_available_tfs, base_cfg
+                        )
+                    return wf_score_cache[cache_key]
 
                 window_rows = []
                 for combo_name, combo_tfs in wf_combos:
                     for ptf in wf_primary_tfs:
+                        combo_key = _combo_primary_key(combo_name, ptf, combo_tfs)
+                        wf_base_cfg = wf_combo_cfg_map.get(combo_key, f12_base)
                         cfg = _scale_runtime_config(
-                            selected_cfg,
+                            wf_base_cfg,
                             ptf,
                             tf_hours,
                             f"wf_{w['window_id']}_{combo_name}@{ptf}",
                         )
+                        wf_score_index = _wf_get_tf_score_index(wf_base_cfg)
                         r = run_strategy_multi_tf(
                             window_data[ptf],
                             wf_score_index,
@@ -1021,6 +1283,9 @@ def main(args):
                             "combo_name": combo_name,
                             "primary_tf": ptf,
                             "decision_tfs": combo_tfs,
+                            "oos_tag": ((wf_oos_meta.get("selection_details", {}) or {})
+                                         .get(combo_key, {})
+                                         .get("selected_tag")),
                             "alpha": float(r["alpha"]),
                             "max_drawdown": float(r["max_drawdown"]),
                             "total_trades": int(r["total_trades"]),
@@ -1037,8 +1302,9 @@ def main(args):
                         "train_end": w["train_end"].isoformat(),
                         "test_start": w["test_start"].isoformat(),
                         "test_end": w["test_end"].isoformat(),
-                        "selected_tag": wf_oos_meta.get("selected_tag"),
-                        "selected_objective_train": wf_oos_meta.get("selected_objective_train"),
+                        "oos_mode": wf_oos_meta.get("mode"),
+                        "oos_selected_targets": wf_oos_meta.get("selected_targets", 0),
+                        "oos_selected_tag_counts": wf_oos_meta.get("selected_tag_counts", {}),
                         "top_combo": (
                             {
                                 "combo": f"{top_row['combo_name']}@{top_row['primary_tf']}",
