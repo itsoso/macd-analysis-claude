@@ -31,3 +31,9 @@ data/
 multi_signal_result.json
 multi_signal_cache.json
 gunicorn.pid
+
+# 回测结果数据库 (非源码)
+backtest_results.db
+
+# 大体量结果 JSON (由回测生成, 不跟踪)
+candlestick_result.json

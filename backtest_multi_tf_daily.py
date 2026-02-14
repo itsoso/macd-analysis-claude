@@ -644,6 +644,8 @@ def main(trade_start=None, trade_end=None, version_tag=None):
         'combo_name': combo_name,
         'leverage': config.get('lev', 5),
         'initial_capital': initial_capital,
+        'signal_mode': 'fast' if use_fast_signals else 'original',
+        'multiprocess': use_multiprocess,
         'runner': 'backtest_multi_tf_daily.py',
         'host': socket.gethostname(),
         'run_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
