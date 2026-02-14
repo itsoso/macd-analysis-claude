@@ -1133,11 +1133,12 @@ def _run_strategy_core(
             pnl_r = eng.futures_short.calc_pnl(price) / eng.futures_short.margin
 
             # 硬断路器: 绝对止损上限, 防止极端跳空超过 short_sl
-            # run#33 出现 -42%/-52% 止损, 实盘应通过交易所限价单覆盖
+            # bar级回测中为标记用; 实盘应通过交易所限价止损单覆盖
             hard_sl = config.get('hard_stop_loss', -0.35)
-            if pnl_r < hard_sl:
+            if pnl_r < hard_sl and eng.futures_short:
                 eng.close_short(price, dt, f"硬止损 {pnl_r*100:.0f}% (上限{hard_sl*100:.0f}%)")
                 short_max_pnl = 0; short_cd = cooldown * 5; short_bars = 0
+                # 仓位已清, 后续 if eng.futures_short 检查自动跳过止盈/止损/超时
 
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
             # v3分段止盈: 更早触发 (+12%/+25% vs 默认 +15%/+50%)
@@ -1282,9 +1283,10 @@ def _run_strategy_core(
 
             # 硬断路器: 做多绝对止损上限
             hard_sl = config.get('hard_stop_loss', -0.35)
-            if pnl_r < hard_sl:
+            if pnl_r < hard_sl and eng.futures_long:
                 eng.close_long(price, dt, f"硬止损 {pnl_r*100:.0f}% (上限{hard_sl*100:.0f}%)")
                 long_max_pnl = 0; long_cd = cooldown * 5; long_bars = 0
+                # 仓位已清, 后续 if eng.futures_long 检查自动跳过止盈/止损/超时
 
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
             _eff_partial_tp_1_long = partial_tp_1_early if use_partial_tp_v3 else partial_tp_1

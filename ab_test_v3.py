@@ -134,9 +134,8 @@ def _run_variant(label, cfg_overrides, all_data, decision_tfs, tf_score_index):
 def main():
     all_data, decision_tfs, tf_score_index = _load_data_and_signals()
 
-    # ── 第三轮: v4基线 + 尾部损失控制消融 ──
-    # v4 基线参数 (param_sweep 系统性优化)
-    # v4 基线参数 (param_sweep 系统性优化)
+    # ── 第五轮: 精简消融 — LVT门控梯度 × spot_sell_cap ──
+    # 硬止损在 bar 级回测中无法验证(实盘通过交易所止损限价单实现)
     v4_base = {
         'short_threshold': 25, 'short_sl': -0.25, 'short_tp': 0.60,
         'long_sl': -0.10, 'short_trail': 0.15, 'long_trail': 0.12,
@@ -145,62 +144,36 @@ def main():
         'partial_tp_1_early': 0.12, 'partial_tp_2_early': 0.25,
         'use_spot_sell_cap': False,
         'use_regime_short_gate': False,
-        'hard_stop_loss': -0.35,
     }
     variants = [
-        # ── 基线对照 ──
-        ("A:v4基线", {
-            **v4_base,
-        }),
+        ("A:v4基线", {**v4_base}),
 
-        # ── 硬断路器: 不同绝对止损上限 (Codex/Claude 共同建议) ──
-        ("B:硬止损-30%", {
-            **v4_base,
-            'hard_stop_loss': -0.30,
-        }),
-        ("C:硬止损-35%", {
-            **v4_base,
-            'hard_stop_loss': -0.35,
-        }),
-        ("D:硬止损-40%", {
-            **v4_base,
-            'hard_stop_loss': -0.40,
-        }),
-
-        # ── low_vol_trend-only 做空门控 (Codex洞察: trend空头+$40k不应门控) ──
-        ("E:LVT门控+10", {
-            **v4_base,
+        # ── LVT 门控梯度 (Codex: low_vol_trend净利仅+$8k, pPF=1.06) ──
+        ("B:LVT+10", {**v4_base,
             'use_regime_short_gate': True, 'regime_short_gate_add': 10,
-            'regime_short_gate_regimes': 'low_vol_trend',
-        }),
-        ("F:LVT门控+15", {
-            **v4_base,
+            'regime_short_gate_regimes': 'low_vol_trend'}),
+        ("C:LVT+15", {**v4_base,
             'use_regime_short_gate': True, 'regime_short_gate_add': 15,
-            'regime_short_gate_regimes': 'low_vol_trend',
-        }),
-        ("G:LVT门控+20", {
-            **v4_base,
+            'regime_short_gate_regimes': 'low_vol_trend'}),
+        ("D:LVT+20", {**v4_base,
             'use_regime_short_gate': True, 'regime_short_gate_add': 20,
-            'regime_short_gate_regimes': 'low_vol_trend',
-        }),
+            'regime_short_gate_regimes': 'low_vol_trend'}),
 
-        # ── 组合: LVT门控 + 硬止损 (风险收敛组合) ──
-        ("H:LVT+15+硬止损35%", {
-            **v4_base,
+        # ── spot_sell_cap 比例方案 ──
+        ("E:卖出cap30%", {**v4_base,
+            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.30}),
+        ("F:卖出cap20%", {**v4_base,
+            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.20}),
+
+        # ── 最佳 LVT + cap 组合 ──
+        ("G:LVT+15+cap30%", {**v4_base,
             'use_regime_short_gate': True, 'regime_short_gate_add': 15,
             'regime_short_gate_regimes': 'low_vol_trend',
-            'hard_stop_loss': -0.35,
-        }),
-        ("I:LVT+15+硬止损30%", {
-            **v4_base,
-            'use_regime_short_gate': True, 'regime_short_gate_add': 15,
-            'regime_short_gate_regimes': 'low_vol_trend',
-            'hard_stop_loss': -0.30,
-        }),
+            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.30}),
     ]
 
     print(f"\n{'='*90}")
-    print(f"  第三轮消融测试: v4基线 + 尾部损失控制 | {TRADE_START} ~ {TRADE_END} | ${INITIAL_CAPITAL:,}")
+    print(f"  第五轮消融: LVT门控×spot_sell_cap | {TRADE_START} ~ {TRADE_END} | ${INITIAL_CAPITAL:,}")
     print(f"{'='*90}")
 
     results = []
