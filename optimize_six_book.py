@@ -1182,8 +1182,8 @@ def _run_strategy_core(
                 partial_pnl = (eng.futures_short.entry_price - actual_close_p) * partial_qty
                 _entry_p = eng.futures_short.entry_price
                 margin_released = eng.futures_short.margin * partial_tp_1_pct
-                eng.usdt += margin_released + partial_pnl
-                eng.frozen_margin -= margin_released  # 修复: 释放冻结保证金
+                eng.usdt += partial_pnl  # 修复: 只加PnL, margin从未从usdt扣除无需加回
+                eng.frozen_margin -= margin_released  # 释放冻结保证金标记
                 fee = partial_qty * actual_close_p * FuturesEngine.TAKER_FEE
                 slippage_cost = partial_qty * price * FuturesEngine.SLIPPAGE
                 eng.usdt -= fee; eng.total_futures_fees += fee
@@ -1207,7 +1207,7 @@ def _run_strategy_core(
                 partial_pnl = (eng.futures_short.entry_price - actual_close_p) * partial_qty
                 _entry_p = eng.futures_short.entry_price
                 margin_released = eng.futures_short.margin * partial_tp_2_pct
-                eng.usdt += margin_released + partial_pnl
+                eng.usdt += partial_pnl  # 修复: 只加PnL, margin从未从usdt扣除无需加回
                 eng.frozen_margin -= margin_released
                 fee = partial_qty * actual_close_p * FuturesEngine.TAKER_FEE
                 slippage_cost = partial_qty * price * FuturesEngine.SLIPPAGE
@@ -1334,8 +1334,8 @@ def _run_strategy_core(
                 partial_pnl = (actual_close_p - eng.futures_long.entry_price) * partial_qty
                 _entry_p = eng.futures_long.entry_price
                 margin_released = eng.futures_long.margin * partial_tp_1_pct
-                eng.usdt += margin_released + partial_pnl
-                eng.frozen_margin -= margin_released  # 修复: 释放冻结保证金
+                eng.usdt += partial_pnl  # 修复: 只加PnL, margin从未从usdt扣除无需加回
+                eng.frozen_margin -= margin_released  # 释放冻结保证金标记
                 fee = partial_qty * actual_close_p * FuturesEngine.TAKER_FEE
                 slippage_cost = partial_qty * price * FuturesEngine.SLIPPAGE
                 eng.usdt -= fee; eng.total_futures_fees += fee
@@ -1359,7 +1359,7 @@ def _run_strategy_core(
                 partial_pnl = (actual_close_p - eng.futures_long.entry_price) * partial_qty
                 _entry_p = eng.futures_long.entry_price
                 margin_released = eng.futures_long.margin * partial_tp_2_pct
-                eng.usdt += margin_released + partial_pnl
+                eng.usdt += partial_pnl  # 修复: 只加PnL, margin从未从usdt扣除无需加回
                 eng.frozen_margin -= margin_released
                 fee = partial_qty * actual_close_p * FuturesEngine.TAKER_FEE
                 slippage_cost = partial_qty * price * FuturesEngine.SLIPPAGE
