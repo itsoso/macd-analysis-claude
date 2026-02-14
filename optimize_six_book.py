@@ -1063,9 +1063,12 @@ def _run_strategy_core(
             in_conflict = ratio >= 0.6 and min(ss, bs) >= 15
 
         # 是否启用趋势增强（现货底仓保护）
-        # 与 engine_mode 解耦: engine_mode 控制合约开仓倍率, trend_enhance 控制现货持仓保护
-        # EMA10/EMA30 趋势状态已有滞后 (enter=1.005x, exit=0.98x), 可独立判断
+        # 可配置的引擎门控:
+        # - trend_enhance_engine_gate=False: 与 engine_mode 解耦（仅看EMA趋势）
+        # - trend_enhance_engine_gate=True : 仅在 trend 引擎中启用（与旧口径兼容）
         trend_enhance_active = bool(config.get('use_trend_enhance', False))
+        if trend_enhance_active and bool(config.get('trend_enhance_engine_gate', False)):
+            trend_enhance_active = (engine_mode != 'reversion')
 
         # ── 趋势持仓保护 (Trend Floor v3 — 带滞后 + 事后检查) ──
         trend_floor_active = False

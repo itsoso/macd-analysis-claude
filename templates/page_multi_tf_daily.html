@@ -278,7 +278,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         // ═══ 汇总卡片 ═══
+        const _spotBuys = trades.filter(t => t.action === 'SPOT_BUY');
         const _spotSells = trades.filter(t => t.action === 'SPOT_SELL');
+        const _futuresOpen = trades.filter(t => ['OPEN_LONG','OPEN_SHORT'].includes(t.action));
         const _futuresClose = trades.filter(t => ['CLOSE_LONG','CLOSE_SHORT','LIQUIDATED'].includes(t.action));
         const _partialTP = trades.filter(t => t.action === 'PARTIAL_TP');
         const _spotPnl = _spotSells.reduce((s2,t) => s2+(t.pnl||0), 0);
@@ -295,7 +297,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
         <div class="mg">
             <div class="mi"><div class="lb">总交易</div><div class="vl neu">${s.total_trades||0}笔</div></div>
+            <div class="mi"><div class="lb">现货买入</div><div class="vl neu">${_spotBuys.length}笔</div></div>
             <div class="mi"><div class="lb">现货卖出</div><div class="vl neu">${_spotSells.length}笔</div></div>
+            <div class="mi"><div class="lb">合约开仓</div><div class="vl neu">${_futuresOpen.length}笔</div></div>
             <div class="mi"><div class="lb">合约平仓</div><div class="vl neu">${_futuresClose.length}笔</div></div>
             <div class="mi"><div class="lb">部分止盈</div><div class="vl neu">${_partialTP.length}笔</div></div>
             <div class="mi"><div class="lb">合约胜率</div><div class="vl ${(s.win_rate_pct||0)>=50?'pos':'neg'}">${fv(s.win_rate_pct)}%</div></div>

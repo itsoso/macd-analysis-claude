@@ -274,6 +274,12 @@ class StrategyConfig:
     spot_sell_max_pct: float = 0.30        # 单笔卖出比例上限
     # run#85: 高波动+趋势段禁止 SPOT_SELL (run#62: 仅 high_vol; 趋势段误卖实锤)
     spot_sell_regime_block: str = 'high_vol,trend'
+    # 趋势保护（现货底仓）
+    use_trend_enhance: bool = True
+    trend_floor_ratio: float = 0.50
+    min_base_eth_ratio: float = 0.0
+    # True: 仅 trend 引擎启用趋势保护（兼容旧口径）; False: 解耦（仅看EMA趋势）
+    trend_enhance_engine_gate: bool = False
     # 仓位管理
     leverage: int = 5
     max_lev: int = 5

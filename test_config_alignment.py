@@ -82,6 +82,10 @@ def test_backtest_daily_defaults_align_with_strategy_defaults():
     assert daily_cfg.DEFAULT_CONFIG["kdj_weight"] == cfg.kdj_weight
     assert daily_cfg.DEFAULT_CONFIG["consensus_min_strength"] == cfg.consensus_min_strength
     assert daily_cfg.DEFAULT_CONFIG["coverage_min"] == cfg.coverage_min
+    assert daily_cfg.DEFAULT_CONFIG["use_trend_enhance"] == cfg.use_trend_enhance
+    assert daily_cfg.DEFAULT_CONFIG["trend_floor_ratio"] == cfg.trend_floor_ratio
+    assert daily_cfg.DEFAULT_CONFIG["min_base_eth_ratio"] == cfg.min_base_eth_ratio
+    assert daily_cfg.DEFAULT_CONFIG["trend_enhance_engine_gate"] == cfg.trend_enhance_engine_gate
     # 注: use_microstructure / use_dual_engine / use_vol_target 在回测中
     # 被故意关闭以隔离趋势保护 v3 效果, 因此与 StrategyConfig 不同
     assert daily_cfg.DEFAULT_CONFIG["use_microstructure"] is False  # 回测中关闭

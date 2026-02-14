@@ -128,6 +128,7 @@ def _build_strategy_snapshot(config):
     # 关键开关
     snapshot = {
         'use_trend_enhance': config.get('use_trend_enhance', False),
+        'trend_enhance_engine_gate': config.get('trend_enhance_engine_gate', False),
         'trend_floor_ratio': config.get('trend_floor_ratio'),
         'min_base_eth_ratio': config.get('min_base_eth_ratio'),
         'use_microstructure': config.get('use_microstructure', False),
