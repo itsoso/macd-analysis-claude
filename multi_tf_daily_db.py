@@ -24,10 +24,20 @@ def _default_db_path():
     return os.path.join(base, 'data', 'backtests', DB_FILENAME)
 
 
+def _open_conn(db_path):
+    """打开 SQLite 连接，启用 WAL 模式 + 性能 pragma。"""
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA cache_size=-8000")      # 8 MB page cache
+    conn.execute("PRAGMA temp_store=MEMORY")
+    return conn
+
+
 def init_db(db_path=None):
     db_path = db_path or _default_db_path()
     os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = _open_conn(db_path)
     try:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS mtf_runs (
@@ -216,6 +226,16 @@ def _build_strategy_snapshot(config):
         # 波动目标
         'vol_target_annual': config.get('vol_target_annual'),
         'vol_target_lookback_bars': config.get('vol_target_lookback_bars'),
+        # S2: 保本止损
+        'use_breakeven_after_tp1': config.get('use_breakeven_after_tp1', False),
+        'breakeven_buffer': config.get('breakeven_buffer', 0.01),
+        # S3: 棘轮追踪止损
+        'use_ratchet_trail': config.get('use_ratchet_trail', False),
+        'ratchet_trail_tiers': config.get('ratchet_trail_tiers', ''),
+        # S5: 信号质量止损
+        'use_ss_quality_sl': config.get('use_ss_quality_sl', False),
+        'ss_quality_sl_threshold': config.get('ss_quality_sl_threshold', 50),
+        'ss_quality_sl_mult': config.get('ss_quality_sl_mult', 0.70),
     }
     return snapshot
 
@@ -259,7 +279,7 @@ def save_run(db_path, run_meta, summary, daily_records, trades,
     if not experiment_notes:
         experiment_notes = run_meta.get('experiment_notes', '')
 
-    conn = sqlite3.connect(db_path)
+    conn = _open_conn(db_path)
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -354,35 +374,39 @@ def save_run(db_path, run_meta, summary, daily_records, trades,
         conn.close()
 
 
-def list_runs(db_path=None):
-    """列出所有回测运行，用于版本选择器"""
+def list_runs(db_path=None, limit=0, offset=0):
+    """列出回测运行，用于版本选择器。
+
+    Args:
+        limit: 返回条数上限，0 表示全部。
+        offset: 跳过前 N 条。
+    """
     db_path = db_path or _default_db_path()
     if not os.path.exists(db_path):
         return []
 
     init_db(db_path)  # 确保新列存在
 
-    conn = sqlite3.connect(db_path)
+    conn = _open_conn(db_path)
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()
-        rows = cur.execute("""
-            SELECT id, created_at, runner, host, start_date, end_date,
-                   primary_tf, decision_tfs, combo_name, leverage,
-                   initial_capital, summary_json, version_tag, strategy_snapshot,
-                   experiment_notes
+
+        # 列表只取轻量列，不取 strategy_snapshot / experiment_notes / meta_json
+        sql = """
+            SELECT id, created_at, host, start_date, end_date,
+                   combo_name, summary_json, version_tag
             FROM mtf_runs ORDER BY id DESC
-        """).fetchall()
+        """
+        params = []
+        if limit > 0:
+            sql += " LIMIT ? OFFSET ?"
+            params = [limit, offset]
+        rows = cur.execute(sql, params).fetchall()
 
         result = []
         for r in rows:
             summary = json.loads(r['summary_json']) if r['summary_json'] else {}
-            snapshot = json.loads(r['strategy_snapshot']) if r['strategy_snapshot'] else {}
-            notes = ''
-            try:
-                notes = r['experiment_notes'] or ''
-            except (KeyError, IndexError):
-                pass
             result.append({
                 'run_id': r['id'],
                 'created_at': r['created_at'],
@@ -391,8 +415,6 @@ def list_runs(db_path=None):
                 'end_date': r['end_date'],
                 'combo_name': r['combo_name'],
                 'version_tag': r['version_tag'] or f"Run #{r['id']}",
-                'strategy_snapshot': snapshot,
-                'experiment_notes': notes,
                 'total_return_pct': summary.get('total_return_pct'),
                 'alpha_pct': summary.get('alpha_pct'),
                 'max_drawdown_pct': summary.get('max_drawdown_pct'),
@@ -414,7 +436,7 @@ def load_run_by_id(run_id, db_path=None):
 
     init_db(db_path)
 
-    conn = sqlite3.connect(db_path)
+    conn = _open_conn(db_path)
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()
@@ -437,7 +459,7 @@ def load_latest_run(db_path=None):
 
     init_db(db_path)
 
-    conn = sqlite3.connect(db_path)
+    conn = _open_conn(db_path)
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()
@@ -453,18 +475,31 @@ def load_latest_run(db_path=None):
 
 
 def _load_run_data(cur, run):
-    """内部：从 run 行加载完整数据"""
+    """内部：从 run 行加载完整数据（性能优化版）。
+
+    - daily：只取结构化列，不再 json.loads(data_json)
+    - trades：从结构化列构建，不再 json.loads(data_json)
+    - equity_curve：直接从结构化列构建
+    """
     run_id = run['id']
 
-    daily_rows = cur.execute(
-        "SELECT * FROM mtf_daily WHERE run_id = ? ORDER BY date ASC",
-        (run_id,)
-    ).fetchall()
+    # ── daily: 只取必要列 ──
+    daily_rows = cur.execute("""
+        SELECT date, eth_price, total_value, usdt, frozen_margin,
+               long_pnl, short_pnl, spot_eth_value,
+               return_pct, drawdown_pct,
+               has_long, has_short, long_entry, long_qty,
+               short_entry, short_qty, day_trades, day_pnl
+        FROM mtf_daily WHERE run_id = ? ORDER BY date ASC
+    """, (run_id,)).fetchall()
 
-    trade_rows = cur.execute(
-        "SELECT data_json FROM mtf_trades WHERE run_id = ? ORDER BY seq ASC",
-        (run_id,)
-    ).fetchall()
+    # ── trades: 从结构化列构建，避免解析 data_json ──
+    trade_rows = cur.execute("""
+        SELECT time, action, direction, market_price, exec_price,
+               quantity, notional_value, margin, leverage, fee,
+               slippage_cost, pnl, after_total, reason
+        FROM mtf_trades WHERE run_id = ? ORDER BY seq ASC
+    """, (run_id,)).fetchall()
 
     run_meta = json.loads(run['meta_json']) if run['meta_json'] else {}
     summary = json.loads(run['summary_json']) if run['summary_json'] else {}
@@ -480,14 +515,51 @@ def _load_run_data(cur, run):
     except (KeyError, IndexError):
         pass
 
+    # 构建 daily_records（从结构化列，不 parse JSON）
     daily_records = []
     for r in daily_rows:
-        rec = json.loads(r['data_json']) if r['data_json'] else {}
-        rec['drawdown_pct'] = r['drawdown_pct']
-        daily_records.append(rec)
+        daily_records.append({
+            'date': r['date'],
+            'eth_price': r['eth_price'],
+            'total_value': r['total_value'],
+            'usdt': r['usdt'],
+            'frozen_margin': r['frozen_margin'],
+            'long_pnl': r['long_pnl'],
+            'short_pnl': r['short_pnl'],
+            'spot_eth_value': r['spot_eth_value'],
+            'return_pct': r['return_pct'],
+            'drawdown_pct': r['drawdown_pct'],
+            'has_long': bool(r['has_long']),
+            'has_short': bool(r['has_short']),
+            'long_entry': r['long_entry'],
+            'long_qty': r['long_qty'],
+            'short_entry': r['short_entry'],
+            'short_qty': r['short_qty'],
+            'day_trades': r['day_trades'],
+            'day_pnl': r['day_pnl'],
+        })
 
-    trades = [json.loads(r['data_json']) for r in trade_rows]
+    # 构建 trades（从结构化列，不 parse JSON）
+    trades = []
+    for r in trade_rows:
+        trades.append({
+            'time': r['time'],
+            'action': r['action'],
+            'direction': r['direction'],
+            'market_price': r['market_price'],
+            'exec_price': r['exec_price'],
+            'quantity': r['quantity'],
+            'notional_value': r['notional_value'],
+            'margin': r['margin'],
+            'leverage': r['leverage'],
+            'fee': r['fee'],
+            'slippage_cost': r['slippage_cost'],
+            'pnl': r['pnl'],
+            'after_total': r['after_total'],
+            'reason': r['reason'],
+        })
 
+    # equity_curve：直接从 daily 列构建
     equity_curve = [
         {
             'date': r['date'],
@@ -515,7 +587,7 @@ def update_experiment_notes(run_id, notes, db_path=None):
     """更新指定 run 的实验说明 (用于回填历史记录)。"""
     db_path = db_path or _default_db_path()
     init_db(db_path)
-    conn = sqlite3.connect(db_path)
+    conn = _open_conn(db_path)
     try:
         conn.execute(
             "UPDATE mtf_runs SET experiment_notes = ? WHERE id = ?",

@@ -3,6 +3,7 @@ Flask Web 应用
 展示: 书籍大纲 + 代码实现说明 + ETH/USDT 多周期回测结果对比 + 策略优化对比
 """
 
+import gzip as _gzip
 import glob
 import json
 import os
@@ -10,6 +11,7 @@ import subprocess
 import sys
 from datetime import timedelta, datetime
 from functools import wraps
+from io import BytesIO
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -25,6 +27,34 @@ app.secret_key = _secret or os.urandom(24).hex()
 if not _secret:
     import warnings
     warnings.warn('SECRET_KEY 未设置，使用临时密钥；生产环境请设置 SECRET_KEY', UserWarning)
+
+# ======================================================
+#   响应 gzip 压缩中间件（JSON 体积降 ~70%）
+# ======================================================
+_GZIP_MIN_SIZE = 512  # bytes
+
+@app.after_request
+def _gzip_response(response):
+    """对 JSON/HTML 响应自动 gzip 压缩。"""
+    if (response.status_code < 200 or response.status_code >= 300
+            or response.direct_passthrough
+            or 'Content-Encoding' in response.headers
+            or not response.content_type
+            or not response.content_type.startswith(('application/json', 'text/'))):
+        return response
+    accept = request.headers.get('Accept-Encoding', '')
+    if 'gzip' not in accept.lower():
+        return response
+    data = response.get_data()
+    if len(data) < _GZIP_MIN_SIZE:
+        return response
+    compressed = _gzip.compress(data, compresslevel=6)
+    response.set_data(compressed)
+    response.headers['Content-Encoding'] = 'gzip'
+    response.headers['Content-Length'] = len(compressed)
+    response.headers['Vary'] = 'Accept-Encoding'
+    return response
+
 
 # ======================================================
 #   用户认证（默认 admin/system123；正式上线时用 ADMIN_PASSWORD 或 ADMIN_PASSWORD_HASH 覆盖）
@@ -209,12 +239,16 @@ MULTI_TF_DAILY_DB_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'multi_tf_d
 @app.route('/api/multi_tf_daily')
 def api_multi_tf_daily():
     """从 SQLite DB 加载回测数据。支持 ?run_id=N 指定版本，默认最新。"""
+    import time as _t
     from multi_tf_daily_db import load_latest_run, load_run_by_id
+    t0 = _t.time()
     run_id = request.args.get('run_id', type=int)
     if run_id:
         data = load_run_by_id(run_id, MULTI_TF_DAILY_DB_FILE)
     else:
         data = load_latest_run(MULTI_TF_DAILY_DB_FILE)
+    elapsed = (_t.time() - t0) * 1000
+    app.logger.info(f"[perf] api_multi_tf_daily run_id={run_id} -> {elapsed:.0f}ms")
     if data:
         return jsonify(data)
     return jsonify({
@@ -224,9 +258,15 @@ def api_multi_tf_daily():
 
 @app.route('/api/multi_tf_daily/runs')
 def api_multi_tf_daily_runs():
-    """列出所有回测版本，用于版本选择器和对比。"""
+    """列出所有回测版本，用于版本选择器和对比。支持 ?limit=N 分页。"""
+    import time as _t
     from multi_tf_daily_db import list_runs
-    runs = list_runs(MULTI_TF_DAILY_DB_FILE)
+    t0 = _t.time()
+    limit = request.args.get('limit', default=0, type=int)
+    offset = request.args.get('offset', default=0, type=int)
+    runs = list_runs(MULTI_TF_DAILY_DB_FILE, limit=limit, offset=offset)
+    elapsed = (_t.time() - t0) * 1000
+    app.logger.info(f"[perf] api_multi_tf_daily_runs limit={limit} offset={offset} -> {elapsed:.0f}ms, {len(runs)} rows")
     return jsonify(runs)
 
 

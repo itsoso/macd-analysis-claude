@@ -114,14 +114,7 @@ details summary:hover { color: var(--accent); }
 document.addEventListener('DOMContentLoaded', async () => {
     const root = document.getElementById('mtd-root');
 
-    // ═══ 1. 加载全部运行列表 ═══
-    let allRuns = [];
-    try {
-        const runsResp = await fetch('/api/multi_tf_daily/runs');
-        if (runsResp.ok) allRuns = await runsResp.json();
-    } catch(e) {}
-
-    // ═══ 2. 加载指定版本数据 ═══
+    // ═══ 1. 并行加载 runs 列表 + 当前版本数据 ═══
     async function loadRun(runId) {
         const url = runId ? `/api/multi_tf_daily?run_id=${runId}` : '/api/multi_tf_daily';
         const resp = await fetch(url);
@@ -129,15 +122,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         return await resp.json();
     }
 
-    // 获取URL参数中的run_id
     const urlParams = new URLSearchParams(window.location.search);
     const initialRunId = urlParams.get('run_id');
 
+    // 两个请求并行发出，不串行等待
+    const [runsResult, dataResult] = await Promise.allSettled([
+        fetch('/api/multi_tf_daily/runs').then(r => r.ok ? r.json() : []),
+        loadRun(initialRunId),
+    ]);
+
+    let allRuns = runsResult.status === 'fulfilled' ? runsResult.value : [];
+
     let data;
-    try {
-        data = await loadRun(initialRunId);
-    } catch (e) {
-        root.innerHTML = `<div class="loading" style="color:var(--red)">加载失败: ${e.message}</div>`;
+    if (dataResult.status === 'fulfilled') {
+        data = dataResult.value;
+    } else {
+        root.innerHTML = `<div class="loading" style="color:var(--red)">加载失败: ${dataResult.reason}</div>`;
         return;
     }
     if (data.error) { root.innerHTML = `<div class="loading" style="color:var(--red)">${data.error}</div>`; return; }
