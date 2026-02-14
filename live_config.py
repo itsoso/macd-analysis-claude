@@ -163,27 +163,27 @@ class StrategyConfig:
     """策略参数配置 - 从优化结果加载"""
     symbol: str = "ETHUSDT"
     timeframe: str = "1h"
-    # 信号阈值
+    # 信号阈值  (v2优化: 2026-02-14 参数扫描)
     sell_threshold: float = 18
     buy_threshold: float = 25
-    short_threshold: float = 25
-    long_threshold: float = 40
+    short_threshold: float = 35       # v2: 25→35 提高开空门槛, 过滤弱信号
+    long_threshold: float = 30        # v2: 40→30 放宽做多门槛, 捕获更多机会
     close_short_bs: float = 40
     close_long_ss: float = 40
     sell_pct: float = 0.55
-    # 止损止盈
-    short_sl: float = -0.25
-    short_tp: float = 0.60
+    # 止损止盈  (v2优化: 收紧空头风控, 放大做多空间)
+    short_sl: float = -0.18           # v2: -0.25→-0.18 收紧空头止损
+    short_tp: float = 0.50            # v2: 0.60→0.50  降低空头止盈目标
     long_sl: float = -0.08
-    long_tp: float = 0.30
+    long_tp: float = 0.40             # v2: 0.30→0.40  提高做多止盈目标
     short_trail: float = 0.25
     long_trail: float = 0.20
     trail_pullback: float = 0.60
-    # 部分止盈
+    # 部分止盈  (v2优化: 更早锁利 + 启用二阶段)
     use_partial_tp: bool = True
-    partial_tp_1: float = 0.20
+    partial_tp_1: float = 0.15        # v2: 0.20→0.15  更早锁利
     partial_tp_1_pct: float = 0.30
-    use_partial_tp_2: bool = False
+    use_partial_tp_2: bool = True     # v2: False→True  启用二阶段止盈
     partial_tp_2: float = 0.50
     partial_tp_2_pct: float = 0.30
     use_atr_sl: bool = False
@@ -213,8 +213,8 @@ class StrategyConfig:
     cs_bonus: float = 0.06
     # 数据参数
     lookback_days: int = 60
-    # 最大持仓K线数
-    short_max_hold: int = 72
+    # 最大持仓K线数  (v2优化: 缩短空头持仓)
+    short_max_hold: int = 48          # v2: 72→48 缩短空头最大持仓
     long_max_hold: int = 72
 
     # ── 多周期联合决策 ──
