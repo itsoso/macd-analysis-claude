@@ -192,8 +192,8 @@ STRATEGY_PARAM_VERSIONS = {
         "use_partial_tp_2": True,
         "short_max_hold": 48,
     },
-    "v4": {  # run31→run62 — param_sweep + Codex 优化 (收敛到 run#62 主线)
-        "short_threshold": 25,   # 更低门槛, 抓更多做空机会 (v2:35)
+    "v4": {  # run31→run85 — param_sweep + Codex 优化 (收敛到 run#85 主线)
+        "short_threshold": 40,   # run#85: 提高门槛过滤低质量开空 (v4旧:25, run#62:25)
         "long_threshold": 30,    # 保持 (v2一致)
         "short_sl": -0.16,       # run#62 最优: 更紧止损 (v4旧:-0.25, ret+881% MDD-4.43%)
         "short_tp": 0.60,        # 更大目标利润 (v2:0.50)
@@ -272,8 +272,8 @@ class StrategyConfig:
     spot_sell_confirm_min: int = 3         # 至少满足 3 项确认条件
     use_spot_sell_cap: bool = False        # 不启用 (run#67 验证退化)
     spot_sell_max_pct: float = 0.30        # 单笔卖出比例上限
-    # run#62: 高波动期禁止 SPOT_SELL (原为空)
-    spot_sell_regime_block: str = 'high_vol'
+    # run#85: 高波动+趋势段禁止 SPOT_SELL (run#62: 仅 high_vol; 趋势段误卖实锤)
+    spot_sell_regime_block: str = 'high_vol,trend'
     # 仓位管理
     leverage: int = 5
     max_lev: int = 5
@@ -283,6 +283,9 @@ class StrategyConfig:
     # 冷却
     cooldown: int = 4
     spot_cooldown: int = 12
+    # 空单 NoTP 提前退出 (第十一/十三轮验证: pPF +0.27, 回撤 +1.48pp, 合约PF翻正)
+    no_tp_exit_bars: int = 16          # 持仓≥16bar + 未达TP1 + 盈利<3% → 平仓
+    no_tp_exit_min_pnl: float = 0.03
     # 融合模式
     fusion_mode: str = "c6_veto_4"
     veto_threshold: float = 25

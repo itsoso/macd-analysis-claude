@@ -112,6 +112,8 @@ def _build_default_config():
         'neutral_mid_ss_sell_ratio': 1.0,  # 1.0=不调整
         'neutral_mid_ss_lo': 50.0,
         'neutral_mid_ss_hi': 70.0,
+        # regime-specific short_threshold (dict: {regime: threshold})
+        'regime_short_threshold': None,    # None=不启用; 例: {'neutral':40}
         # v3 分段止盈
         'use_partial_tp_v3': _LIVE_DEFAULT.use_partial_tp_v3,
         'partial_tp_1_early': _LIVE_DEFAULT.partial_tp_1_early,
@@ -440,8 +442,24 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
                 print(f"  ⚠️  忽略未知 override key: {k}")
                 continue
             orig = DEFAULT_CONFIG[k]
-            if isinstance(orig, bool):
+            # 类型推断: 先尝试 JSON (支持 dict/list)，再按原值类型
+            if v.strip().startswith('{') or v.strip().startswith('['):
+                import json as _json
+                try:
+                    DEFAULT_CONFIG[k] = _json.loads(v)
+                except Exception:
+                    DEFAULT_CONFIG[k] = v
+            elif isinstance(orig, bool):
                 DEFAULT_CONFIG[k] = v.lower() in ('true', '1', 'yes')
+            elif orig is None:
+                # None 默认值: 尝试数字, 否则字符串
+                try:
+                    DEFAULT_CONFIG[k] = int(v)
+                except ValueError:
+                    try:
+                        DEFAULT_CONFIG[k] = float(v)
+                    except ValueError:
+                        DEFAULT_CONFIG[k] = v if v.lower() != 'none' else None
             elif isinstance(orig, int):
                 DEFAULT_CONFIG[k] = int(v)
             elif isinstance(orig, float):

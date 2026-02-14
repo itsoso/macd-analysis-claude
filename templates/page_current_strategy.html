@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}当前最优策略(v4.4候选) - 技术分析平台{% endblock %}
+{% block title %}当前最优策略(v4.5) - 技术分析平台{% endblock %}
 
 {% block content %}
 <style>
@@ -61,19 +61,19 @@
 </style>
 
 <div class="strategy-hero">
-    <h1>📌 当前最优策略（v4.4 候选）<span class="new-tag">NEW</span></h1>
+    <h1>📌 当前最优策略 v4.5 <span class="new-tag">NEW</span></h1>
     <p class="tagline">
         六书融合 × 多周期联合决策（15m+1h+4h+24h）<br>
-        主线参数 = Run#62 基线 + <strong>NoTP 空单提前退出</strong>（第十一轮 A/B 最优变体 B），截至 2026-02-14。<br>
-        核心改善：CLOSE_SHORT 从 -59k 翻正到 +3.3k，回撤从 -7.49% 改善到 -5.63%。
+        主线 = <strong>run#85 基线 + NoTP 空单提前退出</strong>（第十三轮 E 变体最优），截至 2026-02-14。<br>
+        三处核心改善：① 趋势段误卖屏蔽 ② 做空门槛提高到 40 ③ NoTP 退出让合约 PF 翻正。
     </p>
     <div class="strategy-meta">
         <span class="badge blue">主TF: 1h / 决策TF: 15m+1h+4h+24h</span>
-        <span class="badge green">SPOT_SELL过滤: SS≥35 + 3项确认 + block high_vol</span>
+        <span class="badge green">SPOT_SELL: SS≥35确认×3 + block high_vol,trend</span>
         <span class="badge purple">Regime门控: low_vol_trend +35</span>
         <span class="badge yellow">分段止盈v3: 12% / 25%</span>
-        <span class="badge orange">v4.3→v4.4: short_sl -0.16 + NoTP退出16bar</span>
-        <span class="badge red">P0修复: 前视 bug 已修 (ema20/vol_now idx-1)</span>
+        <span class="badge orange">v4.5: short_thr=40 + NoTP退出16bar</span>
+        <span class="badge red">合约PF翻正: 0.93→1.06</span>
     </div>
 </div>
 
@@ -83,96 +83,106 @@
         <li>信号层：六维评分（背离/均线/蜡烛图/布林带/量价/KDJ）在多周期并行生成 SS/BS。</li>
         <li>决策层：多周期共识 + veto 过滤 + regime 动态阈值 + 双引擎（trend/reversion）切换。</li>
         <li>风控层：组合保护（连亏/日亏/全局回撤）、硬断路器、分段止盈、趋势持仓底线。</li>
-        <li><strong>v4.4 新增：</strong>空单 NoTP 提前退出 — 持仓≥16bar 且未触发 TP1，盈利&lt;3% 时主动平仓。精准解决"未达 TP1 空单"亏损瓶颈。</li>
+        <li><strong>v4.5 三项改善：</strong>
+            ① <code>short_threshold=40</code>（过滤低质量开空）
+            ② <code>spot_sell_regime_block=high_vol,trend</code>（趋势段误卖实锤修复）
+            ③ <code>no_tp_exit_bars=16</code>（空单 NoTP 提前退出，合约 PF 翻正）
+        </li>
     </ul>
 </div>
 
 <div class="card section">
-    <h3 class="card-title">📊 v4.4 候选表现（Run#62 基线 + NoTP）</h3>
+    <h3 class="card-title">📊 v4.5 主线表现（第十三轮 E 变体）</h3>
     <div class="stats-grid">
         <div class="stat-card">
             <div class="stat-label">回测区间</div>
             <div class="stat-value">2025-01 ~ 2026-01</div>
-            <div class="stat-note">A/B 第十一轮 变体B</div>
+            <div class="stat-note">run#85基线 + NoTP退出</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">策略收益</div>
-            <div class="stat-value positive">+779.37%</div>
-            <div class="stat-note">基线 +751.57%（+27.8pp）</div>
+            <div class="stat-value positive">+856.74%</div>
+            <div class="stat-note">run#85基线 +857.86%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">Alpha</div>
-            <div class="stat-value positive">+792.92%</div>
+            <div class="stat-value positive">+870.29%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">最大回撤</div>
-            <div class="stat-value" style="color:var(--accent-yellow);">-5.63%</div>
-            <div class="stat-note">基线 -7.49%（+1.86pp）</div>
+            <div class="stat-value" style="color:var(--accent-yellow);">-5.03%</div>
+            <div class="stat-note">基线 -6.51%（+1.48pp）</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">合约PF</div>
-            <div class="stat-value positive">1.11</div>
-            <div class="stat-note">基线 0.94（翻正！）</div>
+            <div class="stat-value positive">1.06</div>
+            <div class="stat-note">基线 0.93（翻正！）</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">组合PF</div>
-            <div class="stat-value positive">1.78</div>
-            <div class="stat-note">基线 1.60（+0.18）</div>
+            <div class="stat-value positive">2.62</div>
+            <div class="stat-note">基线 2.35（+0.27）</div>
         </div>
     </div>
 
-    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">第十一轮 A/B 对比（4 组矩阵）</h4>
+    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">第十三轮 3 维消融（8 组矩阵）</h4>
     <table class="param-table">
         <thead>
-            <tr><th>变体</th><th>收益</th><th>MaxDD</th><th>cPF</th><th>pPF</th><th>CLOSE_SHORT</th><th>SPOT_SELL</th></tr>
+            <tr><th>变体</th><th>收益</th><th>MaxDD</th><th>cPF</th><th>pPF</th><th>CLOSE_SHORT</th><th>SPOT_SELL</th><th>结论</th></tr>
         </thead>
         <tbody>
-            <tr><td>A: run62 基线</td><td>+751.57%</td><td>-7.49%</td><td>0.94</td><td>1.60</td><td class="pnl-neg">-58,990</td><td class="pnl-pos">+167,365</td></tr>
-            <tr style="background:rgba(34,197,94,0.08);font-weight:600;"><td>B: NoTP退出16bar ⭐</td><td class="pnl-pos">+779.37%</td><td>-5.63%</td><td class="pnl-pos">1.11</td><td class="pnl-pos">1.78</td><td class="pnl-pos">+3,299</td><td class="pnl-pos">+173,725</td></tr>
-            <tr><td>C: neutral降卖50%</td><td>+755.54%</td><td>-8.09%</td><td>0.94</td><td>1.60</td><td class="pnl-neg">-59,001</td><td class="pnl-pos">+175,899</td></tr>
-            <tr><td>D: B+C 组合</td><td class="pnl-pos">+783.03%</td><td>-5.86%</td><td class="pnl-pos">1.11</td><td class="pnl-pos">1.77</td><td class="pnl-pos">+3,298</td><td class="pnl-pos">+181,650</td></tr>
+            <tr><td>A: run85基线</td><td>+857.86%</td><td>-6.51%</td><td>0.93</td><td>2.35</td><td class="pnl-neg">-59,589</td><td class="pnl-pos">+580,469</td><td>基准</td></tr>
+            <tr><td>B1: blk仅高波</td><td>+803.01%</td><td>-7.90%</td><td>0.93</td><td>2.11</td><td class="pnl-neg">-59,643</td><td class="pnl-pos">+461,263</td><td style="color:#ef4444">-54pp，趋势屏蔽必须</td></tr>
+            <tr><td>B2: blk三段(+lvt)</td><td>+857.86%</td><td>-6.51%</td><td>0.93</td><td>2.35</td><td class="pnl-neg">-59,589</td><td class="pnl-pos">+580,469</td><td>0增量，lvt不需要</td></tr>
+            <tr><td>C1: confirm=2</td><td>+810.04%</td><td>-6.59%</td><td>0.92</td><td>2.32</td><td class="pnl-neg">-62,271</td><td class="pnl-pos">+474,282</td><td style="color:#ef4444">-48pp，放松确认有害</td></tr>
+            <tr><td>C2: confirm=4</td><td>+193.90%</td><td>-26.10%</td><td>0.89</td><td>1.05</td><td class="pnl-neg">-19,021</td><td class="pnl-neg">-79,661</td><td style="color:#ef4444">严重退化！杀死SPOT_SELL</td></tr>
+            <tr><td>D1: thr=38</td><td>+829.91%</td><td>-6.51%</td><td>0.92</td><td>2.29</td><td class="pnl-neg">-61,190</td><td class="pnl-pos">+548,509</td><td>-28pp，40更优</td></tr>
+            <tr><td>D2: thr=42</td><td>+862.08%</td><td>-6.51%</td><td>0.98</td><td>2.39</td><td class="pnl-neg">-39,763</td><td class="pnl-pos">+552,436</td><td style="color:var(--accent-yellow)">微幅改善，可选</td></tr>
+            <tr style="background:rgba(34,197,94,0.08);font-weight:600;">
+                <td>E: run85+NoTP ⭐</td>
+                <td class="pnl-pos">+856.74%</td>
+                <td style="color:var(--accent-green)">-5.03%</td>
+                <td class="pnl-pos">1.06</td>
+                <td class="pnl-pos">2.62</td>
+                <td>-10,340</td>
+                <td class="pnl-pos">+579,395</td>
+                <td style="color:var(--accent-green)">最优！回撤+PF双改善</td>
+            </tr>
         </tbody>
     </table>
-    <div class="hint">核心改善：B 的 CLOSE_SHORT 从 -59k 翻正到 +3.3k，+62k 摆幅。C 单独增量边际，D 增量主要来自 B。</div>
+    <div class="hint">
+        <strong>消融结论：</strong>
+        ① block=high_vol,trend 必须保留（-54pp）
+        ② confirm_min=3 是甜蜜点（2太松，4杀死SPOT_SELL）
+        ③ short_threshold=40 优于 38（-28pp）
+        ④ <strong>NoTP退出是唯一有效叠加</strong>：回撤 -5.03%、pPF 2.62、合约PF翻正1.06
+    </div>
 
-    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">第十二轮验证（regime-specific 门槛）</h4>
-    <table class="param-table">
-        <thead>
-            <tr><th>变体</th><th>收益</th><th>MaxDD</th><th>pPF</th><th>结论</th></tr>
-        </thead>
-        <tbody>
-            <tr><td>C: regime 门槛35（neutral/high_vol）</td><td>+751.57%</td><td>-7.49%</td><td>1.60</td><td>0 增量 — 这些 regime 的开仓 SS 已 ≥35</td></tr>
-            <tr><td>D: NoTP + regime 门槛</td><td>+779.37%</td><td>-5.63%</td><td>1.78</td><td>增量全来自 NoTP</td></tr>
-        </tbody>
-    </table>
-    <div class="hint">结论：Codex 实验3（分regime门槛）无增量。v4.4 只需加 NoTP 退出即可。</div>
-
-    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">关键 Run 关联（版本选择器可直接查看）</h4>
+    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">关键 Run 关联</h4>
     <table class="param-table">
         <thead>
             <tr><th>Run</th><th>标签</th><th>区间</th><th>收益</th><th>MaxDD</th><th>pPF</th><th>用途</th></tr>
         </thead>
         <tbody>
-            <tr><td>#62</td><td>live-v6-sl16-c35m3-blkhv</td><td>2025-01~2026-01</td><td class="pnl-pos">+881.93%</td><td>-4.43%</td><td>2.17</td><td>v4.3 主线基线</td></tr>
-            <tr><td>#64</td><td>live-v7-sl14-c35m3-blkhv</td><td>2025-01~2026-01</td><td class="pnl-pos">+867.19%</td><td><strong>-3.96%</strong></td><td>2.16</td><td>备线（回撤优先）</td></tr>
-            <tr><td>#63</td><td>oos-v13-sl16-c35m3-blkhv</td><td>2024-01~2024-12</td><td class="pnl-pos">+95.98%</td><td>-19.24%</td><td>1.45</td><td>OOS校验（-0.16）</td></tr>
+            <tr><td>#85</td><td>short40+blk-hv,trend+c35m3</td><td>2025-01~2026-01</td><td class="pnl-pos">+857.86%</td><td>-6.51%</td><td>2.35</td><td>v4.5 基线</td></tr>
+            <tr><td>#86</td><td>OOS run#85</td><td>2024-01~2024-12</td><td class="pnl-pos">+81.45%</td><td>-19.71%</td><td>1.35</td><td>OOS校验</td></tr>
             <tr style="background:rgba(34,197,94,0.06);">
-                <td><strong>R11-B</strong></td>
-                <td>NoTP退出16bar+run62</td>
+                <td><strong>R13-E</strong></td>
+                <td>run85+NoTP16bar</td>
                 <td>2025-01~2026-01</td>
-                <td class="pnl-pos"><strong>+779.37%</strong></td>
-                <td><strong>-5.63%</strong></td>
-                <td><strong>1.78</strong></td>
-                <td><strong>v4.4 候选 ⭐</strong></td>
+                <td class="pnl-pos"><strong>+856.74%</strong></td>
+                <td><strong>-5.03%</strong></td>
+                <td><strong>2.62</strong></td>
+                <td><strong>v4.5 上线候选 ⭐</strong></td>
             </tr>
-            <tr><td>#69</td><td>live-v10-sl16-short35</td><td>2025-01~2026-01</td><td class="pnl-pos">+968.33%</td><td>-6.81%</td><td>2.70</td><td>激进候选（OOS降，暂不上线）</td></tr>
+            <tr><td>#62</td><td>v4.3主线(sl16-c35m3-blkhv)</td><td>2025-01~2026-01</td><td class="pnl-pos">+881.93%</td><td>-4.43%</td><td>2.17</td><td>前主线（Codex数据）</td></tr>
+            <tr><td>#69</td><td>激进候选(short35)</td><td>2025-01~2026-01</td><td class="pnl-pos">+968.33%</td><td>-6.81%</td><td>2.70</td><td>激进（OOS降，暂不上线）</td></tr>
         </tbody>
     </table>
-    <div class="hint">说明：Run#62 的 Codex 数据(+881%) 与 A/B 框架(+751%) 存在差异，因计算路径和信号预处理略有不同。相对对比（vs 基线的增量）是一致的。</div>
 </div>
 
 <div class="card section">
-    <h3 class="card-title">⚙️ v4.4 主线参数（Run#62 + NoTP 退出）</h3>
+    <h3 class="card-title">⚙️ v4.5 上线参数集</h3>
     <table class="param-table">
         <thead>
             <tr><th>参数组</th><th>参数</th><th>值</th><th>说明</th></tr>
@@ -180,69 +190,65 @@
         <tbody>
             <tr><td>多周期</td><td><code>decision_tfs</code></td><td>15m,1h,4h,24h</td><td>日线级趋势锚定保留 24h</td></tr>
             <tr><td>融合阈值</td><td><code>consensus_min_strength / coverage_min</code></td><td>40 / 0.5</td><td>共识强度与覆盖率下限</td></tr>
-            <tr><td>入场阈值</td><td><code>sell/buy/short/long_threshold</code></td><td>18 / 25 / 25 / 30</td><td>实盘口径主线</td></tr>
-            <tr><td>止损止盈</td><td><code>short_sl / short_tp / long_sl / long_tp</code></td><td>-0.16 / 0.6 / -0.1 / 0.4</td><td>v4.3 核心: short_sl 收敛到 -0.16</td></tr>
+            <tr style="background:rgba(34,197,94,0.06);">
+                <td><strong>入场阈值</strong> <span class="new-tag">v4.5</span></td>
+                <td><code>short_threshold</code></td>
+                <td><strong>40</strong></td>
+                <td><strong>v4.3:25→v4.5:40，过滤低质量开空</strong></td>
+            </tr>
+            <tr><td>入场阈值</td><td><code>sell/buy/long_threshold</code></td><td>18 / 25 / 30</td><td>保持</td></tr>
+            <tr><td>止损止盈</td><td><code>short_sl / short_tp / long_sl / long_tp</code></td><td>-0.16 / 0.6 / -0.1 / 0.4</td><td>v4.3 收敛，保持</td></tr>
             <tr><td>分段止盈</td><td><code>use_partial_tp_v3</code></td><td>true</td><td>早锁利：TP1=12%，TP2=25%</td></tr>
             <tr style="background:rgba(34,197,94,0.06);">
-                <td><strong>NoTP退出</strong> <span class="new-tag">v4.4</span></td>
+                <td><strong>NoTP退出</strong> <span class="new-tag">v4.5</span></td>
                 <td><code>no_tp_exit_bars / no_tp_exit_min_pnl</code></td>
                 <td><strong>16 / 0.03</strong></td>
                 <td><strong>空单持仓≥16bar + 未达TP1 + 盈利&lt;3% → 平仓</strong></td>
             </tr>
-            <tr><td>SPOT_SELL过滤</td><td><code>use_spot_sell_confirm</code></td><td>true</td><td>SS≥35 启动确认</td></tr>
-            <tr><td>SPOT_SELL过滤</td><td><code>spot_sell_confirm_ss / min</code></td><td>35 / 3</td><td>确认项不足则阻断卖出</td></tr>
-            <tr><td>SPOT_SELL过滤</td><td><code>spot_sell_regime_block</code></td><td>high_vol</td><td>高波动段禁卖</td></tr>
-            <tr><td>Regime门控</td><td><code>use_regime_short_gate</code></td><td>true</td><td>low_vol_trend 抬高做空门槛</td></tr>
+            <tr><td>SPOT_SELL过滤</td><td><code>use_spot_sell_confirm / ss / min</code></td><td>true / 35 / 3</td><td>confirm_min=3 是甜蜜点</td></tr>
+            <tr style="background:rgba(34,197,94,0.06);">
+                <td><strong>SPOT_SELL屏蔽</strong> <span class="new-tag">v4.5</span></td>
+                <td><code>spot_sell_regime_block</code></td>
+                <td><strong>high_vol,trend</strong></td>
+                <td><strong>趋势段误卖实锤修复（OOS trend +12.9k）</strong></td>
+            </tr>
             <tr><td>Regime门控</td><td><code>regime_short_gate_add</code></td><td>35</td><td>仅 low_vol_trend 生效</td></tr>
-            <tr><td>增强开关</td><td><code>use_microstructure / use_dual_engine / use_vol_target</code></td><td>true / true / true</td><td>回测与实盘参数保持一致</td></tr>
-            <tr><td>保护</td><td><code>hard_stop_loss / prot_global_dd_limit_pct</code></td><td>-0.28 / 0.15</td><td>跳空硬止损 + 全局回撤停机</td></tr>
+            <tr><td>增强开关</td><td><code>use_microstructure / use_dual_engine / use_vol_target</code></td><td>true / true / true</td><td>保持</td></tr>
+            <tr><td>保护</td><td><code>hard_stop_loss / prot_global_dd_limit_pct</code></td><td>-0.28 / 0.15</td><td>保持</td></tr>
         </tbody>
     </table>
 </div>
 
 <div class="card section">
-    <h3 class="card-title">🧪 优化历程（时间线）</h3>
+    <h3 class="card-title">🧪 优化历程</h3>
     <div class="timeline">
         <div class="round">
             <div class="round-date">2026-02-14 最新</div>
-            <div class="round-title">第十二轮: regime-specific short_threshold（Codex 实验3）</div>
-            <div class="round-body">neutral/high_vol/high_vol_choppy 门槛提高到 35 → <strong>0 增量</strong>。原因：这些 regime 下的开仓 SS 已 ≥35。结论：不采用。</div>
-        </div>
-        <div class="round">
-            <div class="round-date">2026-02-14</div>
-            <div class="round-title">第十一轮: P1a NoTP 退出 + P1b neutral 中分 SS 降卖 ⭐</div>
+            <div class="round-title">第十三轮: run#85 基线 3 维消融 ⭐</div>
             <div class="round-body">
-                B(NoTP 退出 16bar)：<strong>收益 +27.8pp、回撤 +1.86pp、CLOSE_SHORT 翻正 (+62k)</strong>。解决核心瓶颈：121 笔未达 TP1 空单的亏损。<br>
-                C(neutral SS50~70 降卖 50%)：+3.97pp 边际改善。D(B+C)增量主要来自 B。
+                8 组矩阵验证：① block=hv+trend 必须保留（去掉 trend 减 54pp）② confirm_min=3 甜蜜点（4 杀死 SPOT_SELL）
+                ③ threshold=40 优于 38 ④ <strong>E(run85+NoTP) 最优：pPF 2.62、回撤 -5.03%、合约 PF 翻正 1.06</strong>
             </div>
         </div>
         <div class="round">
             <div class="round-date">2026-02-14</div>
-            <div class="round-title">第十轮: 双 MACD 共振 A/B（全周期）</div>
-            <div class="round-body">新增快速 MACD(5,10,5) 作为辅助维度，当快慢 MACD 同向时 +8 分。测试中，不影响当前主线。</div>
+            <div class="round-title">第十二轮: regime-specific short_threshold</div>
+            <div class="round-body">neutral/high_vol 门槛35 → 0增量。这些 regime 的开仓 SS 已 ≥35，不需要。</div>
         </div>
         <div class="round">
             <div class="round-date">2026-02-14</div>
-            <div class="round-title">第九轮: SPOT_SELL 质量（G 变体 SS70min2+cd18）</div>
-            <div class="round-body">确认 SS=70 min=2 + spot_cooldown=18 最优。收益 +760.7% / pPF 1.96 / SPOT_SELL +263k。</div>
+            <div class="round-title">第十一轮: P1a NoTP退出 + P1b neutral降卖</div>
+            <div class="round-body">B(NoTP退出16bar) 收益+27.8pp、CLOSE_SHORT翻正。首次验证 NoTP 有效性。</div>
         </div>
         <div class="round">
             <div class="round-date">2026-02-14</div>
-            <div class="round-title">第八轮: LVT 门控 A/B（E 变体 +35）</div>
-            <div class="round-body">low_vol_trend 做空门控从 +15 提升到 +35，CLOSE_SHORT -87k→-45k。成为实盘口径基线。</div>
+            <div class="round-title">P0修复 + run#62 live_config 固化</div>
+            <div class="round-body">修复 use_spot_sell_confirm 前视 bug (ema20/vol_now)。固化 short_sl=-0.16, confirm35×3, block=high_vol。</div>
         </div>
         <div class="round">
             <div class="round-date">2026-02-14</div>
-            <div class="round-title">P0 修复: 前视 bug</div>
-            <div class="round-body">
-                修复 use_spot_sell_confirm 路径中两处前视 bug：<br>
-                ema20 使用 idx+1 → idx（不含当前 bar close）；vol_now 使用 idx → idx-1（仅已完成 bar）。
-            </div>
-        </div>
-        <div class="round">
-            <div class="round-date">2026-02-14</div>
-            <div class="round-title">live_config 固化 run#62</div>
-            <div class="round-body">short_sl=-0.25→-0.16, confirm=True, ss=35, min=3, block=high_vol。生产与回测参数对齐。</div>
+            <div class="round-title">第八~十轮: LVT门控 / SPOT_SELL质量 / 双MACD</div>
+            <div class="round-body">E:LVT+35、G:SS70min2+cd18、双MACD共振（测试中）。</div>
         </div>
     </div>
 </div>
@@ -250,10 +256,10 @@
 <div class="card section">
     <h3 class="card-title">📋 下一步</h3>
     <ul>
-        <li><strong>待上线：</strong>将 <code>no_tp_exit_bars=16, no_tp_exit_min_pnl=0.03</code> 固化到 <code>live_config.py</code> 作为 v4.4 默认。</li>
-        <li><strong>待 OOS 验证：</strong>NoTP 退出在 2024 年 OOS 的表现，确认 pPF ≥ 1.45。</li>
-        <li><strong>观察中：</strong>Run#69（short_threshold=35 全局）激进候选，OOS pPF=1.39 偏低，暂不上线。</li>
-        <li><strong>已否决：</strong>regime-specific 门槛 35（第十二轮，0 增量）、neutral 降卖 50%（边际改善不明显）。</li>
+        <li><strong>待 OOS 验证：</strong>v4.5（run#85+NoTP）在 2024 年 OOS 表现，确认 pPF 不下降。</li>
+        <li><strong>可选微调：</strong>D2(short_threshold=42) 微幅改善，可在 NoTP 基础上叠加验证。</li>
+        <li><strong>已否决：</strong>confirm_min=4（严重退化）、confirm_min=2（-48pp）、block 仅 high_vol（-54pp）。</li>
+        <li><strong>观察中：</strong>run#69(short35全局) 激进候选，OOS pPF=1.39 偏低。</li>
     </ul>
 </div>
 
@@ -268,6 +274,6 @@
         <a href="https://invest.executor.life/strategy/current" target="_blank" rel="noopener noreferrer" style="color:var(--accent-blue);">线上策略说明页</a> ·
         <a href="https://invest.executor.life/strategy/multi-tf-daily" target="_blank" rel="noopener noreferrer" style="color:var(--accent-blue);">线上运行结果页</a>
     </p>
-    <div class="hint">最后更新：2026-02-14 · 第十二轮 A/B 完成 · v4.4 = run#62 + NoTP退出16bar</div>
+    <div class="hint">最后更新：2026-02-14 · 第十三轮 8组消融完成 · v4.5 = run#85 + NoTP退出16bar</div>
 </div>
 {% endblock %}

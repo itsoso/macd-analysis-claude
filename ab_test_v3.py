@@ -8,6 +8,7 @@
   python3 ab_test_v3.py --macd             # 第十轮 双MACD共振 A/B (全周期)
   python3 ab_test_v3.py --p1               # 第十一轮 P1a空单NoTP退出 + P1b中分SS降卖
   python3 ab_test_v3.py --regime-st        # 第十二轮 regime-specific门槛 + NoTP 组合
+  python3 ab_test_v3.py --r85              # 第十三轮 run#85基线 3维消融
 """
 import time, json, sys, os
 sys.path.insert(0, os.path.dirname(__file__))
@@ -148,6 +149,8 @@ def main():
     run_p1_ab = '--p1' in sys.argv or os.environ.get('RUN_P1_AB') == '1'
     # 第十二轮: 实验3 regime-specific short_threshold + 组合 NoTP
     run_regime_st = '--regime-st' in sys.argv or os.environ.get('RUN_REGIME_ST') == '1'
+    # 第十三轮: run#85 基线 3维消融 (block × confirm_min × short_threshold)
+    run_r85_sweep = '--r85' in sys.argv or os.environ.get('RUN_R85_SWEEP') == '1'
 
     # ── 研究口径基线 (run#43) ──
     stable_base = {
@@ -164,7 +167,40 @@ def main():
         'use_spot_sell_confirm': False,
     }
 
-    if run_regime_st:
+    if run_r85_sweep:
+        # ── 第十三轮: run#85 基线 3 维消融 ──
+        # 基线 = run#85: short_threshold=40, block=high_vol,trend, confirm_min=3
+        # 扫 3 维: block(3) + confirm_min(3) + short_threshold(3) = 分别消融 + 最优候选
+        r85_base = {
+            **stable_base,
+            'use_microstructure': True,
+            'use_dual_engine': True,
+            'use_vol_target': True,
+            'regime_short_gate_add': 35,
+            'short_sl': -0.16,
+            'use_spot_sell_confirm': True,
+            'spot_sell_confirm_ss': 35,
+            'spot_sell_confirm_min': 3,
+            'spot_sell_regime_block': 'high_vol,trend',
+            'short_threshold': 40,
+        }
+        variants = [
+            # A: run#85 基线
+            ("A:run85基线(s40/blk-hv+t/m3)", {**r85_base}),
+            # ── block 消融 (固定 short_threshold=40, confirm_min=3) ──
+            ("B1:blk-hv(仅高波)", {**r85_base, 'spot_sell_regime_block': 'high_vol'}),
+            ("B2:blk-hv+t+lvt(三段)", {**r85_base, 'spot_sell_regime_block': 'high_vol,trend,low_vol_trend'}),
+            # ── confirm_min 消融 (固定 short_threshold=40, block=hv+t) ──
+            ("C1:confirm_min=2", {**r85_base, 'spot_sell_confirm_min': 2}),
+            ("C2:confirm_min=4", {**r85_base, 'spot_sell_confirm_min': 4}),
+            # ── short_threshold 消融 (固定 block=hv+t, confirm_min=3) ──
+            ("D1:short_thr=38", {**r85_base, 'short_threshold': 38}),
+            ("D2:short_thr=42", {**r85_base, 'short_threshold': 42}),
+            # ── 叠加 NoTP 退出 (run#85 + 第十一轮最优) ──
+            ("E:run85+NoTP16bar", {**r85_base, 'no_tp_exit_bars': 16, 'no_tp_exit_min_pnl': 0.03}),
+        ]
+        round_title = "第十三轮: run#85 基线 3维消融 | block × confirm_min × short_threshold"
+    elif run_regime_st:
         # ── 第十二轮: regime-specific short_threshold + NoTP 组合 ──
         # Codex 实验3: neutral/high_vol 用 short_threshold=35, trend/lvt 保持默认25
         # 叠加第十一轮最优变体 B(NoTP退出)
