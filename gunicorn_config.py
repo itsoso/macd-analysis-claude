@@ -11,7 +11,7 @@ import os
 # ============================================================
 bind = "127.0.0.1:5100"
 workers = 3
-worker_class = "sync"
+worker_class = "sync"   # 长请求(如多周期信号)会阻塞当前 worker，timeout=360 避免过早杀进程
 worker_connections = 1000
 timeout = 360           # 多周期信号检测可能需要 3-5 分钟
 keepalive = 5

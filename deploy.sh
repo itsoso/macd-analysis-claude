@@ -30,9 +30,16 @@ else
     echo "  交易引擎未运行。"
 fi
 
-# 2. 拉取最新代码
+# 2. 拉取最新代码（若服务器有本地修改会先提示，避免误删）
 echo ""
 echo "[2/4] 拉取最新代码..."
+DIRTY=$($SSH_CMD "cd $REMOTE_DIR && git status --porcelain" 2>/dev/null || true)
+if [ -n "$DIRTY" ] && [ "$1" != "--force" ]; then
+    echo "  ⚠️  服务器存在未提交修改，直接 reset 将永久丢失："
+    echo "$DIRTY" | head -5
+    echo "  请先在服务器上 git stash 或提交后再部署，或执行: bash deploy.sh --force"
+    exit 1
+fi
 $SSH_CMD "cd $REMOTE_DIR && git reset --hard HEAD && git pull origin main"
 
 # 3. 同步回测数据（本地 data/backtests/*.db → 服务器，页面展示用）

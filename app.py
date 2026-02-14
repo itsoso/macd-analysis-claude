@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import timedelta
 from functools import wraps
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,14 +19,29 @@ from date_range_report import load_latest_report_from_db
 from web_routes import register_page_routes, register_result_api_routes
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'macd-analysis-secret-key-2026-change-in-production')
+# 生产环境应设置 SECRET_KEY，否则会话可被伪造；未设置时使用临时密钥并告警
+_secret = os.environ.get('SECRET_KEY')
+app.secret_key = _secret or os.urandom(24).hex()
+if not _secret:
+    import warnings
+    warnings.warn('SECRET_KEY 未设置，使用临时密钥；生产环境请设置 SECRET_KEY', UserWarning)
 
 # ======================================================
-#   用户认证
+#   用户认证（默认 admin/system123；正式上线时用 ADMIN_PASSWORD 或 ADMIN_PASSWORD_HASH 覆盖）
 # ======================================================
-USERS = {
-    'admin': generate_password_hash('system123'),
-}
+def _build_users():
+    admin_user = os.environ.get('ADMIN_USER', 'admin')
+    pwd = os.environ.get('ADMIN_PASSWORD')
+    pwd_hash = os.environ.get('ADMIN_PASSWORD_HASH')
+    if pwd_hash:
+        return {admin_user: pwd_hash}
+    if pwd:
+        return {admin_user: generate_password_hash(pwd)}
+    return {admin_user: generate_password_hash('system123')}
+
+
+USERS = _build_users()
+SESSION_LIFETIME_DAYS = int(os.environ.get('SESSION_LIFETIME_DAYS', '7'))
 
 
 def login_required(f):
@@ -70,7 +86,7 @@ def login():
             session['logged_in'] = True
             session['username'] = username
             session.permanent = True
-            app.permanent_session_lifetime = __import__('datetime').timedelta(days=7)
+            app.permanent_session_lifetime = timedelta(days=SESSION_LIFETIME_DAYS)
             next_url = request.args.get('next') or request.form.get('next') or url_for('page_overview')
             return redirect(next_url)
         else:
@@ -865,6 +881,7 @@ def api_live_test_signal_multi():
     output_file = os.path.join(BASE_DIR, 'multi_signal_result.json')
 
     try:
+        # 同步 subprocess 会占用当前 worker 至多 timeout；sync worker 下会阻塞其他请求
         # 超时 = 300s (线上服务器配置较低, 9个周期可能需要2-4分钟)
         r = subprocess.run(
             [sys.executable, 'live_runner.py', '--test-signal-multi',

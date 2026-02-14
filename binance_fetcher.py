@@ -39,7 +39,10 @@ def _try_load_local(symbol: str, interval: str, days: int) -> pd.DataFrame | Non
 
     try:
         df = pd.read_parquet(path)
-    except Exception:
+    except Exception as e:
+        # 区分文件不存在/损坏/权限等，避免静默传播到回测
+        import sys
+        print(f"[binance_fetcher] 读取 Parquet 失败 {path!r}: {type(e).__name__}: {e}", file=sys.stderr)
         return None
 
     if df is None or len(df) < 100:
