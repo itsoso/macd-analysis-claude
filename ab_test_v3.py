@@ -134,8 +134,8 @@ def _run_variant(label, cfg_overrides, all_data, decision_tfs, tf_score_index):
 def main():
     all_data, decision_tfs, tf_score_index = _load_data_and_signals()
 
-    # ── 第五轮: 精简消融 — LVT门控梯度 × spot_sell_cap ──
-    # 硬止损在 bar 级回测中无法验证(实盘通过交易所止损限价单实现)
+    # ── 第六轮: P0 SPOT_SELL尾部收敛 + 空头门控强化 ──
+    # Codex: trend+SS>=100 SPOT_SELL 拖累 -$129k (21笔, 18亏)
     v4_base = {
         'short_threshold': 25, 'short_sl': -0.25, 'short_tp': 0.60,
         'long_sl': -0.10, 'short_trail': 0.15, 'long_trail': 0.12,
@@ -148,32 +148,43 @@ def main():
     variants = [
         ("A:v4基线", {**v4_base}),
 
-        # ── LVT 门控梯度 (Codex: low_vol_trend净利仅+$8k, pPF=1.06) ──
-        ("B:LVT+10", {**v4_base,
-            'use_regime_short_gate': True, 'regime_short_gate_add': 10,
-            'regime_short_gate_regimes': 'low_vol_trend'}),
-        ("C:LVT+15", {**v4_base,
-            'use_regime_short_gate': True, 'regime_short_gate_add': 15,
-            'regime_short_gate_regimes': 'low_vol_trend'}),
-        ("D:LVT+20", {**v4_base,
-            'use_regime_short_gate': True, 'regime_short_gate_add': 20,
-            'regime_short_gate_regimes': 'low_vol_trend'}),
-
-        # ── spot_sell_cap 比例方案 ──
-        ("E:卖出cap30%", {**v4_base,
-            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.30}),
-        ("F:卖出cap20%", {**v4_base,
+        # ── P0-1: SPOT_SELL 趋势高SS确认 (trend+SS>=100 是 -$129k 拖累源) ──
+        ("B:确认SS100", {**v4_base,
+            'use_spot_sell_confirm': True,
+            'spot_sell_confirm_ss': 100, 'spot_sell_confirm_min': 3}),
+        ("C:确认SS80", {**v4_base,
+            'use_spot_sell_confirm': True,
+            'spot_sell_confirm_ss': 80, 'spot_sell_confirm_min': 2}),
+        ("D:cap20%", {**v4_base,
             'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.20}),
+        ("E:确认+cap", {**v4_base,
+            'use_spot_sell_confirm': True,
+            'spot_sell_confirm_ss': 100, 'spot_sell_confirm_min': 3,
+            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.20}),
+        ("F:趋势禁卖", {**v4_base,
+            'spot_sell_regime_block': 'trend'}),
 
-        # ── 最佳 LVT + cap 组合 ──
-        ("G:LVT+15+cap30%", {**v4_base,
+        # ── P0-2: 空头门控强化 (更大gate_add + neutral扩展) ──
+        ("G:LVT+25", {**v4_base,
+            'use_regime_short_gate': True, 'regime_short_gate_add': 25,
+            'regime_short_gate_regimes': 'low_vol_trend'}),
+        ("H:LVT+35", {**v4_base,
+            'use_regime_short_gate': True, 'regime_short_gate_add': 35,
+            'regime_short_gate_regimes': 'low_vol_trend'}),
+        ("I:LVT+neutral+15", {**v4_base,
             'use_regime_short_gate': True, 'regime_short_gate_add': 15,
-            'regime_short_gate_regimes': 'low_vol_trend',
-            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.30}),
+            'regime_short_gate_regimes': 'low_vol_trend,neutral'}),
+
+        # ── P1: 最佳组合候选 ──
+        ("J:确认+LVT+25", {**v4_base,
+            'use_spot_sell_confirm': True,
+            'spot_sell_confirm_ss': 100, 'spot_sell_confirm_min': 3,
+            'use_regime_short_gate': True, 'regime_short_gate_add': 25,
+            'regime_short_gate_regimes': 'low_vol_trend'}),
     ]
 
     print(f"\n{'='*90}")
-    print(f"  第五轮消融: LVT门控×spot_sell_cap | {TRADE_START} ~ {TRADE_END} | ${INITIAL_CAPITAL:,}")
+    print(f"  第六轮: SPOT_SELL尾部收敛 + 空头门控强化 | {TRADE_START} ~ {TRADE_END} | ${INITIAL_CAPITAL:,}")
     print(f"{'='*90}")
 
     results = []

@@ -265,15 +265,18 @@ class StrategyConfig:
     use_regime_short_gate: bool = False    # 启用 regime 做空门控
     regime_short_gate_add: float = 15     # 在 gate regime 中, short_threshold += 此值
     regime_short_gate_regimes: str = 'low_vol_trend'  # 仅 low_vol_trend (trend空头+$40k,不应门控)
-    # SPOT_SELL 高分确认过滤 (A/B测试:略负面, 减少了有效卖出)
-    use_spot_sell_confirm: bool = False # SPOT_SELL二次确认
-    spot_sell_confirm_ss: float = 50    # SS>=此值时需要确认
-    spot_sell_confirm_min: int = 2      # 至少需要满足的确认条件数
+    # ── SPOT_SELL 风控 (第六轮A/B验证 run#38) ──
+    # v4.2: confirm_ss100 启用 → pPF 1.92→1.95, trend regime pPF 1.30→1.47
+    # 趋势禁卖(spot_sell_regime_block='trend')可达 pPF 2.25/DD -7.89%, 但-37pp收益
+    use_spot_sell_confirm: bool = True  # 高SS确认过滤(trend+SS>=100曾拖累-$129k)
+    spot_sell_confirm_ss: float = 100   # SS>=此值时需要额外确认(EMA/量/ATR)
+    spot_sell_confirm_min: int = 3      # 至少需要满足的确认条件数(EMA20下/RSI<50/ATR>2%)
     # SPOT_SELL 尾部风控: 限制单笔卖出比例
-    # A/B 验证: 固定金额上限($50K)伤害收益(+5751), 改为比例上限
-    use_spot_sell_cap: bool = False     # 启用单笔卖出比例上限 (默认关闭, 待比例方案A/B验证)
+    # 第六轮A/B: cap20%损收益-71pp, 不推荐单独使用
+    use_spot_sell_cap: bool = False     # 启用单笔卖出比例上限
     spot_sell_max_pct: float = 0.30     # 单笔卖出不超过当前ETH仓位价值的30%
-    spot_sell_regime_block: str = ''    # 阻止卖出的regime列表(逗号分隔), 如 'low_vol_trend'
+    # 第六轮A/B: 趋势禁卖(F变体)是风险最优方案, 可选启用
+    spot_sell_regime_block: str = ''    # 阻止卖出的regime列表, 如 'trend' (pPF→2.25但-37pp)
     # 仓位管理
     leverage: int = 5
     max_lev: int = 5

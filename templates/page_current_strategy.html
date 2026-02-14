@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}当前最优策略(v4) - 技术分析平台{% endblock %}
+{% block title %}当前最优策略(v4.2) - 技术分析平台{% endblock %}
 
 {% block content %}
 <style>
@@ -69,13 +69,14 @@
 </style>
 
 <div class="strategy-hero">
-    <h1>📌 当前最优策略（v4 — param_sweep 系统性优化）</h1>
-    <p class="tagline">六书融合 · 多周期联合决策 · ETH/USDT · 与逐日回测 Run#33 一致 · 结构化观测链路</p>
+    <h1>📌 当前最优策略（v4.2 — SPOT_SELL 尾部收敛优化）</h1>
+    <p class="tagline">六书融合 · 多周期联合决策 · ETH/USDT · 与逐日回测 Run#38 一致 · 第六轮A/B验证</p>
     <div class="strategy-meta">
         <span class="badge blue">决策周期 15m / 1h / 4h / 24h</span>
         <span class="badge green">分段止盈 v3（+12% / +25%）</span>
         <span class="badge purple">Regime 动态阈值</span>
         <span class="badge yellow">结构化落库 ss/bs/atr/regime</span>
+        <span class="badge orange">SPOT_SELL高SS确认过滤</span>
     </div>
 </div>
 
@@ -83,34 +84,36 @@
     <h3 class="card-title">🎯 策略概要</h3>
     <p style="color: var(--text-secondary); font-size: 14px; line-height: 1.7; margin-bottom: 16px;">
         基于六维融合评分（背离、均线、蜡烛图、布林带、量价、KDJ）在多个时间框架上并行计算<strong>卖出分（SS）</strong>与<strong>买入分（BS）</strong>，
-        通过多周期共识与趋势/Regime 动态阈值决定开平仓。v4 在 v3 早锁利基础上，通过 33 组 param_sweep 系统性优化，收益 +15.6%、回撤改善 27%。
+        通过多周期共识与趋势/Regime 动态阈值决定开平仓。v4.2 在 v4 基础上，通过第六轮 10 组 A/B 验证：
+        (1) 启用 SPOT_SELL 高 SS 确认过滤 → pPF 1.92→1.95，trend regime pPF 1.30→1.47；
+        (2) 验证空头门控/Cap方案均不值得（代价>40pp收益）。
     </p>
     <ul>
-        <li><strong>开空</strong>：SS ≥ 25（v4 降低门槛，增加做空机会），且卖方优势满足 dominance，无冲突、风控与微结构未拦截。</li>
+        <li><strong>开空</strong>：SS ≥ 25（v4 降低门槛），且卖方优势满足 dominance，无冲突、风控与微结构未拦截。</li>
         <li><strong>开多</strong>：BS ≥ 30（long_threshold），且买方优势满足 dominance。</li>
-        <li><strong>卖出现货</strong>：SS ≥ 18（sell_threshold），冷却与趋势底线满足。</li>
-        <li><strong>固定止损</strong>：做空 -25%（v4 放宽），做多 -10%（v4 放宽）；ATR 动态止损关闭（A/B 证明对 ETH 无效）。</li>
+        <li><strong>卖出现货</strong>：SS ≥ 18（sell_threshold），冷却与趋势底线满足。<strong style="color:#e67e22;">v4.2：SS≥100 时需额外确认（EMA/量/ATR 至少3项满足）</strong></li>
+        <li><strong>固定止损</strong>：做空 -25%，做多 -10%；硬断路器 -30%（A/B验证零代价防跳空）；ATR 动态止损关闭（A/B 证明对 ETH 无效）。</li>
         <li><strong>分段止盈 v3</strong>：做空 TP1 在 +12% 平 30%，TP2 在 +25% 再平 30%；做多同理。</li>
-        <li><strong>追踪止损</strong>：做空 trailing 15%（v4 收紧），做多 12%，回撤比 50%。</li>
+        <li><strong>追踪止损</strong>：做空 trailing 15%，做多 12%，回撤比 50%。</li>
         <li><strong>结构化观测</strong>：每笔交易自动记录 ss/bs/atr_pct/regime_label 到 DB，支持精确归因分析。</li>
     </ul>
 </div>
 
 <div class="card">
-    <h3 class="card-title">📊 回测参考（Run#33，2025-01～2026-01）</h3>
+    <h3 class="card-title">📊 回测参考（Run#38，2025-01～2026-01）</h3>
     <div class="stats-grid">
         <div class="stat-card">
             <div class="stat-label">策略收益</div>
-            <div class="stat-value positive">+858.10%</div>
+            <div class="stat-value positive">+850.83%</div>
             <div class="stat-note">vs 买入持有 -13.55%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">Alpha</div>
-            <div class="stat-value positive">+871.65%</div>
+            <div class="stat-value positive">+864.38%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">最大回撤</div>
-            <div class="stat-value" style="color: var(--accent-yellow);">-8.47%</div>
+            <div class="stat-value" style="color: var(--accent-yellow);">-8.48%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">合约 PF</div>
@@ -119,77 +122,77 @@
         </div>
         <div class="stat-card">
             <div class="stat-label">组合 PF</div>
-            <div class="stat-value positive">1.92</div>
+            <div class="stat-value positive">1.95</div>
             <div class="stat-note">含 PARTIAL_TP / SPOT_SELL</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">胜率</div>
-            <div class="stat-value">63.5%</div>
-            <div class="stat-note">249 次平仓</div>
+            <div class="stat-value">62.9%</div>
+            <div class="stat-note">248 次平仓</div>
         </div>
     </div>
     <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--text-primary);">Regime 分段表现</h4>
     <table class="param-table">
         <thead><tr><th>Regime</th><th>笔数</th><th>净 PnL</th><th>pPF</th><th>说明</th></tr></thead>
         <tbody>
-            <tr><td>neutral</td><td>276</td><td class="pnl-pos">+$379,532</td><td>2.99</td><td>主要利润来源</td></tr>
-            <tr><td>high_vol</td><td>44</td><td class="pnl-pos">+$100,773</td><td>4.47</td><td>高波动行情获利丰厚</td></tr>
-            <tr><td>trend</td><td>145</td><td class="pnl-pos">+$82,470</td><td>1.30</td><td>趋势行情盈利但止损较多</td></tr>
-            <tr><td>low_vol_trend</td><td>65</td><td class="pnl-pos">+$8,011</td><td>1.06</td><td>低波动趋势近平，73% 止损来源</td></tr>
-            <tr><td>high_vol_choppy</td><td>5</td><td class="pnl-pos">+$4,612</td><td>14.27</td><td>罕见状态</td></tr>
+            <tr><td>neutral</td><td>272</td><td class="pnl-pos">+$360,997</td><td>2.78</td><td>主要利润来源</td></tr>
+            <tr><td>trend</td><td>140</td><td class="pnl-pos">+$123,789</td><td><strong>1.47</strong></td><td>v4.2 高SS确认 → pPF从1.30↑1.47</td></tr>
+            <tr><td>high_vol</td><td>44</td><td class="pnl-pos">+$95,028</td><td>3.81</td><td>高波动行情获利丰厚</td></tr>
+            <tr><td>low_vol_trend</td><td>62</td><td class="pnl-pos">+$2,253</td><td>1.02</td><td>低波动趋势近平，止损集中区</td></tr>
+            <tr><td>high_vol_choppy</td><td>5</td><td class="pnl-pos">+$3,999</td><td>5.32</td><td>罕见状态</td></tr>
         </tbody>
     </table>
 </div>
 
 <div class="card">
-    <h3 class="card-title">⚙️ 关键参数（v4 — param_sweep 优化后）</h3>
+    <h3 class="card-title">⚙️ 关键参数（v4.2 — 第六轮A/B验证后）</h3>
     <table class="param-table">
         <thead>
-            <tr><th>参数</th><th>v4 值</th><th>v3 值</th><th>变化说明</th></tr>
+            <tr><th>参数</th><th>v4.2 值</th><th>v4 值</th><th>变化说明</th></tr>
         </thead>
         <tbody>
-            <tr><td><code>short_threshold</code></td><td><strong>25</strong></td><td>35</td><td>降低门槛，增加做空机会</td></tr>
-            <tr><td><code>long_threshold</code></td><td>30</td><td>30</td><td>不变</td></tr>
-            <tr><td><code>short_sl</code></td><td><strong>-25%</strong></td><td>-18%</td><td>放宽止损，减少假突破出局</td></tr>
-            <tr><td><code>short_tp</code></td><td><strong>60%</strong></td><td>50%</td><td>目标更高，配合追踪止损</td></tr>
-            <tr><td><code>long_sl</code></td><td><strong>-10%</strong></td><td>-8%</td><td>放宽做多止损</td></tr>
-            <tr><td><code>short_trail</code></td><td><strong>15%</strong></td><td>25%</td><td>收紧追踪，更快锁利</td></tr>
-            <tr><td><code>long_trail</code></td><td><strong>12%</strong></td><td>20%</td><td>收紧追踪</td></tr>
-            <tr><td><code>trail_pullback</code></td><td><strong>50%</strong></td><td>60%</td><td>更敏感的回撤触发</td></tr>
-            <tr><td><code>partial_tp_1_early</code></td><td>12%</td><td>12%</td><td>v3 早锁利保留</td></tr>
-            <tr><td><code>partial_tp_2_early</code></td><td>25%</td><td>25%</td><td>v3 早锁利保留</td></tr>
-            <tr><td><code>use_atr_sl</code></td><td>关</td><td>关</td><td>A/B + param_sweep 双重验证无效</td></tr>
-            <tr><td><code>use_regime_short_gate</code></td><td>关</td><td>—</td><td>新增 regime 做空门控，回撤改善 0.15% 但收益降 50+pp</td></tr>
-            <tr><td><code>use_spot_sell_cap</code></td><td>关</td><td>—</td><td>比例限卖实测削弱收益，不启用</td></tr>
+            <tr><td><code>short_threshold</code></td><td>25</td><td>25</td><td>不变</td></tr>
+            <tr><td><code>short_sl</code></td><td>-25%</td><td>-25%</td><td>不变</td></tr>
+            <tr><td><code>short_tp</code></td><td>60%</td><td>60%</td><td>不变</td></tr>
+            <tr><td><code>long_sl</code></td><td>-10%</td><td>-10%</td><td>不变</td></tr>
+            <tr><td><code>short_trail / long_trail</code></td><td>15% / 12%</td><td>15% / 12%</td><td>不变</td></tr>
+            <tr><td><code>trail_pullback</code></td><td>50%</td><td>50%</td><td>不变</td></tr>
+            <tr><td><code>hard_stop_loss</code></td><td>-30%</td><td>-30%</td><td>硬断路器(A/B验证零代价防跳空)</td></tr>
+            <tr style="background:rgba(46,204,113,0.08)"><td><code>use_spot_sell_confirm</code></td><td><strong style="color:#27ae60;">开</strong></td><td>关</td><td><strong>v4.2新</strong>：SS≥100时需EMA/量/ATR三重确认</td></tr>
+            <tr style="background:rgba(46,204,113,0.08)"><td><code>spot_sell_confirm_ss</code></td><td><strong style="color:#27ae60;">100</strong></td><td>50</td><td>仅过滤极端高SS卖出(trend+SS≥100曾拖累-$129k)</td></tr>
+            <tr style="background:rgba(46,204,113,0.08)"><td><code>spot_sell_confirm_min</code></td><td><strong style="color:#27ae60;">3</strong></td><td>2</td><td>要求全部3项确认(更严格)</td></tr>
+            <tr><td><code>use_regime_short_gate</code></td><td>关</td><td>关</td><td>第六轮验证：gate_add 25/35均不值(代价>40pp)</td></tr>
+            <tr><td><code>use_spot_sell_cap</code></td><td>关</td><td>关</td><td>第六轮验证：cap20%损收益-71pp</td></tr>
+            <tr><td><code>spot_sell_regime_block</code></td><td>空</td><td>空</td><td>备选：='trend'可达pPF 2.25/DD -7.89%但-37pp收益</td></tr>
         </tbody>
     </table>
 </div>
 
 <div class="card">
-    <h3 class="card-title">🔬 第三轮 A/B 消融验证</h3>
+    <h3 class="card-title">🔬 第六轮 A/B 消融验证（v4→v4.2）</h3>
     <p style="color: var(--text-secondary); font-size: 13px; margin-bottom: 12px;">
-        对 v4 基线进行 9 组消融测试，验证每个功能模块的边际贡献：
+        10 组消融测试，聚焦 SPOT_SELL 尾部风控 + 空头门控强化：
     </p>
     <div class="ab-result">
         <div class="ab-card">
-            <div class="ab-label">早期锁利 (v3)</div>
-            <p>v4 vs v2(无早锁): +858% vs +601%</p>
-            <div class="ab-verdict keep">保留 — 贡献 +257pp 收益</div>
+            <div class="ab-label">B: SS≥100 确认过滤</div>
+            <p>pPF 1.92→<strong>1.95</strong>，trend pPF 1.30→1.47，收益仅-8pp</p>
+            <div class="ab-verdict keep">启用 — 几乎零代价过滤趋势中高SS误杀</div>
         </div>
         <div class="ab-card">
-            <div class="ab-label">ATR 动态止损</div>
-            <p>合约 PF 降至 0.99（跌破 1.0）</p>
-            <div class="ab-verdict drop">关闭 — 对 ETH 有害</div>
+            <div class="ab-label">F: 趋势禁卖(备选)</div>
+            <p>pPF 1.92→<strong>2.25</strong>，DD -7.89%（最优），但收益-37pp</p>
+            <div class="ab-verdict keep">备选 — 风险收敛最优(spot_sell_regime_block='trend')</div>
         </div>
         <div class="ab-card">
-            <div class="ab-label">Regime 做空门控</div>
-            <p>回撤 -8.32%（改善 0.15%），收益降 ~50pp</p>
-            <div class="ab-verdict drop">关闭 — 性价比不足</div>
-        </div>
-        <div class="ab-card">
-            <div class="ab-label">SPOT_SELL 比例上限</div>
-            <p>cap30%: SPOT_SELL PnL 从 $334k 降至 $253k</p>
+            <div class="ab-label">D: cap20% 比例上限</div>
+            <p>收益-71pp，SPOT_SELL PnL 从 $335k 降至 $252k</p>
             <div class="ab-verdict drop">关闭 — 削弱核心收益</div>
+        </div>
+        <div class="ab-card">
+            <div class="ab-label">G/H: 空头门控+25/+35</div>
+            <p>gate_add 25: -41pp; gate_add 35: -43pp; neutral扩展: -66pp</p>
+            <div class="ab-verdict drop">关闭 — 任何强度均代价过大</div>
         </div>
     </div>
 </div>
@@ -209,10 +212,16 @@
             <span class="evolution-tag">v3</span>
             <div>早期分段锁利（+12%/+25%），收益跃升至 +806%，回撤 -10.26%。</div>
         </div>
-        <div class="evolution-item active">
+        <div class="evolution-item">
             <span class="evolution-tag">v4</span>
             <div>param_sweep 33 组系统性优化：短阈值降至 25、止损放宽至 -25%、追踪收紧至 15%/12%。
-                收益 +858%（+52pp），回撤 -8.47%（改善 1.79pp）。结构化观测链路落库。</div>
+                收益 +859%（+53pp），回撤 -8.48%（改善 1.78pp）。结构化观测链路落库。</div>
+        </div>
+        <div class="evolution-item active">
+            <span class="evolution-tag">v4.2</span>
+            <div>第六轮 10 组 A/B 验证：启用高 SS 确认过滤（SS≥100 需 EMA/量/ATR 三重确认）。
+                收益 +851%（-8pp），<strong>pPF 1.95</strong>（+1.6%），<strong>trend regime pPF 1.47</strong>（+13%）。
+                硬断路器 -30% 防跳空。2024年OOS验证 Alpha +61%，无过拟合。</div>
         </div>
     </div>
 </div>
@@ -228,7 +237,8 @@
     <div class="monitor-tip">
         <strong>实盘控制面板建议</strong>：多周期信号检测默认勾选 <strong>15m、1h、4h、24h</strong>（与策略决策一致）；
         自动检测间隔建议 <strong>10 分钟</strong>；重点关注各周期 SS/BS 与「动作」「原因」列，多空分歧时显示「多空分歧-观望」。
-        <br><strong>v4 关键变化</strong>：做空门槛从 35 降至 25，追踪止损更紧（15%/12%），止损更宽（-25%/-10%）。
+        <br><strong>v4.2 关键变化</strong>：SS≥100 时启用 EMA/量/ATR 三重确认过滤（trend+SS≥100 曾拖累 -$129k）。
+        备选"风险收敛模式"：spot_sell_regime_block='trend' → pPF 2.25 / DD -7.89%（收益-37pp）。
     </div>
 </div>
 {% endblock %}

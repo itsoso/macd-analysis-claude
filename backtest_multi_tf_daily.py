@@ -407,12 +407,36 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     parser.add_argument('--tag', type=str, default=None, help='策略版本标签')
     parser.add_argument('--fast', action='store_true', default=False,
                         help='[实验性] P0向量化信号计算, 结果与原版存在近似偏差(±1%%), 不建议作为正式策略结论依据')
+    parser.add_argument('--override', action='append', default=[],
+                        help='覆盖配置参数, 格式: key=value (可多次使用, bool用true/false)')
     args, _ = parser.parse_known_args()
 
     TRADE_START = args.start or trade_start or DEFAULT_TRADE_START
     TRADE_END = args.end or trade_end or DEFAULT_TRADE_END
     if args.tag:
         version_tag = args.tag
+
+    # ── 应用 --override 参数 ──
+    if args.override:
+        for ov in args.override:
+            if '=' not in ov:
+                print(f"  ⚠️  忽略无效 override: {ov} (格式: key=value)")
+                continue
+            k, v = ov.split('=', 1)
+            k = k.strip()
+            if k not in DEFAULT_CONFIG:
+                print(f"  ⚠️  忽略未知 override key: {k}")
+                continue
+            orig = DEFAULT_CONFIG[k]
+            if isinstance(orig, bool):
+                DEFAULT_CONFIG[k] = v.lower() in ('true', '1', 'yes')
+            elif isinstance(orig, int):
+                DEFAULT_CONFIG[k] = int(v)
+            elif isinstance(orig, float):
+                DEFAULT_CONFIG[k] = float(v)
+            else:
+                DEFAULT_CONFIG[k] = v
+            print(f"  ✏️  override: {k} = {DEFAULT_CONFIG[k]} (原值: {orig})")
 
     preferred_combo_name = f"四TF联合({'+'.join(DECISION_TFS)})"
     print("=" * 80)
