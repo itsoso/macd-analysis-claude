@@ -182,6 +182,16 @@ STRATEGY_PARAM_VERSIONS = {
         "use_partial_tp_2": True,
         "short_max_hold": 48,
     },
+    "v3": {  # run30 增强参数 (ATR止损 + 空单抑制 + 确认过滤 + 早期止盈)
+        "short_threshold": 35,
+        "long_threshold": 30,
+        "short_sl": -0.18,       # fallback (ATR止损优先)
+        "short_tp": 0.50,
+        "long_tp": 0.40,
+        "partial_tp_1": 0.12,    # 更早锁利 (+12%即触发)
+        "use_partial_tp_2": True,
+        "short_max_hold": 48,
+    },
 }
 _ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v2")
 
@@ -230,8 +240,17 @@ class StrategyConfig:
     use_partial_tp_2: bool = field(default_factory=lambda: _resolve_param("use_partial_tp_2", True))
     partial_tp_2: float = 0.50
     partial_tp_2_pct: float = 0.30
-    use_atr_sl: bool = False
-    atr_sl_mult: float = 3.0
+    use_atr_sl: bool = False            # ATR自适应止损(A/B证明对ETH无效,保留代码供其他币种)
+    atr_sl_mult: float = 2.5            # ATR倍数: 2.5倍ATR作为止损距离
+    atr_sl_floor: float = -0.25         # ATR止损下限(最宽, 高波动时)
+    atr_sl_ceil: float = -0.15          # ATR止损上限(最窄, 低波动时)
+    # <12h 空单抑制 (A/B测试:SS>=42已覆盖所有信号, 无额外过滤效果)
+    use_short_suppress: bool = False    # 抑制低信号强度短期做空
+    short_suppress_ss_min: float = 42   # SS低于此值时抑制
+    # SPOT_SELL 高分确认过滤 (A/B测试:略负面, 减少了有效卖出)
+    use_spot_sell_confirm: bool = False # SPOT_SELL二次确认
+    spot_sell_confirm_ss: float = 50    # SS>=此值时需要确认
+    spot_sell_confirm_min: int = 2      # 至少需要满足的确认条件数
     # 仓位管理
     leverage: int = 5
     max_lev: int = 5
@@ -308,6 +327,21 @@ class StrategyConfig:
     vol_target_lookback_bars: int = 48
     vol_target_min_scale: float = 0.45
     vol_target_max_scale: float = 1.35
+
+    # ── Regime 可调阈值 (供参数扫描) ──
+    regime_vol_high: float = 0.020      # 高波动判定阈值
+    regime_vol_low: float = 0.007       # 低波动判定阈值
+    regime_trend_strong: float = 0.015  # 强趋势判定阈值
+    regime_trend_weak: float = 0.006    # 弱趋势判定阈值
+    regime_atr_high: float = 0.018      # ATR高波动阈值
+    regime_lookback_bars: int = 48      # Regime 回望窗口
+    regime_atr_bars: int = 14           # Regime ATR 计算周期
+
+    # ── 分段止盈增强(v3 早期锁利) ──
+    # A/B 测试: TP1+12%/TP2+25% 比 TP1+15%/TP2+50% 收益+205pp, 回撤更优
+    partial_tp_1_early: float = 0.12    # v3触发TP1 (+12% vs 默认+15%)
+    partial_tp_2_early: float = 0.25    # v3触发TP2 (+25% vs 默认+50%)
+    use_partial_tp_v3: bool = True      # 启用v3分段止盈(早期锁利, A/B已验证)
 
     @classmethod
     def from_optimize_result(cls, filepath: str, timeframe: str = None) -> 'StrategyConfig':

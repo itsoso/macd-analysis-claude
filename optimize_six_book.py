@@ -737,6 +737,22 @@ def _run_strategy_core(
 
     use_atr_sl = config.get('use_atr_sl', False)
     atr_sl_mult = config.get('atr_sl_mult', 3.0)
+    atr_sl_floor = config.get('atr_sl_floor', -0.25)   # ATR止损最宽
+    atr_sl_ceil = config.get('atr_sl_ceil', -0.08)      # ATR止损最窄
+
+    # <12h 空单抑制
+    use_short_suppress = config.get('use_short_suppress', False)
+    short_suppress_ss_min = config.get('short_suppress_ss_min', 55)
+
+    # SPOT_SELL 高分确认过滤
+    use_spot_sell_confirm = config.get('use_spot_sell_confirm', False)
+    spot_sell_confirm_ss = config.get('spot_sell_confirm_ss', 50)
+    spot_sell_confirm_min = config.get('spot_sell_confirm_min', 2)
+
+    # v3 分段止盈（更早锁利）
+    use_partial_tp_v3 = config.get('use_partial_tp_v3', False)
+    partial_tp_1_early = config.get('partial_tp_1_early', 0.12)
+    partial_tp_2_early = config.get('partial_tp_2_early', 0.25)
 
     # 二段止盈
     use_partial_tp_2 = config.get('use_partial_tp_2', False)
@@ -773,18 +789,17 @@ def _run_strategy_core(
     vol_ann = _build_realized_vol_series(primary_df, primary_tf, config)
     regime_precomputed = _build_regime_precomputed(primary_df, config)
 
-    atr_pct_series = None
-    if use_atr_sl:
-        close_prev = close_series.shift(1)
-        tr = pd.concat(
-            [
-                (high_series - low_series).abs(),
-                (high_series - close_prev).abs(),
-                (low_series - close_prev).abs(),
-            ],
-            axis=1,
-        ).max(axis=1)
-        atr_pct_series = (tr.rolling(14, min_periods=3).mean() / close_series).replace([np.inf, -np.inf], np.nan)
+    # ATR%序列 - 始终计算(供日志/regime使用), use_atr_sl控制是否影响止损
+    close_prev = close_series.shift(1)
+    tr = pd.concat(
+        [
+            (high_series - low_series).abs(),
+            (high_series - close_prev).abs(),
+            (low_series - close_prev).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr_pct_series = (tr.rolling(14, min_periods=3).mean() / close_series).replace([np.inf, -np.inf], np.nan)
 
     dyn_vol_series = None
     if use_dynamic_tp:
@@ -880,14 +895,21 @@ def _run_strategy_core(
 
         ss, bs = (pending_ss, pending_bs) if has_pending_signal else (0.0, 0.0)
 
-        # ATR自适应止损
+        # ATR自适应止损 (use_atr_sl=True 时替代固定 short_sl)
         actual_short_sl = short_sl
         actual_long_sl = long_sl
-        if atr_pct_series is not None and idx >= 20:
+        _atr_pct_val = 0.0  # 供日志记录
+        if idx >= 20:
             atr_pct = float(atr_pct_series.iloc[idx - 1]) if idx - 1 < len(atr_pct_series) else float('nan')
             if np.isfinite(atr_pct) and atr_pct > 0:
-                actual_short_sl = max(short_sl, -(atr_pct * atr_sl_mult))
-                actual_long_sl = max(long_sl, -(atr_pct * atr_sl_mult))
+                _atr_pct_val = atr_pct
+                if use_atr_sl:
+                    # ATR止损 = -atr_pct * mult, 限制在 [ceil, floor] 范围内
+                    # 低波动(ATR 2%): -5% 紧保护; 高波动(ATR 10%): -25% 给空间
+                    atr_derived_sl = -(atr_pct * atr_sl_mult)
+                    atr_derived_sl = max(atr_sl_floor, min(atr_sl_ceil, atr_derived_sl))
+                    actual_short_sl = atr_derived_sl
+                    actual_long_sl = max(long_sl, atr_derived_sl)
 
         # 动态止盈
         actual_short_tp = short_tp
@@ -1030,7 +1052,30 @@ def _run_strategy_core(
                         effective_sell_pct = max(0.02, max_sell)
 
         # 卖出现货 (用 exec_price 执行, 即本bar open)
-        if not trend_floor_active and ss >= effective_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500:
+        # SS高分确认过滤: SS>=阈值时要求额外市场确认(价格/量/RSI)
+        spot_sell_confirmed = True
+        if use_spot_sell_confirm and ss >= spot_sell_confirm_ss:
+            _confirmations = 0
+            # 确认1: 价格在EMA20下方(短期弱势)
+            if idx >= 20:
+                ema20 = float(close_series.iloc[max(0, idx-20):idx+1].mean())
+                if price < ema20:
+                    _confirmations += 1
+            # 确认2: 成交量放大(超过20bar均量)
+            if idx >= 20:
+                vol_mean = float(primary_df['volume'].iloc[max(0, idx-20):idx].mean()) if 'volume' in primary_df.columns else 0
+                vol_now = float(primary_df['volume'].iloc[idx]) if 'volume' in primary_df.columns else 0
+                if vol_mean > 0 and vol_now > vol_mean * 1.1:
+                    _confirmations += 1
+            # 确认3: regime 不是 low_vol_trend (低波动强趋势中不宜卖)
+            _rl = regime_ctl.get('regime_label', 'neutral')
+            if _rl != 'low_vol_trend':
+                _confirmations += 1
+            # 确认4: ATR 表明短期有波动(非横盘)
+            if _atr_pct_val > 0.02:
+                _confirmations += 1
+            spot_sell_confirmed = _confirmations >= spot_sell_confirm_min
+        if not trend_floor_active and ss >= effective_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500 and spot_sell_confirmed:
             eng.spot_sell(exec_price, dt, effective_sell_pct, f"卖出 SS={ss:.0f}")
             spot_cd = effective_spot_cooldown
 
@@ -1041,10 +1086,16 @@ def _run_strategy_core(
         if trend_is_up and trend_enhance_active:
             effective_short_threshold = max(cur_short_threshold, 55)
             sell_dom = (ss > bs * max(2.5, entry_dom_ratio)) if bs > 0 else True
-        if short_cd == 0 and ss >= effective_short_threshold and not eng.futures_short and sell_dom and not in_conflict and can_open_risk and not micro_block_short:
+        # <12h 空单抑制: SS低于阈值的做空信号预期持仓短,净亏损
+        short_suppressed = False
+        if use_short_suppress and ss < short_suppress_ss_min and ss >= effective_short_threshold:
+            short_suppressed = True
+        if short_cd == 0 and ss >= effective_short_threshold and not eng.futures_short and sell_dom and not in_conflict and can_open_risk and not micro_block_short and not short_suppressed:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
-            eng.open_short(exec_price, dt, margin, actual_lev, f"开空 {actual_lev}x")
+            _regime_label = regime_ctl.get('regime_label', 'neutral')
+            eng.open_short(exec_price, dt, margin, actual_lev,
+                f"开空 {actual_lev}x SS={ss:.0f} BS={bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}")
             short_max_pnl = 0; short_bars = 0; short_cd = cooldown
             short_just_opened = True; short_partial_done = False; short_partial2_done = False
 
@@ -1054,7 +1105,10 @@ def _run_strategy_core(
             pnl_r = eng.futures_short.calc_pnl(price) / eng.futures_short.margin
 
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
-            if use_partial_tp and not short_partial_done and pnl_r >= partial_tp_1:
+            # v3分段止盈: 更早触发 (+12%/+25% vs 默认 +15%/+50%)
+            _eff_partial_tp_1 = partial_tp_1_early if use_partial_tp_v3 else partial_tp_1
+            _eff_partial_tp_2 = partial_tp_2_early if use_partial_tp_v3 else partial_tp_2
+            if use_partial_tp and not short_partial_done and pnl_r >= _eff_partial_tp_1:
                 old_qty = eng.futures_short.quantity
                 partial_qty = old_qty * partial_tp_1_pct
                 actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)  # 空头平仓买入, 价格偏高
@@ -1079,7 +1133,7 @@ def _run_strategy_core(
                     margin_released=margin_released, partial_ratio=partial_tp_1_pct)
 
             # 二段止盈 (含滑点 + 修复frozen_margin泄漏, 使用elif避免同bar双触发)
-            elif use_partial_tp_2 and short_partial_done and not short_partial2_done and pnl_r >= partial_tp_2:
+            elif use_partial_tp_2 and short_partial_done and not short_partial2_done and pnl_r >= _eff_partial_tp_2:
                 old_qty = eng.futures_short.quantity
                 partial_qty = old_qty * partial_tp_2_pct
                 actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)
@@ -1180,7 +1234,9 @@ def _run_strategy_core(
         if long_cd == 0 and trend_long_bs >= effective_long_threshold and not eng.futures_long and buy_dom and not in_conflict and can_open_risk and not micro_block_long:
             margin = eng.available_margin() * cur_margin_use
             actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
-            eng.open_long(exec_price, dt, margin, actual_lev, f"开多 {actual_lev}x")
+            _regime_label = regime_ctl.get('regime_label', 'neutral')
+            eng.open_long(exec_price, dt, margin, actual_lev,
+                f"开多 {actual_lev}x SS={ss:.0f} BS={bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}")
             long_max_pnl = 0; long_bars = 0; long_cd = cooldown
             long_just_opened = True; long_partial_done = False; long_partial2_done = False
 
@@ -1190,7 +1246,9 @@ def _run_strategy_core(
             pnl_r = eng.futures_long.calc_pnl(price) / eng.futures_long.margin
 
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
-            if use_partial_tp and not long_partial_done and pnl_r >= partial_tp_1:
+            _eff_partial_tp_1_long = partial_tp_1_early if use_partial_tp_v3 else partial_tp_1
+            _eff_partial_tp_2_long = partial_tp_2_early if use_partial_tp_v3 else partial_tp_2
+            if use_partial_tp and not long_partial_done and pnl_r >= _eff_partial_tp_1_long:
                 old_qty = eng.futures_long.quantity
                 partial_qty = old_qty * partial_tp_1_pct
                 actual_close_p = price * (1 - FuturesEngine.SLIPPAGE)  # 多头平仓卖出, 价格偏低
@@ -1215,7 +1273,7 @@ def _run_strategy_core(
                     margin_released=margin_released, partial_ratio=partial_tp_1_pct)
 
             # 二段止盈 (含滑点 + 修复frozen_margin泄漏, 使用elif避免同bar双触发)
-            elif use_partial_tp_2 and long_partial_done and not long_partial2_done and pnl_r >= partial_tp_2:
+            elif use_partial_tp_2 and long_partial_done and not long_partial2_done and pnl_r >= _eff_partial_tp_2_long:
                 old_qty = eng.futures_long.quantity
                 partial_qty = old_qty * partial_tp_2_pct
                 actual_close_p = price * (1 - FuturesEngine.SLIPPAGE)
