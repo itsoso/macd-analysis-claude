@@ -136,6 +136,7 @@ def main():
 
     # ── 第三轮: v4基线 + 尾部损失控制消融 ──
     # v4 基线参数 (param_sweep 系统性优化)
+    # v4 基线参数 (param_sweep 系统性优化)
     v4_base = {
         'short_threshold': 25, 'short_sl': -0.25, 'short_tp': 0.60,
         'long_sl': -0.10, 'short_trail': 0.15, 'long_trail': 0.12,
@@ -144,57 +145,57 @@ def main():
         'partial_tp_1_early': 0.12, 'partial_tp_2_early': 0.25,
         'use_spot_sell_cap': False,
         'use_regime_short_gate': False,
+        'hard_stop_loss': -0.35,
     }
     variants = [
         # ── 基线对照 ──
         ("A:v4基线", {
             **v4_base,
         }),
-        ("B:v2基线(无早锁)", {
+
+        # ── 硬断路器: 不同绝对止损上限 (Codex/Claude 共同建议) ──
+        ("B:硬止损-30%", {
             **v4_base,
-            'use_partial_tp_v3': False,
-            'short_threshold': 35, 'short_sl': -0.18, 'short_tp': 0.50,
-            'long_sl': -0.08, 'short_trail': 0.25, 'long_trail': 0.20,
-            'trail_pullback': 0.60,
+            'hard_stop_loss': -0.30,
+        }),
+        ("C:硬止损-35%", {
+            **v4_base,
+            'hard_stop_loss': -0.35,
+        }),
+        ("D:硬止损-40%", {
+            **v4_base,
+            'hard_stop_loss': -0.40,
         }),
 
-        # ── 尾部损失控制: regime-aware 做空门控 ──
-        ("C:regime门控+10", {
+        # ── low_vol_trend-only 做空门控 (Codex洞察: trend空头+$40k不应门控) ──
+        ("E:LVT门控+10", {
             **v4_base,
             'use_regime_short_gate': True, 'regime_short_gate_add': 10,
+            'regime_short_gate_regimes': 'low_vol_trend',
         }),
-        ("D:regime门控+15", {
+        ("F:LVT门控+15", {
             **v4_base,
             'use_regime_short_gate': True, 'regime_short_gate_add': 15,
+            'regime_short_gate_regimes': 'low_vol_trend',
         }),
-        ("E:regime门控+20", {
+        ("G:LVT门控+20", {
             **v4_base,
             'use_regime_short_gate': True, 'regime_short_gate_add': 20,
+            'regime_short_gate_regimes': 'low_vol_trend',
         }),
 
-        # ── spot_sell_cap 比例方案 ──
-        ("F:卖出cap30%", {
-            **v4_base,
-            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.30,
-        }),
-        ("G:卖出cap20%", {
-            **v4_base,
-            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.20,
-        }),
-
-        # ── ATR止损 + regime门控 组合 (GPT建议) ──
-        ("H:ATR3.0+regime+15", {
-            **v4_base,
-            'use_atr_sl': True, 'atr_sl_mult': 3.0,
-            'atr_sl_floor': -0.25, 'atr_sl_ceil': -0.15,
-            'use_regime_short_gate': True, 'regime_short_gate_add': 15,
-        }),
-
-        # ── 全组合: 早锁 + regime门控 + cap ──
-        ("I:早锁+regime+15+cap30%", {
+        # ── 组合: LVT门控 + 硬止损 (风险收敛组合) ──
+        ("H:LVT+15+硬止损35%", {
             **v4_base,
             'use_regime_short_gate': True, 'regime_short_gate_add': 15,
-            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.30,
+            'regime_short_gate_regimes': 'low_vol_trend',
+            'hard_stop_loss': -0.35,
+        }),
+        ("I:LVT+15+硬止损30%", {
+            **v4_base,
+            'use_regime_short_gate': True, 'regime_short_gate_add': 15,
+            'regime_short_gate_regimes': 'low_vol_trend',
+            'hard_stop_loss': -0.30,
         }),
     ]
 

@@ -124,7 +124,8 @@ PARAM_SPACE = {
     'use_atr_sl': [False, True],                         # 基线 False — ATR自适应止损
     # [已移除] use_short_suppress — A/B+param_sweep验证零效果
     'use_spot_sell_cap': [False, True],                  # 基线 False — SPOT_SELL比例上限
-    'use_regime_short_gate': [False, True],              # 基线 False — regime做空门控
+    'use_regime_short_gate': [False, True],              # 基线 False — low_vol_trend做空门控
+    'hard_stop_loss': [-0.30, -0.35, -0.40],             # 基线 -0.35 — 硬断路器绝对止损
 
     # === 优先级 1: 空头风控 ===
     'short_sl': [-0.12, -0.15, -0.18, -0.25],          # 基线 -0.18
@@ -318,11 +319,18 @@ def main():
         # 按综合评分排序: 收益提升 + 回撤改善 + portfolio_PF 提升
         scored = []
         for val, m in param_results:
-            # 综合分 = 收益变化% + 回撤改善(负值=改善) * 5 + pPF变化 * 20
+            # 归一化综合分: 各维度转为相对变化率再加权
+            # 修复 Codex 指出的 *100 导致收益主导问题
+            d_ret_pct = (m['return_pct'] - baseline['return_pct']) / max(abs(baseline['return_pct']), 1) * 100
+            d_dd_pct = (m['max_dd_pct'] - baseline['max_dd_pct']) / max(abs(baseline['max_dd_pct']), 1) * 100
+            d_ppf_pct = (m['portfolio_pf'] - baseline['portfolio_pf']) / max(baseline['portfolio_pf'], 0.1) * 100
+            # 综合分 = 收益相对改善 - 回撤相对恶化*3 + pPF相对改善*2
+            # 权重: 回撤改善 > pPF > 收益（聚焦风险收敛而非冲收益）
+            composite = d_ret_pct - d_dd_pct * 3 + d_ppf_pct * 2
+            # 保留原始绝对变化供输出
             d_ret = m['return_pct'] - baseline['return_pct']
             d_dd = m['max_dd_pct'] - baseline['max_dd_pct']
             d_ppf = m['portfolio_pf'] - baseline['portfolio_pf']
-            composite = d_ret - d_dd * 5 + d_ppf * 20
             scored.append((val, m, composite, d_ret, d_dd, d_ppf))
         scored.sort(key=lambda x: x[2], reverse=True)
         best_val, best_m, comp, d_ret, d_dd, d_ppf = scored[0]

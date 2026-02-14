@@ -261,9 +261,10 @@ class StrategyConfig:
     # [已移除] use_short_suppress: A/B+param_sweep双重验证完全零效果(SS>=42已覆盖)
     # Regime-aware 做空抑制: 在 trend/low_vol_trend regime 中提高做空门槛
     # 数据支持: run#32 regime分析显示 73% 止损亏损来自这两个 regime
+    hard_stop_loss: float = -0.30          # 硬断路器: 绝对止损上限(A/B验证-30%零代价, 防跳空超限)
     use_regime_short_gate: bool = False    # 启用 regime 做空门控
     regime_short_gate_add: float = 15     # 在 gate regime 中, short_threshold += 此值
-    regime_short_gate_regimes: str = 'low_vol_trend,trend'  # 触发门控的 regime 列表
+    regime_short_gate_regimes: str = 'low_vol_trend'  # 仅 low_vol_trend (trend空头+$40k,不应门控)
     # SPOT_SELL 高分确认过滤 (A/B测试:略负面, 减少了有效卖出)
     use_spot_sell_confirm: bool = False # SPOT_SELL二次确认
     spot_sell_confirm_ss: float = 50    # SS>=此值时需要确认

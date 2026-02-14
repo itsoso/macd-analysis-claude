@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-多周期联合决策 — 逐日盈亏回测
+多周期联合决策 — 逐日盈亏回测 (v2)
 ===================================
-将每日持仓快照与完整交易明细写入 SQLite DB，
-供专属 Web 页面展示。
+在 backtest_multi_tf_daily.py 基础上新增:
+1) 强制仅本地K线 (禁用API回退)
+2) 预计算多TF融合分数, 降低回测循环中逐bar共识开销
+3) 阶段耗时 + 信号子模块耗时写入 run_meta 便于性能归因
 
 用法:
-    python backtest_multi_tf_daily.py                           # 默认区间
-    python backtest_multi_tf_daily.py --start 2025-06-01 --end 2025-12-31
-    python backtest_multi_tf_daily.py --start 2025-01-01 --end 2026-01-31 --tag "趋势v3基线"
+    python backtest_multi_tf_daily_v2.py                           # 默认区间
+    python backtest_multi_tf_daily_v2.py --start 2025-06-01 --end 2025-12-31
+    python backtest_multi_tf_daily_v2.py --start 2025-01-01 --end 2026-01-31 --tag "趋势v3基线"
 """
 
 import argparse
@@ -29,11 +31,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from indicators import add_all_indicators
 from ma_indicators import add_moving_averages
-from signal_core import compute_signals_six, compute_signals_six_multiprocess
-from live_config import StrategyConfig, get_strategy_version
+from signal_core import compute_signals_six
+from live_config import StrategyConfig
 from kline_store import load_klines
+from multi_tf_consensus import fuse_tf_scores
 from optimize_six_book import (
+    _MTF_MINUTES,
+    _build_regime_precomputed,
     _build_tf_score_index,
+    _compute_regime_controls,
+    _run_strategy_core,
     run_strategy_multi_tf,
 )
 from multi_tf_daily_db import save_run, _default_db_path
@@ -87,27 +94,6 @@ def _build_default_config():
         'partial_tp_2_pct': _LIVE_DEFAULT.partial_tp_2_pct,
         'use_atr_sl': _LIVE_DEFAULT.use_atr_sl,
         'atr_sl_mult': _LIVE_DEFAULT.atr_sl_mult,
-        'atr_sl_floor': _LIVE_DEFAULT.atr_sl_floor,
-        'atr_sl_ceil': _LIVE_DEFAULT.atr_sl_ceil,
-        # [已移除] use_short_suppress
-        # 硬断路器
-        'hard_stop_loss': _LIVE_DEFAULT.hard_stop_loss,
-        # Regime-aware 做空门控
-        'use_regime_short_gate': _LIVE_DEFAULT.use_regime_short_gate,
-        'regime_short_gate_add': _LIVE_DEFAULT.regime_short_gate_add,
-        'regime_short_gate_regimes': _LIVE_DEFAULT.regime_short_gate_regimes,
-        # SPOT_SELL 高分确认过滤
-        'use_spot_sell_confirm': _LIVE_DEFAULT.use_spot_sell_confirm,
-        'spot_sell_confirm_ss': _LIVE_DEFAULT.spot_sell_confirm_ss,
-        'spot_sell_confirm_min': _LIVE_DEFAULT.spot_sell_confirm_min,
-        # SPOT_SELL 尾部风控
-        'use_spot_sell_cap': _LIVE_DEFAULT.use_spot_sell_cap,
-        'spot_sell_max_pct': _LIVE_DEFAULT.spot_sell_max_pct,
-        'spot_sell_regime_block': _LIVE_DEFAULT.spot_sell_regime_block,
-        # v3 分段止盈
-        'use_partial_tp_v3': _LIVE_DEFAULT.use_partial_tp_v3,
-        'partial_tp_1_early': _LIVE_DEFAULT.partial_tp_1_early,
-        'partial_tp_2_early': _LIVE_DEFAULT.partial_tp_2_early,
         'fusion_mode': _LIVE_DEFAULT.fusion_mode,
         'veto_threshold': _LIVE_DEFAULT.veto_threshold,
         'kdj_bonus': _LIVE_DEFAULT.kdj_bonus,
@@ -126,13 +112,6 @@ def _build_default_config():
         'consensus_min_strength': _LIVE_DEFAULT.consensus_min_strength,
         'coverage_min': _LIVE_DEFAULT.coverage_min,
         'use_regime_aware': True,
-        'regime_vol_high': _LIVE_DEFAULT.regime_vol_high,
-        'regime_vol_low': _LIVE_DEFAULT.regime_vol_low,
-        'regime_trend_strong': _LIVE_DEFAULT.regime_trend_strong,
-        'regime_trend_weak': _LIVE_DEFAULT.regime_trend_weak,
-        'regime_atr_high': _LIVE_DEFAULT.regime_atr_high,
-        'regime_lookback_bars': _LIVE_DEFAULT.regime_lookback_bars,
-        'regime_atr_bars': _LIVE_DEFAULT.regime_atr_bars,
         'use_protections': True,
         'prot_loss_streak_limit': 3,
         'prot_loss_streak_cooldown_bars': 24,
@@ -201,8 +180,8 @@ def _scale_runtime_config(base_config, primary_tf):
     return config
 
 
-def fetch_data_for_tf(tf, days, allow_api_fallback=False):
-    """优先从本地K线库读取；可配置是否允许API回退。"""
+def fetch_data_for_tf(tf, days):
+    """仅从本地K线库读取（强制禁用API回退）。"""
     fetch_days = days + 30
     start_dt = (pd.Timestamp.now().tz_localize(None) - pd.Timedelta(days=fetch_days)).strftime('%Y-%m-%d')
     try:
@@ -212,7 +191,7 @@ def fetch_data_for_tf(tf, days, allow_api_fallback=False):
             start=start_dt,
             end=None,
             with_indicators=False,
-            allow_api_fallback=allow_api_fallback,
+            allow_api_fallback=False,
         )
         if df is not None and len(df) > 50:
             df = add_all_indicators(df)
@@ -388,12 +367,174 @@ def _normalize_trade(t):
         'cum_funding_paid': _num(t.get('cum_funding_paid')),
         'cum_slippage': _num(t.get('cum_slippage')),
         'reason': str(t.get('reason', '')),
-        # 结构化观测字段 (分市场段统计 + 后续归因分析)
-        'regime_label': t.get('regime_label', 'unknown'),
-        'ss': _num(t.get('ss')),
-        'bs': _num(t.get('bs')),
-        'atr_pct': _num(t.get('atr_pct')),
     }
+
+
+def _apply_live_parity_gate_local(ss, bs, meta, config):
+    """回测中复用实盘门控口径(actionable/direction/strength)。"""
+    if not config.get('use_live_gate', False):
+        return ss, bs
+
+    decision = meta.get("decision", {}) if isinstance(meta, dict) else {}
+    direction = decision.get("direction", "hold")
+    strength = float(decision.get("strength", 0))
+    actionable = bool(decision.get("actionable", False))
+    min_strength = float(config.get("consensus_min_strength", 40))
+    short_threshold = float(config.get("short_threshold", 25))
+    long_threshold = float(config.get("long_threshold", 40))
+
+    if not actionable:
+        return 0.0, 0.0
+    if direction not in ("long", "short"):
+        return 0.0, 0.0
+    if strength < min_strength:
+        return 0.0, 0.0
+
+    if direction == "long":
+        return 0.0, max(float(bs), long_threshold)
+    return max(float(ss), short_threshold), 0.0
+
+
+def _precompute_consensus_scores_for_primary(primary_df, tf_score_map, decision_tfs, config):
+    """
+    在主TF时间轴上预计算融合后的 (SS, BS), 回测循环中 O(1) 读取。
+    """
+    t0 = time.time()
+    index_values = primary_df.index
+    n = len(index_values)
+    ss_arr = np.zeros(n, dtype=np.float64)
+    bs_arr = np.zeros(n, dtype=np.float64)
+
+    cache_root = tf_score_map.get('__lookup_cache__', {})
+    lookup = {}
+    for tf in decision_tfs:
+        scores = tf_score_map.get(tf, {})
+        if not scores:
+            continue
+        cache = cache_root.get(tf, {})
+        times = list(cache.get('times') or [])
+        if not times:
+            times = list(scores.keys())
+        if times and any(times[i] > times[i + 1] for i in range(len(times) - 1)):
+            times = sorted(times)
+        if not times:
+            continue
+        lookup[tf] = {
+            'scores': scores,
+            'times': times,
+            'cursor': 0,
+            'period_secs': float(max(1, _MTF_MINUTES.get(tf, 60)) * 60),
+        }
+
+    regime_precomputed = _build_regime_precomputed(primary_df, config)
+    regime_labels = ['neutral'] * n
+    if config.get('use_regime_aware', False):
+        for idx in range(n):
+            regime_ctl = _compute_regime_controls(
+                primary_df,
+                idx,
+                config,
+                precomputed=regime_precomputed,
+            )
+            regime_labels[idx] = regime_ctl.get('regime_label', 'neutral')
+
+    base_fuse_cfg = {
+        'short_threshold': float(config.get('short_threshold', 25)),
+        'long_threshold': float(config.get('long_threshold', 40)),
+        'coverage_min': float(config.get('coverage_min', 0.0)),
+        'dominance_ratio': float(config.get('dominance_ratio', 1.3)),
+        'chain_boost_per_tf': float(config.get('chain_boost_per_tf', 0.08)),
+        'chain_boost_weak_per_tf': float(config.get('chain_boost_weak_per_tf', 0.04)),
+    }
+
+    for idx, dt in enumerate(index_values):
+        tf_scores = {}
+        for tf, state in lookup.items():
+            times = state['times']
+            cursor = int(state['cursor'])
+            while cursor + 1 < len(times) and times[cursor + 1] <= dt:
+                cursor += 1
+            state['cursor'] = cursor
+
+            if dt < times[0]:
+                continue
+            nearest = times[cursor]
+            age_secs = (dt - nearest).total_seconds()
+            age_periods = age_secs / state['period_secs'] if state['period_secs'] > 0 else 999.0
+            if age_periods <= 1.0:
+                decay = 1.0
+            elif age_periods >= 4.0:
+                decay = 0.0
+            else:
+                decay = max(0.0, 1.0 - (age_periods - 1.0) / 3.0)
+            if decay <= 0.01:
+                continue
+
+            ss_raw, bs_raw = state['scores'][nearest]
+            tf_scores[tf] = (float(ss_raw) * decay, float(bs_raw) * decay)
+
+        fuse_cfg = dict(base_fuse_cfg)
+        fuse_cfg['_regime_label'] = regime_labels[idx]
+        fused = fuse_tf_scores(tf_scores, decision_tfs, fuse_cfg)
+        meta = dict(fused.get("meta", {}))
+        meta["decision"] = fused.get("decision", {})
+        meta["coverage"] = fused.get("coverage", 0.0)
+        meta["weighted_scores"] = fused.get("weighted_scores", {})
+        ss_val = float(fused.get('weighted_ss', 0.0))
+        bs_val = float(fused.get('weighted_bs', 0.0))
+        ss_val, bs_val = _apply_live_parity_gate_local(ss_val, bs_val, meta, config)
+        ss_arr[idx] = ss_val
+        bs_arr[idx] = bs_val
+
+    elapsed = time.time() - t0
+    return ss_arr, bs_arr, elapsed
+
+
+def run_strategy_multi_tf_v2(
+    primary_df,
+    tf_score_map,
+    decision_tfs,
+    config,
+    primary_tf='1h',
+    trade_days=30,
+    trade_start_dt=None,
+    trade_end_dt=None,
+):
+    """
+    v2: 先预计算主TF时间轴上的融合分数，再复用 _run_strategy_core 执行交易循环。
+    """
+    t0 = time.time()
+    ss_arr, bs_arr, precompute_sec = _precompute_consensus_scores_for_primary(
+        primary_df=primary_df,
+        tf_score_map=tf_score_map,
+        decision_tfs=decision_tfs,
+        config=config,
+    )
+
+    def _precomputed_score(idx, _dt, _price):
+        if idx < 0 or idx >= len(ss_arr):
+            return 0.0, 0.0
+        return float(ss_arr[idx]), float(bs_arr[idx])
+
+    t_run = time.time()
+    result = _run_strategy_core(
+        primary_df=primary_df,
+        config=config,
+        primary_tf=primary_tf,
+        trade_days=trade_days,
+        score_provider=_precomputed_score,
+        trade_start_dt=trade_start_dt,
+        trade_end_dt=trade_end_dt,
+        tf_score_map=tf_score_map,
+        decision_tfs=decision_tfs,
+    )
+    run_sec = time.time() - t_run
+    result['_perf_v2'] = {
+        'consensus_precompute_sec': round(precompute_sec, 3),
+        'strategy_core_sec': round(run_sec, 3),
+        'run_strategy_multi_tf_v2_sec': round(time.time() - t0, 3),
+    }
+    return result
 
 
 def main(trade_start=None, trade_end=None, version_tag=None):
@@ -405,8 +546,11 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     parser.add_argument('--start', type=str, default=None, help='回测起始日 (YYYY-MM-DD)')
     parser.add_argument('--end', type=str, default=None, help='回测结束日 (YYYY-MM-DD)')
     parser.add_argument('--tag', type=str, default=None, help='策略版本标签')
-    parser.add_argument('--fast', action='store_true', default=False,
-                        help='[实验性] P0向量化信号计算, 结果与原版存在近似偏差(±1%%), 不建议作为正式策略结论依据')
+    parser.add_argument(
+        '--disable-fast-consensus',
+        action='store_true',
+        help='禁用v2预计算共识分数，回退到原 run_strategy_multi_tf',
+    )
     args, _ = parser.parse_known_args()
 
     TRADE_START = args.start or trade_start or DEFAULT_TRADE_START
@@ -421,17 +565,9 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     if version_tag:
         print(f"  版本标签: {version_tag}")
     print(f"  主TF: {PRIMARY_TF}  |  决策TFs: {', '.join(DECISION_TFS)}")
-    use_fast_signals = args.fast
-    if use_fast_signals:
-        print("  " + "!" * 60)
-        print("  ⚠️  --fast 模式已启用 (实验性近似算法)")
-        print("  ⚠️  信号计算与原版存在偏差, 不建议作为正式策略结论依据")
-        print("  ⚠️  正式回测请去掉 --fast 参数")
-        print("  " + "!" * 60)
-    allow_api_fallback = os.getenv('BACKTEST_DAILY_ALLOW_API_FALLBACK', '0') == '1'
-    print(f"  K线数据源: {'本地优先+API回退' if allow_api_fallback else '仅本地'}")
-    print(f"  信号加速: {'⚠️ ON (P0向量化/实验性)' if use_fast_signals else 'OFF (原版精确)'}")
-    print(f"  策略参数版本: {get_strategy_version()} (STRATEGY_VERSION 环境变量可切换)")
+    use_fast_consensus = not args.disable_fast_consensus
+    print("  K线数据源: 仅本地(禁用API回退)")
+    print(f"  快速共识: {'ON(v2预计算)' if use_fast_consensus else 'OFF(原始逐bar)'}")
     # 显示关键开关状态
     print(f"  趋势保护v3: {'ON' if DEFAULT_CONFIG.get('use_trend_enhance') else 'OFF'}"
           f"  |  微结构: {'ON' if DEFAULT_CONFIG.get('use_microstructure') else 'OFF'}"
@@ -458,7 +594,7 @@ def main(trade_start=None, trade_end=None, version_tag=None):
             for tf in tf_list:
                 t_tf = time.time()
                 print(f"  获取 {tf} 数据...")
-                df = fetch_data_for_tf(tf, history_days, allow_api_fallback=allow_api_fallback)
+                df = fetch_data_for_tf(tf, history_days)
                 if df is not None:
                     all_data[tf] = df
                     elapsed_tf = time.time() - t_tf
@@ -473,7 +609,7 @@ def main(trade_start=None, trade_end=None, version_tag=None):
             for tf in tf_list:
                 print(f"  获取 {tf} 数据...")
                 start_map[tf] = time.time()
-                futures[executor.submit(fetch_data_for_tf, tf, history_days, allow_api_fallback)] = tf
+                futures[executor.submit(fetch_data_for_tf, tf, history_days)] = tf
             for future in as_completed(futures):
                 tf = futures[future]
                 elapsed_tf = time.time() - start_map.get(tf, time.time())
@@ -531,18 +667,13 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     print(f"\n[2/4] 计算六维信号 (全量, max_bars=0)...")
     t_phase2 = time.time()
     signal_workers = max(1, min(len(score_tfs), int(os.getenv('BACKTEST_DAILY_SIGNAL_WORKERS', '2'))))
-    use_multiprocess = os.getenv('BACKTEST_MULTIPROCESS', '1') == '1'  # 默认启用模块级多进程
-    print(f"  信号并发: {signal_workers}  |  目标TF: {', '.join(score_tfs)}  |  多进程: {'ON' if use_multiprocess else 'OFF'}")
+    print(f"  信号并发: {signal_workers}  |  目标TF: {', '.join(score_tfs)}")
     all_signals = {}
-    if use_multiprocess and not use_fast_signals:
-        # 模块级多进程: 24个任务分发到多核, 瓶颈=最慢单模块(~40s)
-        mp_workers = int(os.getenv('BACKTEST_MP_WORKERS', '0')) or None  # 0=auto
-        all_signals = compute_signals_six_multiprocess(all_data, score_tfs, max_workers=mp_workers)
-    elif signal_workers == 1:
+    if signal_workers == 1:
         for tf in score_tfs:
             t_tf = time.time()
             print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")
-            all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=0, fast=use_fast_signals)
+            all_signals[tf] = compute_signals_six(all_data[tf], tf, all_data, max_bars=0)
             elapsed_tf = time.time() - t_tf
             print(f"    {tf} 信号完成  [{elapsed_tf:.2f}s]")
     else:
@@ -552,7 +683,7 @@ def main(trade_start=None, trade_end=None, version_tag=None):
             for tf in score_tfs:
                 print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")
                 start_map[tf] = time.time()
-                futures[executor.submit(compute_signals_six, all_data[tf], tf, all_data, 0, use_fast_signals)] = tf
+                futures[executor.submit(compute_signals_six, all_data[tf], tf, all_data, 0)] = tf
             for future in as_completed(futures):
                 tf = futures[future]
                 elapsed_tf = time.time() - start_map.get(tf, time.time())
@@ -596,17 +727,33 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     trade_end_dt = pd.Timestamp(TRADE_END) + pd.Timedelta(hours=23, minutes=59)
 
     # trade_days 设为 0 或 None，因为我们显式指定了 start/end
-    result = run_strategy_multi_tf(
-        primary_df=all_data[PRIMARY_TF],
-        tf_score_map=tf_score_index,
-        decision_tfs=decision_tfs,
-        config=config,
-        primary_tf=PRIMARY_TF,
-        trade_days=0,
-        trade_start_dt=trade_start_dt,
-        trade_end_dt=trade_end_dt,
-    )
+    if use_fast_consensus:
+        result = run_strategy_multi_tf_v2(
+            primary_df=all_data[PRIMARY_TF],
+            tf_score_map=tf_score_index,
+            decision_tfs=decision_tfs,
+            config=config,
+            primary_tf=PRIMARY_TF,
+            trade_days=0,
+            trade_start_dt=trade_start_dt,
+            trade_end_dt=trade_end_dt,
+        )
+    else:
+        result = run_strategy_multi_tf(
+            primary_df=all_data[PRIMARY_TF],
+            tf_score_map=tf_score_index,
+            decision_tfs=decision_tfs,
+            config=config,
+            primary_tf=PRIMARY_TF,
+            trade_days=0,
+            trade_start_dt=trade_start_dt,
+            trade_end_dt=trade_end_dt,
+        )
     perf_log['4_strategy_run'] = time.time() - t_phase4
+    perf_v2 = result.get('_perf_v2', {})
+    if perf_v2:
+        perf_log['4a_consensus_precompute'] = float(perf_v2.get('consensus_precompute_sec', 0.0))
+        perf_log['4b_strategy_core'] = float(perf_v2.get('strategy_core_sec', 0.0))
 
     # ── 结果提取 ──
     history = result.get('history', [])
@@ -630,7 +777,6 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     )
 
     # 计算胜率等交易统计
-    # ── contract_pf: 仅合约平仓 (CLOSE_LONG/CLOSE_SHORT/LIQUIDATED) ──
     close_actions = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED'}
     close_trades = []
     wins = []
@@ -646,21 +792,9 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     win_rate = round(len(wins) / len(close_trades) * 100, 2) if close_trades else 0
     avg_win = round(sum(t['pnl'] for t in wins) / len(wins), 2) if wins else 0
     avg_loss = round(sum(t['pnl'] for t in losses) / len(losses), 2) if losses else 0
-    contract_pf = round(
+    profit_factor = round(
         abs(sum(t['pnl'] for t in wins)) / abs(sum(t['pnl'] for t in losses)), 2
     ) if losses and sum(t['pnl'] for t in losses) != 0 else 999
-
-    # ── portfolio_pf: 全量 PnL (含 PARTIAL_TP / SPOT_SELL) ──
-    pnl_actions = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED', 'PARTIAL_TP', 'SPOT_SELL'}
-    all_pnl_trades = [t for t in trades if t['action'] in pnl_actions and t.get('pnl') is not None]
-    all_wins = [t for t in all_pnl_trades if (t.get('pnl') or 0) > 0]
-    all_losses = [t for t in all_pnl_trades if (t.get('pnl') or 0) < 0]
-    gross_profit = sum(t['pnl'] for t in all_wins)
-    gross_loss = abs(sum(t['pnl'] for t in all_losses))
-    portfolio_pf = round(gross_profit / gross_loss, 2) if gross_loss > 0 else 999
-
-    # 兼容性: profit_factor 保持为 contract_pf
-    profit_factor = contract_pf
 
     elapsed = time.time() - t0
 
@@ -679,8 +813,6 @@ def main(trade_start=None, trade_end=None, version_tag=None):
         'avg_win': avg_win,
         'avg_loss': avg_loss,
         'profit_factor': profit_factor,
-        'contract_pf': contract_pf,
-        'portfolio_pf': portfolio_pf,
         'total_fees': fees.get('total_fees', 0),
         'total_slippage': fees.get('slippage_cost', 0),
         'total_costs': fees.get('total_costs', 0),
@@ -699,13 +831,15 @@ def main(trade_start=None, trade_end=None, version_tag=None):
         'combo_name': combo_name,
         'leverage': config.get('lev', 5),
         'initial_capital': initial_capital,
-        'signal_mode': 'fast' if use_fast_signals else 'original',
-        'strategy_version': get_strategy_version(),
-        'multiprocess': use_multiprocess,
-        'runner': 'backtest_multi_tf_daily.py',
+        'runner': 'backtest_multi_tf_daily_v2.py',
         'host': socket.gethostname(),
         'run_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'elapsed_sec': round(elapsed, 1),
+        'kline_source': 'local_only_no_api_fallback',
+        'fast_consensus': bool(use_fast_consensus),
+        'perf_log': {k: round(float(v), 4) for k, v in perf_log.items()},
+        'signal_sub_perf': {k: round(float(v), 4) for k, v in sub_perf_total.items()},
+        'perf_v2': perf_v2,
         'config': {k: v for k, v in config.items() if not k.startswith('_')},
     }
 
@@ -722,48 +856,9 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     print(f"  最大回撤:    {max_drawdown:.2f}%")
     print(f"  交易次数:    {len(raw_trades)} (平仓 {len(close_trades)})")
     print(f"  胜率:        {win_rate:.1f}%")
-    print(f"  合约PF:      {contract_pf:.2f} (仅 CLOSE_LONG/SHORT/LIQUIDATED)")
-    print(f"  组合PF:      {portfolio_pf:.2f} (含 PARTIAL_TP / SPOT_SELL)")
+    print(f"  盈亏比:      {profit_factor:.2f}")
     print(f"  总费用:      ${fees.get('total_costs', 0):,.2f}")
     print(f"  逐日记录:    {len(daily_records)} 天")
-
-    # ── 分市场段统计 (按 regime 拆分) ──
-    pnl_actions_set = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED', 'PARTIAL_TP', 'SPOT_SELL'}
-    regime_stats = defaultdict(lambda: {'trades': 0, 'gross_profit': 0, 'gross_loss': 0, 'net_pnl': 0})
-    for t in trades:
-        if t['action'] not in pnl_actions_set or t.get('pnl') is None:
-            continue
-        regime = t.get('regime_label', 'unknown')
-        pnl_val = t['pnl']
-        rs = regime_stats[regime]
-        rs['trades'] += 1
-        rs['net_pnl'] += pnl_val
-        if pnl_val > 0:
-            rs['gross_profit'] += pnl_val
-        else:
-            rs['gross_loss'] += pnl_val
-
-    if regime_stats:
-        print(f"\n  {'─' * 60}")
-        print(f"  分市场段统计 (regime)")
-        print(f"  {'─' * 60}")
-        print(f"  {'Regime':<20s} {'笔数':>5s} {'净PnL':>12s} {'毛利':>12s} {'毛损':>12s} {'pPF':>6s}")
-        for regime in sorted(regime_stats.keys()):
-            rs = regime_stats[regime]
-            gl = abs(rs['gross_loss'])
-            ppf = round(rs['gross_profit'] / gl, 2) if gl > 0 else 999
-            print(f"  {regime:<20s} {rs['trades']:>5d} {rs['net_pnl']:>+12,.0f} "
-                  f"{rs['gross_profit']:>12,.0f} {rs['gross_loss']:>12,.0f} {ppf:>6.2f}")
-        summary['regime_breakdown'] = {
-            r: {
-                'trades': s['trades'],
-                'net_pnl': round(s['net_pnl'], 2),
-                'gross_profit': round(s['gross_profit'], 2),
-                'gross_loss': round(s['gross_loss'], 2),
-                'portfolio_pf': round(s['gross_profit'] / abs(s['gross_loss']), 2) if s['gross_loss'] != 0 else 999,
-            }
-            for r, s in regime_stats.items()
-        }
 
     # ── 保存到 DB ──
     t_db = time.time()

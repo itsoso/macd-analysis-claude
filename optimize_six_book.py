@@ -1132,6 +1132,13 @@ def _run_strategy_core(
             short_bars += 1
             pnl_r = eng.futures_short.calc_pnl(price) / eng.futures_short.margin
 
+            # 硬断路器: 绝对止损上限, 防止极端跳空超过 short_sl
+            # run#33 出现 -42%/-52% 止损, 实盘应通过交易所限价单覆盖
+            hard_sl = config.get('hard_stop_loss', -0.35)
+            if pnl_r < hard_sl:
+                eng.close_short(price, dt, f"硬止损 {pnl_r*100:.0f}% (上限{hard_sl*100:.0f}%)")
+                short_max_pnl = 0; short_cd = cooldown * 5; short_bars = 0
+
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
             # v3分段止盈: 更早触发 (+12%/+25% vs 默认 +15%/+50%)
             _eff_partial_tp_1 = partial_tp_1_early if use_partial_tp_v3 else partial_tp_1
@@ -1264,7 +1271,7 @@ def _run_strategy_core(
             actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')
             eng.open_long(exec_price, dt, margin, actual_lev,
-                f"开多 {actual_lev}x SS={ss:.0f} BS={bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}")
+                f"开多 {actual_lev}x SS={ss:.0f} BS={trend_long_bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}")
             long_max_pnl = 0; long_bars = 0; long_cd = cooldown
             long_just_opened = True; long_partial_done = False; long_partial2_done = False
 
@@ -1272,6 +1279,12 @@ def _run_strategy_core(
         if eng.futures_long and not long_just_opened:
             long_bars += 1
             pnl_r = eng.futures_long.calc_pnl(price) / eng.futures_long.margin
+
+            # 硬断路器: 做多绝对止损上限
+            hard_sl = config.get('hard_stop_loss', -0.35)
+            if pnl_r < hard_sl:
+                eng.close_long(price, dt, f"硬止损 {pnl_r*100:.0f}% (上限{hard_sl*100:.0f}%)")
+                long_max_pnl = 0; long_cd = cooldown * 5; long_bars = 0
 
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
             _eff_partial_tp_1_long = partial_tp_1_early if use_partial_tp_v3 else partial_tp_1

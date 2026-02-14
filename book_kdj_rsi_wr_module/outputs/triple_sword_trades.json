@@ -1,0 +1,74 @@
+[
+  {
+    "side": "LONG",
+    "entry_idx": 34,
+    "exit_idx": 61,
+    "entry_price": 86.63149618983704,
+    "exit_price": 88.65823282201983,
+    "ret_pct": 2.3394916644883605
+  },
+  {
+    "side": "LONG",
+    "entry_idx": 106,
+    "exit_idx": 200,
+    "entry_price": 86.11630397808185,
+    "exit_price": 78.4300585539191,
+    "ret_pct": -8.925424186944946
+  },
+  {
+    "side": "LONG",
+    "entry_idx": 233,
+    "exit_idx": 247,
+    "entry_price": 72.03759958385874,
+    "exit_price": 70.83723846100644,
+    "ret_pct": -1.6662980579398172
+  },
+  {
+    "side": "LONG",
+    "entry_idx": 256,
+    "exit_idx": 268,
+    "entry_price": 65.70044233416559,
+    "exit_price": 65.51498424213527,
+    "ret_pct": -0.2822783004824221
+  },
+  {
+    "side": "LONG",
+    "entry_idx": 407,
+    "exit_idx": 421,
+    "entry_price": 70.22085488987109,
+    "exit_price": 72.23572138149015,
+    "ret_pct": 2.869327772752153
+  },
+  {
+    "side": "LONG",
+    "entry_idx": 449,
+    "exit_idx": 599,
+    "entry_price": 66.4509468733726,
+    "exit_price": 37.543382876519104,
+    "ret_pct": -43.50210998789692
+  },
+  {
+    "side": "LONG",
+    "entry_idx": 611,
+    "exit_idx": 634,
+    "entry_price": 32.864312685549656,
+    "exit_price": 39.849769373189375,
+    "ret_pct": 21.255447373804973
+  },
+  {
+    "side": "LONG",
+    "entry_idx": 682,
+    "exit_idx": 710,
+    "entry_price": 42.215883938086016,
+    "exit_price": 49.04119850154373,
+    "ret_pct": 16.167645745539165
+  },
+  {
+    "side": "LONG",
+    "entry_idx": 744,
+    "exit_idx": 763,
+    "entry_price": 42.21891226230002,
+    "exit_price": 46.31595119954053,
+    "ret_pct": 9.704274027208925
+  }
+]
