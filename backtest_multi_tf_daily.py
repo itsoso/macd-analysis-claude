@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from indicators import add_all_indicators
 from ma_indicators import add_moving_averages
-from signal_core import compute_signals_six
+from signal_core import compute_signals_six, compute_signals_six_multiprocess
 from live_config import StrategyConfig
 from kline_store import load_klines
 from optimize_six_book import (
@@ -491,9 +491,14 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     print(f"\n[2/4] 计算六维信号 (全量, max_bars=0)...")
     t_phase2 = time.time()
     signal_workers = max(1, min(len(score_tfs), int(os.getenv('BACKTEST_DAILY_SIGNAL_WORKERS', '2'))))
-    print(f"  信号并发: {signal_workers}  |  目标TF: {', '.join(score_tfs)}")
+    use_multiprocess = os.getenv('BACKTEST_MULTIPROCESS', '1') == '1'  # 默认启用模块级多进程
+    print(f"  信号并发: {signal_workers}  |  目标TF: {', '.join(score_tfs)}  |  多进程: {'ON' if use_multiprocess else 'OFF'}")
     all_signals = {}
-    if signal_workers == 1:
+    if use_multiprocess and not use_fast_signals:
+        # 模块级多进程: 24个任务分发到多核, 瓶颈=最慢单模块(~40s)
+        mp_workers = int(os.getenv('BACKTEST_MP_WORKERS', '0')) or None  # 0=auto
+        all_signals = compute_signals_six_multiprocess(all_data, score_tfs, max_workers=mp_workers)
+    elif signal_workers == 1:
         for tf in score_tfs:
             t_tf = time.time()
             print(f"  计算 {tf} 信号 ({len(all_data[tf])} bars)...")

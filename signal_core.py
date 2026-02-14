@@ -8,10 +8,13 @@
 性能优化:
 - compute_signals_six: 子模块 profiling
 - compute_signals_six_fast: P0 向量化版本 (全模块)
+- compute_signals_six_multiprocess: 模块级多进程并行 (回测推荐)
 - calc_fusion_score_six_batch: 批量向量化评分（P1优化核心）
 - get_signal_at: 二分查找替代线性扫描
 """
 
+import multiprocessing as mp
+import os
 import time
 
 import numpy as np
@@ -24,6 +27,9 @@ from candlestick_patterns import compute_candlestick_scores
 from bollinger_strategy import compute_bollinger_scores
 from volume_price_strategy import compute_volume_price_scores
 from kdj_strategy import compute_kdj_scores
+
+# ── 模块级多进程并行所需的全局数据 ──
+_MP_DATA_ALL = None  # fork 模式下子进程继承父进程内存(COW)
 
 
 def compute_signals_six(df, tf, data_all, max_bars=0, fast=False):
@@ -100,6 +106,106 @@ def compute_signals_six(df, tf, data_all, max_bars=0, fast=False):
 
     signals['_perf'] = perf
     return signals
+
+
+# ── 模块级多进程并行 ──────────────────────────────────────
+
+def _mp_compute_module(args):
+    """单模块计算 worker (在子进程中执行，通过 fork 共享 _MP_DATA_ALL)"""
+    tf, module_name = args
+    data_all = _MP_DATA_ALL
+    df = data_all[tf]
+    t0 = time.time()
+
+    if module_name == 'div_main':
+        lookback = max(60, min(200, len(df) // 3))
+        result = analyze_signals_enhanced(df, lookback)
+    elif module_name == 'div_8h':
+        if "8h" in data_all and tf not in ("8h", "12h", "16h", "24h"):
+            result = analyze_signals_enhanced(data_all["8h"], 90)
+        else:
+            result = {}
+    elif module_name == 'ma':
+        result = compute_ma_signals(df, timeframe=tf)
+    elif module_name == 'candlestick':
+        cs_sell, cs_buy, _cs_names = compute_candlestick_scores(df)
+        result = (cs_sell, cs_buy)
+    elif module_name == 'bollinger':
+        bb_sell, bb_buy, _bb_names = compute_bollinger_scores(df)
+        result = (bb_sell, bb_buy)
+    elif module_name == 'volume_price':
+        vp_sell, vp_buy, _vp_names = compute_volume_price_scores(df)
+        result = (vp_sell, vp_buy)
+    elif module_name == 'kdj':
+        kdj_sell, kdj_buy, _kdj_names = compute_kdj_scores(df)
+        result = (kdj_sell, kdj_buy)
+    else:
+        raise ValueError(f"Unknown module: {module_name}")
+
+    elapsed = time.time() - t0
+    return tf, module_name, result, elapsed
+
+
+def compute_signals_six_multiprocess(all_data, score_tfs, max_workers=None):
+    """模块级多进程并行信号计算
+
+    将 N_TF × 7_modules 个独立任务分发到多进程池,
+    最大瓶颈 = 单个最慢任务(15m div_main ~40s),
+    而非整个 15m TF (~90s).
+
+    需要 fork 模式以避免 DataFrame pickle 开销.
+
+    返回: all_signals dict (与串行版格式一致)
+    """
+    global _MP_DATA_ALL
+    _MP_DATA_ALL = all_data
+
+    modules = ['div_main', 'div_8h', 'ma', 'candlestick', 'bollinger', 'volume_price', 'kdj']
+    tasks = []
+    for tf in score_tfs:
+        for mod in modules:
+            tasks.append((tf, mod))
+
+    if max_workers is None:
+        # CPU核心数 与 任务数 取较小值, 上限8
+        max_workers = min(len(tasks), os.cpu_count() or 4, 8)
+
+    print(f"  模块级多进程: {len(tasks)} 任务, {max_workers} workers (fork)")
+
+    # 使用 fork 模式: 子进程继承 _MP_DATA_ALL (copy-on-write, 零序列化开销)
+    ctx = mp.get_context('fork')
+    all_signals = {tf: {} for tf in score_tfs}
+    perf_all = {tf: {} for tf in score_tfs}
+
+    with ctx.Pool(processes=max_workers) as pool:
+        results = pool.map(_mp_compute_module, tasks)
+
+    for tf, module_name, result, elapsed in results:
+        perf_all[tf][module_name] = elapsed
+        if module_name == 'div_main':
+            all_signals[tf]["div"] = result
+        elif module_name == 'div_8h':
+            all_signals[tf]["div_8h"] = result
+        elif module_name == 'ma':
+            all_signals[tf]["ma"] = result
+        elif module_name == 'candlestick':
+            all_signals[tf]["cs_sell"] = result[0]
+            all_signals[tf]["cs_buy"] = result[1]
+        elif module_name == 'bollinger':
+            all_signals[tf]["bb_sell"] = result[0]
+            all_signals[tf]["bb_buy"] = result[1]
+        elif module_name == 'volume_price':
+            all_signals[tf]["vp_sell"] = result[0]
+            all_signals[tf]["vp_buy"] = result[1]
+        elif module_name == 'kdj':
+            all_signals[tf]["kdj_sell"] = result[0]
+            all_signals[tf]["kdj_buy"] = result[1]
+
+    for tf in score_tfs:
+        all_signals[tf]['_perf'] = perf_all[tf]
+
+    _MP_DATA_ALL = None  # 释放引用
+    return all_signals
 
 
 def _compute_signals_six_fast(df, tf, data_all, max_bars=0):
