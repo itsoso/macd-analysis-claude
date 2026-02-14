@@ -158,32 +158,76 @@ PHASE_CONFIGS = {
 }
 
 
+# ── 策略参数版本 (v1=run28基线, v2=run29优化) ──
+# 通过环境变量 STRATEGY_VERSION=v1 可回退到 run28 参数
+# 默认使用 v2 (run29)
+STRATEGY_PARAM_VERSIONS = {
+    "v1": {  # run28 基线参数 (趋势v3 + LiveGate + Regime)
+        "short_threshold": 25,
+        "long_threshold": 40,
+        "short_sl": -0.25,
+        "short_tp": 0.60,
+        "long_tp": 0.30,
+        "partial_tp_1": 0.20,
+        "use_partial_tp_2": False,
+        "short_max_hold": 72,
+    },
+    "v2": {  # run29 优化参数 (2026-02-14 参数扫描)
+        "short_threshold": 35,
+        "long_threshold": 30,
+        "short_sl": -0.18,
+        "short_tp": 0.50,
+        "long_tp": 0.40,
+        "partial_tp_1": 0.15,
+        "use_partial_tp_2": True,
+        "short_max_hold": 48,
+    },
+}
+_ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v2")
+
+
+def get_strategy_version() -> str:
+    """返回当前生效的策略参数版本"""
+    return _ACTIVE_VERSION
+
+
+def _resolve_param(field_name: str, v2_default):
+    """根据 STRATEGY_VERSION 环境变量解析参数值"""
+    ver = _ACTIVE_VERSION
+    params = STRATEGY_PARAM_VERSIONS.get(ver, STRATEGY_PARAM_VERSIONS["v2"])
+    return params.get(field_name, v2_default)
+
+
 @dataclass
 class StrategyConfig:
-    """策略参数配置 - 从优化结果加载"""
+    """策略参数配置 - 从优化结果加载
+
+    版本切换: 设置环境变量 STRATEGY_VERSION=v1 回退到 run28 参数
+    默认: v2 (run29 优化参数)
+    """
     symbol: str = "ETHUSDT"
     timeframe: str = "1h"
-    # 信号阈值  (v2优化: 2026-02-14 参数扫描)
+    # 信号阈值
     sell_threshold: float = 18
     buy_threshold: float = 25
-    short_threshold: float = 35       # v2: 25→35 提高开空门槛, 过滤弱信号
-    long_threshold: float = 30        # v2: 40→30 放宽做多门槛, 捕获更多机会
+    short_threshold: float = field(default_factory=lambda: _resolve_param("short_threshold", 35))
+    long_threshold: float = field(default_factory=lambda: _resolve_param("long_threshold", 30))
     close_short_bs: float = 40
     close_long_ss: float = 40
     sell_pct: float = 0.55
-    # 止损止盈  (v2优化: 收紧空头风控, 放大做多空间)
-    short_sl: float = -0.18           # v2: -0.25→-0.18 收紧空头止损
-    short_tp: float = 0.50            # v2: 0.60→0.50  降低空头止盈目标
+    # 止损止盈
+    short_sl: float = field(default_factory=lambda: _resolve_param("short_sl", -0.18))
+    short_tp: float = field(default_factory=lambda: _resolve_param("short_tp", 0.50))
     long_sl: float = -0.08
-    long_tp: float = 0.40             # v2: 0.30→0.40  提高做多止盈目标
+    long_tp: float = field(default_factory=lambda: _resolve_param("long_tp", 0.40))
     short_trail: float = 0.25
     long_trail: float = 0.20
     trail_pullback: float = 0.60
-    # 部分止盈  (v2优化: 更早锁利 + 启用二阶段)
+    # 部分止盈
     use_partial_tp: bool = True
-    partial_tp_1: float = 0.15        # v2: 0.20→0.15  更早锁利
+    partial_tp_1: float = field(default_factory=lambda: _resolve_param("partial_tp_1", 0.15))
     partial_tp_1_pct: float = 0.30
-    use_partial_tp_2: bool = True     # v2: False→True  启用二阶段止盈
+    use_partial_tp_2: bool = field(default_factory=lambda: _resolve_param("use_partial_tp_2", True))
     partial_tp_2: float = 0.50
     partial_tp_2_pct: float = 0.30
     use_atr_sl: bool = False
@@ -213,8 +257,8 @@ class StrategyConfig:
     cs_bonus: float = 0.06
     # 数据参数
     lookback_days: int = 60
-    # 最大持仓K线数  (v2优化: 缩短空头持仓)
-    short_max_hold: int = 48          # v2: 72→48 缩短空头最大持仓
+    # 最大持仓K线数
+    short_max_hold: int = field(default_factory=lambda: _resolve_param("short_max_hold", 48))
     long_max_hold: int = 72
 
     # ── 多周期联合决策 ──

@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from indicators import add_all_indicators
 from ma_indicators import add_moving_averages
 from signal_core import compute_signals_six, compute_signals_six_multiprocess
-from live_config import StrategyConfig
+from live_config import StrategyConfig, get_strategy_version
 from kline_store import load_klines
 from optimize_six_book import (
     _build_tf_score_index,
@@ -373,7 +373,7 @@ def main(trade_start=None, trade_end=None, version_tag=None):
     parser.add_argument('--end', type=str, default=None, help='回测结束日 (YYYY-MM-DD)')
     parser.add_argument('--tag', type=str, default=None, help='策略版本标签')
     parser.add_argument('--fast', action='store_true', default=False,
-                        help='使用P0向量化信号计算(大幅加速回测)')
+                        help='[实验性] P0向量化信号计算, 结果与原版存在近似偏差(±1%%), 不建议作为正式策略结论依据')
     args, _ = parser.parse_known_args()
 
     TRADE_START = args.start or trade_start or DEFAULT_TRADE_START
@@ -389,9 +389,16 @@ def main(trade_start=None, trade_end=None, version_tag=None):
         print(f"  版本标签: {version_tag}")
     print(f"  主TF: {PRIMARY_TF}  |  决策TFs: {', '.join(DECISION_TFS)}")
     use_fast_signals = args.fast
+    if use_fast_signals:
+        print("  " + "!" * 60)
+        print("  ⚠️  --fast 模式已启用 (实验性近似算法)")
+        print("  ⚠️  信号计算与原版存在偏差, 不建议作为正式策略结论依据")
+        print("  ⚠️  正式回测请去掉 --fast 参数")
+        print("  " + "!" * 60)
     allow_api_fallback = os.getenv('BACKTEST_DAILY_ALLOW_API_FALLBACK', '0') == '1'
     print(f"  K线数据源: {'本地优先+API回退' if allow_api_fallback else '仅本地'}")
-    print(f"  信号加速: {'ON (P0向量化)' if use_fast_signals else 'OFF (原版)'}")
+    print(f"  信号加速: {'⚠️ ON (P0向量化/实验性)' if use_fast_signals else 'OFF (原版精确)'}")
+    print(f"  策略参数版本: {get_strategy_version()} (STRATEGY_VERSION 环境变量可切换)")
     # 显示关键开关状态
     print(f"  趋势保护v3: {'ON' if DEFAULT_CONFIG.get('use_trend_enhance') else 'OFF'}"
           f"  |  微结构: {'ON' if DEFAULT_CONFIG.get('use_microstructure') else 'OFF'}"
@@ -645,6 +652,7 @@ def main(trade_start=None, trade_end=None, version_tag=None):
         'leverage': config.get('lev', 5),
         'initial_capital': initial_capital,
         'signal_mode': 'fast' if use_fast_signals else 'original',
+        'strategy_version': get_strategy_version(),
         'multiprocess': use_multiprocess,
         'runner': 'backtest_multi_tf_daily.py',
         'host': socket.gethostname(),
