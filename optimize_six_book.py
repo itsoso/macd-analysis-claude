@@ -780,7 +780,9 @@ def _run_strategy_core(
     # 趋势持续状态 (跨bar持久, 带滞后)
     _trend_up_active = False  # 上升趋势一旦激活, 直到明确反转才关闭
 
-    warmup = max(60, int(len(primary_df) * 0.05))
+    # 按指标窗口固定 bar 数，避免长样本 5% 导致 OOS 实际起点过晚（如 2024 从 2 月才开始）
+    WARMUP_BARS = 200
+    warmup = min(max(60, WARMUP_BARS), len(primary_df) - 1)
 
     tf_hours = {
         '10m': 1/6, '15m': 0.25, '30m': 0.5, '1h': 1, '2h': 2, '3h': 3,
@@ -1480,10 +1482,11 @@ def _build_tf_score_index(all_data, all_signals, tfs, config):
     from signal_core import calc_fusion_score_six_batch
 
     tf_score_map = {'__lookup_cache__': {}}
+    WARMUP_BARS = 200
     for tf in tfs:
         df = all_data[tf]
         sigs = all_signals[tf]
-        warmup = max(60, int(len(df) * 0.05))
+        warmup = min(max(60, WARMUP_BARS), len(df) - 1)
 
         score_dict, ordered_ts = calc_fusion_score_six_batch(
             sigs, df, config, warmup=warmup,

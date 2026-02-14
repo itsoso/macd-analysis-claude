@@ -160,11 +160,17 @@ def _file_lock(lock_path):
             fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
 
 
-def _slice_train_window(df, test_days=60, train_days=60, purge_days=7):
+# 训练/测试隔离期：指标回溯约 30–60 bar，purge≥30 天可显著降低信息泄露（原 7 天易高估 alpha）
+PURGE_DAYS_OOS = 30
+
+
+def _slice_train_window(df, test_days=60, train_days=60, purge_days=None):
     """
     样本外切片: 训练集使用测试窗口之前的区间，严格不与测试窗口重叠。
-    purge_days: 训练与测试之间的隔离期，防止指标滞后造成的信息泄露。
+    purge_days: 训练与测试之间的隔离期，防止指标滞后造成的信息泄露。默认 PURGE_DAYS_OOS。
     """
+    if purge_days is None:
+        purge_days = PURGE_DAYS_OOS
     if df is None or len(df) == 0:
         return df
     test_start = df.index[-1] - pd.Timedelta(days=test_days)
@@ -499,14 +505,14 @@ def _select_oos_base_config(
     scored.sort(key=lambda x: x["objective"], reverse=True)
     best = scored[0]
 
-    # 检查选中配置是否来自通用候选 (无数据泄露风险) 还是优化候选 (可能泄露)
+    # 训练/测试切片已严格分开；污染风险仅来自候选来源(global_best/top30)与 fallback 人工调优
     selected_tag = best.get("tag", "")
     is_generic = selected_tag.startswith("generic_")
     contamination_risk = "none" if is_generic else "medium"
     contamination_note = (
-        "选中配置来自通用(非优化)候选，无数据泄露" if is_generic else
-        "选中配置来自优化候选，参数可能在测试期[T-30,T]上过拟合。"
-        "OOS训练[T-120,T-60)已做初步过滤，但不能完全消除偏差。"
+        "选中配置来自通用(非优化)候选，无污染风险。" if is_generic else
+        "训练/测试窗口已严格分离；选中配置来自优化候选(global_best/top30)，存在候选来源污染风险，"
+        "alpha 可能被高估。purge_days=%d 降低指标滞后；fallback 若经人工调优亦有污染风险。" % PURGE_DAYS_OOS
     )
 
     meta = {
@@ -514,7 +520,7 @@ def _select_oos_base_config(
         "ref_tf": ref_tf,
         "train_days": train_days,
         "test_days": test_days,
-        "purge_days": 7,
+        "purge_days": PURGE_DAYS_OOS,
         "objective_mode": "multi_tf",
         "decision_tfs": usable_decision_tfs,
         "candidates": len(scored),
@@ -831,8 +837,8 @@ def main(args):
     print(f"\n[1/4] 获取数据 (时间框架: {', '.join(all_tfs_needed)})...")
 
     all_data = {}
-    # 60天测试 + train_days训练 + 7天purge + 30天缓冲(指标预热)
-    history_days = 60 + max(args.train_days, 30) + 7 + 30
+    # 60天测试 + train_days训练 + purge(30天) + 30天缓冲(指标预热)
+    history_days = 60 + max(args.train_days, 30) + PURGE_DAYS_OOS + 30
     for tf in all_tfs_needed:
         print(f"  获取 {tf} 数据 ({history_days}天 + 30天缓冲)...")
         df = fetch_data_for_tf(tf, history_days)

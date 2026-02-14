@@ -134,57 +134,95 @@ def _run_variant(label, cfg_overrides, all_data, decision_tfs, tf_score_index):
 def main():
     all_data, decision_tfs, tf_score_index = _load_data_and_signals()
 
-    # ── 第六轮: P0 SPOT_SELL尾部收敛 + 空头门控强化 ──
-    # Codex: trend+SS>=100 SPOT_SELL 拖累 -$129k (21笔, 18亏)
-    v4_base = {
+    # 是否跑「实盘口径」：--live 第八轮(降频控损)，--live --spot 第九轮(现货卖出质量)
+    run_live_track = '--live' in sys.argv or os.environ.get('RUN_LIVE_AB') == '1'
+    run_live_spot = '--spot' in sys.argv or os.environ.get('RUN_LIVE_SPOT') == '1'
+
+    # ── 研究口径基线 (run#43) ──
+    stable_base = {
         'short_threshold': 25, 'short_sl': -0.25, 'short_tp': 0.60,
         'long_sl': -0.10, 'short_trail': 0.15, 'long_trail': 0.12,
         'trail_pullback': 0.50,
         'use_partial_tp_v3': True,
         'partial_tp_1_early': 0.12, 'partial_tp_2_early': 0.25,
         'use_spot_sell_cap': False,
-        'use_regime_short_gate': False,
+        'use_regime_short_gate': True,
+        'regime_short_gate_add': 15,
+        'regime_short_gate_regimes': 'low_vol_trend',
+        'hard_stop_loss': -0.28,
+        'use_spot_sell_confirm': False,
     }
-    variants = [
-        ("A:v4基线", {**v4_base}),
 
-        # ── P0-1: SPOT_SELL 趋势高SS确认 (trend+SS>=100 是 -$129k 拖累源) ──
-        ("B:确认SS100", {**v4_base,
-            'use_spot_sell_confirm': True,
-            'spot_sell_confirm_ss': 100, 'spot_sell_confirm_min': 3}),
-        ("C:确认SS80", {**v4_base,
-            'use_spot_sell_confirm': True,
-            'spot_sell_confirm_ss': 80, 'spot_sell_confirm_min': 2}),
-        ("D:cap20%", {**v4_base,
-            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.20}),
-        ("E:确认+cap", {**v4_base,
-            'use_spot_sell_confirm': True,
-            'spot_sell_confirm_ss': 100, 'spot_sell_confirm_min': 3,
-            'use_spot_sell_cap': True, 'spot_sell_max_pct': 0.20}),
-        ("F:趋势禁卖", {**v4_base,
-            'spot_sell_regime_block': 'trend'}),
-
-        # ── P0-2: 空头门控强化 (更大gate_add + neutral扩展) ──
-        ("G:LVT+25", {**v4_base,
-            'use_regime_short_gate': True, 'regime_short_gate_add': 25,
-            'regime_short_gate_regimes': 'low_vol_trend'}),
-        ("H:LVT+35", {**v4_base,
-            'use_regime_short_gate': True, 'regime_short_gate_add': 35,
-            'regime_short_gate_regimes': 'low_vol_trend'}),
-        ("I:LVT+neutral+15", {**v4_base,
-            'use_regime_short_gate': True, 'regime_short_gate_add': 15,
-            'regime_short_gate_regimes': 'low_vol_trend,neutral'}),
-
-        # ── P1: 最佳组合候选 ──
-        ("J:确认+LVT+25", {**v4_base,
-            'use_spot_sell_confirm': True,
-            'spot_sell_confirm_ss': 100, 'spot_sell_confirm_min': 3,
-            'use_regime_short_gate': True, 'regime_short_gate_add': 25,
-            'regime_short_gate_regimes': 'low_vol_trend'}),
-    ]
+    if run_live_track and run_live_spot:
+        # ── 第九轮: 实盘口径 现货卖出质量 (Codex) ──
+        # 基线 = run#46 (LVT+35)。目标: 高波动期 SPOT_SELL 噪声下降，confirm_ss 下调覆盖 SS 40~70
+        # 评估: pPF、CLOSE_SHORT净亏、high_vol SPOT_SELL净值、fee_drag
+        live_base = {
+            **stable_base,
+            'use_microstructure': True,
+            'use_dual_engine': True,
+            'use_vol_target': True,
+            'regime_short_gate_add': 35,
+        }
+        variants = [
+            ("A:run46基线", {**live_base}),
+            ("B:确认SS70min2", {**live_base, 'use_spot_sell_confirm': True,
+                'spot_sell_confirm_ss': 70, 'spot_sell_confirm_min': 2}),
+            ("C:确认SS60min2", {**live_base, 'use_spot_sell_confirm': True,
+                'spot_sell_confirm_ss': 60, 'spot_sell_confirm_min': 2}),
+            ("D:sell_thr22", {**live_base, 'sell_threshold': 22}),
+            ("E:spot_cd18", {**live_base, 'spot_cooldown': 18}),
+            ("F:spot_cd24", {**live_base, 'spot_cooldown': 24}),
+            ("G:SS70min2+cd18", {**live_base, 'use_spot_sell_confirm': True,
+                'spot_sell_confirm_ss': 70, 'spot_sell_confirm_min': 2, 'spot_cooldown': 18}),
+        ]
+        round_title = "第九轮: 实盘口径 现货卖出质量 | 基线=run#46"
+    elif run_live_track:
+        # ── 第八轮: 实盘口径 降频控损 (Codex) ──
+        # 基线 = run#44，三开关 ON。目标: 空头亏损与交易成本收敛
+        live_base = {
+            **stable_base,
+            'use_microstructure': True,
+            'use_dual_engine': True,
+            'use_vol_target': True,
+        }
+        variants = [
+            ("A:live基线", {**live_base}),
+            ("B:hard_sl-25", {**live_base, 'hard_stop_loss': -0.25}),
+            ("C:hard_sl-22", {**live_base, 'hard_stop_loss': -0.22}),
+            ("D:LVT+25", {**live_base, 'regime_short_gate_add': 25}),
+            ("E:LVT+35", {**live_base, 'regime_short_gate_add': 35}),
+            ("F:gate+neutral", {**live_base, 'regime_short_gate_regimes': 'low_vol_trend,neutral'}),
+            ("G:确认SS100", {**live_base,
+                'use_spot_sell_confirm': True,
+                'spot_sell_confirm_ss': 100, 'spot_sell_confirm_min': 3}),
+            ("H:sl-22+确认", {**live_base, 'hard_stop_loss': -0.22,
+                'use_spot_sell_confirm': True,
+                'spot_sell_confirm_ss': 100, 'spot_sell_confirm_min': 3}),
+            ("I:LVT25+neutral", {**live_base, 'regime_short_gate_add': 25,
+                'regime_short_gate_regimes': 'low_vol_trend,neutral'}),
+        ]
+        round_title = "第八轮: 实盘口径 降频控损 | 基线=run#44"
+    else:
+        # ── 第七轮: 研究口径 — 空头尾部 + SPOT_SELL 高分确认 ──
+        # 基线 = run#43 稳健档。晋级: MaxDD≥-9%, pPF≥1.9, CLOSE_SHORT 改善, 2024 OOS 不退化
+        variants = [
+            ("A:稳健档基线", {**stable_base}),
+            ("B:hard_sl-25", {**stable_base, 'hard_stop_loss': -0.25}),
+            ("C:hard_sl-22", {**stable_base, 'hard_stop_loss': -0.22}),
+            ("D:LVT+25", {**stable_base, 'regime_short_gate_add': 25}),
+            ("E:LVT+35", {**stable_base, 'regime_short_gate_add': 35}),
+            ("F:sl-25+LVT25", {**stable_base, 'hard_stop_loss': -0.25, 'regime_short_gate_add': 25}),
+            ("G:sl-22+LVT15", {**stable_base, 'hard_stop_loss': -0.22}),
+            ("H:确认SS100", {**stable_base,
+                'use_spot_sell_confirm': True,
+                'spot_sell_confirm_ss': 100, 'spot_sell_confirm_min': 3}),
+            ("I:趋势禁卖", {**stable_base, 'spot_sell_regime_block': 'trend'}),
+        ]
+        round_title = "第七轮: 空头尾部+SPOT_SELL | 基线=run#43"
 
     print(f"\n{'='*90}")
-    print(f"  第六轮: SPOT_SELL尾部收敛 + 空头门控强化 | {TRADE_START} ~ {TRADE_END} | ${INITIAL_CAPITAL:,}")
+    print(f"  {round_title} | {TRADE_START} ~ {TRADE_END} | ${INITIAL_CAPITAL:,}")
     print(f"{'='*90}")
 
     results = []

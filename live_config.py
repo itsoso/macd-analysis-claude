@@ -261,22 +261,19 @@ class StrategyConfig:
     # [已移除] use_short_suppress: A/B+param_sweep双重验证完全零效果(SS>=42已覆盖)
     # Regime-aware 做空抑制: 在 trend/low_vol_trend regime 中提高做空门槛
     # 数据支持: run#32 regime分析显示 73% 止损亏损来自这两个 regime
-    hard_stop_loss: float = -0.30          # 硬断路器: 绝对止损上限(A/B验证-30%零代价, 防跳空超限)
-    use_regime_short_gate: bool = False    # 启用 regime 做空门控
-    regime_short_gate_add: float = 15     # 在 gate regime 中, short_threshold += 此值
-    regime_short_gate_regimes: str = 'low_vol_trend'  # 仅 low_vol_trend (trend空头+$40k,不应门控)
-    # ── SPOT_SELL 风控 (第六轮A/B验证 run#38) ──
-    # v4.2: confirm_ss100 启用 → pPF 1.92→1.95, trend regime pPF 1.30→1.47
-    # 趋势禁卖(spot_sell_regime_block='trend')可达 pPF 2.25/DD -7.89%, 但-37pp收益
-    use_spot_sell_confirm: bool = True  # 高SS确认过滤(trend+SS>=100曾拖累-$129k)
-    spot_sell_confirm_ss: float = 100   # SS>=此值时需要额外确认(EMA/量/ATR)
-    spot_sell_confirm_min: int = 3      # 至少需要满足的确认条件数(EMA20下/RSI<50/ATR>2%)
-    # SPOT_SELL 尾部风控: 限制单笔卖出比例
-    # 第六轮A/B: cap20%损收益-71pp, 不推荐单独使用
-    use_spot_sell_cap: bool = False     # 启用单笔卖出比例上限
-    spot_sell_max_pct: float = 0.30     # 单笔卖出不超过当前ETH仓位价值的30%
-    # 第六轮A/B: 趋势禁卖(F变体)是风险最优方案, 可选启用
-    spot_sell_regime_block: str = ''    # 阻止卖出的regime列表, 如 'trend' (pPF→2.25但-37pp)
+    # Codex: 实盘口径主线; 第八轮 E 变体 LVT+35 最优, 不改为 hard_stop=-0.22
+    hard_stop_loss: float = -0.28          # 硬断路器 -28%(研究口径 C 变体 -0.22 仅限 run#43 轨)
+    use_regime_short_gate: bool = True    # 启用 LVT 做空门控
+    regime_short_gate_add: float = 35     # 实盘口径 E 变体: +35 (run#44 基线 -87k → -45k)
+    regime_short_gate_regimes: str = 'low_vol_trend'  # 仅 low_vol_trend
+    # 暂不启用 (Codex): 激进档再单独并行评估
+    use_spot_sell_confirm: bool = False    # 暂关 (原 v4.2 高SS确认)
+    spot_sell_confirm_ss: float = 100     # SS>=此值时需额外确认
+    spot_sell_confirm_min: int = 3        # 至少满足的确认条件数
+    use_spot_sell_cap: bool = False       # 暂不启用
+    spot_sell_max_pct: float = 0.30       # 单笔卖出比例上限
+    # 稳健档为空; 激进档并行评估: spot_sell_regime_block='low_vol_trend,trend' (run#42 pPF 2.12 回撤-9.14%)
+    spot_sell_regime_block: str = ''      # 阻止卖出的 regime 列表
     # 仓位管理
     leverage: int = 5
     max_lev: int = 5
