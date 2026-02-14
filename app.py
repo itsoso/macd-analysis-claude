@@ -763,6 +763,13 @@ def api_multi_tf_daily_export_all():
 
 
 # ======================================================
+#   当前最新策略说明（菜单最上方）
+# ======================================================
+@app.route('/strategy/current')
+def page_current_strategy():
+    return render_template('page_current_strategy.html', active_page='current-strategy')
+
+
 #   实盘控制面板
 # ======================================================
 @app.route('/strategy/live-control')
@@ -845,7 +852,7 @@ def api_live_test_signal():
 def api_live_test_signal_multi():
     """多时间框架并行信号检测"""
     data = request.json or {}
-    timeframes = data.get('timeframes', ['15m', '30m', '1h', '4h', '8h'])
+    timeframes = data.get('timeframes', ['15m', '1h', '4h', '24h'])  # 与当前策略 decision_timeframes 一致
 
     # 校验时间框架
     valid_tfs = {'1m','3m','5m','10m','15m','30m','1h','2h','3h','4h',

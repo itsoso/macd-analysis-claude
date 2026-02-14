@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}当前最新策略 - 技术分析平台{% endblock %}
+
+{% block content %}
+<style>
+    .strategy-hero {
+        background: linear-gradient(135deg, rgba(74,158,255,0.12), rgba(168,85,247,0.08));
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 28px 32px;
+        margin-bottom: 28px;
+    }
+    .strategy-hero h1 { font-size: 26px; font-weight: 700; margin-bottom: 8px; }
+    .strategy-hero .tagline { font-size: 14px; color: var(--text-secondary); margin-bottom: 20px; }
+    .strategy-meta {
+        display: flex; flex-wrap: wrap; gap: 12px;
+    }
+    .strategy-meta .badge {
+        padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 600;
+    }
+    .strategy-meta .badge.blue { background: rgba(74,158,255,0.2); color: var(--accent-blue); }
+    .strategy-meta .badge.green { background: rgba(0,214,143,0.2); color: var(--accent-green); }
+    .strategy-meta .badge.purple { background: rgba(168,85,247,0.2); color: var(--accent-purple); }
+
+    .section h3 {
+        font-size: 16px; font-weight: 600; margin-bottom: 12px;
+        display: flex; align-items: center; gap: 8px;
+    }
+    .section { margin-bottom: 24px; }
+    .section ul { margin: 0; padding-left: 20px; color: var(--text-secondary); font-size: 14px; line-height: 1.8; }
+    .section .param-table {
+        width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px;
+    }
+    .section .param-table th, .section .param-table td {
+        text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border);
+    }
+    .section .param-table th { color: var(--text-muted); font-weight: 600; }
+    .section .param-table code { background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px; }
+    .monitor-tip {
+        background: rgba(255,170,0,0.1); border: 1px solid rgba(255,170,0,0.3);
+        border-radius: 10px; padding: 16px; margin-top: 16px; font-size: 13px; color: var(--text-secondary);
+    }
+    .monitor-tip strong { color: var(--accent-yellow); }
+</style>
+
+<div class="strategy-hero">
+    <h1>📌 当前最新策略（v3 早期锁利）</h1>
+    <p class="tagline">六书融合 · 多周期联合决策 · ETH/USDT · 与逐日回测 Run#30 一致</p>
+    <div class="strategy-meta">
+        <span class="badge blue">决策周期 15m / 1h / 4h / 24h</span>
+        <span class="badge green">分段止盈 v3（+12% / +25%）</span>
+        <span class="badge purple">趋势保护 v3 + Regime</span>
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="card-title">🎯 策略概要</h3>
+    <p style="color: var(--text-secondary); font-size: 14px; line-height: 1.7; margin-bottom: 16px;">
+        基于六维融合评分（背离、均线、蜡烛图、布林带、量价、KDJ）在多个时间框架上并行计算<strong>卖出分（SS）</strong>与<strong>买入分（BS）</strong>，
+        通过多周期共识与趋势/Regime 动态阈值决定开平仓。当前实盘与回测 Run#30 使用同一套参数，包含早期分段止盈优化。
+    </p>
+    <ul>
+        <li><strong>开空</strong>：SS ≥ 35（short_threshold），且卖方优势满足 dominance，无冲突、风控与微结构未拦截。</li>
+        <li><strong>开多</strong>：BS ≥ 30（long_threshold），且买方优势满足 dominance。</li>
+        <li><strong>卖出现货</strong>：SS ≥ 18（sell_threshold），冷却与趋势底线满足。</li>
+        <li><strong>固定止损</strong>：做空 -18%（short_sl），做多 -8%；ATR 动态止损当前关闭（回测 A/B 对 ETH 未带来收益提升）。</li>
+        <li><strong>分段止盈 v3</strong>：做空 TP1 在 +12% 平 30%，TP2 在 +25% 再平 30%；做多同理。较原 +15%/+50% 更早锁利，回测收益 +205pp。</li>
+    </ul>
+</div>
+
+<div class="card">
+    <h3 class="card-title">📡 多周期与信号</h3>
+    <ul>
+        <li><strong>决策时间框架</strong>：15m、1h、4h、24h（与 <code>live_config.decision_timeframes</code> 一致）。</li>
+        <li><strong>主周期</strong>：1h，用于执行价与持仓管理。</li>
+        <li><strong>Regime</strong>：根据波动率与趋势强度动态调整入场/出场阈值与杠杆（高波动震荡提高门槛、低波动趋势放宽）。</li>
+        <li><strong>入场日志</strong>：开仓时 reason 记录 SS、BS、regime_label、ATR%，便于事后分析。</li>
+    </ul>
+</div>
+
+<div class="card">
+    <h3 class="card-title">⚙️ 关键参数（StrategyConfig v2）</h3>
+    <table class="param-table">
+        <thead>
+            <tr><th>参数</th><th>值</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>short_threshold</code></td><td>35</td><td>做空门槛 SS ≥ 35</td></tr>
+            <tr><td><code>long_threshold</code></td><td>30</td><td>做多门槛 BS ≥ 30</td></tr>
+            <tr><td><code>sell_threshold</code></td><td>18</td><td>现货卖出 SS ≥ 18</td></tr>
+            <tr><td><code>short_sl</code></td><td>-18%</td><td>做空固定止损</td></tr>
+            <tr><td><code>short_tp</code></td><td>50%</td><td>做空止盈目标</td></tr>
+            <tr><td><code>partial_tp_1_early</code></td><td>12%</td><td>v3 第一段止盈触发</td></tr>
+            <tr><td><code>partial_tp_2_early</code></td><td>25%</td><td>v3 第二段止盈触发</td></tr>
+            <tr><td><code>short_max_hold</code></td><td>48 根 K</td><td>做空最大持仓（1h 即 48h）</td></tr>
+            <tr><td><code>use_atr_sl</code></td><td>关</td><td>A/B 证明对 ETH 无效</td></tr>
+            <tr><td><code>use_partial_tp_v3</code></td><td>开</td><td>早期锁利，回测 +205pp</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3 class="card-title">📊 回测参考（Run#30，2025-01～2026-01）</h3>
+    <ul>
+        <li>收益率 +805.72%，Alpha +819.27%，最大回撤 -10.26%，全量 PF 1.90。</li>
+        <li>决策周期 15m / 1h / 4h / 24h；实盘控制面板建议<strong>优先监控这 4 个周期</strong>，再按需勾选 30m、8h 等辅助周期。</li>
+    </ul>
+    <div class="monitor-tip">
+        <strong>实盘控制面板建议</strong>：多周期信号检测默认勾选 <strong>15m、1h、4h、24h</strong>（与策略决策一致）；自动检测间隔建议 <strong>10 分钟</strong>；重点关注各周期 SS/BS 与「动作」「原因」列，多空分歧时显示「多空分歧-观望」。
+    </div>
+</div>
+
+<div class="card">
+    <h3 class="card-title">🔗 相关页面</h3>
+    <p style="color: var(--text-secondary); font-size: 14px;">
+        <a href="/strategy/live-control" style="color: var(--accent-blue);">实盘控制面板</a> ·
+        <a href="/strategy/multi-tf-daily" style="color: var(--accent-blue);">多周期·逐日盈亏</a> ·
+        <a href="/strategy/multi-tf-deep-dive" style="color: var(--accent-blue);">多周期联合决策·代码详解</a>
+    </p>
+</div>
+{% endblock %}

@@ -222,6 +222,12 @@
             </button>
         </div>
         <div class="nav-section">
+            <div class="nav-section-title">当前策略</div>
+            <a class="nav-item {% if active_page == 'current-strategy' %}active{% endif %}" href="/strategy/current" data-tooltip="当前最新策略说明">
+                <span class="nav-icon">📌</span><span class="nav-item-text">当前最新策略</span>
+            </a>
+        </div>
+        <div class="nav-section">
             <div class="nav-section-title">书籍大纲</div>
             <a class="nav-item {% if active_page == 'overview' %}active{% endif %}" href="/" data-tooltip="背离技术分析">
                 <span class="nav-icon">📖</span><span class="nav-item-text">背离技术分析</span>

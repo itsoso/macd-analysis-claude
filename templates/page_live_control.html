@@ -270,15 +270,16 @@
             <h3>📡 多周期信号检测</h3>
             <p class="desc">同时获取多个时间框架的K线数据，并行计算六维融合信号，展示多周期共识</p>
 
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">与当前策略一致：优先勾选 <strong>15m、1h、4h、24h</strong>（决策周期），其余按需添加</p>
             <div class="tf-checkbox-grid" id="tfCheckboxes">
-                <label class="tf-chip checked" onclick="toggleTFChip(this)">
-                    <input type="checkbox" value="10m" checked> 10m
+                <label class="tf-chip" onclick="toggleTFChip(this)">
+                    <input type="checkbox" value="10m"> 10m
                 </label>
                 <label class="tf-chip checked" onclick="toggleTFChip(this)">
                     <input type="checkbox" value="15m" checked> 15m
                 </label>
-                <label class="tf-chip checked" onclick="toggleTFChip(this)">
-                    <input type="checkbox" value="30m" checked> 30m
+                <label class="tf-chip" onclick="toggleTFChip(this)">
+                    <input type="checkbox" value="30m"> 30m
                 </label>
                 <label class="tf-chip checked" onclick="toggleTFChip(this)">
                     <input type="checkbox" value="1h" checked> 1h
@@ -292,14 +293,14 @@
                 <label class="tf-chip" onclick="toggleTFChip(this)">
                     <input type="checkbox" value="6h"> 6h
                 </label>
-                <label class="tf-chip checked" onclick="toggleTFChip(this)">
-                    <input type="checkbox" value="8h" checked> 8h
+                <label class="tf-chip" onclick="toggleTFChip(this)">
+                    <input type="checkbox" value="8h"> 8h
                 </label>
-                <label class="tf-chip checked" onclick="toggleTFChip(this)">
-                    <input type="checkbox" value="12h" checked> 12h
+                <label class="tf-chip" onclick="toggleTFChip(this)">
+                    <input type="checkbox" value="12h"> 12h
                 </label>
-                <label class="tf-chip checked" onclick="toggleTFChip(this)">
-                    <input type="checkbox" value="16h" checked> 16h
+                <label class="tf-chip" onclick="toggleTFChip(this)">
+                    <input type="checkbox" value="16h"> 16h
                 </label>
                 <label class="tf-chip checked" onclick="toggleTFChip(this)">
                     <input type="checkbox" value="24h" checked> 24h
@@ -312,13 +313,14 @@
                 </button>
                 <button class="btn btn-outline btn-sm" onclick="selectAllTF(true)">全选</button>
                 <button class="btn btn-outline btn-sm" onclick="selectAllTF(false)">全不选</button>
+                <button class="btn btn-outline btn-sm" onclick="setStrategyDefaultTFs()" title="与当前策略决策周期一致">策略默认(15m/1h/4h/24h)</button>
                 <button class="btn btn-outline btn-sm" id="autoDetectBtn" onclick="toggleAutoDetect()" style="margin-left:8px;">
                     ⏱️ <span id="autoDetectText">自动检测: 关</span>
                 </button>
                 <select id="autoDetectInterval" onchange="onAutoDetectIntervalChange()" style="background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;">
                     <option value="300">5分钟</option>
-                    <option value="600">10分钟</option>
-                    <option value="900" selected>15分钟</option>
+                    <option value="600" selected>10分钟</option>
+                    <option value="900">15分钟</option>
                     <option value="1800">30分钟</option>
                     <option value="3600">1小时</option>
                 </select>
@@ -742,6 +744,17 @@ function toggleTFChip(label) {
 
 function selectAllTF(checked) {
     document.querySelectorAll('#tfCheckboxes input').forEach(cb => {
+        cb.checked = checked;
+        cb.closest('.tf-chip').classList.toggle('checked', checked);
+    });
+    saveTFSelection();
+}
+
+/** 与当前策略一致：仅勾选决策周期 15m、1h、4h、24h */
+function setStrategyDefaultTFs() {
+    const strategyTFs = ['15m', '1h', '4h', '24h'];
+    document.querySelectorAll('#tfCheckboxes input').forEach(cb => {
+        const checked = strategyTFs.includes(cb.value);
         cb.checked = checked;
         cb.closest('.tf-chip').classList.toggle('checked', checked);
     });
