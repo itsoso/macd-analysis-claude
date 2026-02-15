@@ -303,6 +303,21 @@ STRATEGY_PARAM_VERSIONS = {
         "risk_max_margin_pct": 0.40,       # 单笔最大 40% 仓位
         "risk_min_margin_pct": 0.03,       # 单笔最小 3% 仓位
         #
+        # ── v10.3 D1: 结构锚定 + ATR 包络止损 (默认先关闭, 走A/B) ──
+        "use_structure_anchor_sl": False,
+        "structure_anchor_lookback": 48,
+        "structure_anchor_short_buffer_atr": 0.5,
+        "structure_anchor_long_buffer_atr": 0.5,
+        "structure_anchor_k_neutral": 2.2,
+        "structure_anchor_k_trend": 3.8,
+        "structure_anchor_k_low_vol_trend": 3.6,
+        "structure_anchor_k_high_vol": 2.8,
+        "structure_anchor_k_high_vol_choppy": 2.6,
+        "structure_anchor_min_stop_short": -0.08,
+        "structure_anchor_max_stop_short": -0.35,
+        "structure_anchor_min_stop_long": -0.06,
+        "structure_anchor_max_stop_long": -0.25,
+        #
         # ── v10: Soft Veto (sigmoid 连续衰减替代硬二元门控) ──
         # 回测: IS PF 1.19→1.03 (soft veto alone), +leg budget → 1.31
         "use_soft_veto": True,
@@ -330,6 +345,15 @@ STRATEGY_PARAM_VERSIONS = {
         "risk_budget_trend_long": 1.20,        # 趋势中做多(顺势): 适度加仓
         "risk_budget_low_vol_trend_short": 0.50,  # 低波动趋势做空: 半仓
         "risk_budget_low_vol_trend_long": 1.20,   # 低波动趋势做多: 适度加仓
+        # ── v10.3 D2: neutral short 动态小仓预算 ──
+        "use_neutral_short_dynamic_budget": False,
+        "neutral_short_low_quality_floor": 0.02,
+        "neutral_short_crowding_floor": 0.02,
+        "neutral_short_quality_cov_thr": 0.20,
+        "neutral_short_quality_stale_thr": 12,
+        "neutral_short_crowding_funding_z": 2.0,
+        "neutral_short_crowding_oi_z": 1.0,
+        "neutral_short_crowding_taker_imb": 0.12,
     },
 }
 _ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v5")
@@ -751,6 +775,31 @@ class StrategyConfig:
     risk_budget_high_vol_short: float = 1.00
     risk_budget_high_vol_choppy_long: float = 1.00
     risk_budget_high_vol_choppy_short: float = 1.00
+    # ── v10.3 D2: neutral short 动态小仓预算（低质量/拥挤时进一步降仓） ──
+    use_neutral_short_dynamic_budget: bool = field(
+        default_factory=lambda: _resolve_param("use_neutral_short_dynamic_budget", False)
+    )
+    neutral_short_low_quality_floor: float = field(
+        default_factory=lambda: _resolve_param("neutral_short_low_quality_floor", 0.02)
+    )
+    neutral_short_crowding_floor: float = field(
+        default_factory=lambda: _resolve_param("neutral_short_crowding_floor", 0.02)
+    )
+    neutral_short_quality_cov_thr: float = field(
+        default_factory=lambda: _resolve_param("neutral_short_quality_cov_thr", 0.20)
+    )
+    neutral_short_quality_stale_thr: int = field(
+        default_factory=lambda: _resolve_param("neutral_short_quality_stale_thr", 12)
+    )
+    neutral_short_crowding_funding_z: float = field(
+        default_factory=lambda: _resolve_param("neutral_short_crowding_funding_z", 2.0)
+    )
+    neutral_short_crowding_oi_z: float = field(
+        default_factory=lambda: _resolve_param("neutral_short_crowding_oi_z", 1.0)
+    )
+    neutral_short_crowding_taker_imb: float = field(
+        default_factory=lambda: _resolve_param("neutral_short_crowding_taker_imb", 0.12)
+    )
 
     # ── P21: Risk-per-trade (R) 仓位模型 ──
     # GPT Pro 最高价值建议: 用固定风险百分比 + 止损距离反推仓位, 消灭"少数大亏单主导"
@@ -767,6 +816,20 @@ class StrategyConfig:
     risk_fixed_stop_long: float = 0.03   # 多单固定止损距离 3% (当 mode='fixed')
     risk_max_margin_pct: float = 0.50    # 仓位上限 = equity × 50% (防极端)
     risk_min_margin_pct: float = 0.05    # 仓位下限 = equity × 5% (避免过小)
+    # ── v10.3 D1: 结构锚定 + ATR 包络止损 ──
+    use_structure_anchor_sl: bool = field(default_factory=lambda: _resolve_param("use_structure_anchor_sl", False))
+    structure_anchor_lookback: int = field(default_factory=lambda: _resolve_param("structure_anchor_lookback", 48))
+    structure_anchor_short_buffer_atr: float = field(default_factory=lambda: _resolve_param("structure_anchor_short_buffer_atr", 0.5))
+    structure_anchor_long_buffer_atr: float = field(default_factory=lambda: _resolve_param("structure_anchor_long_buffer_atr", 0.5))
+    structure_anchor_k_neutral: float = field(default_factory=lambda: _resolve_param("structure_anchor_k_neutral", 2.2))
+    structure_anchor_k_trend: float = field(default_factory=lambda: _resolve_param("structure_anchor_k_trend", 3.8))
+    structure_anchor_k_low_vol_trend: float = field(default_factory=lambda: _resolve_param("structure_anchor_k_low_vol_trend", 3.6))
+    structure_anchor_k_high_vol: float = field(default_factory=lambda: _resolve_param("structure_anchor_k_high_vol", 2.8))
+    structure_anchor_k_high_vol_choppy: float = field(default_factory=lambda: _resolve_param("structure_anchor_k_high_vol_choppy", 2.6))
+    structure_anchor_min_stop_short: float = field(default_factory=lambda: _resolve_param("structure_anchor_min_stop_short", -0.08))
+    structure_anchor_max_stop_short: float = field(default_factory=lambda: _resolve_param("structure_anchor_max_stop_short", -0.35))
+    structure_anchor_min_stop_long: float = field(default_factory=lambda: _resolve_param("structure_anchor_min_stop_long", -0.06))
+    structure_anchor_max_stop_long: float = field(default_factory=lambda: _resolve_param("structure_anchor_max_stop_long", -0.25))
 
     # ── P23: 加权结构确认 (基于 Cohen's d 先验) ──
     # 替代简单计数: sum(1 if feat>thr) → sum(alpha_weight * strength) - penalty

@@ -1205,6 +1205,23 @@ def _run_strategy_core(
         'high_vol': float(config.get('regime_high_vol_short_sl', -0.15)),
         'high_vol_choppy': float(config.get('regime_high_vol_choppy_short_sl', -0.15)),
     }
+    # ── v10.3 D1: 结构锚定 + ATR 包络止损 ──
+    # 仅用历史窗口，不引入未来信息；默认关闭，开启后替代固定SL/ATR-SL
+    use_structure_anchor_sl = bool(config.get('use_structure_anchor_sl', False))
+    structure_anchor_lookback = int(config.get('structure_anchor_lookback', 48))
+    structure_anchor_short_buffer_atr = float(config.get('structure_anchor_short_buffer_atr', 0.5))
+    structure_anchor_long_buffer_atr = float(config.get('structure_anchor_long_buffer_atr', 0.5))
+    structure_anchor_min_stop_short = float(config.get('structure_anchor_min_stop_short', -0.08))
+    structure_anchor_max_stop_short = float(config.get('structure_anchor_max_stop_short', -0.35))
+    structure_anchor_min_stop_long = float(config.get('structure_anchor_min_stop_long', -0.06))
+    structure_anchor_max_stop_long = float(config.get('structure_anchor_max_stop_long', -0.25))
+    structure_anchor_k = {
+        'neutral': float(config.get('structure_anchor_k_neutral', 2.2)),
+        'trend': float(config.get('structure_anchor_k_trend', 3.8)),
+        'low_vol_trend': float(config.get('structure_anchor_k_low_vol_trend', 3.6)),
+        'high_vol': float(config.get('structure_anchor_k_high_vol', 2.8)),
+        'high_vol_choppy': float(config.get('structure_anchor_k_high_vol_choppy', 2.6)),
+    }
 
     # ── P20: Short 侧 P13 追踪收紧 ──
     continuous_trail_max_pb_short = float(config.get('continuous_trail_max_pb_short', continuous_trail_max_pb))
@@ -2030,6 +2047,57 @@ def _run_strategy_core(
         data_quality_flags = []
     _perp_data_quality = config.get('_perp_data_quality', {})
 
+    # ── v10.3 D2: neutral short 动态小仓预算（数据质量 / 拥挤度） ──
+    use_neutral_short_dynamic_budget = bool(config.get('use_neutral_short_dynamic_budget', False))
+    neutral_short_low_quality_floor = float(config.get('neutral_short_low_quality_floor', 0.02))
+    neutral_short_crowding_floor = float(config.get('neutral_short_crowding_floor', 0.02))
+    neutral_short_quality_cov_thr = float(config.get('neutral_short_quality_cov_thr', 0.20))
+    neutral_short_quality_stale_thr = int(config.get('neutral_short_quality_stale_thr', 12))
+    neutral_short_crowding_funding_z = float(config.get('neutral_short_crowding_funding_z', 2.0))
+    neutral_short_crowding_oi_z = float(config.get('neutral_short_crowding_oi_z', 1.0))
+    neutral_short_crowding_taker_imb = float(config.get('neutral_short_crowding_taker_imb', 0.12))
+
+    _perp_audit = _perp_data_quality.get('audit', {}) if isinstance(_perp_data_quality, dict) else {}
+    _oi_audit = _perp_audit.get('open_interest', {}) if isinstance(_perp_audit, dict) else {}
+    _oi_cov_raw = _perp_data_quality.get('oi_orig_coverage', _oi_audit.get('orig_coverage', 1.0))
+    _oi_stale_raw = _perp_data_quality.get('oi_max_stale_bars', _oi_audit.get('max_stale_bars', 0))
+    try:
+        _oi_cov = float(_oi_cov_raw if _oi_cov_raw is not None else 1.0)
+    except (TypeError, ValueError):
+        _oi_cov = 1.0
+    try:
+        _oi_stale = int(_oi_stale_raw if _oi_stale_raw is not None else 0)
+    except (TypeError, ValueError):
+        _oi_stale = 0
+    _oi_low_quality = (
+        ('oi_soft_disabled' in data_quality_flags)
+        or (_oi_cov < neutral_short_quality_cov_thr)
+        or (_oi_stale > neutral_short_quality_stale_thr)
+    )
+
+    def _neutral_short_dynamic_mult(regime_label, side, micro_state):
+        """D2: neutral short 在低质量/拥挤时动态降仓，不改变交易时序。"""
+        if (not use_neutral_short_dynamic_budget) or side != 'short' or regime_label != 'neutral':
+            return 1.0, [], {'oi_cov': _oi_cov, 'oi_stale': _oi_stale, 'crowding': False}
+        mult = 1.0
+        reasons = []
+        if _oi_low_quality:
+            mult = min(mult, neutral_short_low_quality_floor)
+            reasons.append('oi_low_quality')
+        _fz = float((micro_state or {}).get('funding_z', 0.0) or 0.0)
+        _oi_z = float((micro_state or {}).get('oi_z', 0.0) or 0.0)
+        _imb = float((micro_state or {}).get('taker_imbalance', 0.0) or 0.0)
+        crowding = (
+            _fz >= neutral_short_crowding_funding_z
+            and _oi_z >= neutral_short_crowding_oi_z
+            and _imb >= neutral_short_crowding_taker_imb
+        )
+        if crowding:
+            mult = min(mult, neutral_short_crowding_floor)
+            reasons.append('long_crowding')
+        mult = float(np.clip(mult, 0.0, 1.0))
+        return mult, reasons, {'oi_cov': _oi_cov, 'oi_stale': _oi_stale, 'crowding': bool(crowding)}
+
     def _calc_risk_margin(side: str, entry_price: float, atr_pct: float, equity: float, lev: int,
                           actual_sl: float = 0.0) -> float:
         """P21: 根据 R(风险单位) 和止损距离反推仓位保证金.
@@ -2070,10 +2138,84 @@ def _run_strategy_core(
 
         return margin
 
+    def _calc_structure_anchor_sl(side: str, idx: int, entry_price: float, lev: int,
+                                  atr_pct: float, regime_label: str):
+        """v10.3 D1: 结构锚点 + ATR 包络推导止损 (返回 pnl_r, 诊断字典).
+
+        - 结构距离: 仅看过去 lookback 根K线极值
+        - ATR包络: K_regime * ATR%
+        - 最终止损距离: max(结构距离, ATR包络距离)
+        - 返回值是 pnl_r 阈值 (负值), 与现有止损体系兼容
+        """
+        if not use_structure_anchor_sl:
+            return None, {}
+        if idx <= 1 or entry_price <= 0 or lev <= 0:
+            return None, {}
+
+        lb = max(5, int(structure_anchor_lookback))
+        start_i = max(0, idx - lb)
+        end_i = idx  # 仅过去数据, 不含当前bar
+        if end_i <= start_i:
+            return None, {}
+
+        atr_pct_val = float(max(atr_pct, 0.0))
+        k_reg = float(structure_anchor_k.get(str(regime_label or 'neutral'), structure_anchor_k['neutral']))
+        atr_px_dist_pct = atr_pct_val * max(k_reg, 0.0)
+        atr_abs = entry_price * atr_pct_val
+
+        high_win = high_series.iloc[start_i:end_i]
+        low_win = low_series.iloc[start_i:end_i]
+        if side == 'short':
+            if high_win.empty:
+                return None, {}
+            swing_high = float(np.nanmax(high_win.values))
+            anchor_price = swing_high + max(0.0, structure_anchor_short_buffer_atr) * atr_abs
+            struct_px_dist_pct = max(0.0, (anchor_price - entry_price) / max(entry_price, 1e-9))
+            final_px_dist_pct = max(struct_px_dist_pct, atr_px_dist_pct)
+            sl_r = -(final_px_dist_pct * lev)  # 价格距离 -> pnl_r
+            sl_r = float(np.clip(sl_r, structure_anchor_max_stop_short, structure_anchor_min_stop_short))
+            diag = {
+                'mode': 'structure_atr',
+                'regime': str(regime_label or 'neutral'),
+                'k': round(k_reg, 5),
+                'lookback': lb,
+                'swing_price': round(swing_high, 6),
+                'anchor_price': round(anchor_price, 6),
+                'struct_px_dist_pct': round(struct_px_dist_pct, 6),
+                'atr_px_dist_pct': round(atr_px_dist_pct, 6),
+                'final_px_dist_pct': round(final_px_dist_pct, 6),
+                'sl_r': round(sl_r, 6),
+            }
+            return sl_r, diag
+
+        if low_win.empty:
+            return None, {}
+        swing_low = float(np.nanmin(low_win.values))
+        anchor_price = swing_low - max(0.0, structure_anchor_long_buffer_atr) * atr_abs
+        struct_px_dist_pct = max(0.0, (entry_price - anchor_price) / max(entry_price, 1e-9))
+        final_px_dist_pct = max(struct_px_dist_pct, atr_px_dist_pct)
+        sl_r = -(final_px_dist_pct * lev)
+        sl_r = float(np.clip(sl_r, structure_anchor_max_stop_long, structure_anchor_min_stop_long))
+        diag = {
+            'mode': 'structure_atr',
+            'regime': str(regime_label or 'neutral'),
+            'k': round(k_reg, 5),
+            'lookback': lb,
+            'swing_price': round(swing_low, 6),
+            'anchor_price': round(anchor_price, 6),
+            'struct_px_dist_pct': round(struct_px_dist_pct, 6),
+            'atr_px_dist_pct': round(atr_px_dist_pct, 6),
+            'final_px_dist_pct': round(final_px_dist_pct, 6),
+            'sl_r': round(sl_r, 6),
+        }
+        return sl_r, diag
+
     eng._data_quality_flags = list(data_quality_flags)
     eng._risk_model_mode = str(config.get('_risk_model_mode') or ('risk_per_trade' if use_risk_per_trade else 'margin_use'))
     if config.get('_stop_anchor_type'):
         eng._stop_anchor_type = str(config.get('_stop_anchor_type'))
+    elif use_structure_anchor_sl:
+        eng._stop_anchor_type = "structure_atr"
     elif use_risk_per_trade:
         eng._stop_anchor_type = f"risk_{risk_stop_mode}"
     elif use_atr_sl:
@@ -2471,6 +2613,26 @@ def _run_strategy_core(
         if vol_active:
             cur_margin_use = float(np.clip(cur_margin_use * vol_scale, 0.05, 0.95))
             cur_lev = int(max(1, round(cur_lev * np.sqrt(vol_scale))))
+
+        # v10.3 D1: 结构锚定 + ATR 包络止损（可与 risk-per-trade 联动）
+        _short_stop_diag = {}
+        _long_stop_diag = {}
+        if use_structure_anchor_sl:
+            _short_ref_entry = float(eng.futures_short.entry_price) if eng.futures_short else float(exec_price)
+            _short_ref_lev = int(eng.futures_short.leverage) if eng.futures_short else int(max(1, cur_lev))
+            _short_sl_struct, _short_stop_diag = _calc_structure_anchor_sl(
+                'short', idx, _short_ref_entry, _short_ref_lev, _atr_pct_val, _regime_label
+            )
+            if _short_sl_struct is not None:
+                actual_short_sl = float(_short_sl_struct)
+
+            _long_ref_entry = float(eng.futures_long.entry_price) if eng.futures_long else float(exec_price)
+            _long_ref_lev = int(eng.futures_long.leverage) if eng.futures_long else int(max(1, cur_lev))
+            _long_sl_struct, _long_stop_diag = _calc_structure_anchor_sl(
+                'long', idx, _long_ref_entry, _long_ref_lev, _atr_pct_val, _regime_label
+            )
+            if _long_sl_struct is not None:
+                actual_long_sl = float(_long_sl_struct)
 
         # 冲突区间过滤
         in_conflict = False
@@ -2893,7 +3055,10 @@ def _run_strategy_core(
                                            actual_sl=actual_short_sl)
             else:
                 margin = eng.available_margin() * cur_margin_use
-            margin *= _leg_budget_mult(_regime_label, 'short')
+            _leg_mult = _leg_budget_mult(_regime_label, 'short')
+            margin *= _leg_mult
+            _dyn_mult, _dyn_reasons, _dyn_diag = _neutral_short_dynamic_mult(_regime_label, 'short', micro_state)
+            margin *= _dyn_mult
             # ── Neutral 结构质量仓位调节: 弱共识信号减仓，保持交易时序不变 ──
             if (use_neutral_structural_discount
                     and _regime_label in structural_discount_short_regimes
@@ -2927,6 +3092,19 @@ def _run_strategy_core(
             _short_extra['sig_short_conflict_reason'] = str(_short_conflict_reason or '')
             _short_extra['sig_short_conflict_div_buy'] = float(_short_conflict_div_buy)
             _short_extra['sig_short_conflict_ma_sell'] = float(_short_conflict_ma_sell)
+            _short_extra['sig_leg_budget_mult'] = float(_leg_mult)
+            _short_extra['sig_neutral_short_dynamic_mult'] = float(_dyn_mult)
+            _short_extra['sig_neutral_short_dynamic_reasons'] = ','.join(_dyn_reasons)
+            _short_extra['sig_neutral_short_oi_cov'] = float(_dyn_diag.get('oi_cov', 0.0))
+            _short_extra['sig_neutral_short_oi_stale'] = int(_dyn_diag.get('oi_stale', 0))
+            _short_extra['sig_neutral_short_crowding'] = bool(_dyn_diag.get('crowding', False))
+            _short_extra['sig_stop_model'] = str(getattr(eng, '_stop_anchor_type', 'fixed_sl'))
+            _short_extra['sig_actual_sl_r'] = float(actual_short_sl)
+            if _short_stop_diag:
+                _short_extra['sig_stop_struct_k'] = float(_short_stop_diag.get('k', 0.0))
+                _short_extra['sig_stop_struct_dist_pct'] = float(_short_stop_diag.get('struct_px_dist_pct', 0.0))
+                _short_extra['sig_stop_atr_dist_pct'] = float(_short_stop_diag.get('atr_px_dist_pct', 0.0))
+                _short_extra['sig_stop_final_dist_pct'] = float(_short_stop_diag.get('final_px_dist_pct', 0.0))
             eng.open_short(exec_price, dt, margin, actual_lev,
                 f"开空 {actual_lev}x SS={ss:.0f} BS={bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}",
                 bar_low=_bar_low, bar_high=_bar_high, extra=_short_extra)
@@ -3451,6 +3629,13 @@ def _run_strategy_core(
             _long_extra['sig_long_conflict_reason'] = str(_long_conflict_reason or '')
             _long_extra['sig_long_conflict_div_sell'] = float(_long_conflict_div_sell)
             _long_extra['sig_long_conflict_ma_buy'] = float(_long_conflict_ma_buy)
+            _long_extra['sig_stop_model'] = str(getattr(eng, '_stop_anchor_type', 'fixed_sl'))
+            _long_extra['sig_actual_sl_r'] = float(actual_long_sl)
+            if _long_stop_diag:
+                _long_extra['sig_stop_struct_k'] = float(_long_stop_diag.get('k', 0.0))
+                _long_extra['sig_stop_struct_dist_pct'] = float(_long_stop_diag.get('struct_px_dist_pct', 0.0))
+                _long_extra['sig_stop_atr_dist_pct'] = float(_long_stop_diag.get('atr_px_dist_pct', 0.0))
+                _long_extra['sig_stop_final_dist_pct'] = float(_long_stop_diag.get('final_px_dist_pct', 0.0))
             eng.open_long(exec_price, dt, margin, actual_lev,
                 f"开多 {actual_lev}x SS={ss:.0f} BS={trend_long_bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}",
                 bar_low=_bar_low, bar_high=_bar_high, extra=_long_extra)

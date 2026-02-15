@@ -376,9 +376,39 @@ def _build_default_config():
         'risk_budget_high_vol_short': _LIVE_DEFAULT.risk_budget_high_vol_short,
         'risk_budget_high_vol_choppy_long': _LIVE_DEFAULT.risk_budget_high_vol_choppy_long,
         'risk_budget_high_vol_choppy_short': _LIVE_DEFAULT.risk_budget_high_vol_choppy_short,
+        # ── v10.3 D2: neutral short 动态小仓预算 ──
+        'use_neutral_short_dynamic_budget': _LIVE_DEFAULT.use_neutral_short_dynamic_budget,
+        'neutral_short_low_quality_floor': _LIVE_DEFAULT.neutral_short_low_quality_floor,
+        'neutral_short_crowding_floor': _LIVE_DEFAULT.neutral_short_crowding_floor,
+        'neutral_short_quality_cov_thr': _LIVE_DEFAULT.neutral_short_quality_cov_thr,
+        'neutral_short_quality_stale_thr': _LIVE_DEFAULT.neutral_short_quality_stale_thr,
+        'neutral_short_crowding_funding_z': _LIVE_DEFAULT.neutral_short_crowding_funding_z,
+        'neutral_short_crowding_oi_z': _LIVE_DEFAULT.neutral_short_crowding_oi_z,
+        'neutral_short_crowding_taker_imb': _LIVE_DEFAULT.neutral_short_crowding_taker_imb,
         # ── P21: Risk-per-trade ──
         'use_risk_per_trade': _LIVE_DEFAULT.use_risk_per_trade,
         'risk_per_trade_pct': _LIVE_DEFAULT.risk_per_trade_pct,
+        'risk_stop_mode': _LIVE_DEFAULT.risk_stop_mode,
+        'risk_atr_mult_short': _LIVE_DEFAULT.risk_atr_mult_short,
+        'risk_atr_mult_long': _LIVE_DEFAULT.risk_atr_mult_long,
+        'risk_fixed_stop_short': _LIVE_DEFAULT.risk_fixed_stop_short,
+        'risk_fixed_stop_long': _LIVE_DEFAULT.risk_fixed_stop_long,
+        'risk_max_margin_pct': _LIVE_DEFAULT.risk_max_margin_pct,
+        'risk_min_margin_pct': _LIVE_DEFAULT.risk_min_margin_pct,
+        # ── v10.3 D1: 结构锚定 + ATR 包络止损 ──
+        'use_structure_anchor_sl': _LIVE_DEFAULT.use_structure_anchor_sl,
+        'structure_anchor_lookback': _LIVE_DEFAULT.structure_anchor_lookback,
+        'structure_anchor_short_buffer_atr': _LIVE_DEFAULT.structure_anchor_short_buffer_atr,
+        'structure_anchor_long_buffer_atr': _LIVE_DEFAULT.structure_anchor_long_buffer_atr,
+        'structure_anchor_k_neutral': _LIVE_DEFAULT.structure_anchor_k_neutral,
+        'structure_anchor_k_trend': _LIVE_DEFAULT.structure_anchor_k_trend,
+        'structure_anchor_k_low_vol_trend': _LIVE_DEFAULT.structure_anchor_k_low_vol_trend,
+        'structure_anchor_k_high_vol': _LIVE_DEFAULT.structure_anchor_k_high_vol,
+        'structure_anchor_k_high_vol_choppy': _LIVE_DEFAULT.structure_anchor_k_high_vol_choppy,
+        'structure_anchor_min_stop_short': _LIVE_DEFAULT.structure_anchor_min_stop_short,
+        'structure_anchor_max_stop_short': _LIVE_DEFAULT.structure_anchor_max_stop_short,
+        'structure_anchor_min_stop_long': _LIVE_DEFAULT.structure_anchor_min_stop_long,
+        'structure_anchor_max_stop_long': _LIVE_DEFAULT.structure_anchor_max_stop_long,
         # ── 止损后冷却倍数(v5.2) ──
         'short_sl_cd_mult': _LIVE_DEFAULT.short_sl_cd_mult,
         'long_sl_cd_mult': _LIVE_DEFAULT.long_sl_cd_mult,
@@ -1058,7 +1088,9 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
     config['_perp_data_quality'] = dict(PERP_DATA_QUALITY.get(PRIMARY_TF, {}))
     config['_data_quality_flags'] = list((config['_perp_data_quality'].get('quality_flags') or []))
     config['_risk_model_mode'] = 'risk_per_trade' if bool(config.get('use_risk_per_trade', False)) else 'margin_use'
-    if bool(config.get('use_risk_per_trade', False)):
+    if bool(config.get('use_structure_anchor_sl', False)):
+        config['_stop_anchor_type'] = 'structure_atr'
+    elif bool(config.get('use_risk_per_trade', False)):
         config['_stop_anchor_type'] = f"risk_{str(config.get('risk_stop_mode', 'atr')).lower()}"
     elif bool(config.get('use_atr_sl', False)):
         config['_stop_anchor_type'] = 'atr_sl'
