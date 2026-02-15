@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}策略技术文档 v6.0 - 技术分析平台{% endblock %}
+
+{% block content %}
+<style>
+    .tech-doc {
+        max-width: 960px;
+        line-height: 1.8;
+        font-size: 14px;
+        color: var(--text-secondary);
+    }
+    .tech-doc h1 {
+        font-size: 26px; font-weight: 700; color: var(--text-primary);
+        margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--accent-blue);
+    }
+    .tech-doc h1:first-child { margin-top: 0; }
+    .tech-doc h2 {
+        font-size: 20px; font-weight: 700; color: var(--text-primary);
+        margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+    }
+    .tech-doc h3 {
+        font-size: 16px; font-weight: 600; color: var(--text-primary);
+        margin: 20px 0 8px;
+    }
+    .tech-doc h4 {
+        font-size: 14px; font-weight: 600; color: var(--text-primary);
+        margin: 16px 0 6px;
+    }
+    .tech-doc p { margin: 8px 0; }
+    .tech-doc ul, .tech-doc ol { margin: 8px 0 8px 20px; }
+    .tech-doc li { margin: 4px 0; }
+    .tech-doc strong { color: var(--text-primary); }
+    .tech-doc code {
+        background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;
+        font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+        color: var(--accent-blue);
+    }
+    .tech-doc pre {
+        background: var(--bg-secondary); border: 1px solid var(--border);
+        border-radius: 8px; padding: 16px; margin: 12px 0;
+        overflow-x: auto; font-size: 12px; line-height: 1.6;
+    }
+    .tech-doc pre code {
+        background: none; padding: 0; color: var(--text-secondary);
+    }
+    .tech-doc table {
+        width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px;
+    }
+    .tech-doc th, .tech-doc td {
+        text-align: left; padding: 8px 12px;
+        border-bottom: 1px solid var(--border); vertical-align: top;
+    }
+    .tech-doc th { color: var(--text-muted); font-weight: 600; background: var(--bg-secondary); }
+    .tech-doc hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+    .tech-doc blockquote {
+        border-left: 3px solid var(--accent-blue); padding: 8px 16px; margin: 12px 0;
+        background: rgba(74,158,255,0.05); border-radius: 0 6px 6px 0;
+    }
+    .tech-doc a { color: var(--accent-blue); text-decoration: none; }
+    .tech-doc a:hover { text-decoration: underline; }
+    .doc-meta {
+        display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px;
+    }
+    .doc-meta .badge {
+        padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;
+    }
+    .doc-meta .blue { background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+    .doc-meta .green { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+    .doc-meta .purple { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+    .doc-toc {
+        background: var(--bg-secondary); border: 1px solid var(--border);
+        border-radius: 10px; padding: 16px 20px; margin-bottom: 24px;
+    }
+    .doc-toc h4 { margin: 0 0 8px; font-size: 13px; color: var(--text-muted); }
+    .doc-toc ul { list-style: none; margin: 0; padding: 0; }
+    .doc-toc li { margin: 3px 0; }
+    .doc-toc a { font-size: 13px; color: var(--text-secondary); }
+    .doc-toc a:hover { color: var(--accent-blue); }
+    .update-hint {
+        font-size: 12px; color: var(--text-muted);
+        margin-top: 32px; padding-top: 12px;
+        border-top: 1px solid var(--border);
+    }
+</style>
+
+<div class="doc-meta">
+    <span class="badge blue">v{{ version }}</span>
+    <span class="badge green">最后更新: {{ last_updated }}</span>
+    <span class="badge purple">WR {{ win_rate }} / cPF {{ cpf }}</span>
+</div>
+
+<div class="doc-toc">
+    <h4>📑 目录</h4>
+    <ul>
+        <li><a href="#section-1">一、策略概述与核心指标</a></li>
+        <li><a href="#section-2">二、架构分层</a></li>
+        <li><a href="#section-3">三、信号生成 — 六书融合</a></li>
+        <li><a href="#section-4">四、多周期共识</a></li>
+        <li><a href="#section-5">五、Regime 检测</a></li>
+        <li><a href="#section-6">六、开仓逻辑</a></li>
+        <li><a href="#section-7">七、持仓管理与退出</a></li>
+        <li><a href="#section-8">八、结构折扣机制</a></li>
+        <li><a href="#section-9">九、冲突软折扣</a></li>
+        <li><a href="#section-10">十、完整参数集</a></li>
+        <li><a href="#section-11">十一、已知问题与优化方向</a></li>
+    </ul>
+</div>
+
+<div class="tech-doc">
+    {{ content | safe }}
+</div>
+
+<div class="update-hint">
+    本文档随策略迭代自动更新 · 文件路径: <code>docs/strategy_tech_doc.md</code> · 版本: v{{ version }}
+</div>
+{% endblock %}

@@ -844,6 +844,34 @@ def page_current_strategy():
     return render_template('page_current_strategy.html', active_page='current-strategy')
 
 
+# ======================================================
+#   策略技术文档（Markdown 渲染）
+# ======================================================
+@app.route('/strategy/tech-doc')
+def page_strategy_tech_doc():
+    import markdown
+    doc_path = os.path.join(os.path.dirname(__file__), 'docs', 'strategy_tech_doc.md')
+    try:
+        with open(doc_path, 'r', encoding='utf-8') as f:
+            md_text = f.read()
+    except FileNotFoundError:
+        md_text = '> 文档文件不存在，请检查 `docs/strategy_tech_doc.md`'
+    html_content = markdown.markdown(
+        md_text,
+        extensions=['tables', 'fenced_code', 'codehilite', 'toc'],
+        extension_configs={'codehilite': {'css_class': 'highlight', 'guess_lang': False}},
+    )
+    return render_template(
+        'page_strategy_tech_doc.html',
+        active_page='strategy-tech-doc',
+        content=html_content,
+        version='6.0',
+        last_updated='2026-02-15',
+        win_rate='63.1%',
+        cpf='1.53',
+    )
+
+
 #   实盘控制面板
 # ======================================================
 @app.route('/strategy/live-control')

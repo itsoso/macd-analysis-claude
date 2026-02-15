@@ -6,6 +6,7 @@ mplfinance>=0.12.10b0
 akshare>=1.12.0
 plotly>=5.15.0
 flask>=3.0.0,<4.0.0
+markdown>=3.5.0
 gunicorn>=22.0.0
 requests>=2.31.0
 python-binance>=1.0.19
