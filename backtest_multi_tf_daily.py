@@ -103,10 +103,27 @@ def _build_default_config():
         'use_spot_sell_confirm': _LIVE_DEFAULT.use_spot_sell_confirm,
         'spot_sell_confirm_ss': _LIVE_DEFAULT.spot_sell_confirm_ss,
         'spot_sell_confirm_min': _LIVE_DEFAULT.spot_sell_confirm_min,
+        # neutral 体制 SPOT_SELL 分层（弱确认减仓）
+        'use_neutral_spot_sell_layer': _LIVE_DEFAULT.use_neutral_spot_sell_layer,
+        'neutral_spot_sell_confirm_thr': _LIVE_DEFAULT.neutral_spot_sell_confirm_thr,
+        'neutral_spot_sell_min_confirms_any': _LIVE_DEFAULT.neutral_spot_sell_min_confirms_any,
+        'neutral_spot_sell_strong_confirms': _LIVE_DEFAULT.neutral_spot_sell_strong_confirms,
+        'neutral_spot_sell_full_ss_min': _LIVE_DEFAULT.neutral_spot_sell_full_ss_min,
+        'neutral_spot_sell_weak_ss_min': _LIVE_DEFAULT.neutral_spot_sell_weak_ss_min,
+        'neutral_spot_sell_weak_pct_cap': _LIVE_DEFAULT.neutral_spot_sell_weak_pct_cap,
+        'neutral_spot_sell_block_ss_min': _LIVE_DEFAULT.neutral_spot_sell_block_ss_min,
         # SPOT_SELL 尾部风控
         'use_spot_sell_cap': _LIVE_DEFAULT.use_spot_sell_cap,
         'spot_sell_max_pct': _LIVE_DEFAULT.spot_sell_max_pct,
         'spot_sell_regime_block': _LIVE_DEFAULT.spot_sell_regime_block,
+        # 反停滞再入场（长期无 spot 交易后小仓再入）
+        'use_stagnation_reentry': _LIVE_DEFAULT.use_stagnation_reentry,
+        'stagnation_reentry_days': _LIVE_DEFAULT.stagnation_reentry_days,
+        'stagnation_reentry_regimes': _LIVE_DEFAULT.stagnation_reentry_regimes,
+        'stagnation_reentry_min_spot_ratio': _LIVE_DEFAULT.stagnation_reentry_min_spot_ratio,
+        'stagnation_reentry_buy_pct': _LIVE_DEFAULT.stagnation_reentry_buy_pct,
+        'stagnation_reentry_min_usdt': _LIVE_DEFAULT.stagnation_reentry_min_usdt,
+        'stagnation_reentry_cooldown_days': _LIVE_DEFAULT.stagnation_reentry_cooldown_days,
         # ── 实验参数（默认关闭/中性） ──
         # NoTP 提前退出（长短独立 + regime 白名单）
         'no_tp_exit_bars': _LIVE_DEFAULT.no_tp_exit_bars,  # 旧参数, 兼容
@@ -1011,6 +1028,10 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         summary['neutral_short_structure_gate'] = result.get('neutral_short_structure_gate')
     if result.get('structural_discount'):
         summary['structural_discount'] = result.get('structural_discount')
+    if result.get('neutral_spot_sell_layer'):
+        summary['neutral_spot_sell_layer'] = result.get('neutral_spot_sell_layer')
+    if result.get('stagnation_reentry'):
+        summary['stagnation_reentry'] = result.get('stagnation_reentry')
     if result.get('confidence_learning'):
         summary['confidence_learning'] = result.get('confidence_learning')
     if result.get('short_adverse_exit'):
@@ -1093,6 +1114,21 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         print(f"  结构折扣:    eval={sd.get('evaluated', 0)} "
               f"discounted={sd.get('discount_applied', 0)} avg_mult={sd.get('avg_mult', 0.0):.3f} "
               f"dist[{cd_text}]")
+    if summary.get('neutral_spot_sell_layer'):
+        ns = summary['neutral_spot_sell_layer']
+        rr = ns.get('reason_counts', {}) or {}
+        rr_text = ', '.join(f"{k}:{v}" for k, v in sorted(rr.items())) if rr else '-'
+        print(f"  Neutral卖出分层: eval={ns.get('evaluated', 0)} "
+              f"blocked={ns.get('blocked', 0)} capped={ns.get('capped', 0)} "
+              f"full={ns.get('full_allowed', 0)} avg_pct={ns.get('avg_effective_pct', 0.0):.3f} "
+              f"reasons[{rr_text}]")
+    if summary.get('stagnation_reentry'):
+        sr = summary['stagnation_reentry']
+        rr = sr.get('reason_counts', {}) or {}
+        rr_text = ', '.join(f"{k}:{v}" for k, v in sorted(rr.items())) if rr else '-'
+        print(f"  停滞再入场:  eval={sr.get('evaluated', 0)} "
+              f"triggered={sr.get('triggered', 0)} days={sr.get('days', 0)} "
+              f"buy_pct={sr.get('buy_pct', 0.0):.2f} reasons[{rr_text}]")
     if summary.get('confidence_learning'):
         cl = summary['confidence_learning']
         cbr = cl.get('blocked_reason_counts', {}) or {}

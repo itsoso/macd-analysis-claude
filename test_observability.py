@@ -221,3 +221,44 @@ def test_strategy_snapshot_contains_long_high_conf_gate_fields():
     ]
     for key in required_keys:
         assert key in snapshot
+
+
+def test_strategy_snapshot_contains_spot_layer_and_reentry_fields():
+    """strategy_snapshot 必须包含 neutral SPOT_SELL 分层与停滞再入场参数。"""
+    config = {
+        'use_neutral_spot_sell_layer': True,
+        'neutral_spot_sell_confirm_thr': 10.0,
+        'neutral_spot_sell_min_confirms_any': 2,
+        'neutral_spot_sell_strong_confirms': 4,
+        'neutral_spot_sell_full_ss_min': 70.0,
+        'neutral_spot_sell_weak_ss_min': 55.0,
+        'neutral_spot_sell_weak_pct_cap': 0.15,
+        'neutral_spot_sell_block_ss_min': 70.0,
+        'use_stagnation_reentry': True,
+        'stagnation_reentry_days': 10.0,
+        'stagnation_reentry_regimes': 'trend,low_vol_trend',
+        'stagnation_reentry_min_spot_ratio': 0.3,
+        'stagnation_reentry_buy_pct': 0.2,
+        'stagnation_reentry_min_usdt': 500.0,
+        'stagnation_reentry_cooldown_days': 3.0,
+    }
+    snapshot = db_mod._build_strategy_snapshot(config)
+    required_keys = [
+        'use_neutral_spot_sell_layer',
+        'neutral_spot_sell_confirm_thr',
+        'neutral_spot_sell_min_confirms_any',
+        'neutral_spot_sell_strong_confirms',
+        'neutral_spot_sell_full_ss_min',
+        'neutral_spot_sell_weak_ss_min',
+        'neutral_spot_sell_weak_pct_cap',
+        'neutral_spot_sell_block_ss_min',
+        'use_stagnation_reentry',
+        'stagnation_reentry_days',
+        'stagnation_reentry_regimes',
+        'stagnation_reentry_min_spot_ratio',
+        'stagnation_reentry_buy_pct',
+        'stagnation_reentry_min_usdt',
+        'stagnation_reentry_cooldown_days',
+    ]
+    for key in required_keys:
+        assert key in snapshot

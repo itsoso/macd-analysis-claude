@@ -772,6 +772,23 @@ def _run_strategy_core(
     neutral_mid_ss_sell_ratio = float(config.get('neutral_mid_ss_sell_ratio', 1.0))
     neutral_mid_ss_lo = float(config.get('neutral_mid_ss_lo', 50))
     neutral_mid_ss_hi = float(config.get('neutral_mid_ss_hi', 70))
+    # neutral 体制 SPOT_SELL 分层：弱确认只减仓，强确认才放开
+    use_neutral_spot_sell_layer = bool(config.get('use_neutral_spot_sell_layer', False))
+    neutral_spot_sell_confirm_thr = float(config.get('neutral_spot_sell_confirm_thr', 10.0))
+    neutral_spot_sell_min_confirms_any = int(config.get('neutral_spot_sell_min_confirms_any', 2))
+    neutral_spot_sell_strong_confirms = int(config.get('neutral_spot_sell_strong_confirms', 4))
+    neutral_spot_sell_full_ss_min = float(config.get('neutral_spot_sell_full_ss_min', 70.0))
+    neutral_spot_sell_weak_ss_min = float(config.get('neutral_spot_sell_weak_ss_min', 55.0))
+    neutral_spot_sell_weak_pct_cap = float(config.get('neutral_spot_sell_weak_pct_cap', 0.15))
+    neutral_spot_sell_block_ss_min = float(config.get('neutral_spot_sell_block_ss_min', 70.0))
+    # 反停滞再入场：长期无 spot 交易且低现货暴露时，允许小仓再入
+    use_stagnation_reentry = bool(config.get('use_stagnation_reentry', False))
+    stagnation_reentry_days = float(config.get('stagnation_reentry_days', 10.0))
+    stagnation_reentry_regimes_raw = config.get('stagnation_reentry_regimes', 'trend,low_vol_trend')
+    stagnation_reentry_min_spot_ratio = float(config.get('stagnation_reentry_min_spot_ratio', 0.30))
+    stagnation_reentry_buy_pct = float(config.get('stagnation_reentry_buy_pct', 0.20))
+    stagnation_reentry_min_usdt = float(config.get('stagnation_reentry_min_usdt', 500.0))
+    stagnation_reentry_cooldown_days = float(config.get('stagnation_reentry_cooldown_days', 3.0))
     # neutral 体制信号质量门控（结构性改造，降低震荡误触发）
     use_neutral_quality_gate = bool(config.get('use_neutral_quality_gate', True))
     neutral_min_score_gap = float(config.get('neutral_min_score_gap', 12.0))
@@ -913,6 +930,7 @@ def _run_strategy_core(
     )
     structural_discount_short_regimes = _parse_regimes(structural_discount_short_regimes_raw) or {'neutral'}
     structural_discount_long_regimes = _parse_regimes(structural_discount_long_regimes_raw) or {'neutral'}
+    stagnation_reentry_regimes = _parse_regimes(stagnation_reentry_regimes_raw)
 
     # 实验3: regime-specific short_threshold — 字典 {regime: threshold}
     # 例: {'neutral': 35, 'high_vol': 35} → 在这些 regime 下用 35, 其余用默认
@@ -1058,6 +1076,21 @@ def _run_strategy_core(
         'regime_discount_counts': {},
         'avg_mult': 0.0,
         'sum_mult': 0.0,
+    }
+    neutral_spot_sell_layer_stats = {
+        'enabled': use_neutral_spot_sell_layer,
+        'evaluated': 0,
+        'blocked': 0,
+        'capped': 0,
+        'full_allowed': 0,
+        'sum_effective_pct': 0.0,
+        'reason_counts': {},
+    }
+    stagnation_reentry_stats = {
+        'enabled': use_stagnation_reentry,
+        'evaluated': 0,
+        'triggered': 0,
+        'reason_counts': {},
     }
     confidence_model = {}
     confidence_open_ctx = {'short': None, 'long': None}
@@ -1637,6 +1670,10 @@ def _run_strategy_core(
         '4h': 4, '6h': 6, '8h': 8, '12h': 12, '16h': 16, '24h': 24,
     }
     bars_per_8h = max(1, int(8 / tf_hours.get(primary_tf, 1)))
+    bars_per_day = max(1, int(round(24 / tf_hours.get(primary_tf, 1))))
+    stagnation_reentry_bars = max(1, int(round(max(0.0, stagnation_reentry_days) * bars_per_day)))
+    stagnation_reentry_cooldown_bars = max(0, int(round(max(0.0, stagnation_reentry_cooldown_days) * bars_per_day)))
+    last_spot_trade_idx = init_idx
 
     record_interval = max(1, len(primary_df) // 500)
 
@@ -2003,12 +2040,67 @@ def _run_strategy_core(
         if neutral_mid_ss_sell_ratio < 1.0 and _regime_label == 'neutral' and neutral_mid_ss_lo <= ss <= neutral_mid_ss_hi:
             effective_sell_pct *= neutral_mid_ss_sell_ratio
 
-        if not trend_floor_active and ss >= effective_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500 and spot_sell_confirmed and spot_sell_regime_ok:
+        # neutral 分层 SPOT_SELL：按结构确认强弱控制卖出力度
+        spot_sell_layer_ok = True
+        spot_sell_layer_mode = 'off'
+        spot_sell_struct_confirms = 0
+        if use_neutral_spot_sell_layer and _regime_label == 'neutral':
+            neutral_spot_sell_layer_stats['evaluated'] += 1
+            spot_sell_layer_mode = 'bypass'
+            _book = signal_meta.get('book_features_weighted', {}) if isinstance(signal_meta, dict) else {}
+            _thr = float(neutral_spot_sell_confirm_thr)
+            _keys = ('ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell')
+            for _k in _keys:
+                _v = float(_book.get(_k, 0.0) or 0.0) if isinstance(_book, dict) else 0.0
+                if _v >= _thr:
+                    spot_sell_struct_confirms += 1
+
+            if (
+                ss >= neutral_spot_sell_block_ss_min
+                and spot_sell_struct_confirms < neutral_spot_sell_min_confirms_any
+            ):
+                spot_sell_layer_ok = False
+                spot_sell_layer_mode = 'blocked_low_confirm'
+                neutral_spot_sell_layer_stats['blocked'] += 1
+                _rc = neutral_spot_sell_layer_stats['reason_counts']
+                _rc[spot_sell_layer_mode] = int(_rc.get(spot_sell_layer_mode, 0)) + 1
+            elif (
+                ss >= neutral_spot_sell_full_ss_min
+                and spot_sell_struct_confirms >= neutral_spot_sell_strong_confirms
+            ):
+                spot_sell_layer_mode = 'full_strong_confirm'
+                neutral_spot_sell_layer_stats['full_allowed'] += 1
+                _rc = neutral_spot_sell_layer_stats['reason_counts']
+                _rc[spot_sell_layer_mode] = int(_rc.get(spot_sell_layer_mode, 0)) + 1
+            elif ss >= neutral_spot_sell_weak_ss_min:
+                _weak_cap = float(np.clip(neutral_spot_sell_weak_pct_cap, 0.01, 1.0))
+                if effective_sell_pct > _weak_cap:
+                    effective_sell_pct = _weak_cap
+                    neutral_spot_sell_layer_stats['capped'] += 1
+                    spot_sell_layer_mode = 'weak_capped'
+                else:
+                    spot_sell_layer_mode = 'weak_keep'
+                _rc = neutral_spot_sell_layer_stats['reason_counts']
+                _rc[spot_sell_layer_mode] = int(_rc.get(spot_sell_layer_mode, 0)) + 1
+            else:
+                spot_sell_layer_mode = 'below_weak_ss'
+                _rc = neutral_spot_sell_layer_stats['reason_counts']
+                _rc[spot_sell_layer_mode] = int(_rc.get(spot_sell_layer_mode, 0)) + 1
+
+            neutral_spot_sell_layer_stats['sum_effective_pct'] += float(effective_sell_pct)
+
+        if not trend_floor_active and ss >= effective_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500 and spot_sell_confirmed and spot_sell_regime_ok and spot_sell_layer_ok:
             _sell_extra = _build_signal_extra('short', ss, bs, signal_meta, spot_sell_conf_info)
+            _sell_extra.update({
+                'sig_spot_sell_layer_mode': spot_sell_layer_mode,
+                'sig_spot_sell_struct_confirms': int(spot_sell_struct_confirms),
+                'sig_spot_sell_effective_pct': round(float(effective_sell_pct), 5),
+            })
             eng.spot_sell(
                 exec_price, dt, effective_sell_pct, f"卖出 SS={ss:.0f}",
                 bar_low=_bar_low, bar_high=_bar_high, extra=_sell_extra
             )
+            last_spot_trade_idx = idx
             spot_cd = effective_spot_cooldown
 
         # 先执行“反向平仓”再判断开仓：
@@ -2420,12 +2512,63 @@ def _run_strategy_core(
                 # ETH不足目标, 积极补仓
                 effective_buy_threshold = min(cur_buy_threshold, 18)
                 effective_buy_pct = min(0.50, (target_ratio - eth_ratio) + 0.15)
+        # 长期停滞再入场：弱化“长期空仓+无交易”导致的错失趋势
+        if use_stagnation_reentry:
+            stagnation_reentry_stats['evaluated'] += 1
+            idle_bars = max(0, idx - int(last_spot_trade_idx))
+            idle_days = idle_bars / max(1, bars_per_day)
+            _can_regime = (not stagnation_reentry_regimes) or (_regime_label in stagnation_reentry_regimes)
+            total_val = eng.total_value(exec_price)
+            spot_ratio = (eng.spot_eth * exec_price / total_val) if total_val > 0 else 0.0
+            _re_reason = ''
+            if spot_cd != 0:
+                _re_reason = 'spot_cd'
+            elif not _can_regime:
+                _re_reason = 'regime_filtered'
+            elif not can_open_risk:
+                _re_reason = 'risk_blocked'
+            elif in_conflict:
+                _re_reason = 'signal_conflict'
+            elif idle_bars < stagnation_reentry_bars:
+                _re_reason = 'idle_not_enough'
+            elif spot_ratio >= stagnation_reentry_min_spot_ratio:
+                _re_reason = 'spot_ratio_ok'
+            elif eng.available_usdt() < stagnation_reentry_min_usdt:
+                _re_reason = 'usdt_not_enough'
+            if _re_reason:
+                _rc = stagnation_reentry_stats['reason_counts']
+                _rc[_re_reason] = int(_rc.get(_re_reason, 0)) + 1
+            elif (
+                idle_bars >= stagnation_reentry_bars
+                and spot_ratio < stagnation_reentry_min_spot_ratio
+                and eng.available_usdt() >= stagnation_reentry_min_usdt
+            ):
+                _buy_amt = eng.available_usdt() * float(np.clip(stagnation_reentry_buy_pct, 0.01, 1.0))
+                _buy_amt = max(stagnation_reentry_min_usdt, min(_buy_amt, eng.available_usdt()))
+                _re_extra = _build_signal_extra('long', ss, bs, signal_meta, spot_buy_conf_info)
+                _re_extra.update({
+                    'sig_reentry': True,
+                    'sig_reentry_idle_days': round(float(idle_days), 2),
+                    'sig_reentry_spot_ratio': round(float(spot_ratio), 5),
+                    'sig_reentry_buy_pct': round(float(stagnation_reentry_buy_pct), 5),
+                    'sig_reentry_mode': 'stagnation',
+                })
+                eng.spot_buy(
+                    exec_price, dt, _buy_amt, f"停滞再入场 {idle_days:.1f}d",
+                    bar_low=_bar_low, bar_high=_bar_high, extra=_re_extra
+                )
+                last_spot_trade_idx = idx
+                spot_cd = stagnation_reentry_cooldown_bars
+                stagnation_reentry_stats['triggered'] += 1
+                _rc = stagnation_reentry_stats['reason_counts']
+                _rc['triggered'] = int(_rc.get('triggered', 0)) + 1
         if bs >= effective_buy_threshold and spot_cd == 0 and not in_conflict and eng.available_usdt() > 500 and can_open_risk:
             _buy_extra = _build_signal_extra('long', ss, bs, signal_meta, spot_buy_conf_info)
             eng.spot_buy(
                 exec_price, dt, eng.available_usdt() * effective_buy_pct, f"买入 BS={bs:.0f}",
                 bar_low=_bar_low, bar_high=_bar_high, extra=_buy_extra
             )
+            last_spot_trade_idx = idx
             spot_cd = spot_cooldown
 
         # 开多 (用 exec_price 执行, 即本bar open)
@@ -2881,6 +3024,40 @@ def _run_strategy_core(
         })
         return _sd
 
+    def _build_neutral_spot_sell_layer_result():
+        if not use_neutral_spot_sell_layer:
+            return None
+        out = dict(neutral_spot_sell_layer_stats)
+        ev = max(1, int(out.get('evaluated', 0)))
+        out['avg_effective_pct'] = round(float(out.get('sum_effective_pct', 0.0)) / ev, 6)
+        out.pop('sum_effective_pct', None)
+        out.update({
+            'confirm_thr': neutral_spot_sell_confirm_thr,
+            'min_confirms_any': neutral_spot_sell_min_confirms_any,
+            'strong_confirms': neutral_spot_sell_strong_confirms,
+            'full_ss_min': neutral_spot_sell_full_ss_min,
+            'weak_ss_min': neutral_spot_sell_weak_ss_min,
+            'weak_pct_cap': neutral_spot_sell_weak_pct_cap,
+            'block_ss_min': neutral_spot_sell_block_ss_min,
+        })
+        return out
+
+    def _build_stagnation_reentry_result():
+        if not use_stagnation_reentry:
+            return None
+        out = dict(stagnation_reentry_stats)
+        out.update({
+            'days': stagnation_reentry_days,
+            'bars': stagnation_reentry_bars,
+            'regimes': sorted(list(stagnation_reentry_regimes)),
+            'min_spot_ratio': stagnation_reentry_min_spot_ratio,
+            'buy_pct': stagnation_reentry_buy_pct,
+            'min_usdt': stagnation_reentry_min_usdt,
+            'cooldown_days': stagnation_reentry_cooldown_days,
+            'cooldown_bars': stagnation_reentry_cooldown_bars,
+        })
+        return out
+
     def _build_book_consensus_result():
         if not use_neutral_book_consensus:
             return None
@@ -2990,6 +3167,12 @@ def _run_strategy_core(
         _sdr = _build_structural_discount_result()
         if _sdr:
             result['structural_discount'] = _sdr
+        _nsl = _build_neutral_spot_sell_layer_result()
+        if _nsl:
+            result['neutral_spot_sell_layer'] = _nsl
+        _sre = _build_stagnation_reentry_result()
+        if _sre:
+            result['stagnation_reentry'] = _sre
         if prot_state.get('enabled', False):
             result['protections'] = {
                 **prot_state.get('stats', {}),
@@ -3050,6 +3233,12 @@ def _run_strategy_core(
     _sdr = _build_structural_discount_result()
     if _sdr:
         result['structural_discount'] = _sdr
+    _nsl = _build_neutral_spot_sell_layer_result()
+    if _nsl:
+        result['neutral_spot_sell_layer'] = _nsl
+    _sre = _build_stagnation_reentry_result()
+    if _sre:
+        result['stagnation_reentry'] = _sre
     if prot_state.get('enabled', False):
         result['protections'] = {
             **prot_state.get('stats', {}),

@@ -270,10 +270,27 @@ class StrategyConfig:
     use_spot_sell_confirm: bool = True     # run#62: 启用高分确认过滤
     spot_sell_confirm_ss: float = 35       # run#62: SS>=35 需额外确认 (原 100)
     spot_sell_confirm_min: int = 3         # 至少满足 3 项确认条件
+    # neutral 体制分层 SPOT_SELL: A/B(run#496-499) 显示主样本负贡献，默认关闭
+    use_neutral_spot_sell_layer: bool = False
+    neutral_spot_sell_confirm_thr: float = 10.0
+    neutral_spot_sell_min_confirms_any: int = 2
+    neutral_spot_sell_strong_confirms: int = 4
+    neutral_spot_sell_full_ss_min: float = 70.0
+    neutral_spot_sell_weak_ss_min: float = 55.0
+    neutral_spot_sell_weak_pct_cap: float = 0.15
+    neutral_spot_sell_block_ss_min: float = 70.0
     use_spot_sell_cap: bool = False        # 不启用 (run#67 验证退化)
     spot_sell_max_pct: float = 0.30        # 单笔卖出比例上限
     # run#85: 高波动+趋势段禁止 SPOT_SELL (run#62: 仅 high_vol; 趋势段误卖实锤)
     spot_sell_regime_block: str = 'high_vol,trend'
+    # 停滞再入场: A/B(run#496-499) 触发极少且主样本负贡献，默认关闭
+    use_stagnation_reentry: bool = False
+    stagnation_reentry_days: float = 10.0
+    stagnation_reentry_regimes: str = 'trend,low_vol_trend'
+    stagnation_reentry_min_spot_ratio: float = 0.30
+    stagnation_reentry_buy_pct: float = 0.20
+    stagnation_reentry_min_usdt: float = 500.0
+    stagnation_reentry_cooldown_days: float = 3.0
     # 趋势保护（现货底仓）
     use_trend_enhance: bool = True
     trend_floor_ratio: float = 0.50

@@ -8,7 +8,7 @@
 
 <h2 id="section-1">一、策略概述与核心指标</h2>
 
-### 核心性能指标 (run#488)
+### 核心性能指标 (run#499)
 
 | 指标 | 值 |
 |------|------|
@@ -20,7 +20,7 @@
 | Alpha (vs ETH持有) | +233.4% |
 | 总费用 | $14,312 |
 
-### Regime 分布表现
+### Regime 分布表现 (run#499)
 
 | Regime | 笔数 | 净PnL | PF |
 |--------|------|-------|-----|
@@ -31,6 +31,8 @@
 | high_vol_choppy | 7 | +$1,405 | 2.16 |
 
 所有 5 个 regime 均为正 PnL，策略在各市场状态下均有效。
+
+> 2026-02-15 最新 2x2 消融（run#496~499）结论：`use_neutral_spot_sell_layer=False`、`use_stagnation_reentry=False` 为当前主样本最优组合。
 
 ---
 
@@ -404,6 +406,17 @@ confirms = sum(1 for k in keys if book_feat[k] > 10.0)
 | cooldown | 4 | 基础冷却期 |
 | reverse_min_hold_short | 8 | 反向平仓最小持仓 |
 
+### 现货执行与再入场（run#499 基线）
+
+| 参数 | 值 | 说明 |
+|------|------|------|
+| use_spot_sell_confirm | True | 现货卖出确认过滤保留 |
+| spot_sell_confirm_ss | 35 | SS>=35 启动确认 |
+| spot_sell_confirm_min | 3 | 至少3项确认 |
+| spot_sell_regime_block | high_vol,trend | 高波动/趋势段禁现货卖出 |
+| use_neutral_spot_sell_layer | False | A/B 负贡献，关闭 |
+| use_stagnation_reentry | False | A/B 负贡献，关闭 |
+
 ### 已验证无效的功能 (保持关闭)
 
 | 功能 | 测试结果 |
@@ -415,6 +428,8 @@ confirms = sum(1 for k in keys if book_feat[k] > 10.0)
 | 棘轮追踪 | 过度截断利润 |
 | 二元门控 | 有蝴蝶效应 |
 | 在线置信度学习 | 样本不足 |
+| neutral 分层 SPOT_SELL | run#496~499 主样本负贡献 |
+| 停滞再入场 | 触发稀少且主样本负贡献 |
 
 ---
 
