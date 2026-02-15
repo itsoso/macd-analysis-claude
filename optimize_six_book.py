@@ -1039,6 +1039,29 @@ def _run_strategy_core(
     continuous_trail_max_pb = float(config.get('continuous_trail_max_pb', 0.60))
     continuous_trail_min_pb = float(config.get('continuous_trail_min_pb', 0.30))
 
+    # ── P18: Regime-Adaptive 六维融合权重 (回测路径: 从 book_features 重新融合) ──
+    use_regime_adaptive_fusion = config.get('use_regime_adaptive_fusion', False)
+    _p18_weights = {
+        'trend':          {'div_w': 0.60, 'ma_w': 0.25, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
+        'low_vol_trend':  {'div_w': 0.60, 'ma_w': 0.25, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
+        'neutral':        {'div_w': 0.25, 'ma_w': 0.25, 'cs_b': 0.15, 'kdj_b': 0.15, 'bb_b': 0.12, 'vp_b': 0.06},
+        'high_vol':       {'div_w': 0.45, 'ma_w': 0.25, 'cs_b': 0.08, 'kdj_b': 0.08, 'bb_b': 0.06, 'vp_b': 0.12},
+        'high_vol_choppy':{'div_w': 0.30, 'ma_w': 0.25, 'cs_b': 0.12, 'kdj_b': 0.12, 'bb_b': 0.10, 'vp_b': 0.10},
+    }
+
+    # ── P24: Regime-Adaptive 止损 ──
+    use_regime_adaptive_sl = config.get('use_regime_adaptive_sl', False)
+    regime_short_sl_map = {
+        'neutral': float(config.get('regime_neutral_short_sl', -0.12)),
+        'trend': float(config.get('regime_trend_short_sl', -0.20)),
+        'low_vol_trend': float(config.get('regime_low_vol_trend_short_sl', -0.20)),
+        'high_vol': float(config.get('regime_high_vol_short_sl', -0.15)),
+        'high_vol_choppy': float(config.get('regime_high_vol_choppy_short_sl', -0.15)),
+    }
+
+    # ── P20: Short 侧 P13 追踪收紧 ──
+    continuous_trail_max_pb_short = float(config.get('continuous_trail_max_pb_short', continuous_trail_max_pb))
+
     short_cd = 0; long_cd = 0; spot_cd = 0
     short_bars = 0; long_bars = 0
     short_max_pnl = 0; long_max_pnl = 0
@@ -1909,8 +1932,60 @@ def _run_strategy_core(
         config['_regime_label'] = _regime_label
         # 设置到引擎, 每笔交易自动记录当前 regime / ss / bs / atr_pct
         eng._regime_label = _regime_label
-        # ── P9: Regime-adaptive SS/BS reweighting ──
-        if use_regime_adaptive_reweight and _regime_label == 'neutral':
+        # ── P24: Regime-Adaptive 止损 (在 regime 确定后应用) ──
+        if use_regime_adaptive_sl:
+            actual_short_sl = regime_short_sl_map.get(_regime_label, short_sl)
+        # ── P18: Regime-Adaptive 六维融合权重 (从 book_features 重新融合) ──
+        if use_regime_adaptive_fusion and isinstance(signal_meta, dict):
+            _bf = signal_meta.get('book_features_weighted', {})
+            if isinstance(_bf, dict) and _bf:
+                _w = _p18_weights.get(_regime_label, _p18_weights['neutral'])
+                # 支持 config 覆盖每个 regime 的权重
+                _div_w = float(config.get(f'regime_{_regime_label}_div_w', _w['div_w']))
+                _ma_w = float(config.get(f'regime_{_regime_label}_ma_w', _w['ma_w']))
+                _bsum = _div_w + _ma_w
+                if _bsum > 0:
+                    _div_w /= _bsum
+                    _ma_w /= _bsum
+                _div_s = float(_bf.get('div_sell', 0) or 0)
+                _div_b = float(_bf.get('div_buy', 0) or 0)
+                _ma_s = float(_bf.get('ma_sell', 0) or 0)
+                _ma_b = float(_bf.get('ma_buy', 0) or 0)
+                _cs_s = float(_bf.get('cs_sell', 0) or 0)
+                _cs_b_v = float(_bf.get('cs_buy', 0) or 0)
+                _bb_s = float(_bf.get('bb_sell', 0) or 0)
+                _bb_b_v = float(_bf.get('bb_buy', 0) or 0)
+                _vp_s = float(_bf.get('vp_sell', 0) or 0)
+                _vp_b_v = float(_bf.get('vp_buy', 0) or 0)
+                _kdj_s = float(_bf.get('kdj_sell', 0) or 0)
+                _kdj_b_v = float(_bf.get('kdj_buy', 0) or 0)
+                # 重新融合基数
+                _base_ss = _div_s * _div_w + _ma_s * _ma_w
+                _base_bs = _div_b * _div_w + _ma_b * _ma_w
+                # 乘法 bonus (支持 config 覆盖)
+                _cs_b = float(config.get(f'regime_{_regime_label}_cs_bonus', _w['cs_b']))
+                _kdj_b = float(config.get(f'regime_{_regime_label}_kdj_bonus', _w['kdj_b']))
+                _bb_b = float(config.get(f'regime_{_regime_label}_bb_bonus', _w['bb_b']))
+                _vp_b = float(config.get(f'regime_{_regime_label}_vp_bonus', _w['vp_b']))
+                _sb = 0.0
+                if _bb_s >= 15: _sb += _bb_b
+                if _vp_s >= 15: _sb += _vp_b
+                if _cs_s >= 25: _sb += _cs_b
+                if _kdj_s >= 15: _sb += _kdj_b
+                _bb_ = 0.0
+                if _bb_b_v >= 15: _bb_ += _bb_b
+                if _vp_b_v >= 15: _bb_ += _vp_b
+                if _cs_b_v >= 25: _bb_ += _cs_b
+                if _kdj_b_v >= 15: _bb_ += _kdj_b
+                # Veto 安全网
+                _veto_thr = float(config.get('veto_threshold', 25))
+                _sell_vetoes = sum(1 for _v in [_bb_b_v, _vp_b_v, _cs_b_v, _kdj_b_v] if _v >= _veto_thr)
+                _buy_vetoes = sum(1 for _v in [_bb_s, _vp_s, _cs_s, _kdj_s] if _v >= _veto_thr)
+                _veto_d = float(config.get('veto_dampen', 0.30))
+                ss = (_base_ss * _veto_d) if _sell_vetoes >= 2 else (_base_ss * (1 + _sb))
+                bs = (_base_bs * _veto_d) if _buy_vetoes >= 2 else (_base_bs * (1 + _bb_))
+        # ── P9: Regime-adaptive SS/BS reweighting (P18开启时自动跳过P9) ──
+        if not use_regime_adaptive_fusion and use_regime_adaptive_reweight and _regime_label == 'neutral':
             ss = ss * regime_neutral_ss_dampen
             bs = bs * regime_neutral_bs_boost
         eng._current_ss = round(ss, 1)
@@ -2483,7 +2558,7 @@ def _run_strategy_core(
             # v3分段止盈: 更早触发 (+12%/+25% vs 默认 +15%/+50%)
             _eff_partial_tp_1 = partial_tp_1_early if use_partial_tp_v3 else partial_tp_1
             _eff_partial_tp_2 = partial_tp_2_early if use_partial_tp_v3 else partial_tp_2
-            if use_partial_tp and not short_partial_done and pnl_r >= _eff_partial_tp_1:
+            if use_partial_tp and eng.futures_short and not short_partial_done and pnl_r >= _eff_partial_tp_1:
                 old_qty = eng.futures_short.quantity
                 partial_qty = old_qty * partial_tp_1_pct
                 actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)  # 空头平仓买入, 价格偏高
@@ -2509,7 +2584,7 @@ def _run_strategy_core(
                     margin_released=margin_released, partial_ratio=partial_tp_1_pct)
 
             # 二段止盈 (含滑点 + 修复frozen_margin泄漏, 使用elif避免同bar双触发)
-            elif use_partial_tp_2 and short_partial_done and not short_partial2_done and pnl_r >= _eff_partial_tp_2:
+            elif use_partial_tp_2 and eng.futures_short and short_partial_done and not short_partial2_done and pnl_r >= _eff_partial_tp_2:
                 old_qty = eng.futures_short.quantity
                 partial_qty = old_qty * partial_tp_2_pct
                 actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)
@@ -2544,7 +2619,9 @@ def _run_strategy_core(
                 # ── P13: 连续追踪止盈 (替代离散门槛) ──
                 if use_continuous_trail and eng.futures_short and short_max_pnl >= continuous_trail_start_pnl:
                     _progress = min(short_max_pnl / actual_short_tp, 1.0) if actual_short_tp > 0 else 0
-                    _eff_pb = continuous_trail_max_pb - (continuous_trail_max_pb - continuous_trail_min_pb) * _progress
+                    # P20: Short 侧使用更紧的 max_pb (空头跑得快)
+                    _short_max_pb = continuous_trail_max_pb_short
+                    _eff_pb = _short_max_pb - (_short_max_pb - continuous_trail_min_pb) * _progress
                     if pnl_r < short_max_pnl * _eff_pb:
                         eng.close_short(price, dt,
                             f"连续追踪 max={short_max_pnl*100:.0f}% pb={_eff_pb:.0%}",

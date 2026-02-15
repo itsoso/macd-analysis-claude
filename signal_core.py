@@ -509,6 +509,61 @@ def _fuse_scores(mode, config,
             if kdj_buy >= 20: bb_ += 0.12
             buy_score = base_buy * (1 + bb_)
 
+    elif mode == "regime_adaptive":
+        # ── P18: Regime-Adaptive 六维融合权重 ──
+        # 核心改造: 根据 regime 动态调整 DIV/MA 基数权重和四书 bonus
+        # 解决: neutral 中 DIV alpha 为负 (d=-0.64) 但占基数 70% 的结构性问题
+        _regime = config.get('_regime_label', 'neutral')
+
+        # Regime-specific 权重矩阵 (可通过 config 覆盖)
+        _default_weights = {
+            'trend':        {'div_w': 0.60, 'ma_w': 0.25, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
+            'low_vol_trend':{'div_w': 0.60, 'ma_w': 0.25, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
+            'neutral':      {'div_w': 0.25, 'ma_w': 0.25, 'cs_b': 0.15, 'kdj_b': 0.15, 'bb_b': 0.12, 'vp_b': 0.06},
+            'high_vol':     {'div_w': 0.45, 'ma_w': 0.25, 'cs_b': 0.08, 'kdj_b': 0.08, 'bb_b': 0.06, 'vp_b': 0.12},
+            'high_vol_choppy':{'div_w': 0.30, 'ma_w': 0.25, 'cs_b': 0.12, 'kdj_b': 0.12, 'bb_b': 0.10, 'vp_b': 0.10},
+        }
+        _w = _default_weights.get(_regime, _default_weights['neutral'])
+        _div_w = float(config.get(f'regime_{_regime}_div_w', _w['div_w']))
+        _ma_w = float(config.get(f'regime_{_regime}_ma_w', _w['ma_w']))
+        _cs_b = float(config.get(f'regime_{_regime}_cs_bonus', _w['cs_b']))
+        _kdj_b = float(config.get(f'regime_{_regime}_kdj_bonus', _w['kdj_b']))
+        _bb_b = float(config.get(f'regime_{_regime}_bb_bonus', _w['bb_b']))
+        _vp_b = float(config.get(f'regime_{_regime}_vp_bonus', _w['vp_b']))
+
+        _base_sum = _div_w + _ma_w
+        if _base_sum > 0:
+            _div_w /= _base_sum
+            _ma_w /= _base_sum
+
+        base_sell = (div_sell * _div_w + ma_sell * _ma_w) * ma_arr_bonus_sell
+        base_buy = (div_buy * _div_w + ma_buy * _ma_w) * ma_arr_bonus_buy
+
+        veto_threshold = config.get("veto_threshold", 25)
+        veto_dampen = config.get("veto_dampen", 0.30)
+        sell_vetoes = sum(1 for s in [bb_buy, vp_buy, cs_buy, kdj_buy] if s >= veto_threshold)
+        buy_vetoes = sum(1 for s in [bb_sell, vp_sell, cs_sell, kdj_sell] if s >= veto_threshold)
+
+        if sell_vetoes >= 2:
+            sell_score = base_sell * veto_dampen
+        else:
+            sb = 0
+            if bb_sell >= 15: sb += _bb_b
+            if vp_sell >= 15: sb += _vp_b
+            if cs_sell >= 25: sb += _cs_b
+            if kdj_sell >= 15: sb += _kdj_b
+            sell_score = base_sell * (1 + sb)
+
+        if buy_vetoes >= 2:
+            buy_score = base_buy * veto_dampen
+        else:
+            bb_ = 0
+            if bb_buy >= 15: bb_ += _bb_b
+            if vp_buy >= 15: bb_ += _vp_b
+            if cs_buy >= 25: bb_ += _cs_b
+            if kdj_buy >= 15: bb_ += _kdj_b
+            buy_score = base_buy * (1 + bb_)
+
     else:
         sell_score = div_sell * 0.5 + ma_sell * 0.2 + kdj_sell * 0.15 + bb_sell * 0.08 + vp_sell * 0.05 + cs_sell * 0.02
         buy_score = div_buy * 0.5 + ma_buy * 0.2 + kdj_buy * 0.15 + bb_buy * 0.08 + vp_buy * 0.05 + cs_buy * 0.02

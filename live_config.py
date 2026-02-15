@@ -222,8 +222,40 @@ STRATEGY_PARAM_VERSIONS = {
         "continuous_trail_max_pb": 0.60,          # 低利润时最宽回撤容忍 60%
         "continuous_trail_min_pb": 0.30,          # 高利润时最紧回撤容忍 30%
     },
+    "v5": {  # v8.1 (P20): v8.0 + 空头追踪收紧
+        # ── 基础参数 (继承 v8.0) ──
+        "short_threshold": 40,
+        "long_threshold": 25,
+        "short_sl": -0.20,
+        "short_tp": 0.60,
+        "long_sl": -0.10,
+        "long_tp": 0.40,
+        "partial_tp_1": 0.15,
+        "use_partial_tp_2": True,
+        "short_max_hold": 48,
+        "short_trail": 0.19,
+        "long_trail": 0.12,
+        "trail_pullback": 0.50,
+        # ── v7.0 B3: neutral short 入场质量修正 ──
+        "cooldown": 6,
+        "regime_short_threshold": "neutral:60",
+        "short_conflict_regimes": "trend,high_vol,neutral",
+        "neutral_struct_discount_0": 0.0,
+        "neutral_struct_discount_1": 0.05,
+        "neutral_struct_discount_2": 0.15,
+        "neutral_struct_discount_3": 0.50,
+        # ── v8.0 P13: 连续追踪止盈 ──
+        "use_continuous_trail": True,
+        "continuous_trail_start_pnl": 0.05,
+        "continuous_trail_max_pb": 0.60,
+        "continuous_trail_min_pb": 0.30,
+        # ── v8.1 P20: 空头追踪收紧 ──
+        # P20 A/B: IS +5.5%, PF 0.92→0.96, OOS 无回退
+        # 空头追踪回撤容忍从 60%→40%, 更早锁定利润
+        "continuous_trail_max_pb_short": 0.40,
+    },
 }
-_ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v4")
+_ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v5")
 
 
 def get_strategy_version() -> str:
@@ -550,8 +582,27 @@ class StrategyConfig:
     # 替代离散门槛触发, 改为连续动态回撤容忍
     use_continuous_trail: bool = False
     continuous_trail_start_pnl: float = 0.05     # 利润>=5%开始追踪
-    continuous_trail_max_pb: float = 0.60         # 低利润时最宽回撤容忍
+    continuous_trail_max_pb: float = 0.60         # 低利润时最宽回撤容忍 (多单)
     continuous_trail_min_pb: float = 0.30         # 高利润时最紧回撤容忍
+    continuous_trail_max_pb_short: float = 0.60   # P20: 空单最宽回撤容忍 (默认同多, 可收紧到0.40)
+
+    # ── P18: Regime-Adaptive 六维融合权重 ──
+    # 核心改造: 在回测主循环中根据 regime 动态重新融合六书分数
+    # 解决: neutral 中 DIV alpha 为负 (d=-0.64) 但占基数 70% 的结构性问题
+    # neutral: DIV 大幅降权(25%), CS/KDJ 大幅升权(bonus 15%)
+    # trend: DIV 保留高权重(60%), 背离在趋势末端有效
+    # high_vol: VP 升权(12%), 量价在高波中更有效
+    use_regime_adaptive_fusion: bool = False
+
+    # ── P24: Regime-Adaptive 止损 ──
+    # 空单止损按 regime 差异化: neutral 收紧(错了快认输), trend 保持(给空间)
+    # Claude 独创建议: -20% 对 neutral 空单过宽, crypto 空头挤压效应显著
+    use_regime_adaptive_sl: bool = False
+    regime_neutral_short_sl: float = -0.12       # neutral 空单止损 -12%
+    regime_trend_short_sl: float = -0.20         # trend 空单止损 -20% (保持)
+    regime_low_vol_trend_short_sl: float = -0.20
+    regime_high_vol_short_sl: float = -0.15      # high_vol 空单止损 -15%
+    regime_high_vol_choppy_short_sl: float = -0.15
 
     # ── 多头冲突软折扣（neutral/low_vol_trend） ──
     # 目标: 买入信号中若卖方divergence过强，先减仓再观察，降低中性体制假突破亏损。

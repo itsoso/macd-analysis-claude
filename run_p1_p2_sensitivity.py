@@ -94,7 +94,7 @@ def prepare_data(symbol, start_date, end_date, warmup_days=60):
     fetch_days = max(90, int((now - warmup_start).days + 5))
 
     primary_tf = '1h'
-    decision_tfs = ['15m', '1h', '4h', '12h']
+    decision_tfs = ['15m', '1h', '4h', '24h']  # P17: 与线上一致
     needed_tfs = sorted(set([primary_tf] + decision_tfs))
 
     all_data = {}

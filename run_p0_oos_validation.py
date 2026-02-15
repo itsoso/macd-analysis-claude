@@ -104,7 +104,8 @@ def load_base_config(opt_file='optimize_six_book_result.json'):
     with open(opt_file) as f:
         data = json.load(f)
     cfg = dict((data.get('global_best') or {}).get('config') or {})
-    cfg = _apply_conservative_risk(cfg)
+    # P17: 移除 _apply_conservative_risk, 使用原始参数与线上一致
+    # cfg = _apply_conservative_risk(cfg)  # 已废弃
     cfg.update(V6_OVERRIDES)
     return cfg
 
@@ -258,7 +259,7 @@ def main():
 
     # 时间框架配置
     primary_tf = '1h'
-    decision_tfs = ['15m', '1h', '4h', '12h']  # 与当前实盘一致
+    decision_tfs = ['15m', '1h', '4h', '24h']  # P17: 与当前实盘一致
     needed_tfs = sorted(set([primary_tf] + decision_tfs))
 
     # 加载 v6.0 配置
