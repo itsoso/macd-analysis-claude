@@ -787,7 +787,11 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
                         help='[实验性] P0向量化信号计算, 结果与原版存在近似偏差(±1%%), 不建议作为正式策略结论依据')
     parser.add_argument('--override', action='append', default=[],
                         help='覆盖配置参数, 格式: key=value (可多次使用, bool用true/false)')
-    args, _ = parser.parse_known_args()
+    parser.add_argument('--set', action='append', default=[],
+                        help='--override 的别名, 格式: key=value (兼容旧命令)')
+    args, unknown_args = parser.parse_known_args()
+    if unknown_args:
+        print(f"  ⚠️  检测到未识别参数: {' '.join(unknown_args)}")
 
     TRADE_START = args.start or trade_start or DEFAULT_TRADE_START
     TRADE_END = args.end or trade_end or DEFAULT_TRADE_END
@@ -797,8 +801,9 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         experiment_notes = args.notes
 
     # ── 应用 --override 参数 ──
-    if args.override:
-        for ov in args.override:
+    all_overrides = list(args.override or []) + list(args.set or [])
+    if all_overrides:
+        for ov in all_overrides:
             if '=' not in ov:
                 print(f"  ⚠️  忽略无效 override: {ov} (格式: key=value)")
                 continue

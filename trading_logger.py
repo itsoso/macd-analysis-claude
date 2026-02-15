@@ -252,7 +252,14 @@ class TradingLogger:
     # 通用方法
     # ============================================================
     def info(self, msg: str):
-        self.logger.info(msg)
+        """INFO 日志 — 使用 FUNDING 级别确保写入文件。
+
+        标准 logging.INFO=20 低于自定义级别 FUNDING=21，
+        导致 info() 消息不会被文件 handler 捕获。
+        改用 FUNDING 级别 (21) 确保多周期门控等关键 INFO 日志
+        同时写入控制台和文件。
+        """
+        self.logger.log(FUNDING, msg)
 
     def warning(self, msg: str):
         self.logger.warning(msg)

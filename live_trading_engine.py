@@ -318,6 +318,24 @@ class LiveTradingEngine:
                 if sig.action != "HOLD":
                     self._execute_action(sig, current_price)
 
+                # 9b. 反手逻辑 — 平仓后立即检查反方向开仓
+                #     当 CLOSE_LONG 由"反向信号"触发时，检查 OPEN_SHORT
+                #     当 CLOSE_SHORT 由"反向信号"触发时，检查 OPEN_LONG
+                if sig.action in ("CLOSE_LONG", "CLOSE_SHORT") and "反向信号" in sig.reason:
+                    reverse_sig = self._try_reverse_open(sig, current_price)
+                    if reverse_sig and reverse_sig.action != "HOLD":
+                        self._execute_action(reverse_sig, current_price)
+                        # 更新信号记录用于通知
+                        self.logger.log_signal(
+                            sell_score=reverse_sig.sell_score,
+                            buy_score=reverse_sig.buy_score,
+                            components=reverse_sig.components,
+                            conflict=reverse_sig.conflict,
+                            action_taken=reverse_sig.action,
+                            timestamp=reverse_sig.timestamp,
+                        )
+                        sig = reverse_sig
+
                 # 10. 通知信号
                 if self.config.telegram.notify_signals and sig.action != "HOLD":
                     self.notifier.notify_signal(
@@ -351,16 +369,24 @@ class LiveTradingEngine:
     # ============================================================
     # 多周期共识门控
     # ============================================================
-    def _apply_multi_tf_gate(self, sig: SignalResult) -> SignalResult:
+    def _apply_multi_tf_gate(self, sig: SignalResult,
+                             reverse_mode: bool = False) -> SignalResult:
         """
         多周期共识门控: 开仓信号需要多周期共识确认
 
-        规则:
-          - 获取多TF共识决策
+        参数:
+          reverse_mode: 反手模式 — 平仓后立即反向开仓时使用。
+                        放宽 "大小周期反向" 的限制，允许强信号通过。
+
+        规则 (常规模式):
           - 共识 actionable=True 且方向一致 → 放行开仓
-          - 共识 actionable=True 但方向相反 → 阻止，改为 HOLD
-          - 共识 actionable=False → 阻止，改为 HOLD
+          - 共识 actionable=True 但方向相反 → 阻止
+          - 共识 actionable=False → 阻止
           - 共识 strength >= consensus_min_strength → 放行
+
+        规则 (反手模式，额外放宽):
+          - "大小周期反向" → 允许通过 (因为刚刚平仓，短线反转信号可信)
+          - 仅当 coverage 不足时才阻止
         """
         try:
             # 调用多周期信号计算
@@ -384,20 +410,59 @@ class LiveTradingEngine:
             fused_bs = round(consensus.get("weighted_bs", 0), 1)
             coverage = consensus.get("coverage", 0)
 
+            mode_tag = "[多周期门控-反手]" if reverse_mode else "[多周期门控]"
             self.logger.info(
-                f"[多周期门控] 单TF建议={sig.action} | "
+                f"{mode_tag} 单TF建议={sig.action} | "
                 f"共识={label} direction={direction} "
                 f"strength={strength} actionable={actionable} "
                 f"fused_ss={fused_ss} fused_bs={fused_bs} "
                 f"coverage={coverage:.0%}"
             )
 
+            # ── 反手模式: 宽松处理 ──
+            if reverse_mode:
+                # 反手时只在 coverage 不足时阻止
+                if coverage < 0.3:
+                    sig.action = "HOLD"
+                    sig.reason = (f"反手被阻止: 覆盖率不足 "
+                                  f"{coverage:.0%} < 30%")
+                    self.logger.info(f"{mode_tag} ⛔ {sig.reason}")
+                    return sig
+
+                # 反手放行 — 附加信息，标记为反手开仓
+                sig.reason = (f"{sig.reason} | 反手放行: {label} "
+                              f"strength={strength}")
+                self.logger.info(
+                    f"{mode_tag} ✅ 反手开仓确认: {sig.action} "
+                    f"(共识={direction}, 反手模式放宽门控)"
+                )
+                return sig
+
+            # ── 常规模式 ──
+
+            # 规则 0 (新增): 强信号覆盖 — 当 fused SS/BS 超强时
+            #   允许通过，即使 actionable=False 或方向不一致
+            strong_override = False
+            if sig_direction == "short" and fused_ss >= 70:
+                strong_override = True
+            elif sig_direction == "long" and fused_bs >= 70:
+                strong_override = True
+
+            if strong_override and not actionable:
+                sig.reason = (f"{sig.reason} | 强信号覆盖: {label} "
+                              f"fused_{sig_direction[0]}s={fused_ss if sig_direction == 'short' else fused_bs:.1f}>=70")
+                self.logger.info(
+                    f"{mode_tag} ⚡ 强信号覆盖放行: {sig.action} "
+                    f"fused_ss={fused_ss} fused_bs={fused_bs}"
+                )
+                return sig
+
             # 规则 1: 共识不可操作 → 阻止
             if not actionable:
                 sig.action = "HOLD"
                 sig.reason = (f"多周期共识阻止: {label} "
                               f"(strength={strength}, 需>={self._consensus_min_strength})")
-                self.logger.info(f"[多周期门控] ⛔ 开仓被阻止: {sig.reason}")
+                self.logger.info(f"{mode_tag} ⛔ 开仓被阻止: {sig.reason}")
                 return sig
 
             # 规则 2: 共识方向与单TF方向不一致 → 阻止
@@ -405,7 +470,7 @@ class LiveTradingEngine:
                 sig.action = "HOLD"
                 sig.reason = (f"多周期共识方向不一致: 单TF={sig_direction} "
                               f"vs 共识={direction} ({label})")
-                self.logger.info(f"[多周期门控] ⛔ 方向不一致: {sig.reason}")
+                self.logger.info(f"{mode_tag} ⛔ 方向不一致: {sig.reason}")
                 return sig
 
             # 规则 3: 共识强度不够 → 阻止
@@ -413,14 +478,14 @@ class LiveTradingEngine:
                 sig.action = "HOLD"
                 sig.reason = (f"多周期共识强度不足: {strength} "
                               f"< {self._consensus_min_strength} ({label})")
-                self.logger.info(f"[多周期门控] ⛔ 强度不足: {sig.reason}")
+                self.logger.info(f"{mode_tag} ⛔ 强度不足: {sig.reason}")
                 return sig
 
             # 通过所有门控 → 放行，附加共识信息
             sig.reason = (f"{sig.reason} | 多周期确认: {label} "
                           f"strength={strength}")
             self.logger.info(
-                f"[多周期门控] ✅ 开仓确认: {sig.action} "
+                f"{mode_tag} ✅ 开仓确认: {sig.action} "
                 f"strength={strength}"
             )
 
@@ -442,6 +507,70 @@ class LiveTradingEngine:
                 sig.action = "HOLD"
                 sig.reason = f"多周期计算异常 fail-closed: {e}"
                 return sig
+
+    # ============================================================
+    # 反手 (Reverse) 逻辑
+    # ============================================================
+    def _try_reverse_open(self, close_sig: SignalResult, price: float):
+        """
+        平仓后立即检查反方向开仓 (反手)。
+
+        当 CLOSE_LONG 由 "反向信号" 触发时 (SS >= close_long_ss)，
+        检查是否应该 OPEN_SHORT；反之亦然。
+
+        反手开仓使用宽松的多周期门控:
+          - 跳过 "大小周期反向" 的硬拒绝
+          - 只要信号足够强 (SS >= short_threshold) 且无冷却即可执行
+        """
+        from copy import deepcopy
+        sig = deepcopy(close_sig)
+
+        ss = sig.sell_score
+        bs = sig.buy_score
+        cfg = self.config.strategy
+
+        if close_sig.action == "CLOSE_LONG":
+            # 尝试反手做空
+            if (ss >= cfg.short_threshold and
+                    ss > bs * 1.2 and  # 宽松比率 (原始 1.5 太严)
+                    self.short_cooldown <= 0 and
+                    "SHORT" not in self.positions):
+                sig.action = "OPEN_SHORT"
+                sig.reason = f"反手做空 SS={ss:.1f} >= {cfg.short_threshold} (平多后)"
+                self.logger.info(
+                    f"[反手] ✅ 平多后反手做空: SS={ss:.1f} BS={bs:.1f}"
+                )
+                # 反手时仍然通过多周期门控，但使用宽松模式
+                if self._use_multi_tf:
+                    sig = self._apply_multi_tf_gate(sig, reverse_mode=True)
+                return sig
+            else:
+                self.logger.info(
+                    f"[反手] ⏭️ 平多后不满足反手条件: SS={ss:.1f} BS={bs:.1f} "
+                    f"需要 SS>={cfg.short_threshold} & SS>BS*1.2"
+                )
+
+        elif close_sig.action == "CLOSE_SHORT":
+            # 尝试反手做多
+            if (bs >= cfg.long_threshold and
+                    bs > ss * 1.2 and  # 宽松比率
+                    self.long_cooldown <= 0 and
+                    "LONG" not in self.positions):
+                sig.action = "OPEN_LONG"
+                sig.reason = f"反手做多 BS={bs:.1f} >= {cfg.long_threshold} (平空后)"
+                self.logger.info(
+                    f"[反手] ✅ 平空后反手做多: BS={bs:.1f} SS={ss:.1f}"
+                )
+                if self._use_multi_tf:
+                    sig = self._apply_multi_tf_gate(sig, reverse_mode=True)
+                return sig
+            else:
+                self.logger.info(
+                    f"[反手] ⏭️ 平空后不满足反手条件: BS={bs:.1f} SS={ss:.1f} "
+                    f"需要 BS>={cfg.long_threshold} & BS>SS*1.2"
+                )
+
+        return None
 
     # ============================================================
     # 交易执行

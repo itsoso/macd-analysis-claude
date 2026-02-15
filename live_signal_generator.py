@@ -463,16 +463,19 @@ class LiveSignalGenerator:
 
         # --- 开仓检查 ---
 
+        # 开仓比率阈值 (可配置, 默认 1.3; 原硬编码 1.5 过于严格)
+        open_dominance = getattr(cfg, 'open_dominance_ratio', 1.3)
+
         # 开空
         if (not has_short and short_cooldown <= 0 and
-                ss >= cfg.short_threshold and ss > bs * 1.5):
+                ss >= cfg.short_threshold and ss > bs * open_dominance):
             signal.action = "OPEN_SHORT"
             signal.reason = f"开空 SS={ss:.1f} >= {cfg.short_threshold}"
             return signal
 
         # 开多
         if (not has_long and long_cooldown <= 0 and
-                bs >= cfg.long_threshold and bs > ss * 1.5):
+                bs >= cfg.long_threshold and bs > ss * open_dominance):
             signal.action = "OPEN_LONG"
             signal.reason = f"开多 BS={bs:.1f} >= {cfg.long_threshold}"
             return signal
