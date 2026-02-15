@@ -344,6 +344,28 @@ def _compute_regime_controls(primary_df, idx, config, precomputed=None):
     trend_weak = float(config.get('regime_trend_weak', 0.006))
     atr_high = float(config.get('regime_atr_high', 0.018))
 
+    # ── P12: 动态 Regime 阈值 ──
+    if config.get('use_dynamic_regime_thresholds', False) and precomputed is not None:
+        _dyn_lb = int(config.get('dynamic_regime_lookback_bars', 2160))
+        _dyn_vq = float(config.get('dynamic_regime_vol_quantile', 0.80))
+        _dyn_tq = float(config.get('dynamic_regime_trend_quantile', 0.80))
+        vol_s = precomputed.get('regime_vol')
+        if vol_s is not None and idx >= _dyn_lb:
+            _vol_window = vol_s.iloc[max(0, idx - _dyn_lb):idx + 1]
+            if len(_vol_window) >= 100:
+                vol_high = float(_vol_window.quantile(_dyn_vq))
+                vol_low = float(_vol_window.quantile(1.0 - _dyn_vq))
+        ma_fast_s = precomputed.get('ma_fast')
+        ma_slow_s = precomputed.get('ma_slow')
+        if ma_fast_s is not None and ma_slow_s is not None and idx >= _dyn_lb:
+            _prc = primary_df['close'].iloc[max(0, idx - _dyn_lb):idx + 1]
+            _mf = ma_fast_s.iloc[max(0, idx - _dyn_lb):idx + 1]
+            _ms = ma_slow_s.iloc[max(0, idx - _dyn_lb):idx + 1]
+            _trends = ((_mf - _ms) / _prc).abs().dropna()
+            if len(_trends) >= 100:
+                trend_strong = float(_trends.quantile(_dyn_tq))
+                trend_weak = float(_trends.quantile(1.0 - _dyn_tq))
+
     high_vol = vol >= vol_high or atr_pct >= atr_high
     low_vol = vol <= vol_low and atr_pct <= atr_high * 0.7
     strong_trend = abs_trend >= trend_strong
@@ -976,6 +998,46 @@ def _run_strategy_core(
     use_ss_quality_sl = config.get('use_ss_quality_sl', False)
     ss_quality_sl_threshold = float(config.get('ss_quality_sl_threshold', 50))
     ss_quality_sl_mult = float(config.get('ss_quality_sl_mult', 0.70))
+
+    # ── P7: trend/high_vol short 大周期方向门控 ──
+    use_trend_short_large_tf_gate = config.get('use_trend_short_large_tf_gate', False)
+    _tslg_str = config.get('trend_short_large_tf_gate_regimes', 'trend,high_vol')
+    trend_short_large_tf_gate_regimes = set(r.strip() for r in _tslg_str.split(',') if r.strip())
+    trend_short_large_tf_bs_ratio = float(config.get('trend_short_large_tf_bs_ratio', 1.0))
+
+    # ── P8: trend/high_vol short 结构确认硬门槛 ──
+    use_trend_short_min_confirms = config.get('use_trend_short_min_confirms', False)
+    _tsmc_str = config.get('trend_short_min_confirms_regimes', 'trend,high_vol')
+    trend_short_min_confirms_regimes = set(r.strip() for r in _tsmc_str.split(',') if r.strip())
+    trend_short_min_confirms_n = int(config.get('trend_short_min_confirms_n', 3))
+
+    # ── P6: Ghost cooldown ──
+    use_ghost_cooldown = config.get('use_ghost_cooldown', False)
+    ghost_cooldown_bars = int(config.get('ghost_cooldown_bars', 3))
+
+    # ── P10: Fast-fail 快速亏损退出 ──
+    use_fast_fail_exit = config.get('use_fast_fail_exit', False)
+    fast_fail_max_bars = int(config.get('fast_fail_max_bars', 3))
+    fast_fail_loss_threshold = float(config.get('fast_fail_loss_threshold', -0.05))
+    _ff_str = config.get('fast_fail_regimes', 'trend,high_vol')
+    fast_fail_regimes = set(r.strip() for r in _ff_str.split(',') if r.strip())
+
+    # ── P9: Regime-adaptive SS/BS reweighting ──
+    use_regime_adaptive_reweight = config.get('use_regime_adaptive_reweight', False)
+    regime_neutral_ss_dampen = float(config.get('regime_neutral_ss_dampen', 0.85))
+    regime_neutral_bs_boost = float(config.get('regime_neutral_bs_boost', 1.10))
+
+    # ── P12: 动态 Regime 阈值 ──
+    use_dynamic_regime_thresholds = config.get('use_dynamic_regime_thresholds', False)
+    dynamic_regime_lookback_bars = int(config.get('dynamic_regime_lookback_bars', 2160))
+    dynamic_regime_vol_quantile = float(config.get('dynamic_regime_vol_quantile', 0.80))
+    dynamic_regime_trend_quantile = float(config.get('dynamic_regime_trend_quantile', 0.80))
+
+    # ── P13: 追踪止盈连续化 ──
+    use_continuous_trail = config.get('use_continuous_trail', False)
+    continuous_trail_start_pnl = float(config.get('continuous_trail_start_pnl', 0.05))
+    continuous_trail_max_pb = float(config.get('continuous_trail_max_pb', 0.60))
+    continuous_trail_min_pb = float(config.get('continuous_trail_min_pb', 0.30))
 
     short_cd = 0; long_cd = 0; spot_cd = 0
     short_bars = 0; long_bars = 0
@@ -1847,6 +1909,10 @@ def _run_strategy_core(
         config['_regime_label'] = _regime_label
         # 设置到引擎, 每笔交易自动记录当前 regime / ss / bs / atr_pct
         eng._regime_label = _regime_label
+        # ── P9: Regime-adaptive SS/BS reweighting ──
+        if use_regime_adaptive_reweight and _regime_label == 'neutral':
+            ss = ss * regime_neutral_ss_dampen
+            bs = bs * regime_neutral_bs_boost
         eng._current_ss = round(ss, 1)
         eng._current_bs = round(bs, 1)
         eng._current_atr_pct = round(_atr_pct_val, 5) if _atr_pct_val > 0 else None
@@ -2247,12 +2313,39 @@ def _run_strategy_core(
                     structural_discount_stats['discount_applied'] += 1
                     _sd_rdc = structural_discount_stats['regime_discount_counts']
                     _sd_rdc[_sd_reg] = int(_sd_rdc.get(_sd_reg, 0)) + 1
+        # ── P7: 大周期方向门控 ──
+        _large_tf_short_ok = True
+        if use_trend_short_large_tf_gate and _regime_label in trend_short_large_tf_gate_regimes:
+            _meta_p7 = signal_meta if isinstance(signal_meta, dict) else {}
+            _large_bs = float(_meta_p7.get('large_bs', 0) or 0)
+            _large_ss = float(_meta_p7.get('large_ss', 0) or 0)
+            if _large_bs > _large_ss * trend_short_large_tf_bs_ratio:
+                _large_tf_short_ok = False  # 大周期看多 → 不做空
+
+        # ── P8: 结构确认硬门槛 (独立于结构折扣) ──
+        _trend_confirms_ok = True
+        if use_trend_short_min_confirms and _regime_label in trend_short_min_confirms_regimes:
+            _p8_confirms = _struct_short_confirms
+            if _p8_confirms < 0:  # 未被结构折扣评估过, 独立计算
+                _sd_bf_p8 = (signal_meta.get('book_features_weighted', {})
+                             if isinstance(signal_meta, dict) else {})
+                if isinstance(_sd_bf_p8, dict) and _sd_bf_p8:
+                    _sd_keys_p8 = ('ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell')
+                    _p8_confirms = sum(
+                        1 for kk in _sd_keys_p8
+                        if float(_sd_bf_p8.get(kk, 0) or 0) > neutral_struct_activity_thr
+                    )
+            if 0 <= _p8_confirms < trend_short_min_confirms_n:
+                _trend_confirms_ok = False
+
         _short_candidate_pre_struct = (
             short_cd == 0 and ss >= effective_short_threshold
             and not eng.futures_short and not eng.futures_long
             and sell_dom and not in_conflict and can_open_risk
             and not micro_block_short and neutral_short_ok
             and _bk_short_ok and extreme_div_short_ok
+            and _large_tf_short_ok               # P7
+            and _trend_confirms_ok               # P8
         )
         _short_candidate = (
             _short_candidate_pre_struct and neutral_struct_short_ok
@@ -2309,11 +2402,31 @@ def _run_strategy_core(
             short_max_pnl = 0; short_bars = 0; short_cd = cooldown
             short_just_opened = True; short_partial_done = False; short_partial2_done = False
             short_entry_ss = ss  # S5: 记录入场信号强度
+        # ── P6: Ghost cooldown — 被过滤的强信号也触发冷却 ──
+        elif (use_ghost_cooldown and not _short_candidate
+              and short_cd == 0
+              and ss >= effective_short_threshold
+              and sell_dom and not in_conflict and can_open_risk
+              and not eng.futures_short and not eng.futures_long):
+            short_cd = ghost_cooldown_bars
 
         # 管理空仓
         if eng.futures_short and not short_just_opened:
             short_bars += 1
             pnl_r = eng.futures_short.calc_pnl(price) / eng.futures_short.margin
+
+            # ── P10: Fast-fail 快速亏损退出 ──
+            if (use_fast_fail_exit and eng.futures_short
+                    and 0 < short_bars <= fast_fail_max_bars
+                    and pnl_r <= fast_fail_loss_threshold
+                    and _regime_label in fast_fail_regimes):
+                eng.close_short(price, dt,
+                    f"FastFail {short_bars}bar pnl={pnl_r*100:.0f}% R={_regime_label}",
+                    bar_low=_bar_low, bar_high=_bar_high)
+                _short_sl_streak += 1
+                _streak_mult = 2 if _short_sl_streak >= 2 else 1
+                short_max_pnl = 0; short_cd = cooldown * 2 * _streak_mult; short_bars = 0
+                short_partial_done = False; short_partial2_done = False
 
             # 结构化防守平空: 亏损扩大前检测“多头反向共识+MA冲突”，提前退出
             if (
@@ -2428,7 +2541,19 @@ def _run_strategy_core(
                 short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
             else:
                 if pnl_r > short_max_pnl: short_max_pnl = pnl_r
-                if short_max_pnl >= short_trail and eng.futures_short:
+                # ── P13: 连续追踪止盈 (替代离散门槛) ──
+                if use_continuous_trail and eng.futures_short and short_max_pnl >= continuous_trail_start_pnl:
+                    _progress = min(short_max_pnl / actual_short_tp, 1.0) if actual_short_tp > 0 else 0
+                    _eff_pb = continuous_trail_max_pb - (continuous_trail_max_pb - continuous_trail_min_pb) * _progress
+                    if pnl_r < short_max_pnl * _eff_pb:
+                        eng.close_short(price, dt,
+                            f"连续追踪 max={short_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
+                            bar_low=_bar_low, bar_high=_bar_high)
+                        _short_sl_streak = 0
+                        short_max_pnl = 0; short_cd = cooldown; short_bars = 0
+                        short_partial_done = False; short_partial2_done = False
+                # 原版离散追踪止盈 (P13关闭时使用)
+                elif not use_continuous_trail and short_max_pnl >= short_trail and eng.futures_short:
                     # S3: 棘轮追踪 — 利润越高, 回撤容忍越小
                     _eff_pb = trail_pullback
                     if use_ratchet_trail and ratchet_trail_tiers:
@@ -2439,7 +2564,7 @@ def _run_strategy_core(
                         eng.close_short(price, dt,
                             f"追踪止盈 max={short_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
                             bar_low=_bar_low, bar_high=_bar_high)
-                        _short_sl_streak = 0  # 盈利退出重置连续止损计数
+                        _short_sl_streak = 0
                         short_max_pnl = 0; short_cd = cooldown; short_bars = 0
                         short_partial_done = False; short_partial2_done = False
                 # P1a: 空单 NoTP 提前退出（长短独立 + regime 白名单）

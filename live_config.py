@@ -192,7 +192,7 @@ STRATEGY_PARAM_VERSIONS = {
         "use_partial_tp_2": True,
         "short_max_hold": 48,
     },
-    "v4": {  # v7.0 (B3): neutral short 强门控 + 冲突折扣扩展 + 激进结构折扣
+    "v4": {  # v8.0 (B3+P13): v7.0 + 连续追踪止盈
         # ── 基础参数 (继承 v6.0) ──
         "short_threshold": 40,
         "long_threshold": 25,
@@ -206,9 +206,7 @@ STRATEGY_PARAM_VERSIONS = {
         "short_trail": 0.19,
         "long_trail": 0.12,
         "trail_pullback": 0.50,
-        # ── v7.0 B3 新增: neutral short 入场质量修正 ──
-        # P4 实证: neutral short 六书均无判别力 (DIV d=-0.64 反向)
-        # B3 A/B: OOS Ret +36→+41.6%, PF 1.67→2.33, WR 60.7→61.0%
+        # ── v7.0 B3: neutral short 入场质量修正 ──
         "cooldown": 6,                          # B3: 冷却 4→6
         "regime_short_threshold": "neutral:60",  # B3: neutral 空单门槛 45→60
         "short_conflict_regimes": "trend,high_vol,neutral",  # B3: 冲突折扣扩展到 neutral
@@ -216,6 +214,13 @@ STRATEGY_PARAM_VERSIONS = {
         "neutral_struct_discount_1": 0.05,       # B3: 1本→5%
         "neutral_struct_discount_2": 0.15,       # B3: 2本→15%
         "neutral_struct_discount_3": 0.50,       # B3: 3本→50%
+        # ── v8.0 P13: 连续追踪止盈 (替代离散门槛) ──
+        # P13 A/B: IS PF 0.91→1.08, OOS WR +3.9%, OOS PF 2.33→2.51
+        # P15 Walk-Forward: 3/6窗口盈利, 均值Ret +9.6%/Q, WR>54%
+        "use_continuous_trail": True,
+        "continuous_trail_start_pnl": 0.05,      # 利润>=5%开始追踪
+        "continuous_trail_max_pb": 0.60,          # 低利润时最宽回撤容忍 60%
+        "continuous_trail_min_pb": 0.30,          # 高利润时最紧回撤容忍 30%
     },
 }
 _ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v4")
@@ -500,6 +505,53 @@ class StrategyConfig:
     short_conflict_div_buy_min: float = 50.0
     short_conflict_ma_sell_min: float = 12.0
     short_conflict_discount_mult: float = 0.60      # Codex验证最优值 (0.50太激进)
+
+    # ── P7: trend/high_vol short 大周期方向门控 ──
+    # 当 4h+24h 加权方向看多时, 在 trend/high_vol regime 中阻止开空
+    # P0 数据: OOS trend空WR=46.7%(PF=0.84), high_vol空WR=33.3%(PF=0.47)
+    use_trend_short_large_tf_gate: bool = False
+    trend_short_large_tf_gate_regimes: str = 'trend,high_vol'
+    trend_short_large_tf_bs_ratio: float = 1.0  # large_bs > large_ss * ratio → block
+
+    # ── P8: trend/high_vol short 结构确认硬门槛 ──
+    # 要求至少 N 本结构书确认才允许开空 (与结构折扣独立, 这是硬阻止)
+    use_trend_short_min_confirms: bool = False
+    trend_short_min_confirms_regimes: str = 'trend,high_vol'
+    trend_short_min_confirms_n: int = 3
+
+    # ── P6: Ghost cooldown ──
+    # 被门控过滤的强信号也触发部分冷却, 防止连续尝试低质量入场
+    use_ghost_cooldown: bool = False
+    ghost_cooldown_bars: int = 3
+
+    # ── P10: Fast-fail 快速亏损退出 ──
+    # 如果 trend/high_vol 空单在前N个bar就亏损超阈值, 提前离场
+    # 依据: P0 显示 trend/high_vol 止损在 2-11 bars 内触发
+    use_fast_fail_exit: bool = False
+    fast_fail_max_bars: int = 3
+    fast_fail_loss_threshold: float = -0.05
+    fast_fail_regimes: str = 'trend,high_vol'
+
+    # ── P9: Regime-adaptive SS/BS 后置调权 ──
+    # neutral 中 DIV 判别力为负(d=-0.64), 做空 SS 不可靠 → 衰减
+    # 做多 BS 在 neutral 中可靠(WR=85%) → 增强
+    use_regime_adaptive_reweight: bool = False
+    regime_neutral_ss_dampen: float = 0.85      # neutral 中 SS 打85折
+    regime_neutral_bs_boost: float = 1.10       # neutral 中 BS 增10%
+
+    # ── P12: 动态 Regime 阈值 ──
+    # 替代固定 vol/trend 阈值, 使用滚动窗口百分位数
+    use_dynamic_regime_thresholds: bool = False
+    dynamic_regime_lookback_bars: int = 2160    # 90天 * 24h = 2160 bars
+    dynamic_regime_vol_quantile: float = 0.80   # 波动率 80th percentile
+    dynamic_regime_trend_quantile: float = 0.80 # 趋势强度 80th percentile
+
+    # ── P13: 追踪止盈连续化 ──
+    # 替代离散门槛触发, 改为连续动态回撤容忍
+    use_continuous_trail: bool = False
+    continuous_trail_start_pnl: float = 0.05     # 利润>=5%开始追踪
+    continuous_trail_max_pb: float = 0.60         # 低利润时最宽回撤容忍
+    continuous_trail_min_pb: float = 0.30         # 高利润时最紧回撤容忍
 
     # ── 多头冲突软折扣（neutral/low_vol_trend） ──
     # 目标: 买入信号中若卖方divergence过强，先减仓再观察，降低中性体制假突破亏损。
