@@ -639,6 +639,72 @@ def merge_perp_data_into_klines(kline_df: pd.DataFrame,
                 aligned = oi_df[col].reindex(result.index, method='ffill')
                 result[col] = aligned
 
+    # ── v10.1: 衍生品数据覆盖率审计 ──
+    _audit_lines = []
+    _total_bars = len(result)
+    for col_name, src_label in [
+        ('funding_rate', 'Funding Rate'),
+        ('open_interest', 'Open Interest'),
+        ('open_interest_value', 'OI Value'),
+        ('mark_close', 'Mark Price'),
+    ]:
+        if col_name not in result.columns:
+            _audit_lines.append(f"  {src_label}: NOT PRESENT")
+            continue
+        _col = result[col_name]
+        _non_null = int(_col.notna().sum())
+        _coverage = _non_null / _total_bars if _total_bars > 0 else 0.0
+        # 计算最长连续 forward-fill (staleness): 原始非NaN的位置之间的最大间隔
+        _orig_mask = pd.Series(False, index=result.index)
+        if col_name in ['open_interest', 'open_interest_value'] and oi_df is not None and len(oi_df) > 0 and col_name in oi_df.columns:
+            _orig_mask.loc[_orig_mask.index.isin(oi_df.index)] = True
+        elif col_name == 'funding_rate' and funding_df is not None and len(funding_df) > 0 and col_name in funding_df.columns:
+            _orig_mask.loc[_orig_mask.index.isin(funding_df.index)] = True
+        elif col_name == 'mark_close' and mark_df is not None and len(mark_df) > 0 and col_name in mark_df.columns:
+            _orig_mask.loc[_orig_mask.index.isin(mark_df.index)] = True
+        _orig_count = int(_orig_mask.sum())
+        _orig_coverage = _orig_count / _total_bars if _total_bars > 0 else 0.0
+        # 最长连续 stale 段 (原始数据点之间的最大间隔)
+        _max_stale = 0
+        if _orig_count > 0:
+            _orig_positions = _orig_mask[_orig_mask].index
+            if len(_orig_positions) > 1:
+                _orig_iloc = [result.index.get_loc(p) for p in _orig_positions]
+                _gaps = [_orig_iloc[i+1] - _orig_iloc[i] for i in range(len(_orig_iloc)-1)]
+                _max_stale = max(_gaps) if _gaps else 0
+            # 也检查第一个原始点之前和最后一个之后的间隔
+            _first_iloc = result.index.get_loc(_orig_positions[0])
+            _last_iloc = result.index.get_loc(_orig_positions[-1])
+            _max_stale = max(_max_stale, _first_iloc, _total_bars - 1 - _last_iloc)
+        else:
+            _max_stale = _total_bars
+        _audit_lines.append(
+            f"  {src_label}: coverage={_coverage:.1%} "
+            f"(orig_points={_orig_count}/{_total_bars}, orig_coverage={_orig_coverage:.1%}, "
+            f"max_stale_bars={_max_stale})"
+        )
+    if _audit_lines:
+        import logging
+        _log = logging.getLogger('merge_perp_audit')
+        _log.info("=== Perp Data Coverage Audit (%d bars) ===\n%s",
+                  _total_bars, '\n'.join(_audit_lines))
+        # 存储审计结果到 DataFrame attrs (供回测脚本读取)
+        result.attrs['perp_data_audit'] = '\n'.join(_audit_lines)
+        result.attrs['perp_data_audit_dict'] = {}
+        for col_name in ['funding_rate', 'open_interest']:
+            if col_name in result.columns:
+                _orig_m = pd.Series(False, index=result.index)
+                if col_name == 'open_interest' and oi_df is not None and len(oi_df) > 0 and col_name in oi_df.columns:
+                    _orig_m.loc[_orig_m.index.isin(oi_df.index)] = True
+                elif col_name == 'funding_rate' and funding_df is not None and len(funding_df) > 0 and col_name in funding_df.columns:
+                    _orig_m.loc[_orig_m.index.isin(funding_df.index)] = True
+                _oc = int(_orig_m.sum())
+                result.attrs['perp_data_audit_dict'][col_name] = {
+                    'orig_count': _oc,
+                    'total_bars': _total_bars,
+                    'orig_coverage': _oc / _total_bars if _total_bars > 0 else 0.0,
+                }
+
     return result
 
 

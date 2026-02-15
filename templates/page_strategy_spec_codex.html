@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}技术规格书 (Codex) - 技术分析平台{% endblock %}
+
+{% block content %}
+<style>
+    .tech-doc {
+        max-width: 980px;
+        line-height: 1.8;
+        font-size: 14px;
+        color: var(--text-secondary);
+    }
+    .tech-doc h1 {
+        font-size: 26px; font-weight: 700; color: var(--text-primary);
+        margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--accent-blue);
+    }
+    .tech-doc h1:first-child { margin-top: 0; }
+    .tech-doc h2 {
+        font-size: 20px; font-weight: 700; color: var(--text-primary);
+        margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+    }
+    .tech-doc h3 {
+        font-size: 16px; font-weight: 600; color: var(--text-primary);
+        margin: 20px 0 8px;
+    }
+    .tech-doc p { margin: 8px 0; }
+    .tech-doc ul, .tech-doc ol { margin: 8px 0 8px 20px; }
+    .tech-doc li { margin: 4px 0; }
+    .tech-doc strong { color: var(--text-primary); }
+    .tech-doc code {
+        background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;
+        font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+        color: var(--accent-blue);
+    }
+    .tech-doc pre {
+        background: var(--bg-secondary); border: 1px solid var(--border);
+        border-radius: 8px; padding: 16px; margin: 12px 0;
+        overflow-x: auto; font-size: 12px; line-height: 1.6;
+    }
+    .tech-doc pre code {
+        background: none; padding: 0; color: var(--text-secondary);
+    }
+    .tech-doc table {
+        width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px;
+    }
+    .tech-doc th, .tech-doc td {
+        text-align: left; padding: 8px 12px;
+        border-bottom: 1px solid var(--border); vertical-align: top;
+    }
+    .tech-doc th { color: var(--text-muted); font-weight: 600; background: var(--bg-secondary); }
+    .tech-doc blockquote {
+        border-left: 3px solid var(--accent-blue); padding: 8px 16px; margin: 12px 0;
+        background: rgba(74,158,255,0.05); border-radius: 0 6px 6px 0;
+    }
+    .doc-meta {
+        display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px;
+    }
+    .doc-meta .badge {
+        padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;
+    }
+    .doc-meta .blue { background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+    .doc-meta .green { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+    .doc-meta .purple { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+    .doc-meta .orange { background: rgba(255,170,60,0.16); color: #ffb74d; }
+    .doc-links {
+        margin-bottom: 22px; font-size: 12px; color: var(--text-muted);
+    }
+    .doc-links a {
+        color: var(--accent-blue); text-decoration: none;
+    }
+    .doc-links a:hover { text-decoration: underline; }
+    .update-hint {
+        font-size: 12px; color: var(--text-muted);
+        margin-top: 32px; padding-top: 12px;
+        border-top: 1px solid var(--border);
+    }
+</style>
+
+<div class="doc-meta">
+    <span class="badge blue">TECH SPEC</span>
+    <span class="badge green">{{ last_updated }}</span>
+    <span class="badge purple">Codex</span>
+    <span class="badge orange">架构 + 回测 + 优化路线</span>
+</div>
+
+<div class="doc-links">
+    其他版本: <a href="/strategy/tech-doc">Cursor 技术文档</a> ·
+    <a href="/strategy/spec">Claude Code 完整规格书</a>
+</div>
+
+<div class="tech-doc">
+    {{ content | safe }}
+</div>
+
+<div class="update-hint">
+    文件路径: <code>docs/strategy_spec_codex.md</code>
+</div>
+{% endblock %}

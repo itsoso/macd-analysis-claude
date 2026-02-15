@@ -541,6 +541,7 @@ def _compute_microstructure_state(micro_df, idx, config):
         'basis_z': float(row.get('basis_z', 0.0) or 0.0),
         'oi_z': float(row.get('oi_z', 0.0) or 0.0),
         'funding_rate': float(row.get('funding_rate', 0.0) or 0.0),
+        'funding_z': float(row.get('funding_z', 0.0) or 0.0),
         'taker_imbalance': float(row.get('taker_imbalance', 0.0) or 0.0),
         'participation': float(row.get('participation', 1.0) or 1.0),
     }
@@ -620,21 +621,21 @@ def _apply_microstructure_overlay(ss, bs, micro_state, config):
         if d >= 2.5:
             overlay['block_long'] = True
 
-    # ── V9 Anti-Squeeze Filter (显式组合条件) ──
-    # GPT Pro 核心建议: funding rate 高 + OI 上升 + taker buy 主导 = 多头拥挤挤空风险
-    # 此时开空极危险 (短期内就止损的主因), 直接阻止或大幅减仓
-    _anti_sq_fr_thr = float(config.get('anti_squeeze_fr_threshold', 0.0008))
+    # ── v10.1 Anti-Squeeze Filter (funding_z 替代原始 funding_rate) ──
+    # v9: 使用原始 funding_rate ≥ 0.0008 (绝对阈值), 不适应市场周期变化
+    # v10.1: 使用 funding_z (滚动 z-score), 自适应 + 统计显著性
+    _anti_sq_fz_thr = float(config.get('anti_squeeze_fz_threshold', 2.0))  # z-score 阈值
     _anti_sq_oi_thr = float(config.get('anti_squeeze_oi_z_threshold', 1.0))
     _anti_sq_imb_thr = float(config.get('anti_squeeze_taker_imb_threshold', 0.12))
-    _fr = float(micro_state.get('funding_rate', 0.0))
+    _fz = float(micro_state.get('funding_z', 0.0))
     _oi_z = float(micro_state.get('oi_z', 0.0))
     _imb = float(micro_state.get('taker_imbalance', 0.0))
-    # 多头拥挤: funding 高 + OI 上升 + 主动买盘强 → 阻止开空
-    if _fr >= _anti_sq_fr_thr and _oi_z >= _anti_sq_oi_thr and _imb >= _anti_sq_imb_thr:
+    # 多头拥挤: funding z-score 高 + OI 上升 + 主动买盘强 → 阻止开空
+    if _fz >= _anti_sq_fz_thr and _oi_z >= _anti_sq_oi_thr and _imb >= _anti_sq_imb_thr:
         overlay['block_short'] = True
-        overlay['margin_mult'] *= 0.60  # 如果已有空仓, 大幅减仓
-    # 空头拥挤 (镜像): funding 极低 + OI 上升 + 主动卖盘强 → 阻止开多
-    if _fr <= -_anti_sq_fr_thr and _oi_z >= _anti_sq_oi_thr and _imb <= -_anti_sq_imb_thr:
+        overlay['margin_mult'] *= 0.60
+    # 空头拥挤 (镜像): funding z-score 极低 + OI 上升 + 主动卖盘强 → 阻止开多
+    if _fz <= -_anti_sq_fz_thr and _oi_z >= _anti_sq_oi_thr and _imb <= -_anti_sq_imb_thr:
         overlay['block_long'] = True
         overlay['margin_mult'] *= 0.60
 
@@ -1955,19 +1956,23 @@ def _run_strategy_core(
     risk_max_margin_pct = float(config.get('risk_max_margin_pct', 0.50))
     risk_min_margin_pct = float(config.get('risk_min_margin_pct', 0.05))
 
-    def _calc_risk_margin(side: str, entry_price: float, atr_pct: float, equity: float, lev: int) -> float:
+    def _calc_risk_margin(side: str, entry_price: float, atr_pct: float, equity: float, lev: int,
+                          actual_sl: float = 0.0) -> float:
         """P21: 根据 R(风险单位) 和止损距离反推仓位保证金.
         side: 'short' or 'long'
         entry_price: 预期入场价格
         atr_pct: 当前 ATR / price 百分比
         equity: 当前权益
         lev: 杠杆
+        actual_sl: v10.1 绑定 — 实际止损百分比 (负值, 如 -0.15), 优先于独立计算
         返回: margin (保证金)
         """
         risk_amount = equity * risk_per_trade_pct  # 每笔最大风险金额
 
-        # 计算止损距离 (价格百分比)
-        if risk_stop_mode == 'atr' and atr_pct > 0:
+        # v10.1: 优先使用实际止损距离 (确保 SL 和仓位完全绑定)
+        if actual_sl < 0:
+            stop_dist_pct = abs(actual_sl)
+        elif risk_stop_mode == 'atr' and atr_pct > 0:
             mult = risk_atr_mult_short if side == 'short' else risk_atr_mult_long
             stop_dist_pct = atr_pct * mult
         else:
@@ -2187,8 +2192,19 @@ def _run_strategy_core(
         config['_regime_label'] = _regime_label
         # 设置到引擎, 每笔交易自动记录当前 regime / ss / bs / atr_pct
         eng._regime_label = _regime_label
-        # ── P24: Regime-Adaptive 止损 (在 regime 确定后应用) ──
-        if use_regime_adaptive_sl:
+        # ── v10.1: ATR-SL with Regime-Specific Multipliers (替代固定 P24) ──
+        # 优先级: use_atr_sl (波动率驱动) > use_regime_adaptive_sl (固定百分比)
+        if use_atr_sl and _atr_pct_val > 0:
+            _regime_atr_mult = float(config.get(
+                f'atr_sl_mult_{_regime_label}',
+                config.get('atr_sl_mult', 3.0)
+            ))
+            atr_derived_sl = -(_atr_pct_val * _regime_atr_mult)
+            atr_derived_sl = max(atr_sl_floor, min(atr_sl_ceil, atr_derived_sl))
+            actual_short_sl = atr_derived_sl
+            actual_long_sl = max(long_sl, atr_derived_sl * 0.8)  # long SL 比 short 略紧
+        elif use_regime_adaptive_sl:
+            # P24 fallback: 固定百分比 (仅当 ATR-SL 未启用时)
             actual_short_sl = regime_short_sl_map.get(_regime_label, short_sl)
         # ── P18: Regime-Adaptive 六维融合权重 (从 book_features 重新融合) ──
         if use_regime_adaptive_fusion and isinstance(signal_meta, dict):
@@ -2712,10 +2728,11 @@ def _run_strategy_core(
             _rc[_r] = int(_rc.get(_r, 0)) + 1
         if _short_candidate and short_conf_info.get('allow', True):
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
-            # P21: Risk-per-trade 仓位模型
+            # P21: Risk-per-trade 仓位模型 (v10.1: SL 绑定仓位)
             if use_risk_per_trade:
                 _equity = eng.total_value(price)
-                margin = _calc_risk_margin('short', exec_price, _atr_pct_val, _equity, actual_lev)
+                margin = _calc_risk_margin('short', exec_price, _atr_pct_val, _equity, actual_lev,
+                                           actual_sl=actual_short_sl)
             else:
                 margin = eng.available_margin() * cur_margin_use
             margin *= _leg_budget_mult(_regime_label, 'short')
@@ -3229,10 +3246,11 @@ def _run_strategy_core(
             _cbc[_cr] = int(_cbc.get(_cr, 0)) + 1
         if _long_candidate and long_conf_info.get('allow', True):
             actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
-            # P21: Risk-per-trade 仓位模型
+            # P21: Risk-per-trade 仓位模型 (v10.1: SL 绑定仓位)
             if use_risk_per_trade:
                 _equity = eng.total_value(price)
-                margin = _calc_risk_margin('long', exec_price, _atr_pct_val, _equity, actual_lev)
+                margin = _calc_risk_margin('long', exec_price, _atr_pct_val, _equity, actual_lev,
+                                           actual_sl=actual_long_sl)
             else:
                 margin = eng.available_margin() * cur_margin_use
             margin *= _leg_budget_mult(_regime_label, 'long')

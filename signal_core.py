@@ -386,8 +386,11 @@ def _fuse_scores(mode, config,
     """纯计算函数: 根据模式融合六维分数为 (sell_score, buy_score)"""
 
     if mode == "c6_veto_4":
-        base_sell = (div_sell * 0.7 + ma_sell * 0.3) * ma_arr_bonus_sell
-        base_buy = (div_buy * 0.7 + ma_buy * 0.3) * ma_arr_bonus_buy
+        # v10.1: DIV 权重可配置 (默认 0.70, 回测验证 0.50 损害 OOS → 保留 0.70)
+        _div_w = config.get("c6_div_weight", 0.70)
+        _ma_w = 1.0 - _div_w
+        base_sell = (div_sell * _div_w + ma_sell * _ma_w) * ma_arr_bonus_sell
+        base_buy = (div_buy * _div_w + ma_buy * _ma_w) * ma_arr_bonus_buy
 
         veto_threshold = config.get("veto_threshold", 25)
         kdj_bonus = config.get("kdj_bonus", 0.09)
@@ -711,8 +714,11 @@ def _vectorized_fuse_scores(mode, config, n,
     """向量化版融合评分: 输入全部为长度 n 的 numpy 数组"""
 
     if mode == "c6_veto_4":
-        base_sell = (div_sell * 0.7 + ma_sell * 0.3) * ma_arr_bonus_sell
-        base_buy = (div_buy * 0.7 + ma_buy * 0.3) * ma_arr_bonus_buy
+        # v10.1: DIV 权重可配置 (默认 0.70, 回测验证 0.50 损害 OOS → 保留 0.70)
+        _div_w = config.get("c6_div_weight", 0.70)
+        _ma_w = 1.0 - _div_w
+        base_sell = (div_sell * _div_w + ma_sell * _ma_w) * ma_arr_bonus_sell
+        base_buy = (div_buy * _div_w + ma_buy * _ma_w) * ma_arr_bonus_buy
 
         veto_threshold = config.get("veto_threshold", 25)
         kdj_b = config.get("kdj_bonus", 0.09)

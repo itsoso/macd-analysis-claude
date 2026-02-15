@@ -270,14 +270,36 @@ STRATEGY_PARAM_VERSIONS = {
         # ── P20: 空头追踪收紧 (40% vs 多头 60%) ──
         "continuous_trail_max_pb_short": 0.40,
         #
-        # ── P24: Regime-Adaptive Stop-Loss ──
-        # 空头止损从全局 -20% 改为分 regime 差异化
-        "use_regime_adaptive_sl": True,
-        "regime_neutral_short_sl": -0.12,        # 理论上被 B1b 禁止
-        "regime_trend_short_sl": -0.15,           # trend: 收紧至 -15%
-        "regime_low_vol_trend_short_sl": -0.18,   # low_vol_trend: -18%
-        "regime_high_vol_short_sl": -0.12,        # high_vol: 挤压风险高, -12%
+        # ── v10.1: ATR-Based Stop-Loss (替代 P24 固定百分比) ──
+        # ATR × regime_mult → 波动率驱动止损, 消除 P24 固定 SL 截断利润
+        # trend: mult=3.5 (宽), neutral: 2.0 (紧), high_vol: 2.5 (中等)
+        "use_atr_sl": True,
+        "atr_sl_mult": 3.0,               # 默认 ATR 乘数 (被 regime 覆盖)
+        "atr_sl_floor": -0.25,             # ATR-SL 最宽 (high_vol 保护)
+        "atr_sl_ceil": -0.06,              # ATR-SL 最窄 (低波时不会太紧)
+        "atr_sl_mult_neutral": 2.0,        # neutral: 紧保护 (低波环境)
+        "atr_sl_mult_trend": 3.5,          # trend: 给空间 (让赢单跑)
+        "atr_sl_mult_low_vol_trend": 3.0,  # low_vol_trend: 略宽
+        "atr_sl_mult_high_vol": 2.5,       # high_vol: 中等 (挤压风险)
+        "atr_sl_mult_high_vol_choppy": 2.0,# high_vol_choppy: 紧 (震荡)
+        #
+        # ── P24: 固定百分比止损 (ATR-SL 的 fallback) ──
+        "use_regime_adaptive_sl": True,    # ATR-SL 优先, P24 仅在 ATR 不可用时生效
+        "regime_neutral_short_sl": -0.12,
+        "regime_trend_short_sl": -0.15,
+        "regime_low_vol_trend_short_sl": -0.18,
+        "regime_high_vol_short_sl": -0.12,
         "regime_high_vol_choppy_short_sl": -0.12,
+        #
+        # ── v10.1: P21 Risk-Per-Trade (仓位与止损绑定) ──
+        # size = risk_budget / stop_distance → 止损放宽不增加单笔亏损
+        "use_risk_per_trade": True,
+        "risk_per_trade_pct": 0.025,       # 每笔最大风险 2.5% 权益 (原 1.5% 太保守)
+        "risk_stop_mode": "atr",           # 使用 ATR 计算止损距离
+        "risk_atr_mult_short": 3.0,        # P21 内部 fallback (正常由 actual_sl 绑定覆盖)
+        "risk_atr_mult_long": 2.0,
+        "risk_max_margin_pct": 0.40,       # 单笔最大 40% 仓位
+        "risk_min_margin_pct": 0.03,       # 单笔最小 3% 仓位
         #
         # ── v10: Soft Veto (sigmoid 连续衰减替代硬二元门控) ──
         # 回测: IS PF 1.19→1.03 (soft veto alone), +leg budget → 1.31
