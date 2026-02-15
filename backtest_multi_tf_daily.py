@@ -240,6 +240,8 @@ def _build_default_config():
         'neutral_struct_discount_2': _LIVE_DEFAULT.neutral_struct_discount_2,
         'neutral_struct_discount_3': _LIVE_DEFAULT.neutral_struct_discount_3,
         'neutral_struct_discount_4plus': _LIVE_DEFAULT.neutral_struct_discount_4plus,
+        'structural_discount_short_regimes': _LIVE_DEFAULT.structural_discount_short_regimes,
+        'structural_discount_long_regimes': _LIVE_DEFAULT.structural_discount_long_regimes,
         # neutral short 结构确认器
         'use_neutral_short_structure_gate': _LIVE_DEFAULT.use_neutral_short_structure_gate,
         'neutral_short_structure_large_tfs': _LIVE_DEFAULT.neutral_short_structure_large_tfs,
@@ -251,6 +253,17 @@ def _build_default_config():
         'neutral_short_structure_fail_open': _LIVE_DEFAULT.neutral_short_structure_fail_open,
         'neutral_short_structure_soften_weak': _LIVE_DEFAULT.neutral_short_structure_soften_weak,
         'neutral_short_structure_soften_mult': _LIVE_DEFAULT.neutral_short_structure_soften_mult,
+        # 空单冲突软折扣（趋势/高波动）
+        'use_short_conflict_soft_discount': _LIVE_DEFAULT.use_short_conflict_soft_discount,
+        'short_conflict_regimes': _LIVE_DEFAULT.short_conflict_regimes,
+        'short_conflict_div_buy_min': _LIVE_DEFAULT.short_conflict_div_buy_min,
+        'short_conflict_ma_sell_min': _LIVE_DEFAULT.short_conflict_ma_sell_min,
+        'short_conflict_discount_mult': _LIVE_DEFAULT.short_conflict_discount_mult,
+        'use_long_conflict_soft_discount': _LIVE_DEFAULT.use_long_conflict_soft_discount,
+        'long_conflict_regimes': _LIVE_DEFAULT.long_conflict_regimes,
+        'long_conflict_div_sell_min': _LIVE_DEFAULT.long_conflict_div_sell_min,
+        'long_conflict_ma_buy_min': _LIVE_DEFAULT.long_conflict_ma_buy_min,
+        'long_conflict_discount_mult': _LIVE_DEFAULT.long_conflict_discount_mult,
         # 空单逆势防守退出（结构化风险控制）
         'use_short_adverse_exit': _LIVE_DEFAULT.use_short_adverse_exit,
         'short_adverse_min_bars': _LIVE_DEFAULT.short_adverse_min_bars,
@@ -988,10 +1001,16 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         summary['book_consensus_gate'] = result.get('book_consensus_gate')
     if result.get('neutral_short_structure_gate'):
         summary['neutral_short_structure_gate'] = result.get('neutral_short_structure_gate')
+    if result.get('structural_discount'):
+        summary['structural_discount'] = result.get('structural_discount')
     if result.get('confidence_learning'):
         summary['confidence_learning'] = result.get('confidence_learning')
     if result.get('short_adverse_exit'):
         summary['short_adverse_exit'] = result.get('short_adverse_exit')
+    if result.get('short_conflict_soft_discount'):
+        summary['short_conflict_soft_discount'] = result.get('short_conflict_soft_discount')
+    if result.get('long_conflict_soft_discount'):
+        summary['long_conflict_soft_discount'] = result.get('long_conflict_soft_discount')
     if result.get('extreme_div_short_veto'):
         summary['extreme_div_short_veto'] = result.get('extreme_div_short_veto')
     signal_replay = _build_signal_replay_report(
@@ -1057,6 +1076,13 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         print(f"  Neutral结构: evaluated={nss.get('evaluated', 0)} "
               f"blocked={nss.get('blocked', 0)} support_avg={nss.get('support_avg', 0.0):.2f} "
               f"reasons[{rr_text}]")
+    if summary.get('structural_discount'):
+        sd = summary['structural_discount']
+        cd = sd.get('confirm_distribution', {})
+        cd_text = ' '.join(f"{k}c:{v}" for k, v in sorted(cd.items(), key=lambda x: int(x[0])))
+        print(f"  结构折扣:    eval={sd.get('evaluated', 0)} "
+              f"discounted={sd.get('discount_applied', 0)} avg_mult={sd.get('avg_mult', 0.0):.3f} "
+              f"dist[{cd_text}]")
     if summary.get('confidence_learning'):
         cl = summary['confidence_learning']
         cbr = cl.get('blocked_reason_counts', {}) or {}
@@ -1071,6 +1097,20 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         rr_text = ', '.join(f"{k}:{v}" for k, v in sorted(rr.items())) if rr else '-'
         print(f"  逆势防守:    eval={sa.get('evaluated', 0)} "
               f"triggered={sa.get('triggered', 0)} avg_pnl_r={sa.get('avg_trigger_pnl_r', 0.0):+.4f} "
+              f"reasons[{rr_text}]")
+    if summary.get('short_conflict_soft_discount'):
+        sc = summary['short_conflict_soft_discount']
+        rr = sc.get('reason_counts', {}) or {}
+        rr_text = ', '.join(f"{k}:{v}" for k, v in sorted(rr.items())) if rr else '-'
+        print(f"  空单冲突折扣: eval={sc.get('evaluated', 0)} "
+              f"triggered={sc.get('triggered', 0)} avg_mult={sc.get('avg_mult_on_triggered', 1.0):.3f} "
+              f"reasons[{rr_text}]")
+    if summary.get('long_conflict_soft_discount'):
+        lc = summary['long_conflict_soft_discount']
+        rr = lc.get('reason_counts', {}) or {}
+        rr_text = ', '.join(f"{k}:{v}" for k, v in sorted(rr.items())) if rr else '-'
+        print(f"  多单冲突折扣: eval={lc.get('evaluated', 0)} "
+              f"triggered={lc.get('triggered', 0)} avg_mult={lc.get('avg_mult_on_triggered', 1.0):.3f} "
               f"reasons[{rr_text}]")
     if summary.get('extreme_div_short_veto'):
         dv = summary['extreme_div_short_veto']

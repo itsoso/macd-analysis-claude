@@ -817,6 +817,8 @@ def _run_strategy_core(
     neutral_struct_discount_2 = float(config.get('neutral_struct_discount_2', 1.00))
     neutral_struct_discount_3 = float(config.get('neutral_struct_discount_3', 1.00))
     neutral_struct_discount_4plus = float(config.get('neutral_struct_discount_4plus', 1.00))
+    structural_discount_short_regimes_raw = config.get('structural_discount_short_regimes', 'neutral')
+    structural_discount_long_regimes_raw = config.get('structural_discount_long_regimes', 'neutral')
     # 信号置信度学习层（在线校准）
     use_confidence_learning = bool(config.get('use_confidence_learning', False))
     confidence_min_raw = float(config.get('confidence_min_raw', 0.42))
@@ -854,6 +856,20 @@ def _run_strategy_core(
     extreme_div_short_min_confirms = int(config.get('extreme_div_short_min_confirms', 3))
     _ext_div_reg_raw = str(config.get('extreme_div_short_regimes', 'trend,high_vol') or '')
     extreme_div_short_regimes = {x.strip() for x in _ext_div_reg_raw.split(',') if x.strip()}
+    # 空单冲突软折扣：趋势/高波动下，买方div很强 + 卖方MA活跃时，对做空仓位打折
+    use_short_conflict_soft_discount = bool(config.get('use_short_conflict_soft_discount', False))
+    _short_conflict_reg_raw = str(config.get('short_conflict_regimes', 'trend,high_vol') or '')
+    short_conflict_regimes = {x.strip() for x in _short_conflict_reg_raw.split(',') if x.strip()}
+    short_conflict_div_buy_min = float(config.get('short_conflict_div_buy_min', 50.0))
+    short_conflict_ma_sell_min = float(config.get('short_conflict_ma_sell_min', 12.0))
+    short_conflict_discount_mult = float(config.get('short_conflict_discount_mult', 0.50))
+    # 多单冲突软折扣：neutral/low_vol_trend 下卖方div很强 + 买方MA活跃时，对做多仓位打折
+    use_long_conflict_soft_discount = bool(config.get('use_long_conflict_soft_discount', False))
+    _long_conflict_reg_raw = str(config.get('long_conflict_regimes', 'neutral,low_vol_trend') or '')
+    long_conflict_regimes = {x.strip() for x in _long_conflict_reg_raw.split(',') if x.strip()}
+    long_conflict_div_sell_min = float(config.get('long_conflict_div_sell_min', 50.0))
+    long_conflict_ma_buy_min = float(config.get('long_conflict_ma_buy_min', 12.0))
+    long_conflict_discount_mult = float(config.get('long_conflict_discount_mult', 0.50))
 
     # P1a: NoTP 提前退出（长短独立 + regime 白名单）
     # 兼容旧参数: no_tp_exit_bars / no_tp_exit_min_pnl / no_tp_exit_regimes
@@ -887,6 +903,8 @@ def _run_strategy_core(
     no_tp_exit_long_regimes = _parse_regimes(
         config.get('no_tp_exit_long_regimes', _legacy_no_tp_regimes)
     )
+    structural_discount_short_regimes = _parse_regimes(structural_discount_short_regimes_raw) or {'neutral'}
+    structural_discount_long_regimes = _parse_regimes(structural_discount_long_regimes_raw) or {'neutral'}
 
     # 实验3: regime-specific short_threshold — 字典 {regime: threshold}
     # 例: {'neutral': 35, 'high_vol': 35} → 在这些 regime 下用 35, 其余用默认
@@ -988,6 +1006,22 @@ def _run_strategy_core(
         'sum_nondiv_confirms': 0.0,
         'reason_counts': {},
     }
+    short_conflict_soft_discount_stats = {
+        'enabled': use_short_conflict_soft_discount,
+        'evaluated': 0,
+        'triggered': 0,
+        'sum_mult': 0.0,
+        'reason_counts': {},
+        'regime_counts': {},
+    }
+    long_conflict_soft_discount_stats = {
+        'enabled': use_long_conflict_soft_discount,
+        'evaluated': 0,
+        'triggered': 0,
+        'sum_mult': 0.0,
+        'reason_counts': {},
+        'regime_counts': {},
+    }
     book_consensus_stats = {
         'enabled': use_neutral_book_consensus,
         'evaluated': 0,
@@ -1002,6 +1036,8 @@ def _run_strategy_core(
         'evaluated': 0,
         'discount_applied': 0,
         'confirm_distribution': {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0},
+        'regime_eval_counts': {},
+        'regime_discount_counts': {},
         'avg_mult': 0.0,
         'sum_mult': 0.0,
     }
@@ -2045,10 +2081,35 @@ def _run_strategy_core(
                 extreme_div_short_veto_stats['blocked'] += 1
                 _rc = extreme_div_short_veto_stats['reason_counts']
                 _rc[extreme_div_short_reason] = int(_rc.get(extreme_div_short_reason, 0)) + 1
+        # ── 空单冲突软折扣: 趋势/高波动下高冲突结构降低仓位 ──
+        _short_conflict_mult = 1.0
+        _short_conflict_triggered = False
+        _short_conflict_reason = ''
+        _short_conflict_div_buy = 0.0
+        _short_conflict_ma_sell = 0.0
+        if use_short_conflict_soft_discount and _regime_label in short_conflict_regimes:
+            short_conflict_soft_discount_stats['evaluated'] += 1
+            if isinstance(_book_feat, dict):
+                _short_conflict_div_buy = float(_book_feat.get('div_buy', 0.0) or 0.0)
+                _short_conflict_ma_sell = float(_book_feat.get('ma_sell', 0.0) or 0.0)
+            if (_short_conflict_div_buy >= short_conflict_div_buy_min
+                    and _short_conflict_ma_sell >= short_conflict_ma_sell_min):
+                _short_conflict_mult = float(np.clip(short_conflict_discount_mult, 0.1, 1.0))
+                _short_conflict_triggered = _short_conflict_mult < 1.0
+                _short_conflict_reason = 'buy_div_conflict'
+                if _short_conflict_triggered:
+                    short_conflict_soft_discount_stats['triggered'] += 1
+                    short_conflict_soft_discount_stats['sum_mult'] += _short_conflict_mult
+                    _r_counts = short_conflict_soft_discount_stats['reason_counts']
+                    _r_counts[_short_conflict_reason] = int(_r_counts.get(_short_conflict_reason, 0)) + 1
+                    _g_counts = short_conflict_soft_discount_stats['regime_counts']
+                    _g_counts[_regime_label] = int(_g_counts.get(_regime_label, 0)) + 1
         # ── Neutral 结构质量: 计算确认数 (用于仓位调节, 不影响入场判断) ──
         _struct_short_mult = 1.0
         _struct_short_confirms = -1  # -1 = 未评估
-        if use_neutral_structural_discount and _regime_label == 'neutral' and isinstance(signal_meta, dict):
+        if (use_neutral_structural_discount
+                and _regime_label in structural_discount_short_regimes
+                and isinstance(signal_meta, dict)):
             _sd_bf = signal_meta.get('book_features_weighted', {})
             if isinstance(_sd_bf, dict) and _sd_bf:
                 _sd_keys = ('ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell')
@@ -2057,6 +2118,9 @@ def _run_strategy_core(
                     if float(_sd_bf.get(kk, 0) or 0) > neutral_struct_activity_thr
                 )
                 structural_discount_stats['evaluated'] += 1
+                _sd_reg = str(_regime_label or 'unknown')
+                _sd_rec = structural_discount_stats['regime_eval_counts']
+                _sd_rec[_sd_reg] = int(_sd_rec.get(_sd_reg, 0)) + 1
                 structural_discount_stats['confirm_distribution'][min(_struct_short_confirms, 5)] += 1
                 if _struct_short_confirms <= 0:
                     _struct_short_mult = neutral_struct_discount_0
@@ -2071,6 +2135,8 @@ def _run_strategy_core(
                 structural_discount_stats['sum_mult'] += _struct_short_mult
                 if _struct_short_mult < 1.0:
                     structural_discount_stats['discount_applied'] += 1
+                    _sd_rdc = structural_discount_stats['regime_discount_counts']
+                    _sd_rdc[_sd_reg] = int(_sd_rdc.get(_sd_reg, 0)) + 1
         _short_candidate_pre_struct = (
             short_cd == 0 and ss >= effective_short_threshold
             and not eng.futures_short and not eng.futures_long
@@ -2094,8 +2160,12 @@ def _run_strategy_core(
         if _short_candidate and short_conf_info.get('allow', True):
             margin = eng.available_margin() * cur_margin_use
             # ── Neutral 结构质量仓位调节: 弱共识信号减仓，保持交易时序不变 ──
-            if use_neutral_structural_discount and _regime_label == 'neutral' and _struct_short_mult < 1.0:
+            if (use_neutral_structural_discount
+                    and _regime_label in structural_discount_short_regimes
+                    and _struct_short_mult < 1.0):
                 margin *= _struct_short_mult
+            if _short_conflict_triggered and _short_conflict_mult < 1.0:
+                margin *= _short_conflict_mult
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')
             _short_extra = _build_signal_extra('short', ss, bs, signal_meta, short_conf_info)
@@ -2115,6 +2185,14 @@ def _run_strategy_core(
             _short_extra['sig_book_consensus_cs_kdj'] = bool(_bk_short_diag.get('cs_kdj_confirm', False))
             _short_extra['sig_struct_discount_mult'] = float(_struct_short_mult)
             _short_extra['sig_struct_confirms'] = int(_struct_short_confirms)
+            _short_extra['sig_entry_threshold'] = float(effective_short_threshold)
+            _short_extra['sig_entry_score'] = float(ss)
+            _short_extra['sig_entry_dom_ratio'] = float(entry_dom_ratio)
+            _short_extra['sig_short_conflict_soft_mult'] = float(_short_conflict_mult)
+            _short_extra['sig_short_conflict_triggered'] = bool(_short_conflict_triggered)
+            _short_extra['sig_short_conflict_reason'] = str(_short_conflict_reason or '')
+            _short_extra['sig_short_conflict_div_buy'] = float(_short_conflict_div_buy)
+            _short_extra['sig_short_conflict_ma_sell'] = float(_short_conflict_ma_sell)
             eng.open_short(exec_price, dt, margin, actual_lev,
                 f"开空 {actual_lev}x SS={ss:.0f} BS={bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}",
                 bar_low=_bar_low, bar_high=_bar_high, extra=_short_extra)
@@ -2392,10 +2470,36 @@ def _run_strategy_core(
             effective_long_threshold = float(np.clip(effective_long_threshold * _long_mult, 5.0, 95.0))
             confidence_stats['threshold_adj_long_avg'] += (_long_mult - 1.0)
             confidence_stats['threshold_adj_long_n'] += 1
+        # ── 多单冲突软折扣: neutral/低波趋势下高冲突结构降低仓位 ──
+        _long_conflict_mult = 1.0
+        _long_conflict_triggered = False
+        _long_conflict_reason = ''
+        _long_conflict_div_sell = 0.0
+        _long_conflict_ma_buy = 0.0
+        if use_long_conflict_soft_discount and _regime_label in long_conflict_regimes:
+            long_conflict_soft_discount_stats['evaluated'] += 1
+            _book_feat_l = signal_meta.get('book_features_weighted', {}) if isinstance(signal_meta, dict) else {}
+            if isinstance(_book_feat_l, dict):
+                _long_conflict_div_sell = float(_book_feat_l.get('div_sell', 0.0) or 0.0)
+                _long_conflict_ma_buy = float(_book_feat_l.get('ma_buy', 0.0) or 0.0)
+            if (_long_conflict_div_sell >= long_conflict_div_sell_min
+                    and _long_conflict_ma_buy >= long_conflict_ma_buy_min):
+                _long_conflict_mult = float(np.clip(long_conflict_discount_mult, 0.1, 1.0))
+                _long_conflict_triggered = _long_conflict_mult < 1.0
+                _long_conflict_reason = 'sell_div_conflict'
+                if _long_conflict_triggered:
+                    long_conflict_soft_discount_stats['triggered'] += 1
+                    long_conflict_soft_discount_stats['sum_mult'] += _long_conflict_mult
+                    _r_counts_l = long_conflict_soft_discount_stats['reason_counts']
+                    _r_counts_l[_long_conflict_reason] = int(_r_counts_l.get(_long_conflict_reason, 0)) + 1
+                    _g_counts_l = long_conflict_soft_discount_stats['regime_counts']
+                    _g_counts_l[_regime_label] = int(_g_counts_l.get(_regime_label, 0)) + 1
         # ── Neutral 结构质量: 计算确认数 (做多, 用于仓位调节) ──
         _struct_long_mult = 1.0
         _struct_long_confirms = -1
-        if use_neutral_structural_discount and _regime_label == 'neutral' and isinstance(signal_meta, dict):
+        if (use_neutral_structural_discount
+                and _regime_label in structural_discount_long_regimes
+                and isinstance(signal_meta, dict)):
             _sd_bf_l = signal_meta.get('book_features_weighted', {})
             if isinstance(_sd_bf_l, dict) and _sd_bf_l:
                 _sd_keys_l = ('ma_buy', 'cs_buy', 'bb_buy', 'vp_buy', 'kdj_buy')
@@ -2404,6 +2508,9 @@ def _run_strategy_core(
                     if float(_sd_bf_l.get(kk, 0) or 0) > neutral_struct_activity_thr
                 )
                 structural_discount_stats['evaluated'] += 1
+                _sd_reg_l = str(_regime_label or 'unknown')
+                _sd_rec_l = structural_discount_stats['regime_eval_counts']
+                _sd_rec_l[_sd_reg_l] = int(_sd_rec_l.get(_sd_reg_l, 0)) + 1
                 structural_discount_stats['confirm_distribution'][min(_struct_long_confirms, 5)] += 1
                 if _struct_long_confirms <= 0:
                     _struct_long_mult = neutral_struct_discount_0
@@ -2418,6 +2525,8 @@ def _run_strategy_core(
                 structural_discount_stats['sum_mult'] += _struct_long_mult
                 if _struct_long_mult < 1.0:
                     structural_discount_stats['discount_applied'] += 1
+                    _sd_rdc_l = structural_discount_stats['regime_discount_counts']
+                    _sd_rdc_l[_sd_reg_l] = int(_sd_rdc_l.get(_sd_reg_l, 0)) + 1
         _long_candidate = (
             long_cd == 0 and trend_long_bs >= effective_long_threshold
             and not eng.futures_long and not eng.futures_short
@@ -2433,8 +2542,12 @@ def _run_strategy_core(
         if _long_candidate and long_conf_info.get('allow', True):
             margin = eng.available_margin() * cur_margin_use
             # ── Neutral 结构质量仓位调节 (做多) ──
-            if use_neutral_structural_discount and _regime_label == 'neutral' and _struct_long_mult < 1.0:
+            if (use_neutral_structural_discount
+                    and _regime_label in structural_discount_long_regimes
+                    and _struct_long_mult < 1.0):
                 margin *= _struct_long_mult
+            if _long_conflict_triggered and _long_conflict_mult < 1.0:
+                margin *= _long_conflict_mult
             actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')
             _long_extra = _build_signal_extra('long', ss, trend_long_bs, signal_meta, long_conf_info)
@@ -2443,6 +2556,16 @@ def _run_strategy_core(
             _long_extra['sig_book_consensus_cs_kdj'] = bool(_bk_long_diag.get('cs_kdj_confirm', False))
             _long_extra['sig_struct_discount_mult'] = float(_struct_long_mult)
             _long_extra['sig_struct_confirms'] = int(_struct_long_confirms)
+            _long_extra['sig_entry_threshold'] = float(effective_long_threshold)
+            _long_extra['sig_entry_score'] = float(trend_long_bs)
+            _long_extra['sig_entry_bs_raw'] = float(bs)
+            _long_extra['sig_entry_bs_final'] = float(trend_long_bs)
+            _long_extra['sig_entry_dom_ratio'] = float(entry_dom_ratio)
+            _long_extra['sig_long_conflict_soft_mult'] = float(_long_conflict_mult)
+            _long_extra['sig_long_conflict_triggered'] = bool(_long_conflict_triggered)
+            _long_extra['sig_long_conflict_reason'] = str(_long_conflict_reason or '')
+            _long_extra['sig_long_conflict_div_sell'] = float(_long_conflict_div_sell)
+            _long_extra['sig_long_conflict_ma_buy'] = float(_long_conflict_ma_buy)
             eng.open_long(exec_price, dt, margin, actual_lev,
                 f"开多 {actual_lev}x SS={ss:.0f} BS={trend_long_bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}",
                 bar_low=_bar_low, bar_high=_bar_high, extra=_long_extra)
@@ -2695,6 +2818,37 @@ def _run_strategy_core(
         })
         return out
 
+    def _build_structural_discount_result():
+        if not use_neutral_structural_discount:
+            return None
+        _sd = dict(structural_discount_stats)
+        _sd_ev = max(1, int(_sd.get('evaluated', 0)))
+        _sd['avg_mult'] = round(float(_sd.get('sum_mult', 0.0)) / _sd_ev, 4)
+        _sd.pop('sum_mult', None)
+        _sd.update({
+            'activity_thr': neutral_struct_activity_thr,
+            'discount_0': neutral_struct_discount_0,
+            'discount_1': neutral_struct_discount_1,
+            'discount_2': neutral_struct_discount_2,
+            'discount_3': neutral_struct_discount_3,
+            'discount_4plus': neutral_struct_discount_4plus,
+            'short_regimes': sorted(list(structural_discount_short_regimes)),
+            'long_regimes': sorted(list(structural_discount_long_regimes)),
+        })
+        return _sd
+
+    def _build_book_consensus_result():
+        if not use_neutral_book_consensus:
+            return None
+        return {
+            **book_consensus_stats,
+            'sell_threshold': neutral_book_sell_threshold,
+            'buy_threshold': neutral_book_buy_threshold,
+            'min_confirms': neutral_book_min_confirms,
+            'max_conflicts': neutral_book_max_conflicts,
+            'cs_kdj_threshold_adj': neutral_book_cs_kdj_threshold_adj,
+        }
+
     def _build_extreme_div_short_veto_result():
         if not use_extreme_divergence_short_veto:
             return None
@@ -2709,6 +2863,36 @@ def _run_strategy_core(
             'confirm_thr': extreme_div_short_confirm_thr,
             'min_confirms': extreme_div_short_min_confirms,
             'regimes': sorted(list(extreme_div_short_regimes)),
+        })
+        return out
+
+    def _build_short_conflict_soft_discount_result():
+        if not use_short_conflict_soft_discount:
+            return None
+        out = dict(short_conflict_soft_discount_stats)
+        trig = max(1, int(out.get('triggered', 0)))
+        out['avg_mult_on_triggered'] = round(float(out.get('sum_mult', 0.0)) / trig, 4)
+        out.pop('sum_mult', None)
+        out.update({
+            'div_buy_min': short_conflict_div_buy_min,
+            'ma_sell_min': short_conflict_ma_sell_min,
+            'discount_mult': short_conflict_discount_mult,
+            'regimes': sorted(list(short_conflict_regimes)),
+        })
+        return out
+
+    def _build_long_conflict_soft_discount_result():
+        if not use_long_conflict_soft_discount:
+            return None
+        out = dict(long_conflict_soft_discount_stats)
+        trig = max(1, int(out.get('triggered', 0)))
+        out['avg_mult_on_triggered'] = round(float(out.get('sum_mult', 0.0)) / trig, 4)
+        out.pop('sum_mult', None)
+        out.update({
+            'div_sell_min': long_conflict_div_sell_min,
+            'ma_buy_min': long_conflict_ma_buy_min,
+            'discount_mult': long_conflict_discount_mult,
+            'regimes': sorted(list(long_conflict_regimes)),
         })
         return out
 
@@ -2737,6 +2921,12 @@ def _run_strategy_core(
                 'soften_mult': neutral_short_structure_soften_mult,
             })
             result['neutral_short_structure_gate'] = _nss
+        _bcg = _build_book_consensus_result()
+        if _bcg:
+            result['book_consensus_gate'] = _bcg
+        _sdr = _build_structural_discount_result()
+        if _sdr:
+            result['structural_discount'] = _sdr
         if prot_state.get('enabled', False):
             result['protections'] = {
                 **prot_state.get('stats', {}),
@@ -2753,6 +2943,12 @@ def _run_strategy_core(
         _sa = _build_short_adverse_exit_result()
         if _sa:
             result['short_adverse_exit'] = _sa
+        _sc = _build_short_conflict_soft_discount_result()
+        if _sc:
+            result['short_conflict_soft_discount'] = _sc
+        _lc = _build_long_conflict_soft_discount_result()
+        if _lc:
+            result['long_conflict_soft_discount'] = _lc
         _dv = _build_extreme_div_short_veto_result()
         if _dv:
             result['extreme_div_short_veto'] = _dv
@@ -2782,15 +2978,12 @@ def _run_strategy_core(
             'soften_mult': neutral_short_structure_soften_mult,
         })
         result['neutral_short_structure_gate'] = _nss
-    if use_neutral_book_consensus:
-        result['book_consensus_gate'] = {
-            **book_consensus_stats,
-            'sell_threshold': neutral_book_sell_threshold,
-            'buy_threshold': neutral_book_buy_threshold,
-            'min_confirms': neutral_book_min_confirms,
-            'max_conflicts': neutral_book_max_conflicts,
-            'cs_kdj_threshold_adj': neutral_book_cs_kdj_threshold_adj,
-        }
+    _bcg = _build_book_consensus_result()
+    if _bcg:
+        result['book_consensus_gate'] = _bcg
+    _sdr = _build_structural_discount_result()
+    if _sdr:
+        result['structural_discount'] = _sdr
     if prot_state.get('enabled', False):
         result['protections'] = {
             **prot_state.get('stats', {}),
@@ -2807,6 +3000,12 @@ def _run_strategy_core(
     _sa = _build_short_adverse_exit_result()
     if _sa:
         result['short_adverse_exit'] = _sa
+    _sc = _build_short_conflict_soft_discount_result()
+    if _sc:
+        result['short_conflict_soft_discount'] = _sc
+    _lc = _build_long_conflict_soft_discount_result()
+    if _lc:
+        result['long_conflict_soft_discount'] = _lc
     _dv = _build_extreme_div_short_veto_result()
     if _dv:
         result['extreme_div_short_veto'] = _dv

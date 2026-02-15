@@ -225,6 +225,23 @@ def _build_strategy_snapshot(config):
         'neutral_min_streak': config.get('neutral_min_streak'),
         'neutral_nochain_extra_gap': config.get('neutral_nochain_extra_gap'),
         'neutral_large_conflict_ratio': config.get('neutral_large_conflict_ratio'),
+        # neutral 六书共识门控
+        'use_neutral_book_consensus': config.get('use_neutral_book_consensus', False),
+        'neutral_book_sell_threshold': config.get('neutral_book_sell_threshold'),
+        'neutral_book_buy_threshold': config.get('neutral_book_buy_threshold'),
+        'neutral_book_min_confirms': config.get('neutral_book_min_confirms'),
+        'neutral_book_max_conflicts': config.get('neutral_book_max_conflicts'),
+        'neutral_book_cs_kdj_threshold_adj': config.get('neutral_book_cs_kdj_threshold_adj'),
+        # neutral 结构质量渐进折扣
+        'use_neutral_structural_discount': config.get('use_neutral_structural_discount', False),
+        'neutral_struct_activity_thr': config.get('neutral_struct_activity_thr'),
+        'neutral_struct_discount_0': config.get('neutral_struct_discount_0'),
+        'neutral_struct_discount_1': config.get('neutral_struct_discount_1'),
+        'neutral_struct_discount_2': config.get('neutral_struct_discount_2'),
+        'neutral_struct_discount_3': config.get('neutral_struct_discount_3'),
+        'neutral_struct_discount_4plus': config.get('neutral_struct_discount_4plus'),
+        'structural_discount_short_regimes': config.get('structural_discount_short_regimes'),
+        'structural_discount_long_regimes': config.get('structural_discount_long_regimes'),
         # 信号置信度学习层
         'use_confidence_learning': config.get('use_confidence_learning', False),
         'confidence_min_raw': config.get('confidence_min_raw'),
@@ -251,6 +268,17 @@ def _build_strategy_snapshot(config):
         'neutral_short_structure_fail_open': config.get('neutral_short_structure_fail_open'),
         'neutral_short_structure_soften_weak': config.get('neutral_short_structure_soften_weak'),
         'neutral_short_structure_soften_mult': config.get('neutral_short_structure_soften_mult'),
+        # 空单冲突软折扣
+        'use_short_conflict_soft_discount': config.get('use_short_conflict_soft_discount', False),
+        'short_conflict_regimes': config.get('short_conflict_regimes'),
+        'short_conflict_div_buy_min': config.get('short_conflict_div_buy_min'),
+        'short_conflict_ma_sell_min': config.get('short_conflict_ma_sell_min'),
+        'short_conflict_discount_mult': config.get('short_conflict_discount_mult'),
+        'use_long_conflict_soft_discount': config.get('use_long_conflict_soft_discount', False),
+        'long_conflict_regimes': config.get('long_conflict_regimes'),
+        'long_conflict_div_sell_min': config.get('long_conflict_div_sell_min'),
+        'long_conflict_ma_buy_min': config.get('long_conflict_ma_buy_min'),
+        'long_conflict_discount_mult': config.get('long_conflict_discount_mult'),
         # 空单逆势防守退出（结构化风控）
         'use_short_adverse_exit': config.get('use_short_adverse_exit', False),
         'short_adverse_min_bars': config.get('short_adverse_min_bars'),
@@ -291,6 +319,9 @@ def _build_strategy_snapshot(config):
         'use_ss_quality_sl': config.get('use_ss_quality_sl', False),
         'ss_quality_sl_threshold': config.get('ss_quality_sl_threshold', 50),
         'ss_quality_sl_mult': config.get('ss_quality_sl_mult', 0.70),
+        # 止损后冷却倍数
+        'short_sl_cd_mult': config.get('short_sl_cd_mult'),
+        'long_sl_cd_mult': config.get('long_sl_cd_mult'),
     }
     return snapshot
 
