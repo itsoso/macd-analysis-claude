@@ -674,6 +674,7 @@ def merge_perp_data_into_klines(kline_df: pd.DataFrame,
 
     # ── v10.1: 衍生品数据覆盖率审计 ──
     _audit_lines = []
+    _audit_dict = {}
     _total_bars = len(result)
     for col_name, src_label in [
         ('funding_rate', 'Funding Rate'),
@@ -716,6 +717,13 @@ def merge_perp_data_into_klines(kline_df: pd.DataFrame,
             f"(orig_points={_orig_count}/{_total_bars}, orig_coverage={_orig_coverage:.1%}, "
             f"max_stale_bars={_max_stale})"
         )
+        _audit_dict[col_name] = {
+            'coverage': _coverage,
+            'orig_count': _orig_count,
+            'total_bars': _total_bars,
+            'orig_coverage': _orig_coverage,
+            'max_stale_bars': int(_max_stale),
+        }
     if _audit_lines:
         import logging
         _log = logging.getLogger('merge_perp_audit')
@@ -723,20 +731,7 @@ def merge_perp_data_into_klines(kline_df: pd.DataFrame,
                   _total_bars, '\n'.join(_audit_lines))
         # 存储审计结果到 DataFrame attrs (供回测脚本读取)
         result.attrs['perp_data_audit'] = '\n'.join(_audit_lines)
-        result.attrs['perp_data_audit_dict'] = {}
-        for col_name in ['funding_rate', 'open_interest']:
-            if col_name in result.columns:
-                _orig_m = pd.Series(False, index=result.index)
-                if col_name == 'open_interest' and oi_df is not None and len(oi_df) > 0 and col_name in oi_df.columns:
-                    _orig_m.loc[_orig_m.index.isin(oi_df.index)] = True
-                elif col_name == 'funding_rate' and funding_df is not None and len(funding_df) > 0 and col_name in funding_df.columns:
-                    _orig_m.loc[_orig_m.index.isin(funding_df.index)] = True
-                _oc = int(_orig_m.sum())
-                result.attrs['perp_data_audit_dict'][col_name] = {
-                    'orig_count': _oc,
-                    'total_bars': _total_bars,
-                    'orig_coverage': _oc / _total_bars if _total_bars > 0 else 0.0,
-                }
+        result.attrs['perp_data_audit_dict'] = _audit_dict
 
     return result
 

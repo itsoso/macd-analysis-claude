@@ -253,6 +253,10 @@ class FuturesEngine:
             # MAE/MFE: 仓位生命周期的最大逆向/顺向偏移 (供 ATR mult 校准)
             'min_pnl_r': getattr(self, '_current_min_pnl_r', None),
             'max_pnl_r': getattr(self, '_current_max_pnl_r', None),
+            # v10.3: 数据质量/风控模型标签（供日志复盘与回测归因）
+            'data_quality_flags': getattr(self, '_data_quality_flags', None),
+            'risk_model_mode': getattr(self, '_risk_model_mode', None),
+            'stop_anchor_type': getattr(self, '_stop_anchor_type', None),
             # 附加字段
             **(extra or {}),
         })

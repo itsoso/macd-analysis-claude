@@ -25,6 +25,7 @@ import sys
 import os
 import time
 import re
+from collections import defaultdict
 from bisect import bisect_right
 from datetime import datetime
 from itertools import product
@@ -641,23 +642,51 @@ def _apply_microstructure_overlay(ss, bs, micro_state, config):
         if d >= 2.5:
             overlay['block_long'] = True
 
-    # ── v10.1 Anti-Squeeze Filter (funding_z 替代原始 funding_rate) ──
-    # v9: 使用原始 funding_rate ≥ 0.0008 (绝对阈值), 不适应市场周期变化
-    # v10.1: 使用 funding_z (滚动 z-score), 自适应 + 统计显著性
-    _anti_sq_fz_thr = float(config.get('anti_squeeze_fz_threshold', 2.0))  # z-score 阈值
-    _anti_sq_oi_thr = float(config.get('anti_squeeze_oi_z_threshold', 1.0))
-    _anti_sq_imb_thr = float(config.get('anti_squeeze_taker_imb_threshold', 0.12))
+    # ── v11: Anti-Squeeze Filter ──
+    # v10.1: 3条件硬门控 (funding_z + oi_z + taker_imb 全满足才 block)
+    # v11: 支持 soft penalty 模式 (use_soft_antisqueeze=True)
+    #      squeeze_score = w_fz*|fz| + w_oi*oi_z + w_imb*|imb|
+    #      penalty = sigmoid((score - midpoint) / steepness)
+    #      overlay['margin_mult'] *= (1 - penalty * max_discount)
     _fz = float(micro_state.get('funding_z', 0.0))
     _oi_z = float(micro_state.get('oi_z', 0.0))
     _imb = float(micro_state.get('taker_imbalance', 0.0))
-    # 多头拥挤: funding z-score 高 + OI 上升 + 主动买盘强 → 阻止开空
-    if _fz >= _anti_sq_fz_thr and _oi_z >= _anti_sq_oi_thr and _imb >= _anti_sq_imb_thr:
-        overlay['block_short'] = True
-        overlay['margin_mult'] *= 0.60
-    # 空头拥挤 (镜像): funding z-score 极低 + OI 上升 + 主动卖盘强 → 阻止开多
-    if _fz <= -_anti_sq_fz_thr and _oi_z >= _anti_sq_oi_thr and _imb <= -_anti_sq_imb_thr:
-        overlay['block_long'] = True
-        overlay['margin_mult'] *= 0.60
+
+    if config.get('use_soft_antisqueeze', False):
+        import math
+        _w_fz = float(config.get('soft_antisqueeze_w_fz', 0.5))
+        _w_oi = float(config.get('soft_antisqueeze_w_oi', 0.3))
+        _w_imb = float(config.get('soft_antisqueeze_w_imb', 0.2))
+        _mid = float(config.get('soft_antisqueeze_midpoint', 1.5))
+        _steep = float(config.get('soft_antisqueeze_steepness', 2.0))
+        _max_disc = float(config.get('soft_antisqueeze_max_discount', 0.50))
+
+        # 多头拥挤评分 (funding 高 + OI 上升 + 主动买盘强)
+        _long_crowd = _w_fz * max(0, _fz) + _w_oi * max(0, _oi_z) + _w_imb * max(0, _imb / 0.12)
+        _long_penalty = 1.0 / (1.0 + math.exp(-_steep * (_long_crowd - _mid)))
+        # 空头拥挤评分 (funding 低 + OI 上升 + 主动卖盘强)
+        _short_crowd = _w_fz * max(0, -_fz) + _w_oi * max(0, _oi_z) + _w_imb * max(0, -_imb / 0.12)
+        _short_penalty = 1.0 / (1.0 + math.exp(-_steep * (_short_crowd - _mid)))
+
+        # 多头拥挤 → 做空有风险, 降低 margin
+        if _long_penalty > 0.05:
+            overlay['margin_mult'] *= (1.0 - _long_penalty * _max_disc)
+        # 空头拥挤 → 做多有风险, 降低 margin
+        if _short_penalty > 0.05:
+            overlay['margin_mult'] *= (1.0 - _short_penalty * _max_disc)
+    else:
+        # 旧版硬门控逻辑
+        _anti_sq_fz_thr = float(config.get('anti_squeeze_fz_threshold', 2.0))
+        _anti_sq_oi_thr = float(config.get('anti_squeeze_oi_z_threshold', 1.0))
+        _anti_sq_imb_thr = float(config.get('anti_squeeze_taker_imb_threshold', 0.12))
+        # 多头拥挤: funding z-score 高 + OI 上升 + 主动买盘强 → 阻止开空
+        if _fz >= _anti_sq_fz_thr and _oi_z >= _anti_sq_oi_thr and _imb >= _anti_sq_imb_thr:
+            overlay['block_short'] = True
+            overlay['margin_mult'] *= 0.60
+        # 空头拥挤 (镜像)
+        if _fz <= -_anti_sq_fz_thr and _oi_z >= _anti_sq_oi_thr and _imb <= -_anti_sq_imb_thr:
+            overlay['block_long'] = True
+            overlay['margin_mult'] *= 0.60
 
     # 拥挤状态降风险（即使方向一致也避免过热追单）
     if abs(float(micro_state.get('basis_z', 0.0))) >= float(config.get('micro_basis_crowded_z', 2.2)):
@@ -804,7 +833,13 @@ def _run_strategy_core(
     partial_tp_1 = config.get('partial_tp_1', 0.30)
     partial_tp_1_pct = config.get('partial_tp_1_pct', 0.40)
     # v10.2: 趋势 regime 禁用 TP1/TP2, 仅用 P13 连续追踪 (让利润奔跑)
-    _tp_disabled_regimes = set(config.get('tp_disabled_regimes', ['trend', 'low_vol_trend']))
+    _tp_disabled_raw = config.get('tp_disabled_regimes', ['trend', 'low_vol_trend'])
+    if isinstance(_tp_disabled_raw, str):
+        _tp_disabled_regimes = {x.strip() for x in _tp_disabled_raw.split(',') if x.strip()}
+    elif isinstance(_tp_disabled_raw, (list, tuple, set)):
+        _tp_disabled_regimes = {str(x).strip() for x in _tp_disabled_raw if str(x).strip()}
+    else:
+        _tp_disabled_regimes = {'trend', 'low_vol_trend'}
 
     use_atr_sl = config.get('use_atr_sl', False)
     atr_sl_mult = config.get('atr_sl_mult', 3.0)
@@ -901,6 +936,12 @@ def _run_strategy_core(
     neutral_struct_discount_4plus = float(config.get('neutral_struct_discount_4plus', 1.00))
     structural_discount_short_regimes_raw = config.get('structural_discount_short_regimes', 'neutral')
     structural_discount_long_regimes_raw = config.get('structural_discount_long_regimes', 'neutral')
+    # v11 Phase 2a: Score Calibration — 用校准后的 p(win)/E[R] 替代硬阈值
+    use_score_calibration = bool(config.get('use_score_calibration', False))
+    _score_calibrator = config.get('_score_calibrator', None)
+    _score_cal_cost = float(config.get('score_cal_cost_estimate', 0.002))
+    _score_cal_min_p = float(config.get('score_cal_min_p_win', 0.40))
+    score_cal_stats = {'evaluated': 0, 'blocked': 0, 'allowed': 0}
     # 信号置信度学习层（在线校准）
     use_confidence_learning = bool(config.get('use_confidence_learning', False))
     confidence_min_raw = float(config.get('confidence_min_raw', 0.42))
@@ -1171,6 +1212,7 @@ def _run_strategy_core(
     short_cd = 0; long_cd = 0; spot_cd = 0
     short_bars = 0; long_bars = 0
     short_max_pnl = 0; long_max_pnl = 0; short_min_pnl = 0.0; long_min_pnl = 0.0  # MAE (最大逆向偏移) 追踪
+    regime_trade_counts = defaultdict(int)  # v11: P18 shrinkage 用的 regime 交易计数
     short_partial_done = False; long_partial_done = False
     short_partial2_done = False; long_partial2_done = False
     short_entry_ss = 0.0; long_entry_bs = 0.0  # S5: 记录入场时信号强度
@@ -1979,6 +2021,14 @@ def _run_strategy_core(
     risk_fixed_stop_long = float(config.get('risk_fixed_stop_long', 0.03))
     risk_max_margin_pct = float(config.get('risk_max_margin_pct', 0.50))
     risk_min_margin_pct = float(config.get('risk_min_margin_pct', 0.05))
+    _data_quality_flags_raw = config.get('_data_quality_flags', [])
+    if isinstance(_data_quality_flags_raw, str):
+        data_quality_flags = [x.strip() for x in _data_quality_flags_raw.split(',') if x.strip()]
+    elif isinstance(_data_quality_flags_raw, (list, tuple, set)):
+        data_quality_flags = [str(x).strip() for x in _data_quality_flags_raw if str(x).strip()]
+    else:
+        data_quality_flags = []
+    _perp_data_quality = config.get('_perp_data_quality', {})
 
     def _calc_risk_margin(side: str, entry_price: float, atr_pct: float, equity: float, lev: int,
                           actual_sl: float = 0.0) -> float:
@@ -2019,6 +2069,19 @@ def _run_strategy_core(
         margin = float(np.clip(margin, min_margin, max_margin))
 
         return margin
+
+    eng._data_quality_flags = list(data_quality_flags)
+    eng._risk_model_mode = str(config.get('_risk_model_mode') or ('risk_per_trade' if use_risk_per_trade else 'margin_use'))
+    if config.get('_stop_anchor_type'):
+        eng._stop_anchor_type = str(config.get('_stop_anchor_type'))
+    elif use_risk_per_trade:
+        eng._stop_anchor_type = f"risk_{risk_stop_mode}"
+    elif use_atr_sl:
+        eng._stop_anchor_type = "atr_sl"
+    elif use_regime_adaptive_sl:
+        eng._stop_anchor_type = "regime_sl"
+    else:
+        eng._stop_anchor_type = "fixed_sl"
 
     record_interval = max(1, len(primary_df) // 500)
 
@@ -2238,20 +2301,35 @@ def _run_strategy_core(
                     config.get('atr_sl_mult', 3.0)
                 ))
             atr_derived_sl = -(_atr_pct_val * _regime_atr_mult)
-            atr_derived_sl = max(atr_sl_floor, min(atr_sl_ceil, atr_derived_sl))
+            # v11: regime-specific ceil/floor — MAE 校准需要不同 regime 有不同钳位
+            _r_ceil = float(config.get(f'atr_sl_ceil_{_regime_label}', atr_sl_ceil))
+            _r_floor = float(config.get(f'atr_sl_floor_{_regime_label}', atr_sl_floor))
+            atr_derived_sl = max(_r_floor, min(_r_ceil, atr_derived_sl))
             actual_short_sl = atr_derived_sl
             actual_long_sl = max(long_sl, atr_derived_sl * 0.8)  # long SL 比 short 略紧
         elif use_regime_adaptive_sl:
             # P24 fallback: 固定百分比 (仅当 ATR-SL 未启用时)
             actual_short_sl = regime_short_sl_map.get(_regime_label, short_sl)
         # ── P18: Regime-Adaptive 六维融合权重 (从 book_features 重新融合) ──
+        # v11 Phase 2b: Shrinkage mixture — w = (1-λ)*w_base + λ*w_regime
+        #   λ = min(shrinkage_max_lambda, n_regime_trades / shrinkage_n_scale)
         if use_regime_adaptive_fusion and isinstance(signal_meta, dict):
             _bf = signal_meta.get('book_features_weighted', {})
             if isinstance(_bf, dict) and _bf:
                 _w = _p18_weights.get(_regime_label, _p18_weights['neutral'])
+                _w_base = _p18_weights.get('neutral', _w)  # base = neutral weights
+                # Shrinkage: 混合 base 和 regime weights
+                _shrink_max_lam = float(config.get('p18_shrinkage_max_lambda', 0.40))
+                _shrink_n_scale = float(config.get('p18_shrinkage_n_scale', 100.0))
+                _regime_n = regime_trade_counts.get(_regime_label, 0)
+                _shrink_lambda = min(_shrink_max_lam, _regime_n / _shrink_n_scale) if _shrink_n_scale > 0 else 0
                 # 支持 config 覆盖每个 regime 的权重
-                _div_w = float(config.get(f'regime_{_regime_label}_div_w', _w['div_w']))
-                _ma_w = float(config.get(f'regime_{_regime_label}_ma_w', _w['ma_w']))
+                _div_w_regime = float(config.get(f'regime_{_regime_label}_div_w', _w['div_w']))
+                _ma_w_regime = float(config.get(f'regime_{_regime_label}_ma_w', _w['ma_w']))
+                _div_w_base = float(_w_base.get('div_w', 0.70))
+                _ma_w_base = float(_w_base.get('ma_w', 0.30))
+                _div_w = (1 - _shrink_lambda) * _div_w_base + _shrink_lambda * _div_w_regime
+                _ma_w = (1 - _shrink_lambda) * _ma_w_base + _shrink_lambda * _ma_w_regime
                 _bsum = _div_w + _ma_w
                 if _bsum > 0:
                     _div_w /= _bsum
@@ -2272,10 +2350,19 @@ def _run_strategy_core(
                 _base_ss = _div_s * _div_w + _ma_s * _ma_w
                 _base_bs = _div_b * _div_w + _ma_b * _ma_w
                 # 乘法 bonus (支持 config 覆盖)
-                _cs_b = float(config.get(f'regime_{_regime_label}_cs_bonus', _w['cs_b']))
-                _kdj_b = float(config.get(f'regime_{_regime_label}_kdj_bonus', _w['kdj_b']))
-                _bb_b = float(config.get(f'regime_{_regime_label}_bb_bonus', _w['bb_b']))
-                _vp_b = float(config.get(f'regime_{_regime_label}_vp_bonus', _w['vp_b']))
+                # Shrinkage 也应用于 bonus weights
+                _cs_b_regime = float(config.get(f'regime_{_regime_label}_cs_bonus', _w['cs_b']))
+                _kdj_b_regime = float(config.get(f'regime_{_regime_label}_kdj_bonus', _w['kdj_b']))
+                _bb_b_regime = float(config.get(f'regime_{_regime_label}_bb_bonus', _w['bb_b']))
+                _vp_b_regime = float(config.get(f'regime_{_regime_label}_vp_bonus', _w['vp_b']))
+                _cs_b_base = float(_w_base.get('cs_b', 0.06))
+                _kdj_b_base = float(_w_base.get('kdj_b', 0.09))
+                _bb_b_base = float(_w_base.get('bb_b', 0.10))
+                _vp_b_base = float(_w_base.get('vp_b', 0.08))
+                _cs_b = (1 - _shrink_lambda) * _cs_b_base + _shrink_lambda * _cs_b_regime
+                _kdj_b = (1 - _shrink_lambda) * _kdj_b_base + _shrink_lambda * _kdj_b_regime
+                _bb_b = (1 - _shrink_lambda) * _bb_b_base + _shrink_lambda * _bb_b_regime
+                _vp_b = (1 - _shrink_lambda) * _vp_b_base + _shrink_lambda * _vp_b_regime
                 _sb = 0.0
                 if _bb_s >= 15: _sb += _bb_b
                 if _vp_s >= 15: _sb += _vp_b
@@ -2347,7 +2434,10 @@ def _run_strategy_core(
         exit_mult = 1.0
         hold_mult = 1.0
         risk_mult = 1.0
-        entry_dom_ratio = float(config.get('entry_dominance_ratio', 1.5))
+        # v11: 支持 open_dominance_ratio 别名 (live_signal_generator 兼容)
+        _default_dom = float(config.get('open_dominance_ratio',
+                             config.get('entry_dominance_ratio', 1.5)))
+        entry_dom_ratio = _default_dom
         if engine_mode == 'trend':
             entry_mult = float(config.get('trend_engine_entry_mult', 0.95))
             exit_mult = float(config.get('trend_engine_exit_mult', 1.05))
@@ -2783,7 +2873,18 @@ def _run_strategy_core(
             _r = str(neutral_struct_short_reason or 'unknown')
             _rc = neutral_short_structure_stats['reason_counts']
             _rc[_r] = int(_rc.get(_r, 0)) + 1
-        if _short_candidate and short_conf_info.get('allow', True):
+        # v11: Score Calibration gate — 用校准 E[R] 替代硬阈值
+        _score_cal_short_ok = True
+        if use_score_calibration and _score_calibrator and _short_candidate:
+            score_cal_stats['evaluated'] += 1
+            _sc_ok, _sc_info = _score_calibrator.should_enter(
+                'short', _regime_label, ss, _score_cal_cost, _score_cal_min_p)
+            if not _sc_ok:
+                _score_cal_short_ok = False
+                score_cal_stats['blocked'] += 1
+            else:
+                score_cal_stats['allowed'] += 1
+        if _short_candidate and short_conf_info.get('allow', True) and _score_cal_short_ok:
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
             # P21: Risk-per-trade 仓位模型 (v10.1: SL 绑定仓位)
             if use_risk_per_trade:
@@ -2832,6 +2933,7 @@ def _run_strategy_core(
             short_max_pnl = 0; short_min_pnl = 0.0; short_bars = 0; short_cd = cooldown
             short_just_opened = True; short_partial_done = False; short_partial2_done = False
             short_entry_ss = ss  # S5: 记录入场信号强度
+            regime_trade_counts[_regime_label] += 1  # v11: P18 shrinkage
         # ── P6: Ghost cooldown — 被过滤的强信号也触发冷却 ──
         elif (use_ghost_cooldown and not _short_candidate
               and short_cd == 0
@@ -3304,7 +3406,18 @@ def _run_strategy_core(
             _cr = str(long_conf_info.get('reason', 'unknown'))
             _cbc = confidence_stats['blocked_reason_counts']
             _cbc[_cr] = int(_cbc.get(_cr, 0)) + 1
-        if _long_candidate and long_conf_info.get('allow', True):
+        # v11: Score Calibration gate (long)
+        _score_cal_long_ok = True
+        if use_score_calibration and _score_calibrator and _long_candidate:
+            score_cal_stats['evaluated'] += 1
+            _sc_ok, _sc_info = _score_calibrator.should_enter(
+                'long', _regime_label, bs, _score_cal_cost, _score_cal_min_p)
+            if not _sc_ok:
+                _score_cal_long_ok = False
+                score_cal_stats['blocked'] += 1
+            else:
+                score_cal_stats['allowed'] += 1
+        if _long_candidate and long_conf_info.get('allow', True) and _score_cal_long_ok:
             actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
             # P21: Risk-per-trade 仓位模型 (v10.1: SL 绑定仓位)
             if use_risk_per_trade:
@@ -3344,6 +3457,7 @@ def _run_strategy_core(
             long_max_pnl = 0; long_min_pnl = 0.0; long_bars = 0; long_cd = cooldown
             long_just_opened = True; long_partial_done = False; long_partial2_done = False
             long_entry_bs = trend_long_bs  # S5: 记录入场信号强度
+            regime_trade_counts[_regime_label] += 1  # v11: P18 shrinkage
 
         # 管理多仓
         if eng.futures_long and not long_just_opened:
@@ -3792,6 +3906,16 @@ def _run_strategy_core(
         _dv = _build_extreme_div_short_veto_result()
         if _dv:
             result['extreme_div_short_veto'] = _dv
+        if _perp_data_quality:
+            result['perp_data_quality'] = _perp_data_quality
+        if data_quality_flags:
+            result['data_quality_flags'] = list(data_quality_flags)
+        if isinstance(config.get('_stat_significance'), dict):
+            result['stat_significance'] = config.get('_stat_significance')
+        elif isinstance(config.get('stat_significance'), dict):
+            result['stat_significance'] = config.get('stat_significance')
+        result['risk_model_mode'] = getattr(eng, '_risk_model_mode', 'margin_use')
+        result['stop_anchor_type'] = getattr(eng, '_stop_anchor_type', 'fixed_sl')
         return result
 
     result = eng.get_result(primary_df)
@@ -3858,6 +3982,16 @@ def _run_strategy_core(
     _dv = _build_extreme_div_short_veto_result()
     if _dv:
         result['extreme_div_short_veto'] = _dv
+    if _perp_data_quality:
+        result['perp_data_quality'] = _perp_data_quality
+    if data_quality_flags:
+        result['data_quality_flags'] = list(data_quality_flags)
+    if isinstance(config.get('_stat_significance'), dict):
+        result['stat_significance'] = config.get('_stat_significance')
+    elif isinstance(config.get('stat_significance'), dict):
+        result['stat_significance'] = config.get('stat_significance')
+    result['risk_model_mode'] = getattr(eng, '_risk_model_mode', 'margin_use')
+    result['stop_anchor_type'] = getattr(eng, '_stop_anchor_type', 'fixed_sl')
     return result
 
 

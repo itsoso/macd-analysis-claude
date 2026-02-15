@@ -2,7 +2,7 @@
 
 > 版本: v9.0.1 (B1b + P13 + P20 + P24 + Anti-Squeeze)
 > 编写时间: 2026-02-15 18:47:20 CST (北京时间)
-> 最后更新: 2026-02-15 v9.0.1 回测验证 (含 v5 完整回测、IS PF<1.0 发现)
+> 最后更新: 2026-02-15 v9.0.1 回测验证 (含 v5 完整回测、IS PF<1.0 发现) + 附录F GPT Pro 外部审计
 > 生产配置: live_config.py v5 (`STRATEGY_VERSION=v5`)
 > 标的: ETH/USDT 永续合约 + 现货
 > 主周期: 1h | 决策周期: 15m + 1h + 4h + 24h
@@ -1472,3 +1472,262 @@ E5_full_v9:          IS -4.19%   PF=1.179  trades=83  | OOS +12.74% PF=1.087  tr
 
 > **注**: E4/E5 的 OOS trades 从 43→107/110, 说明 P18 激活了 short 交易 (v8 基线 OOS 无 short)。
 > E5 full v9 的 Worst-5 从 -$15,069 降至 -$7,021, 尾部风险大幅改善。
+
+---
+
+## 附录 F: GPT Pro 外部审计分析 (2026-02)
+
+### F.1 审计背景
+
+GPT Pro (o1 Pro) 对 v10.2 技术规格书进行系统审计，提出 3 个 P0 级 (数据/模型合规性) 和 5 个 P1 级 (策略增益) 改造建议。本附录将每条建议与实际代码逐行交叉验证，给出准确性判定和优先行动清单。
+
+**审计方法**: 每条建议追溯到具体代码行，确认 GPT Pro 的假设是否成立。
+
+### F.2 审计结论总表
+
+| # | GPT Pro 建议 | 优先级 | 准确性判定 | 关键代码证据 |
+|---|-------------|-------|-----------|-------------|
+| P0-1 | Funding 固定8h假设 | P0 | **部分准确** | `binance_fetcher.py` L482 已动态推算; `optimize_six_book.py` L1942 UTC锚定; **但** `strategy_futures.py` L472 硬编码 (死路径); Anti-Squeeze 硬阈值用绝对值 |
+| P0-2 | OI 数据仅1个月可得 | P0 | **准确，严重** | `data/open_interest/` 目录为空; `optimize_six_book.py` L505 OI缺失时**静默降级为 quote_volume 代理**; 所有 oi_z 均基于错误数据 |
+| P0-3 | SL/TP 同bar优先级偏乐观 | P0 | **部分准确** | 强平 bar extreme ✅; Hard SL bar HIGH ✅; **但** Full TP vs Regular SL → TP 优先 (if-else L3019, 偏乐观); MAE 用 close 非 extreme |
+| P1-1 | 分数校准层 (score→edge) | P1 | **准确** | `multi_tf_consensus.py` L410 原始加权平均, 无 percentile/zscore, 无 score→p(win) 映射 |
+| P1-2 | P18 连续混合+shrinkage | P1 | **准确** | `signal_core.py` L525 离散权重矩阵; sigmoid 仅用于 SL, 不用于融合权重; 无 shrinkage |
+| P1-3 | 多TF标准化+分歧惩罚 | P1 | **部分准确** | 已有大小TF反向衰减 ×0.5 (L460); 已有 regime 动态权重; **但** 无正式 dispersion→仓位, 无 percentile |
+| P1-4 | MAE 动态止损/早退 | P1 | **部分过时** | v10.1 ATR-SL; v10.2 MAE 记录; v11 MAE P90 校准; 非纯诊断但无 MAE+时间联合规则 |
+| P1-5/6 | Short crash-hedge + 动态预算 | P1 | **部分过时** | v10.0 Leg Budget 部分重构; 无显式崩盘触发; 无滚动绩效自适应预算 |
+
+### F.3 逐条详细分析
+
+#### F.3.1 P0-1: Funding 结算频率动态化
+
+**GPT Pro 指出**: Binance 2025-05-02 起引入 1h/4h/8h 动态 funding interval，代码固定 8h 会导致系统性偏差。
+
+**代码实际**:
+
+| 组件 | 位置 | 状态 | 说明 |
+|------|------|------|------|
+| 数据采集 | `binance_fetcher.py` L482-489 | ✅ 已解决 | 通过时间戳差分推算 `funding_interval_hours`, clip [0.5, 24] |
+| 回测主循环 | `optimize_six_book.py` L1942-1982 | ✅ 已解决 | `_crosses_funding_settlement()` UTC锚定, 支持任意 interval |
+| 逐bar读取 | `optimize_six_book.py` L2133-2148 | ✅ 已解决 | 每bar从 `funding_interval_hours_col` 读取当前 interval |
+| 独立引擎 | `strategy_futures.py` L472 | ❌ 硬编码 | `counter % 8`, 但主回测不走此路径 |
+| Anti-Squeeze硬模式 | `live_config.py` L490 | ❌ 绝对值 | `fr_threshold=0.0008` (0.08%), 未标准化 |
+| Anti-Squeeze软模式 | `optimize_six_book.py` L644-695 | ✅ 已解决 | 使用 `funding_z` (z-score) |
+| fundingInfo API | 全局 | ❌ 未使用 | 通过数据推算等效, 但无法获取当前制度设置 |
+
+**结论**: 主回测已正确处理动态 interval。残留问题: Anti-Squeeze 硬模式阈值和 `strategy_futures.py` 独立路径。
+
+---
+
+#### F.3.2 P0-2: OI 历史数据真实性 ⚠️
+
+**GPT Pro 指出**: `openInterestHist` API 仅提供近 1 个月数据，回测 OI 可能是"假有效"。
+
+**代码实际**:
+
+```
+binance_fetcher.py L516-635: fetch_open_interest_history() 功能完整
+data/open_interest/ 目录:   >>> 空, 无任何 Parquet 缓存 <<<
+optimize_six_book.py L505-511:
+    oi_series = None
+    for col in ('open_interest', 'oi'):
+        if col in primary_df.columns:
+            oi_series = pd.to_numeric(primary_df[col], errors='coerce')
+            break
+    if oi_series is None:
+        oi_series = quote_volume    # ← 静默降级, 无告警
+```
+
+**影响范围**:
+
+| 功能 | 依赖 oi_z | 数据来源 | 影响 |
+|------|----------|---------|------|
+| Anti-Squeeze 硬门控 | `oi_z >= 1.0` | quote_volume 代理 | 门控条件语义错误 |
+| Anti-Squeeze 软惩罚 | `_w_oi * oi_z` (权重 0.3) | quote_volume 代理 | 惩罚信号含义偏移 |
+| 微结构得分 | `oi_z >= micro_oi_trend_z` | quote_volume 代理 | 趋势判断噪声 |
+
+**结论**: **GPT Pro 完全正确。这是当前系统的最高优先级数据合规问题。** Anti-Squeeze 的 OI 维度在回测中实质无效 — 所有 oi_z 均基于 quote_volume, 而 quote_volume 与 open_interest 的经济含义和统计分布完全不同。
+
+**建议行动**:
+1. 立即开始 cron 定时抓取 OI → Parquet 积累历史 (不可追溯, 每天增量)
+2. 回测中增加 OI 数据质量日志: `open_interest 非空率 = X%`
+3. 在 Anti-Squeeze 触发时标注 `oi_source=proxy|real`
+4. 考虑购买第三方历史 OI 数据集 (如 Kaiko, CryptoQuant)
+
+---
+
+#### F.3.3 P0-3: Bar 内事件优先级
+
+**GPT Pro 指出**: 同 bar 同时触发 SL 和 TP 时, TP 优先是偏乐观的。
+
+**退出优先级链** (`optimize_six_book.py` L2115-3130, 以空头为例):
+
+```
+优先级 1: 强平检测 → bar HIGH (mark price)         ← 保守 ✅
+优先级 2: Hard SL (熔断) → bar HIGH                ← 保守 ✅
+优先级 3: Fast-fail (P10) → close price
+优先级 4: Adverse exit → close price
+优先级 5: Partial TP1/TP2 → close + bar clipping
+优先级 6: Full TP → close price (if 分支)           ← 优先于 SL ❌ 偏乐观
+优先级 7: Trail stop → close price (else 分支)
+优先级 8: Regular SL → close price (else 分支)
+优先级 9: Reverse signal → open price
+优先级10: Timeout → open price
+```
+
+**关键代码** (L3019-3101):
+
+```python
+if pnl_r >= actual_short_tp:          # ← if 分支: TP
+    eng.close_short(price, dt, "止盈")
+else:                                   # ← else 分支: 所有 SL 逻辑
+    # trail stop, regular SL, timeout...
+```
+
+**问题**: 当 bar 范围足够大, 价格先触发 SL 再回到 TP, 回测仍选择 TP。
+
+**MAE 追踪** (L2885-2889): 使用 close price 而非 bar high/low, 低估真实 MAE。
+
+**影响评估**: 需统计 "同 bar 中 close 价同时满足 TP 和 SL 条件" 的频率。若频率极低 (<1%), 偏差可忽略。
+
+---
+
+#### F.3.4 P1-1: 分数校准层
+
+**GPT Pro 指出**: 不同 TF 和 regime 的 0-100 分数分布不同, 直接加权平均是"混合不可比量纲"。
+
+**代码确认**: `multi_tf_consensus.py` `fuse_tf_scores()` L410-415:
+
+```python
+weighted_ss = Σ(tf_scores[tf][0] × weight[tf]) / Σ(weight)
+weighted_bs = Σ(tf_scores[tf][1] × weight[tf]) / Σ(weight)
+```
+
+无 percentile 标准化, 无 z-score 转换, 无 score→edge 映射。
+
+**建议分两步**:
+1. **短期 (小工作量)**: 对每个 TF 的 score 做滚动 percentile 标准化后再加权
+2. **中期 (大工作量)**: 按 `(TF, regime, direction)` 分层建立 score→E[return] 映射 (等频分箱 + isotonic regression)
+
+---
+
+#### F.3.5 P1-2: P18 连续化 + shrinkage
+
+**GPT Pro 指出**: P18 离散切换导致 IS/OOS 分裂, 应用连续混合 + shrinkage。
+
+**代码确认**: `signal_core.py` L525-578 五个离散权重矩阵:
+
+```python
+'trend':     {'div_w': 0.60, 'ma_w': 0.40, ...}
+'neutral':   {'div_w': 0.25, 'ma_w': 0.75, ...}
+'high_vol':  {'div_w': 0.45, 'ma_w': 0.55, ...}
+```
+
+- Regime 分类用硬阈值 (vol_high=0.020, trend_strong=0.015)
+- Sigmoid 已用于 SL/threshold (可复用), 但**不用于融合权重**
+- 无 shrinkage (无 λ×w_global + (1-λ)×w_regime)
+- P18 当前生产**已禁用** (`use_regime_adaptive_fusion: False`)
+
+**GPT Pro 正确**: 如重启 P18, 应用 trend_score/vol_score 做连续混合, 并增加 shrinkage 防过拟合。这正是 E4 OOS+28.9% 但 IS 崩的根因。
+
+---
+
+#### F.3.6 P1-3: 多 TF 分歧度惩罚
+
+**GPT Pro 指出**: 引入 `disp = std(ss_across_TFs)` 作为仓位惩罚。
+
+**代码确认**: `multi_tf_consensus.py` L460-469 已有粗糙版:
+
+```python
+# 大小 TF 反向 → 信号 ×0.5 衰减
+if large_ss > large_bs*1.3 AND small_bs > small_ss*1.3:
+    weighted_bs *= 0.5
+```
+
+- 有 regime 动态 TF 权重 (high_vol: small×0.6, trend: large×1.25)
+- Chain bonus 存在 (+0.08/TF if ≥3 chain with 4h+)
+- **但**: 无正式 dispersion 度量, 无 dispersion→margin sigmoid
+
+**实现建议**: 在 `fuse_tf_scores()` 中增加:
+
+```python
+ss_values = [tf_scores[tf][0] for tf in active_tfs]
+disp = np.std(ss_values)
+margin_mult *= 1.0 / (1.0 + math.exp(steepness * (disp - midpoint)))
+```
+
+工作量小, 收益预期中等 (减少摇摆期进场)。
+
+---
+
+#### F.3.7 P1-4: MAE 条件早退
+
+**GPT Pro 指出**: 用 MAE 做 "持仓>t0 bars 且 MAE<-x → 早退"。
+
+**v10.x 进展**:
+
+| 版本 | 进展 | 状态 |
+|------|------|------|
+| v10.1 | ATR-SL 替代固定 SL | ✅ 已启用 |
+| v10.2 | MAE/MFE 记入 trade record (min_pnl_r/max_pnl_r) | ✅ 已启用 |
+| v11 Phase1 | MAE P90 用于 ATR mult 校准 | 🔬 实验中 |
+
+**残留**: 无 "MAE + 时间" 联合早退规则。可作为 P36 实验:
+
+```
+if bars_held >= t0 and current_pnl_r < mae_threshold and ss_bs_edge_disappeared:
+    exit("MAE+time early exit")
+```
+
+---
+
+#### F.3.8 P1-5/P1-6: Short crash-hedge + 动态 Leg Budget
+
+**v10.x 进展**:
+- v10.0 Leg Budget: neutral short 预算 10%, 部分限制 short 风险暴露
+- 无显式 "崩盘保险" 触发逻辑 (基于 funding 极端 + OI 急升 + basis 异常)
+- 动态预算 (滚动绩效 → sigmoid → budget) 尚未实现
+- 当前静态 5×2 预算矩阵已是合理起步
+
+### F.4 优先行动清单
+
+#### P0 — 立即
+
+| # | 行动 | 工作量 | 预期影响 |
+|---|------|-------|---------|
+| 1 | **OI 数据管线**: cron 定时抓取 → Parquet 积累; 回测标注 `oi_source=proxy\|real` | 中 | 数据合规, Anti-Squeeze 可信度 |
+| 2 | **MAE bar-extreme**: L2885 改用 high/low 而非 close | 小 | MAE 准确性 |
+
+#### P1 — 下个迭代
+
+| # | 行动 | 工作量 | 预期影响 |
+|---|------|-------|---------|
+| 3 | **TF dispersion 仓位惩罚**: `fuse_tf_scores()` 加 std→sigmoid | 小 | 减少噪声交易, 降回撤 |
+| 4 | **SL/TP 同bar频率统计**: 统计双触发笔数, 评估保守化必要性 | 小 | 回测真实性 |
+| 5 | **Anti-Squeeze 硬阈值 zscore 化**: 替换 0.0008 为 funding_z percentile | 小 | 阈值跨 interval 稳定 |
+
+#### P2 — 研究方向
+
+| # | 行动 | 工作量 | 预期影响 |
+|---|------|-------|---------|
+| 6 | 分数 percentile 标准化 (P1-1 简版) | 中 | TF 间可比性 |
+| 7 | P18 连续混合 + shrinkage (如重启) | 中 | IS/OOS 收敛 |
+| 8 | MAE+时间联合早退 (P36) | 中 | 减扛单, 降尾部 |
+| 9 | 动态 Leg Budget (滚动绩效自适应) | 大 | 资本效率 |
+
+### F.5 v10.x 已解决的项
+
+GPT Pro 审计基于 v10.2 规格书, 以下建议已被 v10.x 迭代解决:
+
+| GPT Pro 建议 | v10.x 对应实现 | 状态 |
+|-------------|---------------|------|
+| Funding 动态化 | v9.0 `binance_fetcher` + `optimize_six_book` UTC锚定 | ✅ 主路径已解决 |
+| ATR-SL 替代固定 SL | v10.1 ATR-SL 已启用 | ✅ |
+| Regime-adaptive SL | v10.1 ATR mult per regime 替代 P24 固定值 | ✅ |
+| MAE 追踪 | v10.2 trade record 含 min_pnl_r/max_pnl_r | ✅ |
+| B1b 误杀 neutral short | v10.0 Leg Budget 取代 neutral:999 | ✅ |
+| 连续化思想 | v10.2 sigmoid soft veto/SL/struct | ✅ 部分 |
+| Mark Price 强平 | v9.0 mark_price 数据管线 + 强平检测 | ✅ |
+
+### F.6 版本差距说明
+
+本 STRATEGY_SPEC.md 主体内容停留在 v9.0.1, 而代码已演进至 v10.2 + v11 实验。详细的 v10.x 规格请参阅 `docs/strategy_tech_doc.md`。本附录 F 的代码行号引用基于 2026-02-15 的代码快照。

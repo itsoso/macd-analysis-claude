@@ -266,6 +266,8 @@ STRATEGY_PARAM_VERSIONS = {
         "continuous_trail_start_pnl": 0.05,
         "continuous_trail_max_pb": 0.60,
         "continuous_trail_min_pb": 0.30,
+        "use_mark_price_for_liquidation": True,
+        "use_real_funding_rate": True,
         #
         # ── P20: 空头追踪收紧 (40% vs 多头 60%) ──
         "continuous_trail_max_pb_short": 0.40,
@@ -665,6 +667,11 @@ class StrategyConfig:
     continuous_trail_max_pb: float = field(default_factory=lambda: _resolve_param("continuous_trail_max_pb", 0.60))         # 低利润时最宽回撤容忍 (多单)
     continuous_trail_min_pb: float = field(default_factory=lambda: _resolve_param("continuous_trail_min_pb", 0.30))         # 高利润时最紧回撤容忍
     continuous_trail_max_pb_short: float = field(default_factory=lambda: _resolve_param("continuous_trail_max_pb_short", 0.60))   # P20: 空单最宽回撤容忍 (默认同多, 可收紧到0.40)
+    # v10.2: regime 连续化开关 + 趋势 TP 禁用列表
+    use_regime_sigmoid: bool = field(default_factory=lambda: _resolve_param("use_regime_sigmoid", False))
+    tp_disabled_regimes: List[str] = field(
+        default_factory=lambda: _resolve_param("tp_disabled_regimes", ['trend', 'low_vol_trend'])
+    )
 
     # ── P18: Regime-Adaptive 六维融合权重 ──
     # 核心改造: 在回测主循环中根据 regime 动态重新融合六书分数
@@ -706,12 +713,12 @@ class StrategyConfig:
 
     # ── V9: 回测口径真实化 (Perp) ──
     # 强平检测优先使用 mark 价格序列（若本地K线包含相关列）
-    use_mark_price_for_liquidation: bool = False
+    use_mark_price_for_liquidation: bool = field(default_factory=lambda: _resolve_param("use_mark_price_for_liquidation", False))
     mark_price_col: str = 'mark_price'
     mark_high_col: str = 'mark_high'
     mark_low_col: str = 'mark_low'
     # 资金费率优先使用真实 funding_rate 列（若存在），否则回退旧模型
-    use_real_funding_rate: bool = False
+    use_real_funding_rate: bool = field(default_factory=lambda: _resolve_param("use_real_funding_rate", False))
     funding_rate_col: str = 'funding_rate'
     funding_interval_hours: float = 8.0
     funding_interval_hours_col: str = 'funding_interval_hours'
@@ -736,8 +743,8 @@ class StrategyConfig:
     # risk_per_trade: 每笔最大风险 = equity × R%
     # 仓位 = risk_amount / (stop_distance_pct × entry_price), 再 clip 到 margin 上限
     # 优势: 尾部可控, 几何增长对大亏极敏感, 控制单笔尾部后可安全加大风险预算
-    use_risk_per_trade: bool = False
-    risk_per_trade_pct: float = 0.015    # 每笔最大风险占 equity 的 1.5%
+    use_risk_per_trade: bool = field(default_factory=lambda: _resolve_param("use_risk_per_trade", False))
+    risk_per_trade_pct: float = field(default_factory=lambda: _resolve_param("risk_per_trade_pct", 0.015))    # 每笔最大风险占 equity 的 1.5%
     risk_stop_mode: str = 'atr'          # 止损距离计算方式: 'atr' 或 'fixed'
     risk_atr_mult_short: float = 2.5     # 空单: 止损 = entry ± ATR × 倍数
     risk_atr_mult_long: float = 2.0      # 多单: 止损 = entry ± ATR × 倍数
@@ -830,6 +837,30 @@ class StrategyConfig:
     ss_quality_sl_threshold: float = 50  # SS/BS低于此值视为弱信号
     ss_quality_sl_mult: float = 0.70     # 弱信号SL *= 0.70 (如-0.20→-0.14)
 
+    def __post_init__(self):
+        if isinstance(self.decision_timeframes, str):
+            self.decision_timeframes = [
+                x.strip() for x in self.decision_timeframes.split(',') if x.strip()
+            ]
+        if isinstance(self.decision_timeframes_fallback, str):
+            self.decision_timeframes_fallback = [
+                x.strip() for x in self.decision_timeframes_fallback.split(',') if x.strip()
+            ]
+        if isinstance(self.tp_disabled_regimes, str):
+            self.tp_disabled_regimes = [
+                x.strip() for x in self.tp_disabled_regimes.split(',') if x.strip()
+            ]
+        elif isinstance(self.tp_disabled_regimes, (tuple, set)):
+            self.tp_disabled_regimes = [
+                str(x).strip() for x in self.tp_disabled_regimes if str(x).strip()
+            ]
+        elif not isinstance(self.tp_disabled_regimes, list):
+            self.tp_disabled_regimes = ['trend', 'low_vol_trend']
+        else:
+            self.tp_disabled_regimes = [
+                str(x).strip() for x in self.tp_disabled_regimes if str(x).strip()
+            ]
+
     @classmethod
     def from_optimize_result(cls, filepath: str, timeframe: str = None) -> 'StrategyConfig':
         """从优化结果 JSON 加载最优配置"""
@@ -871,6 +902,8 @@ class StrategyConfig:
 
         if timeframe:
             config.timeframe = timeframe
+
+        config.__post_init__()
 
         return config
 

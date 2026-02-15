@@ -56,6 +56,8 @@ DECISION_TFS = list(_LIVE_DEFAULT.decision_timeframes)
 FALLBACK_DECISION_TFS = list(_LIVE_DEFAULT.decision_timeframes_fallback)
 AVAILABLE_TFS = list(dict.fromkeys([PRIMARY_TF, *DECISION_TFS, *FALLBACK_DECISION_TFS]))
 COMBO_NAME = f"四TF联合({'+'.join(DECISION_TFS)})"
+# 主TF衍生品数据质量快照（每次回测重置）
+PERP_DATA_QUALITY = {}
 
 # 默认策略参数（与最优配置对齐）
 def _build_default_config():
@@ -334,6 +336,8 @@ def _build_default_config():
         'use_regime_adaptive_reweight': _LIVE_DEFAULT.use_regime_adaptive_reweight,
         'regime_neutral_ss_dampen': _LIVE_DEFAULT.regime_neutral_ss_dampen,
         'regime_neutral_bs_boost': _LIVE_DEFAULT.regime_neutral_bs_boost,
+        'use_regime_sigmoid': _LIVE_DEFAULT.use_regime_sigmoid,
+        'tp_disabled_regimes': _LIVE_DEFAULT.tp_disabled_regimes,
         'use_regime_adaptive_fusion': _LIVE_DEFAULT.use_regime_adaptive_fusion,
         'regime_trend_div_w': _LIVE_DEFAULT.regime_trend_div_w,
         'regime_trend_ma_w': _LIVE_DEFAULT.regime_trend_ma_w,
@@ -372,6 +376,9 @@ def _build_default_config():
         'risk_budget_high_vol_short': _LIVE_DEFAULT.risk_budget_high_vol_short,
         'risk_budget_high_vol_choppy_long': _LIVE_DEFAULT.risk_budget_high_vol_choppy_long,
         'risk_budget_high_vol_choppy_short': _LIVE_DEFAULT.risk_budget_high_vol_choppy_short,
+        # ── P21: Risk-per-trade ──
+        'use_risk_per_trade': _LIVE_DEFAULT.use_risk_per_trade,
+        'risk_per_trade_pct': _LIVE_DEFAULT.risk_per_trade_pct,
         # ── 止损后冷却倍数(v5.2) ──
         'short_sl_cd_mult': _LIVE_DEFAULT.short_sl_cd_mult,
         'long_sl_cd_mult': _LIVE_DEFAULT.long_sl_cd_mult,
@@ -446,6 +453,27 @@ def fetch_data_for_tf(tf, days, allow_api_fallback=False):
                 )
                 if any((x is not None and len(x) > 0) for x in (mark_df, funding_df, oi_df)):
                     df = merge_perp_data_into_klines(df, mark_df, funding_df, oi_df)
+                    audit_dict = dict(df.attrs.get('perp_data_audit_dict') or {})
+                    oi_audit = dict(audit_dict.get('open_interest') or {})
+                    oi_orig_cov = float(oi_audit.get('orig_coverage', 0.0) or 0.0)
+                    oi_max_stale = int(oi_audit.get('max_stale_bars', 0) or 0)
+                    quality_flags = []
+                    oi_soft_disabled = False
+                    # A3: OI 仅近30天可信；覆盖率低或 stale 过长则自动软降级
+                    if (oi_orig_cov < 0.20) or (oi_max_stale > 12):
+                        for _oi_col in ('open_interest', 'open_interest_value'):
+                            if _oi_col in df.columns:
+                                df[_oi_col] = np.nan
+                        oi_soft_disabled = True
+                        quality_flags.append('oi_soft_disabled')
+                    PERP_DATA_QUALITY[tf] = {
+                        'tf': tf,
+                        'audit': audit_dict,
+                        'oi_orig_coverage': oi_orig_cov,
+                        'oi_max_stale_bars': oi_max_stale,
+                        'oi_soft_disabled': oi_soft_disabled,
+                        'quality_flags': quality_flags,
+                    }
                     _perp_cols = [
                         c for c in (
                             'mark_open', 'mark_high', 'mark_low', 'mark_close',
@@ -635,6 +663,10 @@ def _normalize_trade(t):
         'ss': _num(t.get('ss')),
         'bs': _num(t.get('bs')),
         'atr_pct': _num(t.get('atr_pct')),
+        # v10.3: 数据质量/风险模型标签
+        'data_quality_flags': t.get('data_quality_flags'),
+        'risk_model_mode': t.get('risk_model_mode'),
+        'stop_anchor_type': t.get('stop_anchor_type'),
     }
     for k, v in t.items():
         if k in out:
@@ -789,6 +821,8 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
                         help='覆盖配置参数, 格式: key=value (可多次使用, bool用true/false)')
     parser.add_argument('--set', action='append', default=[],
                         help='--override 的别名, 格式: key=value (兼容旧命令)')
+    parser.add_argument('--stat-significance-file', type=str, default=None,
+                        help='可选: 统计显著性JSON文件路径，将写入summary_json.stat_significance')
     args, unknown_args = parser.parse_known_args()
     if unknown_args:
         print(f"  ⚠️  检测到未识别参数: {' '.join(unknown_args)}")
@@ -838,6 +872,13 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
             else:
                 DEFAULT_CONFIG[k] = v
             print(f"  ✏️  override: {k} = {DEFAULT_CONFIG[k]} (原值: {orig})")
+    if args.stat_significance_file:
+        try:
+            with open(args.stat_significance_file, 'r', encoding='utf-8') as f:
+                DEFAULT_CONFIG['_stat_significance'] = json.load(f)
+            print(f"  ✏️  注入统计显著性: {args.stat_significance_file}")
+        except Exception as e:
+            print(f"  ⚠️  读取统计显著性文件失败: {e}")
 
     preferred_combo_name = f"四TF联合({'+'.join(DECISION_TFS)})"
     print("=" * 80)
@@ -863,6 +904,11 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
           f"  |  微结构: {'ON' if DEFAULT_CONFIG.get('use_microstructure') else 'OFF'}"
           f"  |  双引擎: {'ON' if DEFAULT_CONFIG.get('use_dual_engine') else 'OFF'}"
           f"  |  波动目标: {'ON' if DEFAULT_CONFIG.get('use_vol_target') else 'OFF'}")
+    print(f"  风控模型:     risk_per_trade={'ON' if DEFAULT_CONFIG.get('use_risk_per_trade') else 'OFF'}"
+          f"({float(DEFAULT_CONFIG.get('risk_per_trade_pct', 0.0))*100:.2f}%)"
+          f"  |  regime_sigmoid: {'ON' if DEFAULT_CONFIG.get('use_regime_sigmoid') else 'OFF'}")
+    print(f"  Perp口径:      mark_liq={'ON' if DEFAULT_CONFIG.get('use_mark_price_for_liquidation') else 'OFF'}"
+          f"  |  real_funding={'ON' if DEFAULT_CONFIG.get('use_real_funding_rate') else 'OFF'}")
     print("=" * 80)
 
     # ── 1. 获取数据 ──
@@ -875,6 +921,7 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
     t_phase1 = time.time()
     fetch_workers = max(1, min(len(AVAILABLE_TFS), int(os.getenv('BACKTEST_DAILY_FETCH_WORKERS', '3'))))
     print(f"  抓取并发: {fetch_workers}")
+    PERP_DATA_QUALITY.clear()
     all_data = {}
 
     def _fetch_tf_batch(tf_list):
@@ -1008,6 +1055,17 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
     t_phase3 = time.time()
     config = _scale_runtime_config(DEFAULT_CONFIG, PRIMARY_TF)
     config['name'] = f"多TF逐日_{combo_name}@{PRIMARY_TF}"
+    config['_perp_data_quality'] = dict(PERP_DATA_QUALITY.get(PRIMARY_TF, {}))
+    config['_data_quality_flags'] = list((config['_perp_data_quality'].get('quality_flags') or []))
+    config['_risk_model_mode'] = 'risk_per_trade' if bool(config.get('use_risk_per_trade', False)) else 'margin_use'
+    if bool(config.get('use_risk_per_trade', False)):
+        config['_stop_anchor_type'] = f"risk_{str(config.get('risk_stop_mode', 'atr')).lower()}"
+    elif bool(config.get('use_atr_sl', False)):
+        config['_stop_anchor_type'] = 'atr_sl'
+    elif bool(config.get('use_regime_adaptive_sl', False)):
+        config['_stop_anchor_type'] = 'regime_sl'
+    else:
+        config['_stop_anchor_type'] = 'fixed_sl'
     tf_score_index = _build_tf_score_index(all_data, all_signals, score_tfs, config)
     perf_log['3_score_index'] = time.time() - t_phase3
     for tf in score_tfs:
@@ -1116,6 +1174,12 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         'fee_drag_pct': fees.get('fee_drag_pct', 0),
         'liquidations': result.get('liquidations', 0),
     }
+    if config.get('_perp_data_quality'):
+        summary['perp_data_quality'] = config.get('_perp_data_quality')
+    if isinstance(config.get('_stat_significance'), dict):
+        summary['stat_significance'] = config.get('_stat_significance')
+    elif isinstance(config.get('stat_significance'), dict):
+        summary['stat_significance'] = config.get('stat_significance')
     if result.get('neutral_quality_gate'):
         summary['neutral_quality_gate'] = result.get('neutral_quality_gate')
     if result.get('book_consensus_gate'):

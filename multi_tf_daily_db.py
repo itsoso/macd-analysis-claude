@@ -346,6 +346,8 @@ def _build_strategy_snapshot(config):
         'use_regime_adaptive_reweight': config.get('use_regime_adaptive_reweight', False),
         'regime_neutral_ss_dampen': config.get('regime_neutral_ss_dampen'),
         'regime_neutral_bs_boost': config.get('regime_neutral_bs_boost'),
+        'use_regime_sigmoid': config.get('use_regime_sigmoid', False),
+        'tp_disabled_regimes': config.get('tp_disabled_regimes'),
         'use_regime_adaptive_fusion': config.get('use_regime_adaptive_fusion', False),
         'regime_trend_div_w': config.get('regime_trend_div_w'),
         'regime_trend_ma_w': config.get('regime_trend_ma_w'),
@@ -384,6 +386,9 @@ def _build_strategy_snapshot(config):
         'risk_budget_high_vol_short': config.get('risk_budget_high_vol_short'),
         'risk_budget_high_vol_choppy_long': config.get('risk_budget_high_vol_choppy_long'),
         'risk_budget_high_vol_choppy_short': config.get('risk_budget_high_vol_choppy_short'),
+        # P21: risk-per-trade
+        'use_risk_per_trade': config.get('use_risk_per_trade', False),
+        'risk_per_trade_pct': config.get('risk_per_trade_pct'),
         # 止损后冷却倍数
         'short_sl_cd_mult': config.get('short_sl_cd_mult'),
         'long_sl_cd_mult': config.get('long_sl_cd_mult'),
