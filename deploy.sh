@@ -4,6 +4,7 @@
 # 服务器: ssh -p 22222 root@47.237.191.17
 # 项目路径: /opt/macd-analysis
 # Web服务: macd-analysis.service (gunicorn)
+# 交易引擎: macd-engine.service (live_runner.py --phase paper)
 # ============================================================
 
 set -e
@@ -18,21 +19,20 @@ echo "=========================================="
 echo "  部署到服务器 $SERVER:$PORT"
 echo "=========================================="
 
-# 1. 检查交易引擎是否在运行
+# 1. 检查交易引擎状态 (通过 systemd)
 echo ""
-echo "[1/4] 检查交易引擎状态..."
-ENGINE_STATUS=$($SSH_CMD "pgrep -af live_runner.py 2>/dev/null || true")
-if [ -n "$ENGINE_STATUS" ]; then
-    echo "  ⚠️  交易引擎正在运行:"
-    echo "  $ENGINE_STATUS"
-    echo "  引擎使用 start_new_session 独立运行，Web 重载不会影响持仓。"
-else
-    echo "  交易引擎未运行。"
+echo "[1/5] 检查服务状态..."
+ENGINE_ACTIVE=$($SSH_CMD "systemctl is-active macd-engine 2>/dev/null || echo inactive")
+WEB_ACTIVE=$($SSH_CMD "systemctl is-active macd-analysis 2>/dev/null || echo inactive")
+echo "  Web 服务:    $WEB_ACTIVE"
+echo "  交易引擎:    $ENGINE_ACTIVE"
+if [ "$ENGINE_ACTIVE" = "active" ]; then
+    echo "  ⚠️  交易引擎正在运行，部署后将自动重启以加载新代码。"
 fi
 
-# 2. 拉取最新代码（若服务器有本地修改会先提示，避免误删）
+# 2. 拉取最新代码
 echo ""
-echo "[2/4] 拉取最新代码..."
+echo "[2/5] 拉取最新代码..."
 DIRTY=$($SSH_CMD "cd $REMOTE_DIR && git status --porcelain" 2>/dev/null || true)
 if [ -n "$DIRTY" ] && [ "$1" != "--force" ]; then
     echo "  ⚠️  服务器存在未提交修改，直接 reset 将永久丢失："
@@ -42,9 +42,9 @@ if [ -n "$DIRTY" ] && [ "$1" != "--force" ]; then
 fi
 $SSH_CMD "cd $REMOTE_DIR && git reset --hard HEAD && git pull origin main"
 
-# 3. 同步回测数据（本地 data/backtests/*.db → 服务器，页面展示用）
+# 3. 同步回测数据
 echo ""
-echo "[3/4] 同步回测数据..."
+echo "[3/5] 同步回测数据..."
 $SSH_CMD "mkdir -p $REMOTE_DIR/data/backtests"
 SYNC_FILES=()
 [ -f data/backtests/multi_tf_daily_backtest.db ] && SYNC_FILES+=(data/backtests/multi_tf_daily_backtest.db)
@@ -57,22 +57,20 @@ else
   echo "  ⚠️  本地无 data/backtests/*.db，跳过"
 fi
 
-# 4. 重启 Web 服务 (preload_app=True 时 reload 不会加载新代码, 必须 restart)
+# 4. 重启 Web 服务
 echo ""
-echo "[4/4] 重启 Web 服务..."
-$SSH_CMD "systemctl restart macd-analysis && sleep 2 && systemctl is-active macd-analysis >/dev/null && echo '  ✅ Web 服务已重启 (restart)' || echo '  ❌ 服务重启失败!'"
+echo "[4/5] 重启 Web 服务..."
+$SSH_CMD "systemctl restart macd-analysis && sleep 2 && systemctl is-active macd-analysis >/dev/null && echo '  ✅ Web 服务已重启' || echo '  ❌ Web 服务重启失败!'"
 
-# 4. 再次确认引擎状态
-if [ -n "$ENGINE_STATUS" ]; then
-    echo ""
-    echo "[确认] 检查交易引擎是否仍在运行..."
-    POST_STATUS=$($SSH_CMD "pgrep -af live_runner.py 2>/dev/null || true")
-    if [ -n "$POST_STATUS" ]; then
-        echo "  ✅ 交易引擎仍在运行，持仓安全。"
-    else
-        echo "  ❌ 警告：交易引擎已停止！请手动检查。"
-    fi
-fi
+# 5. 重启交易引擎 (加载新代码)
+echo ""
+echo "[5/5] 重启交易引擎..."
+$SSH_CMD "systemctl restart macd-engine && sleep 3 && systemctl is-active macd-engine >/dev/null && echo '  ✅ 交易引擎已重启 (paper mode)' || echo '  ❌ 交易引擎重启失败!'"
+
+# 最终确认
+echo ""
+echo "[确认] 服务状态..."
+$SSH_CMD "echo '  Web:    '\$(systemctl is-active macd-analysis); echo '  Engine: '\$(systemctl is-active macd-engine); echo '  PID:    '\$(pgrep -f 'live_runner.py' 2>/dev/null || echo 'N/A')"
 
 echo ""
 echo "=========================================="
