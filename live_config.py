@@ -159,8 +159,8 @@ PHASE_CONFIGS = {
 
 
 # ── 策略参数版本 ──
-# 通过环境变量 STRATEGY_VERSION=v1/v2/v3/v4 可切换
-# 默认使用 v4 (run31 — param_sweep 系统性优化)
+# 通过环境变量 STRATEGY_VERSION=v1/v2/v3/v4/v5 可切换
+# 默认使用 v5
 STRATEGY_PARAM_VERSIONS = {
     "v1": {  # run28 基线参数 (趋势v3 + LiveGate + Regime)
         "short_threshold": 25,
@@ -334,8 +334,8 @@ def _resolve_param(field_name: str, v2_default):
 class StrategyConfig:
     """策略参数配置 - 从优化结果加载
 
-    版本切换: 设置环境变量 STRATEGY_VERSION=v1/v2/v3/v4
-    默认: v4 (run31 — param_sweep 系统性优化)
+    版本切换: 设置环境变量 STRATEGY_VERSION=v1/v2/v3/v4/v5
+    默认: v5
     """
     symbol: str = "ETHUSDT"
     timeframe: str = "1h"
@@ -412,7 +412,7 @@ class StrategyConfig:
     single_pct: float = 0.20
     total_pct: float = 0.50
     # 冷却
-    cooldown: int = 6  # v7.0 B3: 4→6, 近似 ghost cooldown (IS+0.9%, OOS+5.6%)
+    cooldown: int = field(default_factory=lambda: _resolve_param("cooldown", 6))  # v7.0 B3: 4→6, 近似 ghost cooldown (IS+0.9%, OOS+5.6%)
     spot_cooldown: int = 12
     # NoTP 提前退出（长短独立 + regime 白名单）
     # 兼容旧参数: no_tp_exit_bars / no_tp_exit_min_pnl / no_tp_exit_regimes
@@ -526,7 +526,7 @@ class StrategyConfig:
     # v7.0 B3: neutral 门槛提高到 60 (P4实证neutral short无alpha, B3 OOS +5.6%)
     # 回退 B1b: 设为 'neutral:999' 可完全禁止 neutral 空单
     # 格式 "regime:threshold,..." 例 "neutral:60" → neutral中SS须>=60才开空
-    regime_short_threshold: str = 'neutral:60'
+    regime_short_threshold: str = field(default_factory=lambda: _resolve_param("regime_short_threshold", 'neutral:60'))
 
     # ── S1.5: neutral 体制信号质量门控（结构性过滤，减少震荡假突破） ──
     # 逻辑: 方向强度 + 共识链条 + 大周期不冲突 + 信号连续性
@@ -573,10 +573,10 @@ class StrategyConfig:
     # 5本结构书(CS/KDJ/MA/BB/VP), 排除在neutral中无判别力的divergence。
     use_neutral_structural_discount: bool = True
     neutral_struct_activity_thr: float = 10.0     # 书"活跃"阈值
-    neutral_struct_discount_0: float = 0.0        # v7.0 B3: 0本确认→直接不做 (P4: confirms与WR无单调关系)
-    neutral_struct_discount_1: float = 0.05       # v7.0 B3: 1本确认→5%仓位
-    neutral_struct_discount_2: float = 0.15       # v7.0 B3: 2本确认→15%仓位
-    neutral_struct_discount_3: float = 0.50       # v7.0 B3: 3本确认→50%仓位
+    neutral_struct_discount_0: float = field(default_factory=lambda: _resolve_param("neutral_struct_discount_0", 0.0))        # v7.0 B3: 0本确认→直接不做 (P4: confirms与WR无单调关系)
+    neutral_struct_discount_1: float = field(default_factory=lambda: _resolve_param("neutral_struct_discount_1", 0.05))       # v7.0 B3: 1本确认→5%仓位
+    neutral_struct_discount_2: float = field(default_factory=lambda: _resolve_param("neutral_struct_discount_2", 0.15))       # v7.0 B3: 2本确认→15%仓位
+    neutral_struct_discount_3: float = field(default_factory=lambda: _resolve_param("neutral_struct_discount_3", 0.50))       # v7.0 B3: 3本确认→50%仓位
     neutral_struct_discount_4plus: float = 1.00   # 4-5本: 极强共识→全额
     # 结构折扣生效的 regime（仅 neutral: trend/high_vol扩展测试 ret下降19% →回退）
     structural_discount_short_regimes: str = 'neutral'
@@ -598,7 +598,7 @@ class StrategyConfig:
     # 目标: 避免“卖出极强但买方div也很强”的高冲突做空放大尾部止损。
     # 默认关闭，仅用于A/B验证。
     use_short_conflict_soft_discount: bool = True  # v7.0 B3: 扩展到 neutral
-    short_conflict_regimes: str = 'trend,high_vol,neutral'  # v7.0 B3: +neutral
+    short_conflict_regimes: str = field(default_factory=lambda: _resolve_param("short_conflict_regimes", 'trend,high_vol,neutral'))  # v7.0 B3: +neutral
     short_conflict_div_buy_min: float = 50.0
     short_conflict_ma_sell_min: float = 12.0
     short_conflict_discount_mult: float = 0.60      # Codex验证最优值 (0.50太激进)
@@ -645,11 +645,11 @@ class StrategyConfig:
 
     # ── P13: 追踪止盈连续化 ──
     # 替代离散门槛触发, 改为连续动态回撤容忍
-    use_continuous_trail: bool = False
-    continuous_trail_start_pnl: float = 0.05     # 利润>=5%开始追踪
-    continuous_trail_max_pb: float = 0.60         # 低利润时最宽回撤容忍 (多单)
-    continuous_trail_min_pb: float = 0.30         # 高利润时最紧回撤容忍
-    continuous_trail_max_pb_short: float = 0.60   # P20: 空单最宽回撤容忍 (默认同多, 可收紧到0.40)
+    use_continuous_trail: bool = field(default_factory=lambda: _resolve_param("use_continuous_trail", False))
+    continuous_trail_start_pnl: float = field(default_factory=lambda: _resolve_param("continuous_trail_start_pnl", 0.05))     # 利润>=5%开始追踪
+    continuous_trail_max_pb: float = field(default_factory=lambda: _resolve_param("continuous_trail_max_pb", 0.60))         # 低利润时最宽回撤容忍 (多单)
+    continuous_trail_min_pb: float = field(default_factory=lambda: _resolve_param("continuous_trail_min_pb", 0.30))         # 高利润时最紧回撤容忍
+    continuous_trail_max_pb_short: float = field(default_factory=lambda: _resolve_param("continuous_trail_max_pb_short", 0.60))   # P20: 空单最宽回撤容忍 (默认同多, 可收紧到0.40)
 
     # ── P18: Regime-Adaptive 六维融合权重 ──
     # 核心改造: 在回测主循环中根据 regime 动态重新融合六书分数
@@ -673,21 +673,21 @@ class StrategyConfig:
     # ── v10: Soft Veto (连续衰减替代二元门控) ──
     # 原 veto: ≥2 本书反向 → score×0.30 (hard switch)
     # soft veto: 计算反向强度 → sigmoid 衰减 → score×penalty (连续)
-    use_soft_veto: bool = False
-    soft_veto_steepness: float = 3.0       # sigmoid 陡度 (越大越接近硬开关)
-    soft_veto_midpoint: float = 1.0        # 惩罚中点 (1.0 ≈ 原2本书@阈值水平)
+    use_soft_veto: bool = field(default_factory=lambda: _resolve_param("use_soft_veto", False))
+    soft_veto_steepness: float = field(default_factory=lambda: _resolve_param("soft_veto_steepness", 3.0))       # sigmoid 陡度 (越大越接近硬开关)
+    soft_veto_midpoint: float = field(default_factory=lambda: _resolve_param("soft_veto_midpoint", 1.0))        # 惩罚中点 (1.0 ≈ 原2本书@阈值水平)
     # v10: 结构折扣最小乘数 (替代 confirms=0 → margin×0.0 的硬禁止)
-    soft_struct_min_mult: float = 0.0      # 0.0=硬禁止(原行为), 0.02=2%仓位(soft)
+    soft_struct_min_mult: float = field(default_factory=lambda: _resolve_param("soft_struct_min_mult", 0.0))      # 0.0=硬禁止(原行为), 0.02=2%仓位(soft)
 
     # ── P24: Regime-Adaptive 止损 ──
     # 空单止损按 regime 差异化: neutral 收紧(错了快认输), trend 保持(给空间)
     # Claude 独创建议: -20% 对 neutral 空单过宽, crypto 空头挤压效应显著
-    use_regime_adaptive_sl: bool = False
-    regime_neutral_short_sl: float = -0.12       # neutral 空单止损 -12%
-    regime_trend_short_sl: float = -0.20         # trend 空单止损 -20% (保持)
-    regime_low_vol_trend_short_sl: float = -0.20
-    regime_high_vol_short_sl: float = -0.15      # high_vol 空单止损 -15%
-    regime_high_vol_choppy_short_sl: float = -0.15
+    use_regime_adaptive_sl: bool = field(default_factory=lambda: _resolve_param("use_regime_adaptive_sl", False))
+    regime_neutral_short_sl: float = field(default_factory=lambda: _resolve_param("regime_neutral_short_sl", -0.12))       # neutral 空单止损 -12%
+    regime_trend_short_sl: float = field(default_factory=lambda: _resolve_param("regime_trend_short_sl", -0.20))         # trend 空单止损 -20% (保持)
+    regime_low_vol_trend_short_sl: float = field(default_factory=lambda: _resolve_param("regime_low_vol_trend_short_sl", -0.20))
+    regime_high_vol_short_sl: float = field(default_factory=lambda: _resolve_param("regime_high_vol_short_sl", -0.15))      # high_vol 空单止损 -15%
+    regime_high_vol_choppy_short_sl: float = field(default_factory=lambda: _resolve_param("regime_high_vol_choppy_short_sl", -0.15))
 
     # ── V9: 回测口径真实化 (Perp) ──
     # 强平检测优先使用 mark 价格序列（若本地K线包含相关列）
@@ -703,9 +703,9 @@ class StrategyConfig:
 
     # ── V9: Leg 级风险预算（regime × direction） ──
     # 默认关闭；开启后只影响开仓保证金分配，不改变信号本身
-    use_leg_risk_budget: bool = False
+    use_leg_risk_budget: bool = field(default_factory=lambda: _resolve_param("use_leg_risk_budget", False))
     risk_budget_neutral_long: float = 1.00
-    risk_budget_neutral_short: float = 1.00
+    risk_budget_neutral_short: float = field(default_factory=lambda: _resolve_param("risk_budget_neutral_short", 1.00))
     risk_budget_trend_long: float = 1.00
     risk_budget_trend_short: float = 1.00
     risk_budget_low_vol_trend_long: float = 1.00

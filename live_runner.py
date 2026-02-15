@@ -372,7 +372,10 @@ def _compute_single_tf(tf, base_config):
                 "action": sig.action,
                 "reason": sig.reason,
                 "conflict": bool(sig.conflict),
-                "components": {k: round(float(v), 1) for k, v in sig.components.items()},
+                "components": {
+                    k: (round(float(v), 1) if isinstance(v, (int, float)) else str(v))
+                    for k, v in sig.components.items()
+                },
                 "bars": len(gen._df) if gen._df is not None else 0,
             })
         else:

@@ -2,7 +2,7 @@
 
 - 文档目的：给研发与其他 LLM 提供“可执行、可复核、与当前代码一致”的策略基线。
 - 适用范围：`backtest_multi_tf_daily.py` / `optimize_six_book.py` / `live_config.py` / `live_signal_generator.py`。
-- 更新时间：`2026-02-15 20:04:16 CST`
+- 更新时间：`2026-02-15 20:49:00 CST`
 - 页面入口：`/strategy/spec-codex`（独立于 `/strategy/spec` 与 `/strategy/tech-doc`）
 
 ---
@@ -11,8 +11,8 @@
 
 当前代码已经具备 v9/v10 的大部分能力（Mark 口径、真实 Funding、Leg 风险预算、Risk-per-trade、Soft Veto 等），但默认运行路径仍是“保守兼容”形态。主要结论如下：
 
-1. `STRATEGY_VERSION=v5` 已生效，但 `v5` 参数表里很多开关并不会自动落到 `StrategyConfig` 实例上。
-2. 回测主链路 `kline_store.load_klines()` 会裁剪列，仅保留 OHLCV + taker/trades，导致 `mark_*` / `funding_rate` / `open_interest` 默认不进入回测 DataFrame。
+1. `STRATEGY_VERSION=v5` 已生效，且关键 v10 开关已映射到 `StrategyConfig`（本次修复）。
+2. 回测主链路 `kline_store.load_klines()` 现在会保留可选 `mark_* / funding_rate / open_interest` 列（若本地文件存在这些列）。
 3. 最新 v10 A/B（`data/backtests/v10/v10_backtest_20260215_192304.csv`）显示：
    - `E1_v9_v5_prod`：IS `PF=0.90`（低于 1.0），OOS `Ret=-3.83%`
    - `E4_v10_full`：IS `PF=1.31`，OOS `Ret=+7.87%`
@@ -57,16 +57,16 @@
 | `cooldown` | `6` |
 | `regime_short_threshold` | `neutral:60` |
 | `use_regime_adaptive_fusion` | `False` |
-| `use_leg_risk_budget` | `False` |
-| `risk_budget_neutral_short` | `1.0` |
-| `use_continuous_trail` | `False` |
-| `use_regime_adaptive_sl` | `False` |
-| `use_soft_veto` | `False` |
-| `soft_struct_min_mult` | `0.0` |
+| `use_leg_risk_budget` | `True` |
+| `risk_budget_neutral_short` | `0.1` |
+| `use_continuous_trail` | `True` |
+| `use_regime_adaptive_sl` | `True` |
+| `use_soft_veto` | `True` |
+| `soft_struct_min_mult` | `0.02` |
 
-关键点：`STRATEGY_PARAM_VERSIONS['v5']` 中虽然定义了 `use_leg_risk_budget=True`、`use_soft_veto=True` 等，但 **不会自动生效**。
+关键点：本次已将 v5 关键开关纳入 `_resolve_param` 映射，`StrategyConfig()` 默认值与 `STRATEGY_PARAM_VERSIONS['v5']` 的关键参数对齐。
 
-原因：`_resolve_param()` 仅绑定了少数字段（例如 `short_threshold/short_sl/...`），而大部分布尔开关是 dataclass 常量默认值，不走版本映射。
+剩余注意：仍有部分字段保持 dataclass 常量默认，若后续继续扩展版本参数，建议统一走映射或统一后处理覆盖。
 
 代码锚点：`live_config.py:323` 到 `live_config.py:340`、`live_config.py:432`。
 
@@ -98,11 +98,11 @@
 |---|---|---|
 | Mark 口径强平 | `optimize_six_book.py` | 关 |
 | UTC 锚定 Funding 结算 | `optimize_six_book.py` | 真实 funding 默认关 |
-| Leg 风险预算 | `optimize_six_book.py` | 关 |
+| Leg 风险预算 | `optimize_six_book.py` | `v5` 下开 |
 | Risk-per-trade | `optimize_six_book.py` | 关 |
 | Weighted confirms | `optimize_six_book.py` | 关 |
 | Regime-adaptive fusion | `optimize_six_book.py` | 关 |
-| Soft Veto | `optimize_six_book.py` | 关 |
+| Soft Veto | `optimize_six_book.py` | `v5` 下开 |
 | Ghost cooldown / fast-fail | `optimize_six_book.py` | 关 |
 
 ---
@@ -111,10 +111,11 @@
 
 ### 5.1 回测数据链路的现实限制
 
-`kline_store.load_klines()` 会裁剪列，仅保留：
+`kline_store.load_klines()` 会裁剪列，但已包含衍生品可选列：
 
 - 标准列：`open, high, low, close, volume, quote_volume`
 - 扩展列：`taker_buy_base, taker_buy_quote, trades`
+- 衍生品列：`mark_*`, `funding_rate`, `funding_interval_hours`, `open_interest`, `open_interest_value`
 
 代码锚点：`kline_store.py:358` 到 `kline_store.py:361`。
 
@@ -185,16 +186,16 @@
 
 ## 7. 当前关键问题（按优先级）
 
-## P0：版本配置映射不完整
+## P0：版本映射仍需系统化
 
-- 现状：`STRATEGY_PARAM_VERSIONS['v5']` 包含大量开关，但 `StrategyConfig` 只有少数字段走 `_resolve_param`。
-- 结果：文档和期望认为 “v5 默认打开了 v10 能力”，实际没有。
-- 影响：实盘/回测容易出现“以为已启用，实际未启用”的隐性偏差。
+- 现状：已修复 v5 关键开关映射（leg budget / soft veto / 连续追踪 / regime-SL）。
+- 风险：版本键数量继续增加时，仍可能出现“版本表定义了但 dataclass 未映射”的漂移。
+- 方向：引入统一版本覆盖层（初始化后统一 apply），减少逐字段遗漏风险。
 
-## P0：回测数据列裁剪阻断了 perp 口径验证
+## P0：回测数据来源仍未自动合并 perp 数据
 
-- `kline_store.py` 裁剪掉 `mark/funding/oi` 相关列。
-- v9/v10 的真实化功能即使写好，也难以在主回测链路被验证。
+- 本次已保留 `mark/funding/oi` 列，但前提是本地 parquet 已包含这些字段。
+- 若历史本地库未预先合并 perp 数据，主回测仍会退化到纯 OHLCV 口径。
 
 ## P1：指标口径混用风险
 
@@ -212,8 +213,8 @@
 
 ### 阶段 A：先打通口径（必须先做）
 
-1. 修复版本映射：将关键开关纳入 `StrategyConfig` 的版本解析。
-2. 放开回测数据列：让 `mark_* / funding_rate / open_interest` 能进入回测 DataFrame。
+1. 统一版本覆盖机制：从“逐字段 `_resolve_param`”升级为“集中覆盖”，避免新参数漏映射。
+2. 打通回测 perp 数据注入：在主回测链路增加可控合并步骤，确保 `mark/funding/oi` 真实可用。
 3. 固化输出口径：统一使用 `total_return_pct + contract_pf + portfolio_pf`。
 
 ### 阶段 B：策略增强（基于已验证方向）
@@ -237,8 +238,8 @@
 ```markdown
 事实基线：
 1) 当前策略默认版本是 STRATEGY_VERSION=v5。
-2) 但 v5 参数表里很多开关不会自动应用到 StrategyConfig（仅少数字段走 _resolve_param）。
-3) 回测主数据链路会裁剪列，默认不保留 mark/funding/oi。
+2) v5 关键开关（soft veto / leg budget / continuous trail / regime-SL）已映射到 StrategyConfig 默认值。
+3) 回测主数据链路已支持保留 mark/funding/oi 列，但依赖本地 parquet 里实际存在这些字段。
 4) summary_json 真实字段是 total_return_pct / contract_pf / portfolio_pf。
 5) 最新 v10 CSV 显示 E4_v10_full: IS PF=1.31, OOS Ret=+7.87%。
 6) 最新 v5 生产对照 E1_v9_v5_prod: IS PF=0.90, OOS Ret=-3.83%。
@@ -279,4 +280,3 @@ BACKTEST_DAILY_ALLOW_API_FALLBACK=0 python3 backtest_multi_tf_daily.py \
 - `multi_tf_daily_db.py`: 结果入库与快照透传
 - `run_v9_ab_round3.py`: v9 A/B 实验矩阵
 - `run_v10_backtest.py`: v10 改造实验矩阵
-

@@ -354,10 +354,18 @@ def load_klines(symbol='ETHUSDT', interval='1h',
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
 
-    # 只保留回测需要的标准列 (与 fetch_binance_klines 输出对齐)
+    # 只保留回测需要列:
+    # - 标准K线列
+    # - 交易活跃度列
+    # - 可选衍生品列（用于 mark/funding/OI 真实口径回测）
     standard_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
     extra_cols = ['taker_buy_base', 'taker_buy_quote', 'trades']
-    keep = [c for c in standard_cols + extra_cols if c in df.columns]
+    perp_cols = [
+        'mark_price', 'mark_open', 'mark_high', 'mark_low', 'mark_close',
+        'funding_rate', 'funding_interval_hours',
+        'open_interest', 'open_interest_value',
+    ]
+    keep = [c for c in standard_cols + extra_cols + perp_cols if c in df.columns]
     df = df[keep].copy()
 
     if with_indicators:
