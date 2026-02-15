@@ -19,6 +19,7 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, s
 from werkzeug.security import generate_password_hash, check_password_hash
 from date_range_report import load_latest_report_from_db
 from web_routes import register_page_routes, register_result_api_routes
+import config_store
 
 app = Flask(__name__)
 # 生产环境应设置 SECRET_KEY，否则会话可被伪造；未设置时使用临时密钥并告警
@@ -202,6 +203,9 @@ def load_json(path):
 # ======================================================
 register_page_routes(app)
 register_result_api_routes(app, load_json=load_json, result_paths=RESULT_FILE_PATHS)
+
+# ── 配置存储: 自动迁移旧 JSON 文件到 DB ──
+config_store.ensure_migrated()
 
 
 @app.route('/api/multi_tf_date_range_report')
@@ -943,23 +947,27 @@ _engine_process = {"proc": None, "phase": None, "started_at": None}
 
 @app.route('/api/live/generate_config', methods=['POST'])
 def api_live_generate_config():
-    """生成配置模板"""
+    """生成配置模板 → 写入 DB"""
     try:
+        # 先生成模板到临时文件，再导入 DB
+        import tempfile
+        tmp_path = os.path.join(tempfile.gettempdir(), 'live_trading_config_tpl.json')
         r = subprocess.run(
-            [sys.executable, 'live_runner.py', '--generate-config', '-o', 'live_trading_config.json'],
+            [sys.executable, 'live_runner.py', '--generate-config', '-o', tmp_path],
             capture_output=True, text=True, timeout=15, cwd=BASE_DIR
         )
-        config_path = os.path.join(BASE_DIR, 'live_trading_config.json')
         config_data = {}
-        if os.path.exists(config_path):
-            with open(config_path, 'r') as f:
+        if os.path.exists(tmp_path):
+            with open(tmp_path, 'r') as f:
                 config_data = json.load(f)
+            # 写入 DB
+            config_store.set_live_trading_config(config_data)
+            os.remove(tmp_path)
         return jsonify({
             "success": True,
-            "message": "配置模板已生成",
+            "message": "配置模板已生成并保存到数据库",
             "output": r.stdout + r.stderr,
             "config": config_data,
-            "config_path": config_path,
         })
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
@@ -967,9 +975,11 @@ def api_live_generate_config():
 
 @app.route('/api/live/save_config', methods=['POST'])
 def api_live_save_config():
-    """保存编辑后的配置"""
+    """保存编辑后的配置 → DB"""
     try:
         config_data = request.get_json()
+        config_store.set_live_trading_config(config_data)
+        # 同时写一份 JSON 文件供引擎进程读取 (过渡期兼容)
         config_path = os.path.join(BASE_DIR, 'live_trading_config.json')
         with open(config_path, 'w') as f:
             json.dump(config_data, f, indent=2, ensure_ascii=False)
@@ -980,12 +990,19 @@ def api_live_save_config():
 
 @app.route('/api/live/load_config')
 def api_live_load_config():
-    """加载当前配置"""
+    """从 DB 加载当前配置"""
+    config_data = config_store.get_live_trading_config_full()
+    if config_data:
+        return jsonify({"success": True, "config": config_data})
+    # Fallback: 尝试旧文件
     config_path = os.path.join(BASE_DIR, 'live_trading_config.json')
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
-            return jsonify({"success": True, "config": json.load(f)})
-    return jsonify({"success": False, "message": "配置文件不存在，请先生成"})
+            data = json.load(f)
+        # 顺便迁移到 DB
+        config_store.set_live_trading_config(data)
+        return jsonify({"success": True, "config": data})
+    return jsonify({"success": False, "message": "配置不存在，请先生成"})
 
 
 @app.route('/api/live/test_signal', methods=['POST'])
@@ -1226,10 +1243,18 @@ def _normalize_live_monitor_rules(raw):
 
 
 def _load_live_monitor_rules():
+    # 优先从 DB 读取
+    db_rules = config_store.get_monitor_rules()
+    if db_rules:
+        return _normalize_live_monitor_rules(db_rules)
+    # Fallback: 旧 JSON 文件
     try:
         if os.path.exists(LIVE_MONITOR_RULES_FILE):
             with open(LIVE_MONITOR_RULES_FILE, 'r', encoding='utf-8') as f:
-                return _normalize_live_monitor_rules(json.load(f))
+                rules = _normalize_live_monitor_rules(json.load(f))
+            # 顺便迁移到 DB
+            config_store.set_monitor_rules(rules)
+            return rules
     except Exception:
         pass
     return dict(DEFAULT_LIVE_MONITOR_RULES)
@@ -1237,9 +1262,8 @@ def _load_live_monitor_rules():
 
 def _save_live_monitor_rules(rules):
     normalized = _normalize_live_monitor_rules(rules)
-    os.makedirs(os.path.dirname(LIVE_MONITOR_RULES_FILE), exist_ok=True)
-    with open(LIVE_MONITOR_RULES_FILE, 'w', encoding='utf-8') as f:
-        json.dump(normalized, f, ensure_ascii=False, indent=2)
+    # 写入 DB
+    config_store.set_monitor_rules(normalized)
     return normalized
 
 
@@ -1658,10 +1682,8 @@ def api_live_start():
         return jsonify({"success": False, "message": f"无效阶段: {phase}"})
 
     try:
+        # 引擎现在优先从 DB 加载配置, 不再需要传 --config 文件
         cmd = [sys.executable, 'live_runner.py', '--phase', phase, '-y']
-        config_path = os.path.join(BASE_DIR, 'live_trading_config.json')
-        if os.path.exists(config_path) and phase != 'paper':
-            cmd.extend(['--config', config_path])
 
         log_dir = os.path.join(BASE_DIR, 'logs', 'live')
         os.makedirs(log_dir, exist_ok=True)
@@ -1788,10 +1810,8 @@ def api_live_stop():
 def api_live_kill_switch():
     """紧急平仓"""
     try:
-        config_path = os.path.join(BASE_DIR, 'live_trading_config.json')
+        # 引擎从 DB 加载配置
         cmd = [sys.executable, 'live_runner.py', '--kill-switch', '-y']
-        if os.path.exists(config_path):
-            cmd.extend(['--config', config_path])
 
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=BASE_DIR)
         return jsonify({

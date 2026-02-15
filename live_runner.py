@@ -151,22 +151,36 @@ def cmd_run(args):
         sys.exit(1)
     atexit.register(_release_engine_lock)
 
-    # 加载配置
+    # 加载配置: DB > 指定文件 > 默认
     if args.config and os.path.exists(args.config):
         print(f"  从配置文件加载: {args.config}")
         config = LiveTradingConfig.load(args.config)
     else:
-        phase = TradingPhase(args.phase)
-        config = create_default_config(phase)
+        # 优先从 DB 加载
+        try:
+            config = LiveTradingConfig.load_from_db()
+            if config:
+                print("  ✓ 从数据库加载配置")
+                # 如果命令行指定了 phase, 覆盖 DB 中的值
+                if args.phase:
+                    config.phase = TradingPhase(args.phase)
+                    config._validate()
+        except Exception as _db_err:
+            print(f"  DB 加载失败 ({_db_err}), 使用默认配置")
+            config = None
 
-        # 尝试加载优化结果
-        opt_file = "optimize_six_book_result.json"
-        if os.path.exists(opt_file):
-            try:
-                config.strategy = StrategyConfig.from_optimize_result(opt_file)
-                print(f"  ✓ 已加载优化策略参数: {opt_file}")
-            except Exception as e:
-                print(f"  ⚠ 优化参数加载失败，使用默认值: {e}")
+        if config is None:
+            phase = TradingPhase(args.phase)
+            config = create_default_config(phase)
+
+            # 尝试加载优化结果
+            opt_file = "optimize_six_book_result.json"
+            if os.path.exists(opt_file):
+                try:
+                    config.strategy = StrategyConfig.from_optimize_result(opt_file)
+                    print(f"  ✓ 已加载优化策略参数: {opt_file}")
+                except Exception as e:
+                    print(f"  ⚠ 优化参数加载失败，使用默认值: {e}")
 
         # 命令行覆盖
         if args.symbol:
@@ -221,9 +235,14 @@ def cmd_test_connection(args):
     if args.config and os.path.exists(args.config):
         config = LiveTradingConfig.load(args.config)
     else:
-        config = create_default_config(
-            TradingPhase(args.phase or "paper")
-        )
+        try:
+            config = LiveTradingConfig.load_from_db()
+        except Exception:
+            config = None
+        if config is None:
+            config = create_default_config(
+                TradingPhase(args.phase or "paper")
+            )
 
     from order_manager import create_order_manager
     from trading_logger import TradingLogger
@@ -617,8 +636,13 @@ def cmd_kill_switch(args):
     if args.config and os.path.exists(args.config):
         config = LiveTradingConfig.load(args.config)
     else:
-        print("  ❌ 需要提供配置文件 (--config)")
-        return
+        try:
+            config = LiveTradingConfig.load_from_db()
+        except Exception:
+            config = None
+        if config is None:
+            print("  ❌ 需要提供配置文件 (--config) 或确保 DB 中有配置")
+            return
 
     from order_manager import create_order_manager
     from trading_logger import TradingLogger

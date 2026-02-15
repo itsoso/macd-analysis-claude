@@ -1017,14 +1017,30 @@ class LiveTradingConfig:
                 self.initial_capital = phase_cfg.get("initial_capital", 100000)
 
     @classmethod
+    def load_from_db(cls) -> 'LiveTradingConfig':
+        """从 DB 加载配置 (优先)"""
+        try:
+            import config_store
+            data = config_store.get_live_trading_config_full()
+            if data:
+                return cls._from_dict(data)
+        except Exception as e:
+            print(f"[LiveConfig] DB 加载失败, 回退到文件: {e}")
+        return cls.load()
+
+    @classmethod
     def load(cls, config_path: str = "live_trading_config.json") -> 'LiveTradingConfig':
-        """从 JSON 文件加载配置"""
+        """从 JSON 文件加载配置 (兼容旧方式)"""
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
         with open(config_path, 'r') as f:
             data = json.load(f)
+        return cls._from_dict(data)
 
+    @classmethod
+    def _from_dict(cls, data: dict) -> 'LiveTradingConfig':
+        """从 dict 构建配置 (load / load_from_db 共用)"""
         config = cls()
         config.phase = TradingPhase(data.get("phase", "paper"))
 
