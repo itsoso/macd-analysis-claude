@@ -250,6 +250,9 @@ class FuturesEngine:
             'ss': getattr(self, '_current_ss', None),
             'bs': getattr(self, '_current_bs', None),
             'atr_pct': getattr(self, '_current_atr_pct', None),
+            # MAE/MFE: 仓位生命周期的最大逆向/顺向偏移 (供 ATR mult 校准)
+            'min_pnl_r': getattr(self, '_current_min_pnl_r', None),
+            'max_pnl_r': getattr(self, '_current_max_pnl_r', None),
             # 附加字段
             **(extra or {}),
         })

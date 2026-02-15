@@ -310,9 +310,24 @@ STRATEGY_PARAM_VERSIONS = {
         # ── v10: Soft Struct (confirms=0 → 2% 仓位, 非硬禁止) ──
         "soft_struct_min_mult": 0.02,
         #
-        # ── v10: Leg Risk Budget (neutral short → 10% 仓位, 替代 B1b 硬禁止) ──
+        # ── v10.2: Regime 连续化 — SL/杠杆/阈值 sigmoid 过渡 ──
+        "use_regime_sigmoid": True,
+        # ── v10.2: 趋势 regime 禁用 TP1/TP2, 让利润奔跑 ──
+        "tp_disabled_regimes": ["trend", "low_vol_trend"],
+        #
+        # ── v10.1: Leg Risk Budget 5×2 矩阵 (regime × direction) ──
+        # 控制不同市况/方向的仓位缩放, 1.0=全仓, 0.10=10%仓位
         "use_leg_risk_budget": True,
-        "risk_budget_neutral_short": 0.10,
+        "risk_budget_neutral_short": 0.10,     # neutral 做空: 极小仓位 (替代 B1b 硬禁止)
+        "risk_budget_neutral_long": 0.30,      # neutral 做多: 谨慎
+        "risk_budget_high_vol_short": 0.50,    # 高波动做空: 半仓
+        "risk_budget_high_vol_long": 0.50,     # 高波动做多: 半仓
+        "risk_budget_high_vol_choppy_short": 0.20,  # 高波动震荡做空: 微仓
+        "risk_budget_high_vol_choppy_long": 0.20,   # 高波动震荡做多: 微仓
+        "risk_budget_trend_short": 0.60,       # 趋势中做空(逆势): 减仓
+        "risk_budget_trend_long": 1.20,        # 趋势中做多(顺势): 适度加仓
+        "risk_budget_low_vol_trend_short": 0.50,  # 低波动趋势做空: 半仓
+        "risk_budget_low_vol_trend_long": 1.20,   # 低波动趋势做多: 适度加仓
     },
 }
 _ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v5")

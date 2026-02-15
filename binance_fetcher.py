@@ -266,7 +266,8 @@ def _api_get_json(url: str, max_retries: int = 3) -> list:
 def fetch_mark_price_klines(symbol: str = "ETHUSDT",
                             interval: str = "15m",
                             days: int = 365,
-                            force_api: bool = False) -> pd.DataFrame:
+                            force_api: bool = False,
+                            allow_api_fallback: bool = True) -> pd.DataFrame:
     """
     获取 Binance Futures Mark Price K线数据
 
@@ -291,6 +292,10 @@ def fetch_mark_price_klines(symbol: str = "ETHUSDT",
                     return df
             except Exception as e:
                 print(f"  Mark kline 缓存读取失败: {e}")
+
+    if not allow_api_fallback and not force_api:
+        print(f"  [本地] {symbol} mark {interval} 缓存缺失/无效, 已禁用 API 回退")
+        return pd.DataFrame()
 
     # ── API 获取 ──
     # Mark klines 支持的 interval 与标准 klines 相同
@@ -384,7 +389,8 @@ def fetch_mark_price_klines(symbol: str = "ETHUSDT",
 
 def fetch_funding_rate_history(symbol: str = "ETHUSDT",
                                days: int = 365,
-                               force_api: bool = False) -> pd.DataFrame:
+                               force_api: bool = False,
+                               allow_api_fallback: bool = True) -> pd.DataFrame:
     """
     获取 Binance Futures 历史资金费率
 
@@ -408,16 +414,29 @@ def fetch_funding_rate_history(symbol: str = "ETHUSDT",
                         df.index = df.index.tz_localize(None)
                     end_dt = pd.Timestamp.now()
                     start_dt = end_dt - pd.Timedelta(days=days)
-                    # 检查缓存是否足够新 (不超过 24h 的 gap)
-                    if df.index[-1] >= (end_dt - pd.Timedelta(hours=24)):
+                    if allow_api_fallback:
+                        # 实盘/在线模式下，要求缓存不超过24小时，过期则尝试API刷新
+                        if df.index[-1] >= (end_dt - pd.Timedelta(hours=24)):
+                            df = df[df.index >= start_dt]
+                            df = df[~df.index.duplicated(keep='first')].sort_index()
+                            print(f"  [本地] {symbol} funding rate 加载 {len(df)} 条 "
+                                  f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+                                  f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+                            return df
+                    else:
+                        # 回测离线模式：不要求“新鲜度”，只要本地有历史即可
                         df = df[df.index >= start_dt]
                         df = df[~df.index.duplicated(keep='first')].sort_index()
-                        print(f"  [本地] {symbol} funding rate 加载 {len(df)} 条 "
+                        print(f"  [本地] {symbol} funding rate(离线) 加载 {len(df)} 条 "
                               f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
                               f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
                         return df
             except Exception as e:
                 print(f"  Funding rate 缓存读取失败: {e}")
+
+    if not allow_api_fallback and not force_api:
+        print(f"  [本地] {symbol} funding 缓存缺失/无效, 已禁用 API 回退")
+        return pd.DataFrame()
 
     # ── API 获取 ──
     # fundingRate API limit=1000, 8h 间隔约 3 条/天, 1000 条 ≈ 333 天
@@ -497,7 +516,8 @@ def fetch_funding_rate_history(symbol: str = "ETHUSDT",
 def fetch_open_interest_history(symbol: str = "ETHUSDT",
                                 interval: str = "15m",
                                 days: int = 365,
-                                force_api: bool = False) -> pd.DataFrame:
+                                force_api: bool = False,
+                                allow_api_fallback: bool = True) -> pd.DataFrame:
     """
     获取 Binance Futures 历史 Open Interest 数据
 
@@ -527,17 +547,30 @@ def fetch_open_interest_history(symbol: str = "ETHUSDT",
                     if df.index.tz is not None:
                         df.index = df.index.tz_localize(None)
                     end_dt = pd.Timestamp.now()
-                    # 检查缓存是否足够新
-                    if df.index[-1] >= (end_dt - pd.Timedelta(hours=24)):
-                        start_dt = end_dt - pd.Timedelta(days=days)
+                    start_dt = end_dt - pd.Timedelta(days=days)
+                    if allow_api_fallback:
+                        # 实盘/在线模式下，要求缓存不超过24小时，过期则尝试API刷新
+                        if df.index[-1] >= (end_dt - pd.Timedelta(hours=24)):
+                            df = df[df.index >= start_dt]
+                            df = df[~df.index.duplicated(keep='first')].sort_index()
+                            print(f"  [本地] {symbol} OI {period} 加载 {len(df)} 条 "
+                                  f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+                                  f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+                            return df
+                    else:
+                        # 回测离线模式：不要求“新鲜度”，只要本地有历史即可
                         df = df[df.index >= start_dt]
                         df = df[~df.index.duplicated(keep='first')].sort_index()
-                        print(f"  [本地] {symbol} OI {period} 加载 {len(df)} 条 "
+                        print(f"  [本地] {symbol} OI {period}(离线) 加载 {len(df)} 条 "
                               f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
                               f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
                         return df
             except Exception as e:
                 print(f"  OI 缓存读取失败: {e}")
+
+    if not allow_api_fallback and not force_api:
+        print(f"  [本地] {symbol} OI {period} 缓存缺失/无效, 已禁用 API 回退")
+        return pd.DataFrame()
 
     # ── API 获取 ──
     # openInterestHist: limit=500, 按 period 粒度返回

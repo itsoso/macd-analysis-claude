@@ -32,6 +32,12 @@ from ma_indicators import add_moving_averages
 from signal_core import compute_signals_six, compute_signals_six_multiprocess
 from live_config import StrategyConfig, get_strategy_version
 from kline_store import load_klines
+from binance_fetcher import (
+    fetch_mark_price_klines,
+    fetch_funding_rate_history,
+    fetch_open_interest_history,
+    merge_perp_data_into_klines,
+)
 from optimize_six_book import (
     _build_tf_score_index,
     run_strategy_multi_tf,
@@ -406,6 +412,49 @@ def fetch_data_for_tf(tf, days, allow_api_fallback=False):
             allow_api_fallback=allow_api_fallback,
         )
         if df is not None and len(df) > 50:
+            # V9/V10: 主TF自动注入衍生品列 (Mark/Funding/OI)
+            # 开关优先级:
+            # 1) BACKTEST_DAILY_ENABLE_PERP_DATA=1/0 强制开/关
+            # 2) auto(默认): 若策略启用 mark_liq 或 real_funding 则自动开启
+            _perp_mode = os.getenv('BACKTEST_DAILY_ENABLE_PERP_DATA', 'auto').strip().lower()
+            if _perp_mode in ('1', 'true', 'yes', 'on'):
+                _enable_perp = True
+            elif _perp_mode in ('0', 'false', 'no', 'off'):
+                _enable_perp = False
+            else:
+                _enable_perp = bool(
+                    DEFAULT_CONFIG.get('use_mark_price_for_liquidation', False)
+                    or DEFAULT_CONFIG.get('use_real_funding_rate', False)
+                )
+            if tf == PRIMARY_TF and _enable_perp:
+                mark_df = fetch_mark_price_klines(
+                    "ETHUSDT",
+                    interval=tf,
+                    days=fetch_days,
+                    allow_api_fallback=allow_api_fallback,
+                )
+                funding_df = fetch_funding_rate_history(
+                    "ETHUSDT",
+                    days=fetch_days,
+                    allow_api_fallback=allow_api_fallback,
+                )
+                oi_df = fetch_open_interest_history(
+                    "ETHUSDT",
+                    interval=tf,
+                    days=fetch_days,
+                    allow_api_fallback=allow_api_fallback,
+                )
+                if any((x is not None and len(x) > 0) for x in (mark_df, funding_df, oi_df)):
+                    df = merge_perp_data_into_klines(df, mark_df, funding_df, oi_df)
+                    _perp_cols = [
+                        c for c in (
+                            'mark_open', 'mark_high', 'mark_low', 'mark_close',
+                            'funding_rate', 'funding_interval_hours',
+                            'open_interest', 'open_interest_value',
+                        )
+                        if c in df.columns and df[c].notna().any()
+                    ]
+                    print(f"    {tf}: 衍生品列已注入 -> {', '.join(_perp_cols) if _perp_cols else 'none'}")
             df = add_all_indicators(df)
             add_moving_averages(df, timeframe=tf)
             return df

@@ -264,6 +264,15 @@ def _build_regime_precomputed(primary_df, config):
     }
 
 
+def _sigmoid_blend(x, center, steepness=200.0):
+    """连续 sigmoid 过渡: x < center → ~0, x > center → ~1。
+    steepness 控制过渡宽度 (越大越陡)。
+    用于 regime 参数的平滑过渡, 避免硬阈值跳变。"""
+    z = (x - center) * steepness
+    z = float(np.clip(z, -20, 20))
+    return 1.0 / (1.0 + np.exp(-z))
+
+
 def _compute_regime_controls(primary_df, idx, config, precomputed=None):
     """
     根据当前市场状态动态调整阈值与风险参数。
@@ -421,6 +430,12 @@ def _compute_regime_controls(primary_df, idx, config, precomputed=None):
     lev = int(max(1, min(base['lev'], round(base['lev'] * risk_mult))))
     margin_use = float(np.clip(base['margin_use'] * risk_mult, 0.10, base['margin_use']))
 
+    # ── v10.2: Regime 连续化权重 (供 sigmoid 平滑过渡) ──
+    # 每个 sigmoid 输出 0~1 的连续值, 下游使用线性插值混合参数
+    _w_high_vol = _sigmoid_blend(max(vol, atr_pct), (vol_high + atr_high) / 2, steepness=120.0)
+    _w_trend = _sigmoid_blend(abs_trend, trend_strong, steepness=100.0)
+    _w_low_vol = _sigmoid_blend(vol, vol_low, steepness=-150.0)  # 负值: vol < vol_low → 高权重
+
     return {
         'sell_threshold': sell_threshold,
         'buy_threshold': buy_threshold,
@@ -431,6 +446,7 @@ def _compute_regime_controls(primary_df, idx, config, precomputed=None):
         'lev': lev,
         'margin_use': margin_use,
         'regime_label': regime_label,
+        'risk_mult': risk_mult,
         'regime_metrics': {
             'vol': vol,
             'atr_pct': atr_pct,
@@ -438,6 +454,10 @@ def _compute_regime_controls(primary_df, idx, config, precomputed=None):
             'high_vol': high_vol,
             'strong_trend': strong_trend,
         },
+        # sigmoid 连续权重 (0=neutral, 1=full regime effect)
+        'w_high_vol': _w_high_vol,
+        'w_trend': _w_trend,
+        'w_low_vol': _w_low_vol,
     }
 
 
@@ -783,11 +803,15 @@ def _run_strategy_core(
     use_partial_tp = config.get('use_partial_tp', False)
     partial_tp_1 = config.get('partial_tp_1', 0.30)
     partial_tp_1_pct = config.get('partial_tp_1_pct', 0.40)
+    # v10.2: 趋势 regime 禁用 TP1/TP2, 仅用 P13 连续追踪 (让利润奔跑)
+    _tp_disabled_regimes = set(config.get('tp_disabled_regimes', ['trend', 'low_vol_trend']))
 
     use_atr_sl = config.get('use_atr_sl', False)
     atr_sl_mult = config.get('atr_sl_mult', 3.0)
     atr_sl_floor = config.get('atr_sl_floor', -0.25)   # ATR止损最宽
     atr_sl_ceil = config.get('atr_sl_ceil', -0.08)      # ATR止损最窄
+    # v10.2: Regime 连续化 — SL/杠杆/阈值 sigmoid 平滑过渡
+    use_regime_sigmoid = bool(config.get('use_regime_sigmoid', False))
 
     # [已移除] use_short_suppress: A/B+param_sweep双重验证完全零效果
 
@@ -1146,7 +1170,7 @@ def _run_strategy_core(
 
     short_cd = 0; long_cd = 0; spot_cd = 0
     short_bars = 0; long_bars = 0
-    short_max_pnl = 0; long_max_pnl = 0
+    short_max_pnl = 0; long_max_pnl = 0; short_min_pnl = 0.0; long_min_pnl = 0.0  # MAE (最大逆向偏移) 追踪
     short_partial_done = False; long_partial_done = False
     short_partial2_done = False; long_partial2_done = False
     short_entry_ss = 0.0; long_entry_bs = 0.0  # S5: 记录入场时信号强度
@@ -2071,11 +2095,11 @@ def _run_strategy_core(
         if had_short_before_liq and eng.futures_short is None:
             short_cd = max(short_cd, cooldown * 6)
             long_cd = max(long_cd, cooldown * 3)  # 跨方向冷却
-            short_bars = 0; short_max_pnl = 0
+            short_bars = 0; short_max_pnl = 0; short_min_pnl = 0.0
         if had_long_before_liq and eng.futures_long is None:
             long_cd = max(long_cd, cooldown * 6)
             short_cd = max(short_cd, cooldown * 3)  # 跨方向冷却
-            long_bars = 0; long_max_pnl = 0
+            long_bars = 0; long_max_pnl = 0; long_min_pnl = 0.0
         short_just_opened = False; long_just_opened = False
 
         # 资金费率 — V9: 基于 UTC 时间戳锚定结算时点
@@ -2192,13 +2216,27 @@ def _run_strategy_core(
         config['_regime_label'] = _regime_label
         # 设置到引擎, 每笔交易自动记录当前 regime / ss / bs / atr_pct
         eng._regime_label = _regime_label
+        # v10.2: 趋势 regime 禁用 TP1/TP2 (仅用 P13 追踪)
+        _tp_regime_ok = _regime_label not in _tp_disabled_regimes
         # ── v10.1: ATR-SL with Regime-Specific Multipliers (替代固定 P24) ──
+        # v10.2: 支持 sigmoid 连续过渡 (use_regime_sigmoid=True)
         # 优先级: use_atr_sl (波动率驱动) > use_regime_adaptive_sl (固定百分比)
         if use_atr_sl and _atr_pct_val > 0:
-            _regime_atr_mult = float(config.get(
-                f'atr_sl_mult_{_regime_label}',
-                config.get('atr_sl_mult', 3.0)
-            ))
+            if use_regime_sigmoid:
+                # 连续混合: neutral_mult ←sigmoid→ high_vol_mult/trend_mult
+                _base_mult = float(config.get('atr_sl_mult_neutral', config.get('atr_sl_mult', 3.0)))
+                _hv_mult = float(config.get('atr_sl_mult_high_vol', 2.0))
+                _trend_mult = float(config.get('atr_sl_mult_trend', 3.5))
+                _w_hv = regime_ctl.get('w_high_vol', 0.0)
+                _w_tr = regime_ctl.get('w_trend', 0.0)
+                # 高波动收紧SL (降低mult), 趋势放宽SL (增大mult)
+                _regime_atr_mult = _base_mult * (1 - _w_hv) + _hv_mult * _w_hv
+                _regime_atr_mult = _regime_atr_mult * (1 - _w_tr) + _trend_mult * _w_tr
+            else:
+                _regime_atr_mult = float(config.get(
+                    f'atr_sl_mult_{_regime_label}',
+                    config.get('atr_sl_mult', 3.0)
+                ))
             atr_derived_sl = -(_atr_pct_val * _regime_atr_mult)
             atr_derived_sl = max(atr_sl_floor, min(atr_sl_ceil, atr_derived_sl))
             actual_short_sl = atr_derived_sl
@@ -2284,8 +2322,21 @@ def _run_strategy_core(
         cur_long_threshold = float(regime_ctl['long_threshold'])
         cur_close_short_bs = float(regime_ctl['close_short_bs'])
         cur_close_long_ss = float(regime_ctl['close_long_ss'])
-        cur_lev = int(regime_ctl['lev'])
-        cur_margin_use = float(regime_ctl['margin_use'])
+        if use_regime_sigmoid:
+            # v10.2: 杠杆连续过渡 — 高波动时平滑降低, 而非硬切
+            _base_lev = float(config.get('lev', 5))
+            _risk_mult = float(regime_ctl.get('risk_mult', 1.0))
+            _w_hv = regime_ctl.get('w_high_vol', 0.0)
+            # 高波动 → risk_mult 连续衰减 (neutral risk_mult=1.0, high_vol=0.58~0.75)
+            _smooth_risk = 1.0 * (1 - _w_hv) + _risk_mult * _w_hv
+            cur_lev = int(max(1, round(_base_lev * _smooth_risk)))
+            cur_margin_use = float(np.clip(
+                float(config.get('margin_use', 0.70)) * _smooth_risk, 0.10,
+                float(config.get('margin_use', 0.70))
+            ))
+        else:
+            cur_lev = int(regime_ctl['lev'])
+            cur_margin_use = float(regime_ctl['margin_use'])
 
         # 微结构状态（资金费率/基差/OI/主动买卖）
         micro_state = _compute_microstructure_state(micro_df, idx, config)
@@ -2521,13 +2572,13 @@ def _run_strategy_core(
             bs_dom = (ss < bs * 0.7) if bs > 0 else True
             if bs_dom:
                 eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}", bar_low=_bar_low, bar_high=_bar_high)
-                short_max_pnl = 0; short_cd = cooldown * 3; short_bars = 0
+                short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown * 3; short_bars = 0
                 short_partial_done = False; short_partial2_done = False
         if eng.futures_long and long_bars >= reverse_min_hold_long and ss >= cur_close_long_ss:
             ss_dom = (bs < ss * 0.7) if bs > 0 else True
             if ss_dom:
                 eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}", bar_low=_bar_low, bar_high=_bar_high)
-                long_max_pnl = 0; long_cd = cooldown * 3; long_bars = 0
+                long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown * 3; long_bars = 0
                 long_partial_done = False; long_partial2_done = False
 
         # 开空 (用 exec_price 执行, 即本bar open)
@@ -2540,10 +2591,16 @@ def _run_strategy_core(
         # Regime-aware 做空门控: trend/low_vol_trend 中进一步提高门槛
         if use_regime_short_gate and _regime_label in regime_short_gate_regimes:
             effective_short_threshold += regime_short_gate_add
-        # 实验3: regime-specific short_threshold — 对指定 regime 直接覆盖门槛
+        # 实验3: regime-specific short_threshold — 对指定 regime 覆盖门槛
+        # v10.2: sigmoid 模式下用连续权重混合, 硬模式下保留原逻辑
         if regime_short_threshold and _regime_label in regime_short_threshold:
-            effective_short_threshold = max(effective_short_threshold,
-                                            regime_short_threshold[_regime_label])
+            _rst_target = regime_short_threshold[_regime_label]
+            if use_regime_sigmoid:
+                _w_hv = regime_ctl.get('w_high_vol', 0.0)
+                # 高波动 regime 的阈值提升按 sigmoid 权重线性混合
+                effective_short_threshold += (_rst_target - effective_short_threshold) * _w_hv
+            else:
+                effective_short_threshold = max(effective_short_threshold, _rst_target)
         if use_confidence_learning:
             _short_mult = float(short_conf_info.get('threshold_mult', 1.0) or 1.0)
             effective_short_threshold = float(np.clip(effective_short_threshold * _short_mult, 5.0, 95.0))
@@ -2772,7 +2829,7 @@ def _run_strategy_core(
             eng.open_short(exec_price, dt, margin, actual_lev,
                 f"开空 {actual_lev}x SS={ss:.0f} BS={bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}",
                 bar_low=_bar_low, bar_high=_bar_high, extra=_short_extra)
-            short_max_pnl = 0; short_bars = 0; short_cd = cooldown
+            short_max_pnl = 0; short_min_pnl = 0.0; short_bars = 0; short_cd = cooldown
             short_just_opened = True; short_partial_done = False; short_partial2_done = False
             short_entry_ss = ss  # S5: 记录入场信号强度
         # ── P6: Ghost cooldown — 被过滤的强信号也触发冷却 ──
@@ -2787,6 +2844,9 @@ def _run_strategy_core(
         if eng.futures_short and not short_just_opened:
             short_bars += 1
             pnl_r = eng.futures_short.calc_pnl(price) / eng.futures_short.margin
+            if pnl_r < short_min_pnl: short_min_pnl = pnl_r  # MAE 追踪
+            eng._current_min_pnl_r = round(short_min_pnl, 4)
+            eng._current_max_pnl_r = round(short_max_pnl, 4)
 
             # ── P10: Fast-fail 快速亏损退出 ──
             if (use_fast_fail_exit and eng.futures_short
@@ -2798,7 +2858,7 @@ def _run_strategy_core(
                     bar_low=_bar_low, bar_high=_bar_high)
                 _short_sl_streak += 1
                 _streak_mult = 2 if _short_sl_streak >= 2 else 1
-                short_max_pnl = 0; short_cd = cooldown * 2 * _streak_mult; short_bars = 0
+                short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown * 2 * _streak_mult; short_bars = 0
                 short_partial_done = False; short_partial2_done = False
 
             # 结构化防守平空: 亏损扩大前检测“多头反向共识+MA冲突”，提前退出
@@ -2825,7 +2885,7 @@ def _run_strategy_core(
                     _rk = str(_regime_label or 'unknown')
                     _rg[_rk] = int(_rg.get(_rk, 0)) + 1
                     _short_sl_streak = 0
-                    short_max_pnl = 0
+                    short_max_pnl = 0; short_min_pnl = 0.0
                     short_cd = cooldown * 2
                     short_bars = 0
                     short_partial_done = False
@@ -2845,7 +2905,7 @@ def _run_strategy_core(
                                     bar_low=_bar_low, bar_high=_bar_high)
                     _short_sl_streak += 1
                     _streak_mult = 2 if _short_sl_streak >= 2 else 1  # 连续止损加倍冷却
-                    short_max_pnl = 0; short_cd = cooldown * 5 * _streak_mult; short_bars = 0
+                    short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown * 5 * _streak_mult; short_bars = 0
                     short_partial_done = False; short_partial2_done = False
                     # P1修复: 止损后设置跨方向冷却, 防止同bar/快速反向开仓
                     long_cd = max(long_cd, cooldown * 3)
@@ -2854,7 +2914,7 @@ def _run_strategy_core(
             # v3分段止盈: 更早触发 (+12%/+25% vs 默认 +15%/+50%)
             _eff_partial_tp_1 = partial_tp_1_early if use_partial_tp_v3 else partial_tp_1
             _eff_partial_tp_2 = partial_tp_2_early if use_partial_tp_v3 else partial_tp_2
-            if use_partial_tp and eng.futures_short and not short_partial_done and pnl_r >= _eff_partial_tp_1:
+            if use_partial_tp and _tp_regime_ok and eng.futures_short and not short_partial_done and pnl_r >= _eff_partial_tp_1:
                 old_qty = eng.futures_short.quantity
                 partial_qty = old_qty * partial_tp_1_pct
                 actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)  # 空头平仓买入, 价格偏高
@@ -2880,7 +2940,7 @@ def _run_strategy_core(
                     margin_released=margin_released, partial_ratio=partial_tp_1_pct)
 
             # 二段止盈 (含滑点 + 修复frozen_margin泄漏, 使用elif避免同bar双触发)
-            elif use_partial_tp_2 and eng.futures_short and short_partial_done and not short_partial2_done and pnl_r >= _eff_partial_tp_2:
+            elif use_partial_tp_2 and _tp_regime_ok and eng.futures_short and short_partial_done and not short_partial2_done and pnl_r >= _eff_partial_tp_2:
                 old_qty = eng.futures_short.quantity
                 partial_qty = old_qty * partial_tp_2_pct
                 actual_close_p = price * (1 + FuturesEngine.SLIPPAGE)
@@ -2908,7 +2968,7 @@ def _run_strategy_core(
             if pnl_r >= actual_short_tp:
                 eng.close_short(price, dt, f"止盈 +{pnl_r*100:.0f}%", bar_low=_bar_low, bar_high=_bar_high)
                 _short_sl_streak = 0  # 盈利退出重置连续止损计数
-                short_max_pnl = 0; short_cd = cooldown * 2; short_bars = 0
+                short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown * 2; short_bars = 0
                 short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
             else:
                 if pnl_r > short_max_pnl: short_max_pnl = pnl_r
@@ -2923,7 +2983,7 @@ def _run_strategy_core(
                             f"连续追踪 max={short_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
                             bar_low=_bar_low, bar_high=_bar_high)
                         _short_sl_streak = 0
-                        short_max_pnl = 0; short_cd = cooldown; short_bars = 0
+                        short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown; short_bars = 0
                         short_partial_done = False; short_partial2_done = False
                 # 原版离散追踪止盈 (P13关闭时使用)
                 elif not use_continuous_trail and short_max_pnl >= short_trail and eng.futures_short:
@@ -2938,7 +2998,7 @@ def _run_strategy_core(
                             f"追踪止盈 max={short_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
                             bar_low=_bar_low, bar_high=_bar_high)
                         _short_sl_streak = 0
-                        short_max_pnl = 0; short_cd = cooldown; short_bars = 0
+                        short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown; short_bars = 0
                         short_partial_done = False; short_partial2_done = False
                 # P1a: 空单 NoTP 提前退出（长短独立 + regime 白名单）
                 _no_tp_short_regime_ok = (
@@ -2958,7 +3018,7 @@ def _run_strategy_core(
                         f"NoTP退出[{_regime_label}] {short_bars}bar pnl={pnl_r*100:.0f}%",
                         bar_low=_bar_low, bar_high=_bar_high)
                     _short_sl_streak = 0  # 任何非止损出场都重置连续计数
-                    short_max_pnl = 0; short_cd = cooldown * 2; short_bars = 0
+                    short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown * 2; short_bars = 0
                     short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_short and short_bars >= reverse_min_hold_short and bs >= cur_close_short_bs:
                     bs_dom = (ss < bs * 0.7) if bs > 0 else True
@@ -2966,7 +3026,7 @@ def _run_strategy_core(
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
                         eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}", bar_low=_bar_low, bar_high=_bar_high)
                         _short_sl_streak = 0  # 盈利退出重置连续止损计数
-                        short_max_pnl = 0; short_cd = cooldown * 3; short_bars = 0
+                        short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown * 3; short_bars = 0
                         short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 # 常规止损: 用收盘确认触发(降低 wick 噪音), 但成交价封顶到止损价
                 # 这样既避免过度悲观(仅high触发即止损), 又不会出现远超阈值的超额亏损。
@@ -2986,13 +3046,13 @@ def _run_strategy_core(
                         bar_low=_bar_low, bar_high=_bar_high)
                     _short_sl_streak += 1
                     _streak_mult = 2 if _short_sl_streak >= 2 else 1  # 连续止损加倍冷却
-                    short_max_pnl = 0; short_cd = cooldown * short_sl_cd_mult * _streak_mult; short_bars = 0
+                    short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown * short_sl_cd_mult * _streak_mult; short_bars = 0
                     short_partial_done = False; short_partial2_done = False
                 if eng.futures_short and short_bars >= int(max(3, short_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_short(exec_price, dt, "超时", bar_low=_bar_low, bar_high=_bar_high)
                     _short_sl_streak = 0  # 任何非止损出场都重置连续计数
-                    short_max_pnl = 0; short_cd = cooldown; short_bars = 0
+                    short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown; short_bars = 0
                     short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
         elif eng.futures_short and short_just_opened:
             short_bars = 1
@@ -3281,7 +3341,7 @@ def _run_strategy_core(
             eng.open_long(exec_price, dt, margin, actual_lev,
                 f"开多 {actual_lev}x SS={ss:.0f} BS={trend_long_bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}",
                 bar_low=_bar_low, bar_high=_bar_high, extra=_long_extra)
-            long_max_pnl = 0; long_bars = 0; long_cd = cooldown
+            long_max_pnl = 0; long_min_pnl = 0.0; long_bars = 0; long_cd = cooldown
             long_just_opened = True; long_partial_done = False; long_partial2_done = False
             long_entry_bs = trend_long_bs  # S5: 记录入场信号强度
 
@@ -3289,6 +3349,9 @@ def _run_strategy_core(
         if eng.futures_long and not long_just_opened:
             long_bars += 1
             pnl_r = eng.futures_long.calc_pnl(price) / eng.futures_long.margin
+            if pnl_r < long_min_pnl: long_min_pnl = pnl_r  # MAE 追踪
+            eng._current_min_pnl_r = round(long_min_pnl, 4)
+            eng._current_max_pnl_r = round(long_max_pnl, 4)
 
             # 硬断路器: 做多绝对止损上限, 使用 mark/bar LOW 检测 intrabar 穿越
             # 多仓最坏情况 = bar内最低价(价格下跌对多头不利)
@@ -3305,15 +3368,16 @@ def _run_strategy_core(
                                bar_low=_bar_low, bar_high=_bar_high)
                 _long_sl_streak += 1
                 _streak_mult = 2 if _long_sl_streak >= 2 else 1
-                long_max_pnl = 0; long_cd = cooldown * 5 * _streak_mult; long_bars = 0
+                long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown * 5 * _streak_mult; long_bars = 0
                 long_partial_done = False; long_partial2_done = False
                 # P1修复: 止损后设置跨方向冷却
                 short_cd = max(short_cd, cooldown * 3)
 
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
+            # v10.2: trend/low_vol_trend 中禁用 TP1/TP2, 仅保留 P13 连续追踪
             _eff_partial_tp_1_long = partial_tp_1_early if use_partial_tp_v3 else partial_tp_1
             _eff_partial_tp_2_long = partial_tp_2_early if use_partial_tp_v3 else partial_tp_2
-            if use_partial_tp and not long_partial_done and pnl_r >= _eff_partial_tp_1_long:
+            if use_partial_tp and _tp_regime_ok and not long_partial_done and pnl_r >= _eff_partial_tp_1_long:
                 old_qty = eng.futures_long.quantity
                 partial_qty = old_qty * partial_tp_1_pct
                 actual_close_p = price * (1 - FuturesEngine.SLIPPAGE)  # 多头平仓卖出, 价格偏低
@@ -3339,7 +3403,7 @@ def _run_strategy_core(
                     margin_released=margin_released, partial_ratio=partial_tp_1_pct)
 
             # 二段止盈 (含滑点 + 修复frozen_margin泄漏, 使用elif避免同bar双触发)
-            elif use_partial_tp_2 and long_partial_done and not long_partial2_done and pnl_r >= _eff_partial_tp_2_long:
+            elif use_partial_tp_2 and _tp_regime_ok and long_partial_done and not long_partial2_done and pnl_r >= _eff_partial_tp_2_long:
                 old_qty = eng.futures_long.quantity
                 partial_qty = old_qty * partial_tp_2_pct
                 actual_close_p = price * (1 - FuturesEngine.SLIPPAGE)
@@ -3367,7 +3431,7 @@ def _run_strategy_core(
             if pnl_r >= actual_long_tp:
                 eng.close_long(price, dt, f"止盈 +{pnl_r*100:.0f}%", bar_low=_bar_low, bar_high=_bar_high)
                 _long_sl_streak = 0
-                long_max_pnl = 0; long_cd = cooldown * 2; long_bars = 0
+                long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown * 2; long_bars = 0
                 long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
             else:
                 if pnl_r > long_max_pnl: long_max_pnl = pnl_r
@@ -3383,7 +3447,7 @@ def _run_strategy_core(
                             f"追踪止盈 max={long_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
                             bar_low=_bar_low, bar_high=_bar_high)
                         _long_sl_streak = 0
-                        long_max_pnl = 0; long_cd = cooldown; long_bars = 0
+                        long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown; long_bars = 0
                         long_partial_done = False; long_partial2_done = False
                 # P1: 多仓 NoTP 提前退出（长短独立 + regime 白名单）
                 _no_tp_long_regime_ok = (
@@ -3403,7 +3467,7 @@ def _run_strategy_core(
                         f"NoTP退出多[{_regime_label}] {long_bars}bar pnl={pnl_r*100:.0f}%",
                         bar_low=_bar_low, bar_high=_bar_high)
                     _long_sl_streak = 0
-                    long_max_pnl = 0; long_cd = cooldown * 2; long_bars = 0
+                    long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown * 2; long_bars = 0
                     long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_long and long_bars >= reverse_min_hold_long and ss >= cur_close_long_ss:
                     ss_dom = (bs < ss * 0.7) if bs > 0 else True
@@ -3411,7 +3475,7 @@ def _run_strategy_core(
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
                         eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}", bar_low=_bar_low, bar_high=_bar_high)
                         _long_sl_streak = 0
-                        long_max_pnl = 0; long_cd = cooldown * 3; long_bars = 0
+                        long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown * 3; long_bars = 0
                         long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 # 常规止损: 用收盘确认触发(降低 wick 噪音), 但成交价封顶到止损价
                 # S2: 保本止损 — TP1后收紧SL到保本(微亏)
@@ -3430,13 +3494,13 @@ def _run_strategy_core(
                         bar_low=_bar_low, bar_high=_bar_high)
                     _long_sl_streak += 1
                     _streak_mult = 2 if _long_sl_streak >= 2 else 1
-                    long_max_pnl = 0; long_cd = cooldown * long_sl_cd_mult * _streak_mult; long_bars = 0
+                    long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown * long_sl_cd_mult * _streak_mult; long_bars = 0
                     long_partial_done = False; long_partial2_done = False
                 if eng.futures_long and long_bars >= int(max(3, long_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_long(exec_price, dt, "超时", bar_low=_bar_low, bar_high=_bar_high)
                     _long_sl_streak = 0
-                    long_max_pnl = 0; long_cd = cooldown; long_bars = 0
+                    long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown; long_bars = 0
                     long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
         elif eng.futures_long and long_just_opened:
             long_bars = 1
