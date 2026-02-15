@@ -254,7 +254,7 @@ class FuturesEngine:
         })
 
     # === 现货操作 ===
-    def spot_buy(self, price, dt, usdt_amount, reason, *, bar_low=None, bar_high=None):
+    def spot_buy(self, price, dt, usdt_amount, reason, *, bar_low=None, bar_high=None, extra=None):
         """现货买入ETH"""
         avail = self.available_usdt()
         invest = min(usdt_amount, avail)
@@ -271,9 +271,10 @@ class FuturesEngine:
         self.total_spot_fees += fee
         self.total_slippage_cost += slippage_cost
         self._record_trade(dt, price, 'SPOT_BUY', 'long', qty, invest, fee, 1, reason,
-                           exec_price=actual_p, slippage_cost=slippage_cost)
+                           exec_price=actual_p, slippage_cost=slippage_cost,
+                           extra=extra)
 
-    def spot_sell(self, price, dt, ratio, reason, *, bar_low=None, bar_high=None):
+    def spot_sell(self, price, dt, ratio, reason, *, bar_low=None, bar_high=None, extra=None):
         """现货卖出ETH"""
         qty = self.spot_eth * ratio
         if qty * price < 200:
@@ -300,10 +301,10 @@ class FuturesEngine:
         self.total_slippage_cost += slippage_cost
         self._record_trade(dt, price, 'SPOT_SELL', 'short', qty, revenue, fee, 1, reason,
                            exec_price=actual_p, slippage_cost=slippage_cost,
-                           pnl=real_pnl)  # 修正: 记录真实已实现PnL(成本法)
+                           pnl=real_pnl, extra=extra)  # 修正: 记录真实已实现PnL(成本法)
 
     # === 合约操作 ===
-    def open_long(self, price, dt, margin, leverage, reason, *, bar_low=None, bar_high=None):
+    def open_long(self, price, dt, margin, leverage, reason, *, bar_low=None, bar_high=None, extra=None):
         """开多仓"""
         if self.futures_long:
             return  # 已有多仓
@@ -326,7 +327,7 @@ class FuturesEngine:
         self._record_trade(dt, price, 'OPEN_LONG', 'long', qty, notional, fee,
                            leverage, reason,
                            exec_price=actual_p, slippage_cost=slippage_cost,
-                           margin=margin)
+                           margin=margin, extra=extra)
 
     def close_long(self, price, dt, reason, *, bar_low=None, bar_high=None):
         """平多仓"""
@@ -355,7 +356,7 @@ class FuturesEngine:
                            pnl=pnl, entry_price=entry_price,
                            margin_released=margin_released)
 
-    def open_short(self, price, dt, margin, leverage, reason, *, bar_low=None, bar_high=None):
+    def open_short(self, price, dt, margin, leverage, reason, *, bar_low=None, bar_high=None, extra=None):
         """开空仓"""
         if self.futures_short:
             return  # 已有空仓
@@ -378,7 +379,7 @@ class FuturesEngine:
         self._record_trade(dt, price, 'OPEN_SHORT', 'short', qty, notional, fee,
                            leverage, reason,
                            exec_price=actual_p, slippage_cost=slippage_cost,
-                           margin=margin)
+                           margin=margin, extra=extra)
 
     def close_short(self, price, dt, reason, *, bar_low=None, bar_high=None):
         """平空仓"""

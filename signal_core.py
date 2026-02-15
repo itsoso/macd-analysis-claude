@@ -774,7 +774,7 @@ def _vectorized_fuse_scores(mode, config, n,
     return sell_score, buy_score
 
 
-def calc_fusion_score_six_batch(signals, df, config, warmup=60):
+def calc_fusion_score_six_batch(signals, df, config, warmup=60, return_features=False):
     """
     P1 核心优化: 批量向量化计算整个 DataFrame 的融合评分。
 
@@ -783,6 +783,12 @@ def calc_fusion_score_six_batch(signals, df, config, warmup=60):
     返回: (score_dict, ordered_ts)
         score_dict: {timestamp: (sell_score, buy_score)}
         ordered_ts: 有序时间戳列表
+        return_features=True 时额外返回 feature_dict:
+            {timestamp: {
+                div_sell/div_buy, ma_sell/ma_buy, cs_sell/cs_buy,
+                bb_sell/bb_buy, vp_sell/vp_buy, kdj_sell/kdj_buy,
+                ma_arr_bonus_sell/ma_arr_bonus_buy
+            }}
     """
     n = len(df)
     if n <= warmup:
@@ -883,10 +889,30 @@ def calc_fusion_score_six_batch(signals, df, config, warmup=60):
 
     # ─── 8. 构建输出字典 (只保留 warmup 之后的) ───
     score_dict = {}
+    feature_dict = {} if return_features else None
     ordered_ts = []
     for i in range(warmup, n):
         dt = index[i]
         score_dict[dt] = (float(sell_scores[i]), float(buy_scores[i]))
+        if return_features:
+            feature_dict[dt] = {
+                'div_sell': float(div_sell[i]),
+                'div_buy': float(div_buy[i]),
+                'ma_sell': float(ma_sell[i]),
+                'ma_buy': float(ma_buy[i]),
+                'cs_sell': float(cs_sell[i]),
+                'cs_buy': float(cs_buy[i]),
+                'bb_sell': float(bb_sell[i]),
+                'bb_buy': float(bb_buy[i]),
+                'vp_sell': float(vp_sell[i]),
+                'vp_buy': float(vp_buy[i]),
+                'kdj_sell': float(kdj_sell[i]),
+                'kdj_buy': float(kdj_buy[i]),
+                'ma_arr_bonus_sell': float(ma_arr_bonus_sell[i]),
+                'ma_arr_bonus_buy': float(ma_arr_bonus_buy[i]),
+            }
         ordered_ts.append(dt)
 
+    if return_features:
+        return score_dict, ordered_ts, feature_dict
     return score_dict, ordered_ts

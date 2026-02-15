@@ -103,7 +103,7 @@ def test_inverted_hammer_does_not_depend_on_next_bar():
 
 
 def test_execution_uses_next_bar_open_after_signal_close():
-    df = _make_ohlcv(n=100, start=100, step=1.0)
+    df = _make_ohlcv(n=260, start=100, step=1.0)
     warmup = 200
 
     def score_provider(idx, _dt, _price):
@@ -227,6 +227,338 @@ def test_reverse_close_then_open_same_bar():
     # 关键断言: 同一bar先平空再开多，避免“错过反手”
     assert close_short_idx < open_long_idx
     assert trades[close_short_idx]["time"] == trades[open_long_idx]["time"]
+
+
+def test_neutral_quality_gate_blocks_low_confidence_entry(monkeypatch):
+    df = _make_ohlcv(n=420, start=100, step=0.0)
+    warmup = 200
+
+    original_regime = opt_six._compute_regime_controls
+
+    def _forced_neutral(primary_df, idx, config, precomputed=None):
+        ctl = original_regime(primary_df, idx, config, precomputed=precomputed)
+        ctl["regime_label"] = "neutral"
+        return ctl
+
+    monkeypatch.setattr(opt_six, "_compute_regime_controls", _forced_neutral)
+
+    low_conf_meta = {
+        "decision": {"direction": "long", "actionable": True, "strength": 70},
+        "chain_len": 3,
+        "chain_dir": "short",
+        "chain_has_4h": True,
+        "large_ss": 60,
+        "large_bs": 10,
+    }
+
+    def score_provider(idx, _dt, _price):
+        if idx < warmup:
+            return 0.0, 0.0, {}
+        return 82.0, 18.0, low_conf_meta
+
+    cfg = _base_exec_config()
+    cfg.update(
+        {
+            "short_threshold": 20,
+            "close_short_bs": 999,
+            "use_neutral_quality_gate": True,
+            "neutral_min_strength": 45,
+            "neutral_min_streak": 1,
+        }
+    )
+
+    result = opt_six._run_strategy_core(
+        primary_df=df,
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+        score_provider=score_provider,
+    )
+
+    assert not any(t["action"] == "OPEN_SHORT" for t in result["trades"])
+    gate_stats = result.get("neutral_quality_gate", {})
+    assert gate_stats.get("short_blocked", 0) > 0
+    assert gate_stats.get("blocked_reason_counts", {}).get("decision_conflict", 0) > 0
+
+
+def test_neutral_quality_gate_allows_consistent_entry(monkeypatch):
+    df = _make_ohlcv(n=420, start=100, step=0.0)
+    warmup = 200
+
+    original_regime = opt_six._compute_regime_controls
+
+    def _forced_neutral(primary_df, idx, config, precomputed=None):
+        ctl = original_regime(primary_df, idx, config, precomputed=precomputed)
+        ctl["regime_label"] = "neutral"
+        return ctl
+
+    monkeypatch.setattr(opt_six, "_compute_regime_controls", _forced_neutral)
+
+    high_conf_meta = {
+        "decision": {"direction": "short", "actionable": True, "strength": 75},
+        "chain_len": 3,
+        "chain_dir": "short",
+        "chain_has_4h": True,
+        "large_ss": 62,
+        "large_bs": 8,
+    }
+
+    def score_provider(idx, _dt, _price):
+        if idx < warmup:
+            return 0.0, 0.0, {}
+        return 84.0, 16.0, high_conf_meta
+
+    cfg = _base_exec_config()
+    cfg.update(
+        {
+            "short_threshold": 20,
+            "close_short_bs": 999,
+            "use_neutral_quality_gate": True,
+            "neutral_min_score_gap": 12,
+        }
+    )
+
+    result = opt_six._run_strategy_core(
+        primary_df=df,
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+        score_provider=score_provider,
+    )
+
+    short_opens = [t for t in result["trades"] if t["action"] == "OPEN_SHORT"]
+    assert len(short_opens) >= 1
+    assert pd.Timestamp(short_opens[0]["time"]) >= df.index[warmup + 1]
+    gate_stats = result.get("neutral_quality_gate", {})
+    assert gate_stats.get("short_blocked", 0) == 0
+
+
+def test_neutral_short_structure_gate_blocks_bullish_large_tf(monkeypatch):
+    df = _make_ohlcv(n=420, start=100, step=0.0)
+    warmup = 200
+
+    original_regime = opt_six._compute_regime_controls
+
+    def _forced_neutral(primary_df, idx, config, precomputed=None):
+        ctl = original_regime(primary_df, idx, config, precomputed=precomputed)
+        ctl["regime_label"] = "neutral"
+        return ctl
+
+    monkeypatch.setattr(opt_six, "_compute_regime_controls", _forced_neutral)
+
+    conflict_meta = {
+        "decision": {"direction": "short", "actionable": True, "strength": 80},
+        "book_features_by_tf": {
+            "4h": {"div_sell": 12, "div_buy": 36, "ma_sell": 9, "ma_buy": 24, "vp_sell": 6, "vp_buy": 16},
+            "24h": {"div_sell": 10, "div_buy": 34, "ma_sell": 8, "ma_buy": 21, "vp_sell": 4, "vp_buy": 14},
+        },
+    }
+
+    def score_provider(idx, _dt, _price):
+        if idx < warmup:
+            return 0.0, 0.0, {}
+        return 86.0, 14.0, conflict_meta
+
+    cfg = _base_exec_config()
+    cfg.update(
+        {
+            "short_threshold": 20,
+            "close_short_bs": 999,
+            "use_neutral_short_structure_gate": True,
+            "neutral_short_structure_large_tfs": "4h,24h",
+            "neutral_short_structure_need_min_tfs": 1,
+            "neutral_short_structure_min_agree": 1,
+            "neutral_short_structure_fail_open": True,
+        }
+    )
+
+    result = opt_six._run_strategy_core(
+        primary_df=df,
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+        score_provider=score_provider,
+    )
+
+    assert not any(t["action"] == "OPEN_SHORT" for t in result["trades"])
+    nss = result.get("neutral_short_structure_gate", {})
+    assert nss.get("blocked", 0) > 0
+    assert nss.get("reason_counts", {}).get("large_tf_bull_conflict", 0) > 0
+
+
+def test_neutral_short_structure_gate_allows_bearish_large_tf(monkeypatch):
+    df = _make_ohlcv(n=420, start=100, step=0.0)
+    warmup = 200
+
+    original_regime = opt_six._compute_regime_controls
+
+    def _forced_neutral(primary_df, idx, config, precomputed=None):
+        ctl = original_regime(primary_df, idx, config, precomputed=precomputed)
+        ctl["regime_label"] = "neutral"
+        return ctl
+
+    monkeypatch.setattr(opt_six, "_compute_regime_controls", _forced_neutral)
+
+    support_meta = {
+        "decision": {"direction": "short", "actionable": True, "strength": 82},
+        "book_features_by_tf": {
+            "4h": {"div_sell": 34, "div_buy": 12, "ma_sell": 25, "ma_buy": 10, "vp_sell": 18, "vp_buy": 7},
+            "24h": {"div_sell": 29, "div_buy": 11, "ma_sell": 21, "ma_buy": 9, "vp_sell": 14, "vp_buy": 5},
+        },
+    }
+
+    def score_provider(idx, _dt, _price):
+        if idx < warmup:
+            return 0.0, 0.0, {}
+        return 86.0, 14.0, support_meta
+
+    cfg = _base_exec_config()
+    cfg.update(
+        {
+            "short_threshold": 20,
+            "close_short_bs": 999,
+            "use_neutral_short_structure_gate": True,
+            "neutral_short_structure_large_tfs": "4h,24h",
+            "neutral_short_structure_need_min_tfs": 1,
+            "neutral_short_structure_min_agree": 1,
+            "neutral_short_structure_fail_open": True,
+        }
+    )
+
+    result = opt_six._run_strategy_core(
+        primary_df=df,
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+        score_provider=score_provider,
+    )
+
+    assert any(t["action"] == "OPEN_SHORT" for t in result["trades"])
+    nss = result.get("neutral_short_structure_gate", {})
+    assert nss.get("blocked", 0) == 0
+    assert nss.get("support_avg", 0.0) > 0
+
+
+def test_short_adverse_exit_closes_losing_short_early():
+    df = _make_ohlcv(n=440, start=100, step=1.0)
+    warmup = 200
+
+    open_meta = {
+        "decision": {"direction": "short", "actionable": True, "strength": 80},
+        "chain_dir": "short",
+        "book_features_weighted": {"ma_sell": 22, "ma_buy": 10},
+    }
+    reverse_meta = {
+        "decision": {"direction": "long", "actionable": True, "strength": 80},
+        "chain_dir": "long",
+        "book_features_weighted": {
+            "div_sell": 8, "div_buy": 22,
+            "ma_sell": 8, "ma_buy": 24,
+            "cs_sell": 6, "cs_buy": 18,
+            "bb_sell": 7, "bb_buy": 16,
+            "vp_sell": 8, "vp_buy": 17,
+            "kdj_sell": 6, "kdj_buy": 19,
+        },
+    }
+
+    def score_provider(idx, _dt, _price):
+        if idx < warmup:
+            return 0.0, 0.0, {}
+        if idx == warmup:
+            return 88.0, 0.0, open_meta
+        return 20.0, 82.0, reverse_meta
+
+    cfg = _base_exec_config()
+    cfg.update(
+        {
+            "short_threshold": 20,
+            "close_short_bs": 999,   # 禁用常规反向平空，隔离测试目标
+            "hard_stop_loss": -0.99,  # 禁用硬止损
+            "short_sl": -0.99,        # 禁用常规止损
+            "use_short_adverse_exit": True,
+            "short_adverse_min_bars": 2,
+            "short_adverse_loss_r": -0.02,
+            "short_adverse_bs": 60,
+            "short_adverse_bs_dom_ratio": 0.9,
+            "short_adverse_ss_cap": 40,
+            "short_adverse_ma_conflict_gap": 8,
+            "short_adverse_need_chain_long": True,
+            "short_adverse_regimes": "",  # 不限制 regime，避免依赖 regime 分类细节
+        }
+    )
+
+    result = opt_six._run_strategy_core(
+        primary_df=df,
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+        score_provider=score_provider,
+    )
+
+    close_shorts = [t for t in result["trades"] if t["action"] == "CLOSE_SHORT"]
+    assert any("防守平空" in (t.get("reason") or "") for t in close_shorts)
+    sa = result.get("short_adverse_exit", {})
+    assert sa.get("triggered", 0) >= 1
+
+
+def test_extreme_divergence_short_veto_blocks_trend_short(monkeypatch):
+    df = _make_ohlcv(n=420, start=100, step=0.2)
+    warmup = 200
+
+    original_regime = opt_six._compute_regime_controls
+
+    def _forced_trend(primary_df, idx, config, precomputed=None):
+        ctl = original_regime(primary_df, idx, config, precomputed=precomputed)
+        ctl["regime_label"] = "trend"
+        return ctl
+
+    monkeypatch.setattr(opt_six, "_compute_regime_controls", _forced_trend)
+
+    meta = {
+        "decision": {"direction": "short", "actionable": True, "strength": 90},
+        "book_features_weighted": {
+            "div_sell": 95,
+            "div_buy": 20,
+            "ma_sell": 12,
+            "ma_buy": 8,
+            "cs_sell": 6,
+            "cs_buy": 4,
+            "bb_sell": 7,
+            "bb_buy": 3,
+            "vp_sell": 9,
+            "vp_buy": 5,
+            "kdj_sell": 8,
+            "kdj_buy": 3,
+        },
+    }
+
+    def score_provider(idx, _dt, _price):
+        if idx < warmup:
+            return 0.0, 0.0, {}
+        return 90.0, 10.0, meta
+
+    cfg = _base_exec_config()
+    cfg.update(
+        {
+            "short_threshold": 20,
+            "use_extreme_divergence_short_veto": True,
+            "extreme_div_short_threshold": 85.0,
+            "extreme_div_short_regimes": "trend,high_vol",
+        }
+    )
+
+    result = opt_six._run_strategy_core(
+        primary_df=df,
+        config=cfg,
+        primary_tf="1h",
+        trade_days=30,
+        score_provider=score_provider,
+    )
+
+    assert not any(t["action"] == "OPEN_SHORT" for t in result["trades"])
+    dv = result.get("extreme_div_short_veto", {})
+    assert dv.get("blocked", 0) > 0
+    assert dv.get("reason_counts", {}).get("extreme_divergence", 0) > 0
 
 
 def test_trade_days_60_is_windowed_not_full_history():
@@ -419,6 +751,34 @@ def test_calc_multi_tf_consensus_coverage_counts_only_valid_tf_scores():
     assert bs == pytest.approx(50.0 * cov, abs=1e-6)
     assert meta["decision"]["actionable"] is False
     assert "覆盖不足" in meta["decision"]["label"]
+
+
+def test_calc_multi_tf_consensus_includes_book_features_meta():
+    dt = pd.Timestamp("2025-01-01 00:00:00")
+    score_map = {
+        "1h": {dt: (30.0, 10.0)},
+        "4h": {dt: (50.0, 5.0)},
+        "__feature_map__": {
+            "1h": {dt: {"div_sell": 20.0, "ma_sell": 15.0, "vp_sell": 10.0}},
+            "4h": {dt: {"div_sell": 40.0, "ma_sell": 25.0, "vp_sell": 12.0}},
+        },
+    }
+
+    ss, bs, meta = opt_six.calc_multi_tf_consensus(
+        score_map,
+        ["1h", "4h"],
+        dt,
+        {"short_threshold": 25, "long_threshold": 40, "coverage_min": 0.0},
+    )
+
+    assert ss > bs
+    assert "book_features_by_tf" in meta
+    assert "book_features_weighted" in meta
+    assert "1h" in meta["book_features_by_tf"]
+    assert "4h" in meta["book_features_by_tf"]
+    # 4h权重(15) > 1h权重(8)，加权后的div_sell应靠近4h值
+    assert meta["book_features_weighted"]["div_sell"] > 30.0
+    assert meta["book_features_weighted"]["ma_sell"] > 20.0
 
 
 def test_oos_selection_uses_multi_tf_objective(monkeypatch):

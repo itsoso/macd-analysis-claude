@@ -197,7 +197,7 @@ STRATEGY_PARAM_VERSIONS = {
         "long_threshold": 30,    # 保持 (v2一致)
         "short_sl": -0.20,       # v5.1: 放宽止损, P0修复后需更大呼吸空间 (v4旧:-0.16)
         "short_tp": 0.60,        # 更大目标利润 (v2:0.50)
-        "long_sl": -0.10,        # 多头略放宽 (v2:-0.08)
+        "long_sl": -0.10,        # 多头保持 (v2:-0.08)
         "long_tp": 0.40,         # 保持 (v2一致)
         "partial_tp_1": 0.15,    # 保持v2 (v3 early由use_partial_tp_v3控制)
         "use_partial_tp_2": True,
@@ -302,6 +302,9 @@ class StrategyConfig:
     no_tp_exit_long_min_pnl: float = 0.03
     no_tp_exit_long_loss_floor: float = -0.03
     no_tp_exit_long_regimes: str = 'neutral'
+    # 止损后冷却倍数（v5.2: 支持配置化，默认保持原始值4x）
+    short_sl_cd_mult: int = 4          # 空头止损后 cooldown*4
+    long_sl_cd_mult: int = 4           # 多头止损后 cooldown*4
     # 反向平仓最小持仓bars。用于抑制短周期来回反手造成的手续费拖累。
     # 2025-01~2026-01 A/B: 8 bars 在收益/组合PF上优于0/2/6/12。
     reverse_min_hold_short: int = 8
@@ -393,6 +396,95 @@ class StrategyConfig:
     # 最新回归: 在关闭 BE/Ratchet/SSQ 后, neutral:45 复现最优收益/组合PF
     # 格式 "regime:threshold,..." 例 "neutral:45" → neutral中SS须>=45才开空
     regime_short_threshold: str = 'neutral:45'
+
+    # ── S1.5: neutral 体制信号质量门控（结构性过滤，减少震荡假突破） ──
+    # 逻辑: 方向强度 + 共识链条 + 大周期不冲突 + 信号连续性
+    # 当前结论: 样本内提升明显，但 2024 OOS 退化，暂保持默认关闭（实验开关）
+    use_neutral_quality_gate: bool = False
+    neutral_min_score_gap: float = 12.0
+    neutral_min_strength: float = 45.0
+    neutral_min_streak: int = 2
+    neutral_nochain_extra_gap: float = 20.0
+    neutral_large_conflict_ratio: float = 1.10
+
+    # ── 信号置信度学习层（实验） ──
+    # 默认关闭：先用于回测复盘与策略迭代，确认稳健后再启用实盘
+    use_confidence_learning: bool = False
+    confidence_min_raw: float = 0.42
+    confidence_min_posterior: float = 0.47
+    confidence_min_samples: int = 8
+    confidence_block_after_samples: int = 30
+    confidence_threshold_gain: float = 0.35
+    confidence_threshold_min_mult: float = 0.88
+    confidence_threshold_max_mult: float = 1.22
+    confidence_prior_alpha: float = 2.0
+    confidence_prior_beta: float = 2.0
+    confidence_win_pnl_r: float = 0.03
+    confidence_loss_pnl_r: float = -0.03
+    # 回测日志输出（不影响实盘执行）
+    print_signal_features: bool = True
+    signal_replay_top_n: int = 10
+
+    # ── Neutral 六书共识门控 ──────────────────────────────────────────
+    # 核心: neutral 体制中 divergence 占融合权重70%但判别力≈0,
+    #       CS(d=0.40)/KDJ(d=0.42) 才是真正有效确认书。
+    #       要求多本书独立确认方向, 而非依赖单一 SS 阈值。
+    use_neutral_book_consensus: bool = False      # 二元门控 (已弃用, 用渐进折扣替代)
+    neutral_book_sell_threshold: float = 10.0     # 卖方书"活跃"阈值
+    neutral_book_buy_threshold: float = 10.0      # 买方书"活跃"阈值
+    neutral_book_min_confirms: int = 2            # 最少确认书数 (5本结构书)
+    neutral_book_max_conflicts: int = 4           # 最大允许冲突书数
+    neutral_book_cs_kdj_threshold_adj: float = 0.0  # CS+KDJ双确认时阈值调整
+
+    # ── Neutral 结构质量渐进折扣 ──
+    # 核心改进: 不阻止交易(避免蝴蝶效应), 而是根据结构书独立确认数量
+    # 渐进折扣 SS/BS, 让弱共识信号自然被现有阈值过滤。
+    # 5本结构书(CS/KDJ/MA/BB/VP), 排除在neutral中无判别力的divergence。
+    use_neutral_structural_discount: bool = True
+    neutral_struct_activity_thr: float = 10.0     # 书"活跃"阈值
+    neutral_struct_discount_0: float = 0.15       # 0本确认: 仅div驱动 (33% WR) →大幅减仓
+    neutral_struct_discount_1: float = 0.25       # 1本确认: 微弱支撑 (50% WR) →中度减仓
+    neutral_struct_discount_2: float = 1.00       # 2本确认: 尚可 (62.5% WR) →全额
+    neutral_struct_discount_3: float = 1.00       # 3本确认: 强共识→全额
+    neutral_struct_discount_4plus: float = 1.00   # 4-5本: 极强共识→全额
+
+    # ── neutral short 结构确认器（减少震荡期错空） ──
+    use_neutral_short_structure_gate: bool = False
+    neutral_short_structure_large_tfs: str = '4h,24h'
+    neutral_short_structure_need_min_tfs: int = 1
+    neutral_short_structure_min_agree: int = 1
+    neutral_short_structure_div_gap: float = 8.0
+    neutral_short_structure_ma_gap: float = 5.0
+    neutral_short_structure_vp_gap: float = 4.0
+    neutral_short_structure_fail_open: bool = True
+    neutral_short_structure_soften_weak: bool = True
+    neutral_short_structure_soften_mult: float = 1.10
+
+    # ── 空单逆势防守退出（结构化风控） ──
+    # 目标: 在空单亏损扩张且多头共识抬升时提前离场，降低 -20% 类尾部止损频率
+    # 默认关闭：先用于A/B验证，不直接改变现有基线
+    use_short_adverse_exit: bool = False
+    short_adverse_min_bars: int = 8
+    short_adverse_loss_r: float = -0.08
+    short_adverse_bs: float = 55.0
+    short_adverse_bs_dom_ratio: float = 0.85
+    short_adverse_ss_cap: float = 95.0
+    short_adverse_require_bs_dom: bool = False
+    short_adverse_ma_conflict_gap: float = 8.0
+    short_adverse_conflict_thr: float = 10.0
+    short_adverse_min_conflicts: int = 3
+    short_adverse_need_cs_kdj: bool = True
+    short_adverse_large_bs_min: float = 35.0
+    short_adverse_large_ratio: float = 0.55
+    short_adverse_need_chain_long: bool = True
+    short_adverse_regimes: str = 'trend,low_vol_trend,high_vol'
+
+    # ── 极端 divergence 做空否决（结构化过滤） ──
+    use_extreme_divergence_short_veto: bool = False
+    extreme_div_short_threshold: float = 85.0
+    extreme_div_short_confirm_thr: float = 10.0
+    extreme_div_short_min_confirms: int = 3
+    extreme_div_short_regimes: str = 'trend,high_vol'
 
     # ── S2: 保本止损 — TP1触发后将SL移至保本, 防止盈利全部回吐 ──
     # 最新消融: 单开与组合均拉低收益, 默认关闭

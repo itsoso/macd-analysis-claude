@@ -673,6 +673,7 @@ def _run_strategy_core(
 ):
     """统一交易执行循环: 单TF/多TF共用。
     tf_score_map, decision_tfs: 可选, 供趋势做多直接读取大周期原始信号。
+    score_provider 可返回 (ss, bs) 或 (ss, bs, meta)。
     """
     eng = FuturesEngine(
         config.get('name', 'opt'),
@@ -771,6 +772,88 @@ def _run_strategy_core(
     neutral_mid_ss_sell_ratio = float(config.get('neutral_mid_ss_sell_ratio', 1.0))
     neutral_mid_ss_lo = float(config.get('neutral_mid_ss_lo', 50))
     neutral_mid_ss_hi = float(config.get('neutral_mid_ss_hi', 70))
+    # neutral 体制信号质量门控（结构性改造，降低震荡误触发）
+    use_neutral_quality_gate = bool(config.get('use_neutral_quality_gate', True))
+    neutral_min_score_gap = float(config.get('neutral_min_score_gap', 12.0))
+    neutral_min_strength = float(config.get('neutral_min_strength', 45.0))
+    neutral_min_streak = int(config.get('neutral_min_streak', 2))
+    neutral_nochain_extra_gap = float(config.get('neutral_nochain_extra_gap', 20.0))
+    neutral_large_conflict_ratio = float(config.get('neutral_large_conflict_ratio', 1.10))
+    # neutral 体制结构确认器（针对错空：要求 4h/24h 六书特征给出空头结构支持）
+    use_neutral_short_structure_gate = bool(config.get('use_neutral_short_structure_gate', False))
+    _nss_tfs_raw = str(config.get('neutral_short_structure_large_tfs', '4h,24h') or '')
+    neutral_short_structure_large_tfs = [x.strip() for x in _nss_tfs_raw.split(',') if x.strip()]
+    neutral_short_structure_need_min_tfs = int(config.get('neutral_short_structure_need_min_tfs', 1))
+    neutral_short_structure_min_agree = int(config.get('neutral_short_structure_min_agree', 1))
+    neutral_short_structure_div_gap = float(config.get('neutral_short_structure_div_gap', 8.0))
+    neutral_short_structure_ma_gap = float(config.get('neutral_short_structure_ma_gap', 5.0))
+    neutral_short_structure_vp_gap = float(config.get('neutral_short_structure_vp_gap', 4.0))
+    neutral_short_structure_fail_open = bool(config.get('neutral_short_structure_fail_open', True))
+    neutral_short_structure_soften_weak = bool(config.get('neutral_short_structure_soften_weak', True))
+    neutral_short_structure_soften_mult = float(config.get('neutral_short_structure_soften_mult', 1.10))
+    # ── Neutral 六书共识门控 ──────────────────────────────────────────
+    # 核心原理: neutral 体制中 divergence (占融合权重70%) 判别力≈0,
+    #          而 CS/KDJ 才是真正有判别力的书 (Cohen's d ≈ 0.4)。
+    #          单靠 SS 阈值无法区分好坏信号, 需要检查多少本书独立确认。
+    use_neutral_book_consensus = bool(config.get('use_neutral_book_consensus', False))
+    neutral_book_sell_threshold = float(config.get('neutral_book_sell_threshold', 10.0))
+    neutral_book_buy_threshold = float(config.get('neutral_book_buy_threshold', 10.0))
+    neutral_book_min_confirms = int(config.get('neutral_book_min_confirms', 2))
+    neutral_book_max_conflicts = int(config.get('neutral_book_max_conflicts', 4))
+    # CS+KDJ 双确认时的阈值调整 (负值=降低阈值, 正值=提高)
+    neutral_book_cs_kdj_threshold_adj = float(config.get('neutral_book_cs_kdj_threshold_adj', 0.0))
+    # ── Neutral 结构质量渐进调节 ────────────────────────────────────
+    # 替代二元门控: 根据结构书确认数量渐进调节SS/BS用于入场比较,
+    # 不阻止交易, 避免蝴蝶效应, 同时让弱共识信号自然被阈值过滤。
+    use_neutral_structural_discount = bool(config.get('use_neutral_structural_discount', True))
+    neutral_struct_activity_thr = float(config.get('neutral_struct_activity_thr', 10.0))
+    # 折扣表: 结构确认数 → SS 乘数 (5本结构书, 排除无判别力的div)
+    # 0本确认: 仅divergence驱动 → 大幅折扣
+    # 1本确认: 微弱支撑 → 中度折扣
+    # 2本确认: 尚可 → 小幅折扣
+    # 3+本确认: 强共识 → 无折扣甚至奖励
+    neutral_struct_discount_0 = float(config.get('neutral_struct_discount_0', 0.15))
+    neutral_struct_discount_1 = float(config.get('neutral_struct_discount_1', 0.25))
+    neutral_struct_discount_2 = float(config.get('neutral_struct_discount_2', 1.00))
+    neutral_struct_discount_3 = float(config.get('neutral_struct_discount_3', 1.00))
+    neutral_struct_discount_4plus = float(config.get('neutral_struct_discount_4plus', 1.00))
+    # 信号置信度学习层（在线校准）
+    use_confidence_learning = bool(config.get('use_confidence_learning', False))
+    confidence_min_raw = float(config.get('confidence_min_raw', 0.42))
+    confidence_min_posterior = float(config.get('confidence_min_posterior', 0.47))
+    confidence_min_samples = int(config.get('confidence_min_samples', 8))
+    confidence_block_after_samples = int(config.get('confidence_block_after_samples', 30))
+    confidence_threshold_gain = float(config.get('confidence_threshold_gain', 0.35))
+    confidence_threshold_min_mult = float(config.get('confidence_threshold_min_mult', 0.88))
+    confidence_threshold_max_mult = float(config.get('confidence_threshold_max_mult', 1.22))
+    confidence_prior_alpha = float(config.get('confidence_prior_alpha', 2.0))
+    confidence_prior_beta = float(config.get('confidence_prior_beta', 2.0))
+    confidence_win_pnl_r = float(config.get('confidence_win_pnl_r', 0.03))
+    confidence_loss_pnl_r = float(config.get('confidence_loss_pnl_r', -0.03))
+    # 空单逆势防守退出（结构化风控）：亏损扩大前在多头反向共识抬升时提前离场
+    use_short_adverse_exit = bool(config.get('use_short_adverse_exit', False))
+    short_adverse_min_bars = int(config.get('short_adverse_min_bars', 8))
+    short_adverse_loss_r = float(config.get('short_adverse_loss_r', -0.08))
+    short_adverse_bs = float(config.get('short_adverse_bs', 55.0))
+    short_adverse_bs_dom_ratio = float(config.get('short_adverse_bs_dom_ratio', 0.85))
+    short_adverse_ss_cap = float(config.get('short_adverse_ss_cap', 95.0))
+    short_adverse_require_bs_dom = bool(config.get('short_adverse_require_bs_dom', False))
+    short_adverse_ma_conflict_gap = float(config.get('short_adverse_ma_conflict_gap', 8.0))
+    short_adverse_conflict_thr = float(config.get('short_adverse_conflict_thr', 10.0))
+    short_adverse_min_conflicts = int(config.get('short_adverse_min_conflicts', 3))
+    short_adverse_need_cs_kdj = bool(config.get('short_adverse_need_cs_kdj', True))
+    short_adverse_large_bs_min = float(config.get('short_adverse_large_bs_min', 35.0))
+    short_adverse_large_ratio = float(config.get('short_adverse_large_ratio', 0.55))
+    short_adverse_need_chain_long = bool(config.get('short_adverse_need_chain_long', True))
+    _short_adverse_reg_raw = str(config.get('short_adverse_regimes', 'trend,low_vol_trend,high_vol') or '')
+    short_adverse_regimes = {x.strip() for x in _short_adverse_reg_raw.split(',') if x.strip()}
+    # 极端 divergence 做空否决（结构性过滤）：trend/high_vol 下极高 div_sell 常为反趋势噪声
+    use_extreme_divergence_short_veto = bool(config.get('use_extreme_divergence_short_veto', False))
+    extreme_div_short_threshold = float(config.get('extreme_div_short_threshold', 85.0))
+    extreme_div_short_confirm_thr = float(config.get('extreme_div_short_confirm_thr', 10.0))
+    extreme_div_short_min_confirms = int(config.get('extreme_div_short_min_confirms', 3))
+    _ext_div_reg_raw = str(config.get('extreme_div_short_regimes', 'trend,high_vol') or '')
+    extreme_div_short_regimes = {x.strip() for x in _ext_div_reg_raw.split(',') if x.strip()}
 
     # P1a: NoTP 提前退出（长短独立 + regime 白名单）
     # 兼容旧参数: no_tp_exit_bars / no_tp_exit_min_pnl / no_tp_exit_regimes
@@ -856,6 +939,637 @@ def _run_strategy_core(
     short_partial_done = False; long_partial_done = False
     short_partial2_done = False; long_partial2_done = False
     short_entry_ss = 0.0; long_entry_bs = 0.0  # S5: 记录入场时信号强度
+    # neutral 信号方向连续性（防 1-bar 抖动）
+    neutral_last_dir = 'hold'
+    neutral_dir_streak = 0
+    neutral_gate_stats = {
+        'enabled': use_neutral_quality_gate,
+        'short_blocked': 0,
+        'long_blocked': 0,
+        'blocked_reason_counts': {},
+    }
+    confidence_stats = {
+        'enabled': use_confidence_learning,
+        'short_blocked': 0,
+        'long_blocked': 0,
+        'blocked_reason_counts': {},
+        'threshold_adj_short_avg': 0.0,
+        'threshold_adj_long_avg': 0.0,
+        'threshold_adj_short_n': 0,
+        'threshold_adj_long_n': 0,
+        'updates': 0,
+        'wins': 0,
+        'losses': 0,
+        'neutral': 0,
+        'bucket_stats': {},
+    }
+    neutral_short_structure_stats = {
+        'enabled': use_neutral_short_structure_gate,
+        'evaluated': 0,
+        'blocked': 0,
+        'reason_counts': {},
+        'support_hits': 0,
+        'support_avg': 0.0,
+        'soft_adjusted': 0,
+    }
+    short_adverse_exit_stats = {
+        'enabled': use_short_adverse_exit,
+        'evaluated': 0,
+        'triggered': 0,
+        'sum_trigger_pnl_r': 0.0,
+        'reason_counts': {},
+        'regime_counts': {},
+    }
+    extreme_div_short_veto_stats = {
+        'enabled': use_extreme_divergence_short_veto,
+        'evaluated': 0,
+        'blocked': 0,
+        'sum_div_sell': 0.0,
+        'sum_nondiv_confirms': 0.0,
+        'reason_counts': {},
+    }
+    book_consensus_stats = {
+        'enabled': use_neutral_book_consensus,
+        'evaluated': 0,
+        'short_blocked': 0,
+        'long_blocked': 0,
+        'reason_counts': {},
+        'cs_kdj_threshold_adj_count': 0,
+        'cs_kdj_threshold_adj_sum': 0.0,
+    }
+    structural_discount_stats = {
+        'enabled': use_neutral_structural_discount,
+        'evaluated': 0,
+        'discount_applied': 0,
+        'confirm_distribution': {0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0},
+        'avg_mult': 0.0,
+        'sum_mult': 0.0,
+    }
+    confidence_model = {}
+    confidence_open_ctx = {'short': None, 'long': None}
+
+    def _safe_signal_triplet(raw):
+        """兼容 score_provider 返回 (ss,bs) 或 (ss,bs,meta)。"""
+        if isinstance(raw, (tuple, list)):
+            if len(raw) >= 3:
+                ss, bs, meta = raw[0], raw[1], raw[2]
+            elif len(raw) >= 2:
+                ss, bs = raw[0], raw[1]
+                meta = {}
+            else:
+                ss, bs, meta = 0.0, 0.0, {}
+        else:
+            ss, bs, meta = raw, 0.0, {}
+        if not isinstance(meta, dict):
+            meta = {}
+        return float(ss), float(bs), meta
+
+    def _neutral_gate_allow(direction, ss_v, bs_v, meta_v, regime_label):
+        """neutral regime 入场质量门控: 方向一致性 + 强度 + 连续性。"""
+        if not use_neutral_quality_gate or regime_label != 'neutral':
+            return True, ''
+        # 仅对多TF共识路径启用（要求存在结构化 meta），避免影响单TF回测语义。
+        if not isinstance(meta_v, dict) or 'decision' not in meta_v:
+            return True, ''
+
+        gap = abs(float(ss_v) - float(bs_v))
+        dec = meta_v.get('decision', {}) if isinstance(meta_v, dict) else {}
+        dec_actionable = False
+        dec_dir = 'hold'
+        if dec:
+            dec_dir = dec.get('direction', 'hold')
+            dec_actionable = bool(dec.get('actionable', False))
+            # 只硬性拦截“明确反向可交易”信号；避免过度 fail-closed
+            if dec_actionable and dec_dir in ('long', 'short') and dec_dir != direction:
+                return False, 'decision_conflict'
+
+        large_ss = float(meta_v.get('large_ss', 0) or 0)
+        large_bs = float(meta_v.get('large_bs', 0) or 0)
+        if direction == 'short' and large_bs > large_ss * neutral_large_conflict_ratio:
+            return False, 'large_tf_conflict'
+        if direction == 'long' and large_ss > large_bs * neutral_large_conflict_ratio:
+            return False, 'large_tf_conflict'
+
+        # 在 neutral 中, 仅对“非 actionable 且分数差很小”的噪声信号做额外过滤
+        if (not dec_actionable) and gap < neutral_min_score_gap:
+            return False, 'gap'
+
+        return True, ''
+
+    def _neutral_short_structure_allow(ss_v, bs_v, meta_v, regime_label):
+        """
+        neutral 体制下的空头结构确认:
+        仅当 4h/24h 等大周期六书特征显示“卖出结构占优”时允许开空。
+        """
+        diag = {'checked': 0, 'support': 0, 'conflict': 0, 'detail': {}}
+        if not use_neutral_short_structure_gate or regime_label != 'neutral':
+            return True, '', diag
+        if not isinstance(meta_v, dict):
+            return (not neutral_short_structure_fail_open), 'insufficient_meta', diag
+
+        feature_map = meta_v.get('book_features_by_tf', {})
+        if not isinstance(feature_map, dict) or not feature_map:
+            return (not neutral_short_structure_fail_open), 'insufficient_meta', diag
+
+        target_tfs = neutral_short_structure_large_tfs or ['4h', '24h']
+        selected = []
+        for tf in target_tfs:
+            feat = feature_map.get(tf)
+            if isinstance(feat, dict):
+                selected.append((tf, feat))
+        diag['checked'] = len(selected)
+
+        if len(selected) < max(1, neutral_short_structure_need_min_tfs):
+            if neutral_short_structure_fail_open:
+                return False, 'insufficient_large_tf', diag
+            return True, '', diag
+
+        for tf, feat in selected:
+            div_delta = float(feat.get('div_sell', 0.0) or 0.0) - float(feat.get('div_buy', 0.0) or 0.0)
+            ma_delta = float(feat.get('ma_sell', 0.0) or 0.0) - float(feat.get('ma_buy', 0.0) or 0.0)
+            vp_delta = float(feat.get('vp_sell', 0.0) or 0.0) - float(feat.get('vp_buy', 0.0) or 0.0)
+
+            bear_votes = 0
+            bull_votes = 0
+            if div_delta >= neutral_short_structure_div_gap:
+                bear_votes += 1
+            elif div_delta <= -neutral_short_structure_div_gap:
+                bull_votes += 1
+            if ma_delta >= neutral_short_structure_ma_gap:
+                bear_votes += 1
+            elif ma_delta <= -neutral_short_structure_ma_gap:
+                bull_votes += 1
+            if vp_delta >= neutral_short_structure_vp_gap:
+                bear_votes += 1
+            elif vp_delta <= -neutral_short_structure_vp_gap:
+                bull_votes += 1
+
+            if bear_votes >= 2:
+                diag['support'] += 1
+            if bull_votes >= 2:
+                diag['conflict'] += 1
+
+            diag['detail'][tf] = {
+                'div_delta': round(div_delta, 4),
+                'ma_delta': round(ma_delta, 4),
+                'vp_delta': round(vp_delta, 4),
+                'bear_votes': bear_votes,
+                'bull_votes': bull_votes,
+            }
+
+        if diag['conflict'] > 0:
+            return False, 'large_tf_bull_conflict', diag
+        if diag['support'] < max(1, neutral_short_structure_min_agree):
+            if neutral_short_structure_soften_weak:
+                diag['soft_threshold_mult'] = float(max(1.0, neutral_short_structure_soften_mult))
+                return True, 'large_tf_bear_weak_soft', diag
+            return False, 'large_tf_bear_weak', diag
+        return True, '', diag
+
+    def _neutral_book_consensus_gate(direction, ss_v, bs_v, meta_v, regime_label):
+        """
+        Neutral 体制六书共识门控 (信号逻辑级改进, 非参数微调).
+
+        核心发现 (基于实证数据分析):
+        - divergence 在 neutral 中 Cohen's d ≈ -0.04, 几乎无判别力
+        - CS(d=+0.40) 和 KDJ(d=+0.42) 是最有判别力的书
+        - CS+KDJ 双确认: 胜率 72.7% vs 无确认 55.4%
+        - 卖方书 >=3 本活跃: 胜率 58-89% vs <=2 本: 33-50%
+        - 买方冲突 >=5: 胜率仅 33%
+
+        逻辑:
+        1. 统计独立确认的卖/买方书数量
+        2. 确认数不足 → 阻止 (divergence-only 信号不可靠)
+        3. 冲突数过多 → 阻止 (方向不一致)
+
+        返回: (allow: bool, reason: str, diag: dict)
+        """
+        diag = {'confirms': 0, 'conflicts': 0, 'cs_kdj_confirm': False}
+        if not use_neutral_book_consensus or regime_label != 'neutral':
+            return True, '', diag
+        if not isinstance(meta_v, dict):
+            return True, '', diag
+
+        book_feat = meta_v.get('book_features_weighted', {})
+        if not isinstance(book_feat, dict) or not book_feat:
+            return True, '', diag  # fail-open: 无特征数据时放行
+
+        book_consensus_stats['evaluated'] += 1
+
+        # 仅统计结构书 (排除 divergence — 在 neutral 中判别力≈0)
+        # 实证依据: div_sell 胜/负 均值 88.8 vs 89.2, Cohen's d = -0.04
+        structural_sell = ['ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell']
+        structural_buy = ['ma_buy', 'cs_buy', 'bb_buy', 'vp_buy', 'kdj_buy']
+
+        if direction == 'short':
+            confirm_keys = structural_sell
+            conflict_keys = structural_buy
+            confirm_thr = neutral_book_sell_threshold
+            conflict_thr = neutral_book_buy_threshold
+        else:  # long
+            confirm_keys = structural_buy
+            conflict_keys = structural_sell
+            confirm_thr = neutral_book_buy_threshold
+            conflict_thr = neutral_book_sell_threshold
+
+        confirms = sum(
+            1 for k in confirm_keys
+            if float(book_feat.get(k, 0) or 0) > confirm_thr
+        )
+        conflicts = sum(
+            1 for k in conflict_keys
+            if float(book_feat.get(k, 0) or 0) > conflict_thr
+        )
+
+        # CS + KDJ 双确认检查 (最具判别力的两本书)
+        if direction == 'short':
+            cs_kdj = (float(book_feat.get('cs_sell', 0) or 0) > confirm_thr
+                      and float(book_feat.get('kdj_sell', 0) or 0) > confirm_thr)
+        else:
+            cs_kdj = (float(book_feat.get('cs_buy', 0) or 0) > confirm_thr
+                      and float(book_feat.get('kdj_buy', 0) or 0) > confirm_thr)
+
+        diag['confirms'] = confirms
+        diag['conflicts'] = conflicts
+        diag['cs_kdj_confirm'] = cs_kdj
+
+        # Gate 1: 确认数不足 → 阻止 (divergence-only 信号不可靠)
+        if confirms < neutral_book_min_confirms:
+            return False, 'insufficient_confirms', diag
+
+        # Gate 2: 冲突数过多 → 阻止 (方向不一致)
+        if conflicts >= neutral_book_max_conflicts:
+            return False, 'too_many_conflicts', diag
+
+        return True, '', diag
+
+    def _short_adverse_exit_allow(ss_v, bs_v, meta_v, regime_label):
+        """
+        空头逆势防守退出:
+        仅在“亏损中 + 多头共识占优 + MA结构冲突”同时成立时触发。
+        """
+        diag = {
+            'regime_ok': True,
+            'chain_long': False,
+            'ma_conflict': False,
+            'large_conflict': False,
+            'conflicts': 0,
+            'cs_kdj_conflict': False,
+            'bs_dom': False,
+            'ma_delta': 0.0,
+        }
+        if not use_short_adverse_exit:
+            return False, 'off', diag
+
+        if short_adverse_regimes and regime_label not in short_adverse_regimes:
+            diag['regime_ok'] = False
+            return False, 'regime_skip', diag
+
+        meta_v = meta_v if isinstance(meta_v, dict) else {}
+        chain_dir = str(meta_v.get('chain_dir', '') or '')
+        diag['chain_long'] = (chain_dir == 'long')
+        if short_adverse_need_chain_long and not diag['chain_long']:
+            return False, 'chain_not_long', diag
+
+        book_feat = meta_v.get('book_features_weighted', {})
+        if not isinstance(book_feat, dict) or not book_feat:
+            return False, 'missing_book_features', diag
+
+        ma_sell = float(book_feat.get('ma_sell', 0.0) or 0.0)
+        ma_buy = float(book_feat.get('ma_buy', 0.0) or 0.0)
+        ma_delta = ma_buy - ma_sell
+        diag['ma_delta'] = round(ma_delta, 4)
+        diag['ma_conflict'] = ma_delta >= short_adverse_ma_conflict_gap
+
+        conflict_thr = float(short_adverse_conflict_thr)
+        buy_keys = ('div_buy', 'ma_buy', 'cs_buy', 'bb_buy', 'vp_buy', 'kdj_buy')
+        sell_keys = ('div_sell', 'ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell')
+        conflicts = 0
+        for kb, ks in zip(buy_keys, sell_keys):
+            bv = float(book_feat.get(kb, 0.0) or 0.0)
+            sv = float(book_feat.get(ks, 0.0) or 0.0)
+            if bv >= conflict_thr and bv > sv:
+                conflicts += 1
+        diag['conflicts'] = conflicts
+        if conflicts < short_adverse_min_conflicts:
+            return False, 'book_conflicts_low', diag
+
+        cs_buy = float(book_feat.get('cs_buy', 0.0) or 0.0)
+        kdj_buy = float(book_feat.get('kdj_buy', 0.0) or 0.0)
+        diag['cs_kdj_conflict'] = bool(cs_buy >= conflict_thr and kdj_buy >= conflict_thr)
+        if short_adverse_need_cs_kdj and not diag['cs_kdj_conflict']:
+            return False, 'cs_kdj_weak', diag
+
+        large_ss = float(meta_v.get('large_ss', 0.0) or 0.0)
+        large_bs = float(meta_v.get('large_bs', 0.0) or 0.0)
+        diag['large_conflict'] = (
+            large_bs >= short_adverse_large_bs_min
+            and (large_ss <= 0 or large_bs >= large_ss * short_adverse_large_ratio)
+        )
+        if not (diag['ma_conflict'] or diag['large_conflict']):
+            return False, 'trend_conflict_weak', diag
+
+        bs_v = float(bs_v)
+        ss_v = float(ss_v)
+        bs_dom = (bs_v >= short_adverse_bs) and (ss_v <= short_adverse_ss_cap)
+        if bs_v > 0:
+            bs_dom = bs_dom and (ss_v <= bs_v * short_adverse_bs_dom_ratio)
+        diag['bs_dom'] = bool(bs_dom)
+        if short_adverse_require_bs_dom and not diag['bs_dom']:
+            return False, 'bs_not_dom', diag
+
+        return True, '', diag
+
+    def _confidence_bucket(conf_v):
+        if conf_v >= 0.75:
+            return 'high'
+        if conf_v >= 0.55:
+            return 'mid'
+        return 'low'
+
+    def _confidence_stat_key(direction, regime_label, bucket):
+        return f'{direction}|{regime_label}|{bucket}'
+
+    def _get_confidence_stat(key):
+        st = confidence_model.get(key)
+        if st is None:
+            st = {
+                'alpha': confidence_prior_alpha,
+                'beta': confidence_prior_beta,
+                'n': 0,
+                'wins': 0,
+                'losses': 0,
+                'neutral': 0,
+                'sum_pnl_r': 0.0,
+            }
+            confidence_model[key] = st
+        return st
+
+    def _confidence_posterior(st):
+        den = float(st['alpha']) + float(st['beta'])
+        if den <= 0:
+            return 0.5
+        return float(st['alpha']) / den
+
+    def _compute_signal_confidence(direction, ss_v, bs_v, meta_v, regime_label):
+        """将共识结构化信号映射到 0~1 的方向置信度。"""
+        meta_v = meta_v if isinstance(meta_v, dict) else {}
+        decision = meta_v.get('decision', {}) if isinstance(meta_v, dict) else {}
+        dec_dir = decision.get('direction', 'hold')
+        dec_actionable = bool(decision.get('actionable', False))
+        dec_strength = float(decision.get('strength', 0.0) or 0.0) / 100.0
+        if dec_strength <= 0:
+            dec_strength = min(1.0, abs(float(ss_v) - float(bs_v)) / 45.0)
+        coverage = float(meta_v.get('coverage', 1.0) or 1.0)
+        coverage = float(np.clip(coverage, 0.0, 1.0))
+        chain_len = float(meta_v.get('chain_len', 0.0) or 0.0)
+        chain_score = float(np.clip(chain_len / 4.0, 0.0, 1.0))
+        gap_score = float(np.clip(abs(float(ss_v) - float(bs_v)) / 45.0, 0.0, 1.0))
+
+        if direction == 'short':
+            dom_raw = (float(ss_v) - float(bs_v)) / max(1.0, abs(float(ss_v)) + abs(float(bs_v)))
+            large_main = float(meta_v.get('large_ss', 0.0) or 0.0)
+            large_opp = float(meta_v.get('large_bs', 0.0) or 0.0)
+        else:
+            dom_raw = (float(bs_v) - float(ss_v)) / max(1.0, abs(float(ss_v)) + abs(float(bs_v)))
+            large_main = float(meta_v.get('large_bs', 0.0) or 0.0)
+            large_opp = float(meta_v.get('large_ss', 0.0) or 0.0)
+        dom_score = float(np.clip((dom_raw + 1.0) * 0.5, 0.0, 1.0))
+
+        if large_main <= 0 and large_opp <= 0:
+            large_score = 0.55
+        elif large_main > large_opp * 1.05:
+            large_score = 1.0
+        elif large_opp > large_main * 1.05:
+            large_score = 0.25
+        else:
+            large_score = 0.55
+
+        if dec_actionable and dec_dir == direction:
+            action_score = 1.0
+        elif dec_actionable and dec_dir in ('long', 'short') and dec_dir != direction:
+            action_score = 0.20
+        elif dec_dir == 'hold':
+            action_score = 0.45
+        else:
+            action_score = 0.65
+
+        regime_score = 0.95 if regime_label == 'neutral' else 1.0
+        conf_raw = (
+            dec_strength * 0.30
+            + dom_score * 0.22
+            + gap_score * 0.15
+            + coverage * 0.12
+            + chain_score * 0.08
+            + large_score * 0.08
+            + action_score * 0.05
+        ) * regime_score
+        return float(np.clip(conf_raw, 0.0, 1.0))
+
+    def _confidence_probe(direction, ss_v, bs_v, meta_v, regime_label):
+        """只观测不拦截：返回 raw/posterior/threshold_mult 等解释字段。"""
+        raw = _compute_signal_confidence(direction, ss_v, bs_v, meta_v, regime_label)
+        bucket = _confidence_bucket(raw)
+        key_regime = _confidence_stat_key(direction, regime_label, bucket)
+        key_global = _confidence_stat_key(direction, 'all', bucket)
+        st_reg = _get_confidence_stat(key_regime)
+        st_all = _get_confidence_stat(key_global)
+        post_reg = _confidence_posterior(st_reg)
+        post_all = _confidence_posterior(st_all)
+        if st_reg['n'] >= confidence_min_samples:
+            posterior = post_reg
+            src = 'regime'
+            n_samples = st_reg['n']
+        else:
+            w_reg = min(0.60, (st_reg['n'] / max(1, confidence_min_samples)) * 0.60)
+            posterior = post_reg * w_reg + post_all * (1.0 - w_reg)
+            src = 'blend' if st_reg['n'] > 0 else 'global'
+            n_samples = st_reg['n'] + st_all['n']
+        conf_eff = raw * 0.65 + posterior * 0.35
+        thr_mult = 1.0 + (0.50 - posterior) * confidence_threshold_gain
+        thr_mult = float(np.clip(thr_mult, confidence_threshold_min_mult, confidence_threshold_max_mult))
+        return {
+            'raw': float(np.clip(raw, 0.0, 1.0)),
+            'posterior': float(np.clip(posterior, 0.0, 1.0)),
+            'effective': float(np.clip(conf_eff, 0.0, 1.0)),
+            'bucket': bucket,
+            'key_regime': key_regime,
+            'key_global': key_global,
+            'sample_n': int(n_samples),
+            'source': src,
+            'threshold_mult': thr_mult,
+            'allow': True,
+            'reason': '',
+        }
+
+    def _confidence_entry_gate(direction, ss_v, bs_v, meta_v, regime_label):
+        if not use_confidence_learning:
+            info = _confidence_probe(direction, ss_v, bs_v, meta_v, regime_label)
+            info['allow'] = True
+            info['reason'] = 'off'
+            info['threshold_mult'] = 1.0
+            info['source'] = 'off'
+            return info
+        info = _confidence_probe(direction, ss_v, bs_v, meta_v, regime_label)
+        if info['raw'] < confidence_min_raw:
+            info['allow'] = False
+            info['reason'] = 'raw_low'
+            return info
+        if info['sample_n'] >= confidence_block_after_samples and info['posterior'] < confidence_min_posterior:
+            info['allow'] = False
+            info['reason'] = 'posterior_low'
+        return info
+
+    def _confidence_update_bucket(bucket, pnl_r):
+        bs = confidence_stats['bucket_stats'].setdefault(bucket, {
+            'n': 0, 'wins': 0, 'losses': 0, 'neutral': 0, 'sum_pnl_r': 0.0,
+        })
+        bs['n'] += 1
+        bs['sum_pnl_r'] += float(pnl_r)
+
+    def _confidence_update_model(direction, regime_label, bucket, pnl_r):
+        """平仓后更新在线置信度统计（regime + global 双轨）。"""
+        if not use_confidence_learning:
+            return
+        outcome = 'neutral'
+        if pnl_r >= confidence_win_pnl_r:
+            outcome = 'win'
+            confidence_stats['wins'] += 1
+        elif pnl_r <= confidence_loss_pnl_r:
+            outcome = 'loss'
+            confidence_stats['losses'] += 1
+        else:
+            confidence_stats['neutral'] += 1
+
+        confidence_stats['updates'] += 1
+        _confidence_update_bucket(bucket, pnl_r)
+        bstats = confidence_stats['bucket_stats'][bucket]
+        if outcome == 'win':
+            bstats['wins'] += 1
+        elif outcome == 'loss':
+            bstats['losses'] += 1
+        else:
+            bstats['neutral'] += 1
+
+        for key in (
+            _confidence_stat_key(direction, regime_label, bucket),
+            _confidence_stat_key(direction, 'all', bucket),
+        ):
+            st = _get_confidence_stat(key)
+            st['n'] += 1
+            st['sum_pnl_r'] += float(pnl_r)
+            if outcome == 'win':
+                st['wins'] += 1
+                st['alpha'] += 1.0
+            elif outcome == 'loss':
+                st['losses'] += 1
+                st['beta'] += 1.0
+            else:
+                st['neutral'] += 1
+                if pnl_r > 0:
+                    st['alpha'] += 0.35
+                    st['beta'] += 0.15
+                elif pnl_r < 0:
+                    st['alpha'] += 0.15
+                    st['beta'] += 0.35
+                else:
+                    st['alpha'] += 0.20
+                    st['beta'] += 0.20
+
+    def _build_signal_extra(direction, ss_v, bs_v, meta_v, conf_info):
+        """将共识与六书特征落到交易记录，便于复盘。"""
+        meta_v = meta_v if isinstance(meta_v, dict) else {}
+        decision = meta_v.get('decision', {}) if isinstance(meta_v, dict) else {}
+        out = {
+            'sig_direction': direction,
+            'sig_gap': round(abs(float(ss_v) - float(bs_v)), 4),
+            'sig_weighted_ss': round(float(meta_v.get('weighted_ss', ss_v) or 0.0), 4),
+            'sig_weighted_bs': round(float(meta_v.get('weighted_bs', bs_v) or 0.0), 4),
+            'sig_coverage': round(float(meta_v.get('coverage', 0.0) or 0.0), 4),
+            'sig_chain_len': int(meta_v.get('chain_len', 0) or 0),
+            'sig_chain_dir': str(meta_v.get('chain_dir', 'hold')),
+            'sig_decision_dir': str(decision.get('direction', 'hold')),
+            'sig_decision_actionable': bool(decision.get('actionable', False)),
+            'sig_decision_strength': round(float(decision.get('strength', 0.0) or 0.0), 2),
+            'sig_large_ss': round(float(meta_v.get('large_ss', 0.0) or 0.0), 4),
+            'sig_large_bs': round(float(meta_v.get('large_bs', 0.0) or 0.0), 4),
+            'sig_small_ss': round(float(meta_v.get('small_ss', 0.0) or 0.0), 4),
+            'sig_small_bs': round(float(meta_v.get('small_bs', 0.0) or 0.0), 4),
+        }
+        if isinstance(conf_info, dict):
+            out.update({
+                'sig_conf_raw': round(float(conf_info.get('raw', 0.0) or 0.0), 5),
+                'sig_conf_posterior': round(float(conf_info.get('posterior', 0.0) or 0.0), 5),
+                'sig_conf_effective': round(float(conf_info.get('effective', 0.0) or 0.0), 5),
+                'sig_conf_bucket': str(conf_info.get('bucket', 'na')),
+                'sig_conf_sample_n': int(conf_info.get('sample_n', 0) or 0),
+                'sig_conf_source': str(conf_info.get('source', 'na')),
+                'sig_conf_threshold_mult': round(float(conf_info.get('threshold_mult', 1.0) or 1.0), 5),
+                'sig_conf_gate_reason': str(conf_info.get('reason', '')),
+            })
+        book_feat = meta_v.get('book_features_weighted', {})
+        if isinstance(book_feat, dict):
+            for bk, bv in book_feat.items():
+                try:
+                    out[f'book_{bk}'] = round(float(bv), 5)
+                except (TypeError, ValueError):
+                    continue
+        return out
+
+    def _confidence_on_trade(tr):
+        """基于真实成交流做在线学习（开仓→分段TP→平仓）。"""
+        if not use_confidence_learning:
+            return
+        action = str(tr.get('action', ''))
+        direction = str(tr.get('direction', ''))
+        pnl_val = float(tr.get('pnl', 0.0) or 0.0)
+
+        if action == 'OPEN_SHORT':
+            confidence_open_ctx['short'] = {
+                'entry_margin': float(tr.get('margin', 0.0) or 0.0),
+                'partial_pnl': 0.0,
+                'bucket': str(tr.get('sig_conf_bucket', 'mid')),
+                'regime_label': str(tr.get('regime_label', 'unknown')),
+            }
+            return
+        if action == 'OPEN_LONG':
+            confidence_open_ctx['long'] = {
+                'entry_margin': float(tr.get('margin', 0.0) or 0.0),
+                'partial_pnl': 0.0,
+                'bucket': str(tr.get('sig_conf_bucket', 'mid')),
+                'regime_label': str(tr.get('regime_label', 'unknown')),
+            }
+            return
+
+        if action == 'PARTIAL_TP':
+            if direction in ('short', 'long') and confidence_open_ctx.get(direction):
+                confidence_open_ctx[direction]['partial_pnl'] += pnl_val
+            return
+
+        if action in ('CLOSE_SHORT', 'LIQUIDATED') and direction == 'short':
+            ctx = confidence_open_ctx.get('short')
+            if ctx:
+                total_pnl = float(ctx.get('partial_pnl', 0.0)) + pnl_val
+                margin = max(float(ctx.get('entry_margin', 0.0)), 1e-9)
+                pnl_r = total_pnl / margin
+                _confidence_update_model('short', ctx.get('regime_label', 'unknown'), ctx.get('bucket', 'mid'), pnl_r)
+            confidence_open_ctx['short'] = None
+            return
+
+        if action in ('CLOSE_LONG', 'LIQUIDATED') and direction == 'long':
+            ctx = confidence_open_ctx.get('long')
+            if ctx:
+                total_pnl = float(ctx.get('partial_pnl', 0.0)) + pnl_val
+                margin = max(float(ctx.get('entry_margin', 0.0)), 1e-9)
+                pnl_r = total_pnl / margin
+                _confidence_update_model('long', ctx.get('regime_label', 'unknown'), ctx.get('bucket', 'mid'), pnl_r)
+            confidence_open_ctx['long'] = None
+
+    # 连续止损保护：跟踪近期止损次数，连续止损时加倍冷却
+    _short_sl_streak = 0  # 连续空头止损计数
+    _long_sl_streak = 0   # 连续多头止损计数
+    short_sl_cd_mult = int(config.get('short_sl_cd_mult', 4))  # 空头止损后冷却倍数(原始=4)
+    long_sl_cd_mult = int(config.get('long_sl_cd_mult', 4))    # 多头止损后冷却倍数(原始=4)
 
     # 趋势持续状态 (跨bar持久, 带滞后)
     _trend_up_active = False  # 上升趋势一旦激活, 直到明确反转才关闭
@@ -876,6 +1590,7 @@ def _run_strategy_core(
     #    在下一根K线的 open 价执行。消除 same-bar execution bias。
     pending_ss = 0.0
     pending_bs = 0.0
+    pending_meta = {}
     has_pending_signal = False
     prot_state = _init_protection_state(config, eng.total_value(primary_df['close'].iloc[init_idx]))
     trade_cursor = 0
@@ -920,7 +1635,7 @@ def _run_strategy_core(
             if idx % record_interval == 0:
                 eng.record_history(dt, price)
             # 预热阶段也要生成信号供下一根使用(但不交易)
-            pending_ss, pending_bs = score_provider(idx, dt, price)
+            pending_ss, pending_bs, pending_meta = _safe_signal_triplet(score_provider(idx, dt, price))
             has_pending_signal = True
             continue
 
@@ -992,12 +1707,17 @@ def _run_strategy_core(
         # ── 使用上一根 bar 的信号做决策 (消除 same-bar bias) ──
         # 如果还没有 pending 信号(第一根交易bar), 使用前一根 bar 的信号
         if not has_pending_signal and idx > warmup:
-            pending_ss, pending_bs = score_provider(idx - 1,
-                                                     index_values[idx - 1],
-                                                     float(close_prices[idx - 1]))
+            pending_ss, pending_bs, pending_meta = _safe_signal_triplet(
+                score_provider(
+                    idx - 1,
+                    index_values[idx - 1],
+                    float(close_prices[idx - 1]),
+                )
+            )
             has_pending_signal = True
 
         ss, bs = (pending_ss, pending_bs) if has_pending_signal else (0.0, 0.0)
+        signal_meta = pending_meta if has_pending_signal else {}
 
         # ATR自适应止损 (use_atr_sl=True 时替代固定 short_sl)
         actual_short_sl = short_sl
@@ -1039,6 +1759,22 @@ def _run_strategy_core(
         eng._current_ss = round(ss, 1)
         eng._current_bs = round(bs, 1)
         eng._current_atr_pct = round(_atr_pct_val, 5) if _atr_pct_val > 0 else None
+        # 方向连续性: 跨 regime 跟踪信号连贯度，避免 neutral 段频繁“从0开始”
+        if ss > bs * 1.05 and ss >= 20:
+            _dir = 'short'
+        elif bs > ss * 1.05 and bs >= 20:
+            _dir = 'long'
+        else:
+            _dir = 'hold'
+        if _dir in ('short', 'long'):
+            if _dir == neutral_last_dir:
+                neutral_dir_streak += 1
+            else:
+                neutral_last_dir = _dir
+                neutral_dir_streak = 1
+        else:
+            neutral_last_dir = 'hold'
+            neutral_dir_streak = 0
         cur_sell_threshold = float(regime_ctl['sell_threshold'])
         cur_buy_threshold = float(regime_ctl['buy_threshold'])
         cur_short_threshold = float(regime_ctl['short_threshold'])
@@ -1097,6 +1833,12 @@ def _run_strategy_core(
         if ss > 0 and bs > 0:
             ratio = min(ss, bs) / max(ss, bs)
             in_conflict = ratio >= 0.6 and min(ss, bs) >= 15
+
+        # 信号置信度学习层（仅作用于合约开仓；现货用于复盘观测）
+        short_conf_info = _confidence_entry_gate('short', ss, bs, signal_meta, _regime_label)
+        long_conf_info = _confidence_entry_gate('long', ss, bs, signal_meta, _regime_label)
+        spot_sell_conf_info = _confidence_probe('short', ss, bs, signal_meta, _regime_label)
+        spot_buy_conf_info = _confidence_probe('long', ss, bs, signal_meta, _regime_label)
 
         # 是否启用趋势增强（现货底仓保护）
         # 可配置的引擎门控:
@@ -1208,7 +1950,11 @@ def _run_strategy_core(
             effective_sell_pct *= neutral_mid_ss_sell_ratio
 
         if not trend_floor_active and ss >= effective_sell_threshold and spot_cd == 0 and not in_conflict and eng.spot_eth * exec_price > 500 and spot_sell_confirmed and spot_sell_regime_ok:
-            eng.spot_sell(exec_price, dt, effective_sell_pct, f"卖出 SS={ss:.0f}", bar_low=_bar_low, bar_high=_bar_high)
+            _sell_extra = _build_signal_extra('short', ss, bs, signal_meta, spot_sell_conf_info)
+            eng.spot_sell(
+                exec_price, dt, effective_sell_pct, f"卖出 SS={ss:.0f}",
+                bar_low=_bar_low, bar_high=_bar_high, extra=_sell_extra
+            )
             spot_cd = effective_spot_cooldown
 
         # 先执行“反向平仓”再判断开仓：
@@ -1240,13 +1986,138 @@ def _run_strategy_core(
         if regime_short_threshold and _regime_label in regime_short_threshold:
             effective_short_threshold = max(effective_short_threshold,
                                             regime_short_threshold[_regime_label])
-        if short_cd == 0 and ss >= effective_short_threshold and not eng.futures_short and not eng.futures_long and sell_dom and not in_conflict and can_open_risk and not micro_block_short:
+        if use_confidence_learning:
+            _short_mult = float(short_conf_info.get('threshold_mult', 1.0) or 1.0)
+            effective_short_threshold = float(np.clip(effective_short_threshold * _short_mult, 5.0, 95.0))
+            confidence_stats['threshold_adj_short_avg'] += (_short_mult - 1.0)
+            confidence_stats['threshold_adj_short_n'] += 1
+        neutral_short_ok, neutral_short_reason = _neutral_gate_allow(
+            'short', ss, bs, signal_meta, _regime_label
+        )
+        neutral_struct_short_ok, neutral_struct_short_reason, neutral_struct_short_diag = _neutral_short_structure_allow(
+            ss, bs, signal_meta, _regime_label
+        )
+        if neutral_struct_short_reason == 'large_tf_bear_weak_soft':
+            _soft_mult = float(neutral_struct_short_diag.get('soft_threshold_mult', neutral_short_structure_soften_mult) or 1.0)
+            effective_short_threshold = float(np.clip(effective_short_threshold * _soft_mult, 5.0, 95.0))
+            neutral_short_structure_stats['soft_adjusted'] += 1
+        if use_neutral_short_structure_gate and _regime_label == 'neutral':
+            neutral_short_structure_stats['evaluated'] += 1
+            neutral_short_structure_stats['support_hits'] += int(neutral_struct_short_diag.get('support', 0))
+        if use_neutral_quality_gate and _regime_label == 'neutral' and not neutral_short_ok:
+            neutral_gate_stats['short_blocked'] += 1
+            _bc = neutral_gate_stats['blocked_reason_counts']
+            _bc[neutral_short_reason] = int(_bc.get(neutral_short_reason, 0)) + 1
+        # ── 六书共识门控 (空) ──
+        _bk_short_ok, _bk_short_reason, _bk_short_diag = _neutral_book_consensus_gate(
+            'short', ss, bs, signal_meta, _regime_label
+        )
+        if use_neutral_book_consensus and _regime_label == 'neutral' and not _bk_short_ok:
+            book_consensus_stats['short_blocked'] += 1
+            _brc = book_consensus_stats['reason_counts']
+            _brc[_bk_short_reason] = int(_brc.get(_bk_short_reason, 0)) + 1
+        # CS+KDJ 双确认 → 阈值微调 (奖励高判别力信号)
+        if (use_neutral_book_consensus and _regime_label == 'neutral'
+                and _bk_short_ok and _bk_short_diag.get('cs_kdj_confirm')):
+            effective_short_threshold = float(max(5.0, effective_short_threshold + neutral_book_cs_kdj_threshold_adj))
+            book_consensus_stats['cs_kdj_threshold_adj_count'] += 1
+            book_consensus_stats['cs_kdj_threshold_adj_sum'] += neutral_book_cs_kdj_threshold_adj
+        extreme_div_short_ok = True
+        extreme_div_short_reason = ''
+        _ext_div_sell = 0.0
+        _ext_nondiv_confirms = 0
+        _book_feat = signal_meta.get('book_features_weighted', {}) if isinstance(signal_meta, dict) else {}
+        if use_extreme_divergence_short_veto and _regime_label in extreme_div_short_regimes:
+            extreme_div_short_veto_stats['evaluated'] += 1
+            if isinstance(_book_feat, dict):
+                _ext_div_sell = float(_book_feat.get('div_sell', 0.0) or 0.0)
+                extreme_div_short_veto_stats['sum_div_sell'] += _ext_div_sell
+                _sell_keys = ('ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell')
+                _ext_nondiv_confirms = sum(
+                    1 for kk in _sell_keys
+                    if float(_book_feat.get(kk, 0.0) or 0.0) >= extreme_div_short_confirm_thr
+                )
+                extreme_div_short_veto_stats['sum_nondiv_confirms'] += float(_ext_nondiv_confirms)
+            if (_ext_div_sell >= extreme_div_short_threshold
+                    and _ext_nondiv_confirms < extreme_div_short_min_confirms):
+                extreme_div_short_ok = False
+                extreme_div_short_reason = 'extreme_divergence'
+                extreme_div_short_veto_stats['blocked'] += 1
+                _rc = extreme_div_short_veto_stats['reason_counts']
+                _rc[extreme_div_short_reason] = int(_rc.get(extreme_div_short_reason, 0)) + 1
+        # ── Neutral 结构质量: 计算确认数 (用于仓位调节, 不影响入场判断) ──
+        _struct_short_mult = 1.0
+        _struct_short_confirms = -1  # -1 = 未评估
+        if use_neutral_structural_discount and _regime_label == 'neutral' and isinstance(signal_meta, dict):
+            _sd_bf = signal_meta.get('book_features_weighted', {})
+            if isinstance(_sd_bf, dict) and _sd_bf:
+                _sd_keys = ('ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell')
+                _struct_short_confirms = sum(
+                    1 for kk in _sd_keys
+                    if float(_sd_bf.get(kk, 0) or 0) > neutral_struct_activity_thr
+                )
+                structural_discount_stats['evaluated'] += 1
+                structural_discount_stats['confirm_distribution'][min(_struct_short_confirms, 5)] += 1
+                if _struct_short_confirms <= 0:
+                    _struct_short_mult = neutral_struct_discount_0
+                elif _struct_short_confirms == 1:
+                    _struct_short_mult = neutral_struct_discount_1
+                elif _struct_short_confirms == 2:
+                    _struct_short_mult = neutral_struct_discount_2
+                elif _struct_short_confirms == 3:
+                    _struct_short_mult = neutral_struct_discount_3
+                else:
+                    _struct_short_mult = neutral_struct_discount_4plus
+                structural_discount_stats['sum_mult'] += _struct_short_mult
+                if _struct_short_mult < 1.0:
+                    structural_discount_stats['discount_applied'] += 1
+        _short_candidate_pre_struct = (
+            short_cd == 0 and ss >= effective_short_threshold
+            and not eng.futures_short and not eng.futures_long
+            and sell_dom and not in_conflict and can_open_risk
+            and not micro_block_short and neutral_short_ok
+            and _bk_short_ok and extreme_div_short_ok
+        )
+        _short_candidate = (
+            _short_candidate_pre_struct and neutral_struct_short_ok
+        )
+        if use_confidence_learning and _short_candidate and not short_conf_info.get('allow', True):
+            confidence_stats['short_blocked'] += 1
+            _cr = str(short_conf_info.get('reason', 'unknown'))
+            _cbc = confidence_stats['blocked_reason_counts']
+            _cbc[_cr] = int(_cbc.get(_cr, 0)) + 1
+        if use_neutral_short_structure_gate and _regime_label == 'neutral' and _short_candidate_pre_struct and not neutral_struct_short_ok:
+            neutral_short_structure_stats['blocked'] += 1
+            _r = str(neutral_struct_short_reason or 'unknown')
+            _rc = neutral_short_structure_stats['reason_counts']
+            _rc[_r] = int(_rc.get(_r, 0)) + 1
+        if _short_candidate and short_conf_info.get('allow', True):
             margin = eng.available_margin() * cur_margin_use
+            # ── Neutral 结构质量仓位调节: 弱共识信号减仓，保持交易时序不变 ──
+            if use_neutral_structural_discount and _regime_label == 'neutral' and _struct_short_mult < 1.0:
+                margin *= _struct_short_mult
             actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')
+            _short_extra = _build_signal_extra('short', ss, bs, signal_meta, short_conf_info)
+            _short_extra['sig_neutral_struct_support'] = int(neutral_struct_short_diag.get('support', 0))
+            _short_extra['sig_neutral_struct_conflict'] = int(neutral_struct_short_diag.get('conflict', 0))
+            _short_extra['sig_neutral_struct_checked'] = int(neutral_struct_short_diag.get('checked', 0))
+            _short_extra['sig_neutral_struct_reason'] = str(neutral_struct_short_reason or '')
+            _short_extra['sig_neutral_struct_soft_mult'] = float(
+                neutral_struct_short_diag.get('soft_threshold_mult', 1.0) or 1.0
+            )
+            _short_extra['sig_extreme_div_sell'] = float(_ext_div_sell)
+            _short_extra['sig_extreme_div_nondiv_confirms'] = int(_ext_nondiv_confirms)
+            _short_extra['sig_extreme_div_veto'] = bool(not extreme_div_short_ok)
+            _short_extra['sig_extreme_div_reason'] = str(extreme_div_short_reason or '')
+            _short_extra['sig_book_consensus_confirms'] = int(_bk_short_diag.get('confirms', 0))
+            _short_extra['sig_book_consensus_conflicts'] = int(_bk_short_diag.get('conflicts', 0))
+            _short_extra['sig_book_consensus_cs_kdj'] = bool(_bk_short_diag.get('cs_kdj_confirm', False))
+            _short_extra['sig_struct_discount_mult'] = float(_struct_short_mult)
+            _short_extra['sig_struct_confirms'] = int(_struct_short_confirms)
             eng.open_short(exec_price, dt, margin, actual_lev,
                 f"开空 {actual_lev}x SS={ss:.0f} BS={bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}",
-                bar_low=_bar_low, bar_high=_bar_high)
+                bar_low=_bar_low, bar_high=_bar_high, extra=_short_extra)
             short_max_pnl = 0; short_bars = 0; short_cd = cooldown
             short_just_opened = True; short_partial_done = False; short_partial2_done = False
             short_entry_ss = ss  # S5: 记录入场信号强度
@@ -1256,23 +2127,56 @@ def _run_strategy_core(
             short_bars += 1
             pnl_r = eng.futures_short.calc_pnl(price) / eng.futures_short.margin
 
+            # 结构化防守平空: 亏损扩大前检测“多头反向共识+MA冲突”，提前退出
+            if (
+                eng.futures_short and use_short_adverse_exit
+                and short_bars >= short_adverse_min_bars
+                and pnl_r <= short_adverse_loss_r
+            ):
+                short_adverse_exit_stats['evaluated'] += 1
+                _adv_ok, _adv_reason, _adv_diag = _short_adverse_exit_allow(
+                    ss, bs, signal_meta, _regime_label
+                )
+                if _adv_ok:
+                    eng.close_short(
+                        price, dt,
+                        f"防守平空 {pnl_r*100:.0f}% BS={bs:.0f}",
+                        bar_low=_bar_low, bar_high=_bar_high
+                    )
+                    short_adverse_exit_stats['triggered'] += 1
+                    short_adverse_exit_stats['sum_trigger_pnl_r'] += float(pnl_r)
+                    _rc = short_adverse_exit_stats['reason_counts']
+                    _rc['adverse_reversal'] = int(_rc.get('adverse_reversal', 0)) + 1
+                    _rg = short_adverse_exit_stats['regime_counts']
+                    _rk = str(_regime_label or 'unknown')
+                    _rg[_rk] = int(_rg.get(_rk, 0)) + 1
+                    _short_sl_streak = 0
+                    short_max_pnl = 0
+                    short_cd = cooldown * 2
+                    short_bars = 0
+                    short_partial_done = False
+                    short_partial2_done = False
+
             # 硬断路器: 绝对止损上限, 使用 bar HIGH 检测 intrabar 穿越
             # 空仓最坏情况 = bar内最高价(价格上涨对空头不利)
-            hard_sl = config.get('hard_stop_loss', -0.35)
-            _high_price = float(high_series.iloc[idx])
-            _worst_pnl_r_short = eng.futures_short.calc_pnl(_high_price) / eng.futures_short.margin
-            if _worst_pnl_r_short < hard_sl and eng.futures_short:
-                # 计算硬止损触发价格: (entry - stop_p) * qty / margin = hard_sl
-                # stop_p = entry - hard_sl * margin / qty
-                _sl_price = eng.futures_short.entry_price - hard_sl * eng.futures_short.margin / eng.futures_short.quantity
-                # 实际成交价不能比 bar HIGH 更差(取两者较优)
-                _sl_exec = min(_sl_price, _high_price)
-                eng.close_short(_sl_exec, dt, f"硬止损 {_worst_pnl_r_short*100:.0f}%→限{hard_sl*100:.0f}%",
-                                bar_low=_bar_low, bar_high=_bar_high)
-                short_max_pnl = 0; short_cd = cooldown * 5; short_bars = 0
-                short_partial_done = False; short_partial2_done = False
-                # P1修复: 止损后设置跨方向冷却, 防止同bar/快速反向开仓
-                long_cd = max(long_cd, cooldown * 3)
+            if eng.futures_short:
+                hard_sl = config.get('hard_stop_loss', -0.35)
+                _high_price = float(high_series.iloc[idx])
+                _worst_pnl_r_short = eng.futures_short.calc_pnl(_high_price) / eng.futures_short.margin
+                if _worst_pnl_r_short < hard_sl and eng.futures_short:
+                    # 计算硬止损触发价格: (entry - stop_p) * qty / margin = hard_sl
+                    # stop_p = entry - hard_sl * margin / qty
+                    _sl_price = eng.futures_short.entry_price - hard_sl * eng.futures_short.margin / eng.futures_short.quantity
+                    # 实际成交价不能比 bar HIGH 更差(取两者较优)
+                    _sl_exec = min(_sl_price, _high_price)
+                    eng.close_short(_sl_exec, dt, f"硬止损 {_worst_pnl_r_short*100:.0f}%→限{hard_sl*100:.0f}%",
+                                    bar_low=_bar_low, bar_high=_bar_high)
+                    _short_sl_streak += 1
+                    _streak_mult = 2 if _short_sl_streak >= 2 else 1  # 连续止损加倍冷却
+                    short_max_pnl = 0; short_cd = cooldown * 5 * _streak_mult; short_bars = 0
+                    short_partial_done = False; short_partial2_done = False
+                    # P1修复: 止损后设置跨方向冷却, 防止同bar/快速反向开仓
+                    long_cd = max(long_cd, cooldown * 3)
 
             # 一段止盈 (含滑点 + 修复frozen_margin泄漏)
             # v3分段止盈: 更早触发 (+12%/+25% vs 默认 +15%/+50%)
@@ -1331,6 +2235,7 @@ def _run_strategy_core(
 
             if pnl_r >= actual_short_tp:
                 eng.close_short(price, dt, f"止盈 +{pnl_r*100:.0f}%", bar_low=_bar_low, bar_high=_bar_high)
+                _short_sl_streak = 0  # 盈利退出重置连续止损计数
                 short_max_pnl = 0; short_cd = cooldown * 2; short_bars = 0
                 short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
             else:
@@ -1346,6 +2251,7 @@ def _run_strategy_core(
                         eng.close_short(price, dt,
                             f"追踪止盈 max={short_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
                             bar_low=_bar_low, bar_high=_bar_high)
+                        _short_sl_streak = 0  # 盈利退出重置连续止损计数
                         short_max_pnl = 0; short_cd = cooldown; short_bars = 0
                         short_partial_done = False; short_partial2_done = False
                 # P1a: 空单 NoTP 提前退出（长短独立 + regime 白名单）
@@ -1365,6 +2271,7 @@ def _run_strategy_core(
                     eng.close_short(price, dt,
                         f"NoTP退出[{_regime_label}] {short_bars}bar pnl={pnl_r*100:.0f}%",
                         bar_low=_bar_low, bar_high=_bar_high)
+                    _short_sl_streak = 0  # 任何非止损出场都重置连续计数
                     short_max_pnl = 0; short_cd = cooldown * 2; short_bars = 0
                     short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_short and short_bars >= reverse_min_hold_short and bs >= cur_close_short_bs:
@@ -1372,6 +2279,7 @@ def _run_strategy_core(
                     if bs_dom:
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
                         eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}", bar_low=_bar_low, bar_high=_bar_high)
+                        _short_sl_streak = 0  # 盈利退出重置连续止损计数
                         short_max_pnl = 0; short_cd = cooldown * 3; short_bars = 0
                         short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 # 常规止损: 用收盘确认触发(降低 wick 噪音), 但成交价封顶到止损价
@@ -1390,11 +2298,14 @@ def _run_strategy_core(
                     eng.close_short(_sl_exec, dt,
                         f"{_sl_label} {pnl_r*100:.0f}%→限{_eff_short_sl*100:.0f}%",
                         bar_low=_bar_low, bar_high=_bar_high)
-                    short_max_pnl = 0; short_cd = cooldown * 4; short_bars = 0
+                    _short_sl_streak += 1
+                    _streak_mult = 2 if _short_sl_streak >= 2 else 1  # 连续止损加倍冷却
+                    short_max_pnl = 0; short_cd = cooldown * short_sl_cd_mult * _streak_mult; short_bars = 0
                     short_partial_done = False; short_partial2_done = False
                 if eng.futures_short and short_bars >= int(max(3, short_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_short(exec_price, dt, "超时", bar_low=_bar_low, bar_high=_bar_high)
+                    _short_sl_streak = 0  # 任何非止损出场都重置连续计数
                     short_max_pnl = 0; short_cd = cooldown; short_bars = 0
                     short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
         elif eng.futures_short and short_just_opened:
@@ -1414,8 +2325,11 @@ def _run_strategy_core(
                 effective_buy_threshold = min(cur_buy_threshold, 18)
                 effective_buy_pct = min(0.50, (target_ratio - eth_ratio) + 0.15)
         if bs >= effective_buy_threshold and spot_cd == 0 and not in_conflict and eng.available_usdt() > 500 and can_open_risk:
-            eng.spot_buy(exec_price, dt, eng.available_usdt() * effective_buy_pct, f"买入 BS={bs:.0f}",
-                         bar_low=_bar_low, bar_high=_bar_high)
+            _buy_extra = _build_signal_extra('long', ss, bs, signal_meta, spot_buy_conf_info)
+            eng.spot_buy(
+                exec_price, dt, eng.available_usdt() * effective_buy_pct, f"买入 BS={bs:.0f}",
+                bar_low=_bar_low, bar_high=_bar_high, extra=_buy_extra
+            )
             spot_cd = spot_cooldown
 
         # 开多 (用 exec_price 执行, 即本bar open)
@@ -1450,13 +2364,88 @@ def _run_strategy_core(
                     if raw_big_bs > raw_big_ss * 1.2:  # 大周期买方占优
                         trend_long_bs = raw_big_bs
                         buy_dom = True
-        if long_cd == 0 and trend_long_bs >= effective_long_threshold and not eng.futures_long and not eng.futures_short and buy_dom and not in_conflict and can_open_risk and not micro_block_long:
+        # 做多置信度使用最终的 trend_long_bs（含大周期兜底后的决策输入）
+        long_conf_info = _confidence_entry_gate('long', ss, trend_long_bs, signal_meta, _regime_label)
+        neutral_long_ok, neutral_long_reason = _neutral_gate_allow(
+            'long', ss, trend_long_bs, signal_meta, _regime_label
+        )
+        if use_neutral_quality_gate and _regime_label == 'neutral' and not neutral_long_ok:
+            neutral_gate_stats['long_blocked'] += 1
+            _bc = neutral_gate_stats['blocked_reason_counts']
+            _bc[neutral_long_reason] = int(_bc.get(neutral_long_reason, 0)) + 1
+        # ── 六书共识门控 (多) ──
+        _bk_long_ok, _bk_long_reason, _bk_long_diag = _neutral_book_consensus_gate(
+            'long', ss, trend_long_bs, signal_meta, _regime_label
+        )
+        if use_neutral_book_consensus and _regime_label == 'neutral' and not _bk_long_ok:
+            book_consensus_stats['long_blocked'] += 1
+            _brc = book_consensus_stats['reason_counts']
+            _brc[_bk_long_reason] = int(_brc.get(_bk_long_reason, 0)) + 1
+        # CS+KDJ 双确认 → 阈值微调 (多)
+        if (use_neutral_book_consensus and _regime_label == 'neutral'
+                and _bk_long_ok and _bk_long_diag.get('cs_kdj_confirm')):
+            effective_long_threshold = float(max(5.0, effective_long_threshold + neutral_book_cs_kdj_threshold_adj))
+            book_consensus_stats['cs_kdj_threshold_adj_count'] += 1
+            book_consensus_stats['cs_kdj_threshold_adj_sum'] += neutral_book_cs_kdj_threshold_adj
+        if use_confidence_learning:
+            _long_mult = float(long_conf_info.get('threshold_mult', 1.0) or 1.0)
+            effective_long_threshold = float(np.clip(effective_long_threshold * _long_mult, 5.0, 95.0))
+            confidence_stats['threshold_adj_long_avg'] += (_long_mult - 1.0)
+            confidence_stats['threshold_adj_long_n'] += 1
+        # ── Neutral 结构质量: 计算确认数 (做多, 用于仓位调节) ──
+        _struct_long_mult = 1.0
+        _struct_long_confirms = -1
+        if use_neutral_structural_discount and _regime_label == 'neutral' and isinstance(signal_meta, dict):
+            _sd_bf_l = signal_meta.get('book_features_weighted', {})
+            if isinstance(_sd_bf_l, dict) and _sd_bf_l:
+                _sd_keys_l = ('ma_buy', 'cs_buy', 'bb_buy', 'vp_buy', 'kdj_buy')
+                _struct_long_confirms = sum(
+                    1 for kk in _sd_keys_l
+                    if float(_sd_bf_l.get(kk, 0) or 0) > neutral_struct_activity_thr
+                )
+                structural_discount_stats['evaluated'] += 1
+                structural_discount_stats['confirm_distribution'][min(_struct_long_confirms, 5)] += 1
+                if _struct_long_confirms <= 0:
+                    _struct_long_mult = neutral_struct_discount_0
+                elif _struct_long_confirms == 1:
+                    _struct_long_mult = neutral_struct_discount_1
+                elif _struct_long_confirms == 2:
+                    _struct_long_mult = neutral_struct_discount_2
+                elif _struct_long_confirms == 3:
+                    _struct_long_mult = neutral_struct_discount_3
+                else:
+                    _struct_long_mult = neutral_struct_discount_4plus
+                structural_discount_stats['sum_mult'] += _struct_long_mult
+                if _struct_long_mult < 1.0:
+                    structural_discount_stats['discount_applied'] += 1
+        _long_candidate = (
+            long_cd == 0 and trend_long_bs >= effective_long_threshold
+            and not eng.futures_long and not eng.futures_short
+            and buy_dom and not in_conflict and can_open_risk
+            and not micro_block_long and neutral_long_ok
+            and _bk_long_ok
+        )
+        if use_confidence_learning and _long_candidate and not long_conf_info.get('allow', True):
+            confidence_stats['long_blocked'] += 1
+            _cr = str(long_conf_info.get('reason', 'unknown'))
+            _cbc = confidence_stats['blocked_reason_counts']
+            _cbc[_cr] = int(_cbc.get(_cr, 0)) + 1
+        if _long_candidate and long_conf_info.get('allow', True):
             margin = eng.available_margin() * cur_margin_use
+            # ── Neutral 结构质量仓位调节 (做多) ──
+            if use_neutral_structural_discount and _regime_label == 'neutral' and _struct_long_mult < 1.0:
+                margin *= _struct_long_mult
             actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')
+            _long_extra = _build_signal_extra('long', ss, trend_long_bs, signal_meta, long_conf_info)
+            _long_extra['sig_book_consensus_confirms'] = int(_bk_long_diag.get('confirms', 0))
+            _long_extra['sig_book_consensus_conflicts'] = int(_bk_long_diag.get('conflicts', 0))
+            _long_extra['sig_book_consensus_cs_kdj'] = bool(_bk_long_diag.get('cs_kdj_confirm', False))
+            _long_extra['sig_struct_discount_mult'] = float(_struct_long_mult)
+            _long_extra['sig_struct_confirms'] = int(_struct_long_confirms)
             eng.open_long(exec_price, dt, margin, actual_lev,
                 f"开多 {actual_lev}x SS={ss:.0f} BS={trend_long_bs:.0f} R={_regime_label} ATR={_atr_pct_val:.3f}",
-                bar_low=_bar_low, bar_high=_bar_high)
+                bar_low=_bar_low, bar_high=_bar_high, extra=_long_extra)
             long_max_pnl = 0; long_bars = 0; long_cd = cooldown
             long_just_opened = True; long_partial_done = False; long_partial2_done = False
             long_entry_bs = trend_long_bs  # S5: 记录入场信号强度
@@ -1478,7 +2467,9 @@ def _run_strategy_core(
                 _sl_exec = max(_sl_price, _low_price)
                 eng.close_long(_sl_exec, dt, f"硬止损 {_worst_pnl_r_long*100:.0f}%→限{hard_sl*100:.0f}%",
                                bar_low=_bar_low, bar_high=_bar_high)
-                long_max_pnl = 0; long_cd = cooldown * 5; long_bars = 0
+                _long_sl_streak += 1
+                _streak_mult = 2 if _long_sl_streak >= 2 else 1
+                long_max_pnl = 0; long_cd = cooldown * 5 * _streak_mult; long_bars = 0
                 long_partial_done = False; long_partial2_done = False
                 # P1修复: 止损后设置跨方向冷却
                 short_cd = max(short_cd, cooldown * 3)
@@ -1539,6 +2530,7 @@ def _run_strategy_core(
 
             if pnl_r >= actual_long_tp:
                 eng.close_long(price, dt, f"止盈 +{pnl_r*100:.0f}%", bar_low=_bar_low, bar_high=_bar_high)
+                _long_sl_streak = 0
                 long_max_pnl = 0; long_cd = cooldown * 2; long_bars = 0
                 long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
             else:
@@ -1554,6 +2546,7 @@ def _run_strategy_core(
                         eng.close_long(price, dt,
                             f"追踪止盈 max={long_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
                             bar_low=_bar_low, bar_high=_bar_high)
+                        _long_sl_streak = 0
                         long_max_pnl = 0; long_cd = cooldown; long_bars = 0
                         long_partial_done = False; long_partial2_done = False
                 # P1: 多仓 NoTP 提前退出（长短独立 + regime 白名单）
@@ -1573,6 +2566,7 @@ def _run_strategy_core(
                     eng.close_long(price, dt,
                         f"NoTP退出多[{_regime_label}] {long_bars}bar pnl={pnl_r*100:.0f}%",
                         bar_low=_bar_low, bar_high=_bar_high)
+                    _long_sl_streak = 0
                     long_max_pnl = 0; long_cd = cooldown * 2; long_bars = 0
                     long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_long and long_bars >= reverse_min_hold_long and ss >= cur_close_long_ss:
@@ -1580,6 +2574,7 @@ def _run_strategy_core(
                     if ss_dom:
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
                         eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}", bar_low=_bar_low, bar_high=_bar_high)
+                        _long_sl_streak = 0
                         long_max_pnl = 0; long_cd = cooldown * 3; long_bars = 0
                         long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 # 常规止损: 用收盘确认触发(降低 wick 噪音), 但成交价封顶到止损价
@@ -1597,21 +2592,25 @@ def _run_strategy_core(
                     eng.close_long(_sl_exec, dt,
                         f"{_sl_label} {pnl_r*100:.0f}%→限{_eff_long_sl*100:.0f}%",
                         bar_low=_bar_low, bar_high=_bar_high)
-                    long_max_pnl = 0; long_cd = cooldown * 4; long_bars = 0
+                    _long_sl_streak += 1
+                    _streak_mult = 2 if _long_sl_streak >= 2 else 1
+                    long_max_pnl = 0; long_cd = cooldown * long_sl_cd_mult * _streak_mult; long_bars = 0
                     long_partial_done = False; long_partial2_done = False
                 if eng.futures_long and long_bars >= int(max(3, long_max_hold * hold_mult)):
                     # 超时平仓为主观决策, 用 exec_price
                     eng.close_long(exec_price, dt, "超时", bar_low=_bar_low, bar_high=_bar_high)
+                    _long_sl_streak = 0
                     long_max_pnl = 0; long_cd = cooldown; long_bars = 0
                     long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
         elif eng.futures_long and long_just_opened:
             long_bars = 1
 
         if len(eng.trades) > trade_cursor:
-            if prot_state.get('enabled', False):
-                for tr in eng.trades[trade_cursor:]:
+            for tr in eng.trades[trade_cursor:]:
+                if prot_state.get('enabled', False):
                     pnl = _extract_realized_pnl_from_trade(tr)
                     _apply_loss_streak_protection(prot_state, pnl, idx, config)
+                _confidence_on_trade(tr)
             trade_cursor = len(eng.trades)
 
         # 资金曲线记录策略：
@@ -1629,7 +2628,7 @@ def _run_strategy_core(
             eng.record_history(dt, price)
 
         # ── 在当前 bar 收盘后计算信号, 供下一根 bar 执行 ──
-        pending_ss, pending_bs = score_provider(idx, dt, price)
+        pending_ss, pending_bs, pending_meta = _safe_signal_triplet(score_provider(idx, dt, price))
         has_pending_signal = True
 
     # 期末平仓: 若指定 end_dt，则在 end_dt 所在窗口结束价结算。
@@ -1655,8 +2654,89 @@ def _run_strategy_core(
     if end_dt is not None:
         trade_df = trade_df[trade_df.index <= end_dt]
 
+    def _build_confidence_result():
+        if not use_confidence_learning:
+            return None
+        out = dict(confidence_stats)
+        ns = max(1, int(out.get('threshold_adj_short_n', 0)))
+        nl = max(1, int(out.get('threshold_adj_long_n', 0)))
+        out['threshold_adj_short_avg'] = round(float(out.get('threshold_adj_short_avg', 0.0)) / ns, 6)
+        out['threshold_adj_long_avg'] = round(float(out.get('threshold_adj_long_avg', 0.0)) / nl, 6)
+        bstats = out.get('bucket_stats', {})
+        for bk, bv in bstats.items():
+            n = max(1, int(bv.get('n', 0)))
+            bv['avg_pnl_r'] = round(float(bv.get('sum_pnl_r', 0.0)) / n, 6)
+            bv['win_rate'] = round(float(bv.get('wins', 0)) / n, 4)
+            bv.pop('sum_pnl_r', None)
+        return out
+
+    def _build_short_adverse_exit_result():
+        if not use_short_adverse_exit:
+            return None
+        out = dict(short_adverse_exit_stats)
+        tn = max(1, int(out.get('triggered', 0)))
+        out['avg_trigger_pnl_r'] = round(float(out.get('sum_trigger_pnl_r', 0.0)) / tn, 6)
+        out.pop('sum_trigger_pnl_r', None)
+        out.update({
+            'min_bars': short_adverse_min_bars,
+            'loss_r': short_adverse_loss_r,
+            'bs': short_adverse_bs,
+            'bs_dom_ratio': short_adverse_bs_dom_ratio,
+            'ss_cap': short_adverse_ss_cap,
+            'require_bs_dom': short_adverse_require_bs_dom,
+            'ma_conflict_gap': short_adverse_ma_conflict_gap,
+            'conflict_thr': short_adverse_conflict_thr,
+            'min_conflicts': short_adverse_min_conflicts,
+            'need_cs_kdj': short_adverse_need_cs_kdj,
+            'large_bs_min': short_adverse_large_bs_min,
+            'large_ratio': short_adverse_large_ratio,
+            'need_chain_long': short_adverse_need_chain_long,
+            'regimes': sorted(list(short_adverse_regimes)),
+        })
+        return out
+
+    def _build_extreme_div_short_veto_result():
+        if not use_extreme_divergence_short_veto:
+            return None
+        out = dict(extreme_div_short_veto_stats)
+        ev = max(1, int(out.get('evaluated', 0)))
+        out['avg_div_sell'] = round(float(out.get('sum_div_sell', 0.0)) / ev, 4)
+        out['avg_nondiv_confirms'] = round(float(out.get('sum_nondiv_confirms', 0.0)) / ev, 4)
+        out.pop('sum_div_sell', None)
+        out.pop('sum_nondiv_confirms', None)
+        out.update({
+            'threshold': extreme_div_short_threshold,
+            'confirm_thr': extreme_div_short_confirm_thr,
+            'min_confirms': extreme_div_short_min_confirms,
+            'regimes': sorted(list(extreme_div_short_regimes)),
+        })
+        return out
+
     if len(trade_df) > 1:
         result = eng.get_result(trade_df)
+        if use_neutral_quality_gate:
+            result['neutral_quality_gate'] = {
+                **neutral_gate_stats,
+                'neutral_min_streak': neutral_min_streak,
+                'neutral_min_strength': neutral_min_strength,
+                'neutral_min_score_gap': neutral_min_score_gap,
+            }
+        if use_neutral_short_structure_gate:
+            _nss = dict(neutral_short_structure_stats)
+            _ev = max(1, int(_nss.get('evaluated', 0)))
+            _nss['support_avg'] = round(float(_nss.get('support_hits', 0)) / _ev, 4)
+            _nss.update({
+                'large_tfs': list(neutral_short_structure_large_tfs),
+                'need_min_tfs': neutral_short_structure_need_min_tfs,
+                'min_agree': neutral_short_structure_min_agree,
+                'div_gap': neutral_short_structure_div_gap,
+                'ma_gap': neutral_short_structure_ma_gap,
+                'vp_gap': neutral_short_structure_vp_gap,
+                'fail_open': neutral_short_structure_fail_open,
+                'soften_weak': neutral_short_structure_soften_weak,
+                'soften_mult': neutral_short_structure_soften_mult,
+            })
+            result['neutral_short_structure_gate'] = _nss
         if prot_state.get('enabled', False):
             result['protections'] = {
                 **prot_state.get('stats', {}),
@@ -1667,9 +2747,50 @@ def _run_strategy_core(
                 'daily_pnl_pct': round(float(prot_state.get('daily_pnl_pct', 0.0)) * 100, 2),
                 'drawdown_from_peak_pct': round(float(prot_state.get('drawdown_from_peak_pct', 0.0)) * 100, 2),
             }
+        _cl = _build_confidence_result()
+        if _cl:
+            result['confidence_learning'] = _cl
+        _sa = _build_short_adverse_exit_result()
+        if _sa:
+            result['short_adverse_exit'] = _sa
+        _dv = _build_extreme_div_short_veto_result()
+        if _dv:
+            result['extreme_div_short_veto'] = _dv
         return result
 
     result = eng.get_result(primary_df)
+    if use_neutral_quality_gate:
+        result['neutral_quality_gate'] = {
+            **neutral_gate_stats,
+            'neutral_min_streak': neutral_min_streak,
+            'neutral_min_strength': neutral_min_strength,
+            'neutral_min_score_gap': neutral_min_score_gap,
+        }
+    if use_neutral_short_structure_gate:
+        _nss = dict(neutral_short_structure_stats)
+        _ev = max(1, int(_nss.get('evaluated', 0)))
+        _nss['support_avg'] = round(float(_nss.get('support_hits', 0)) / _ev, 4)
+        _nss.update({
+            'large_tfs': list(neutral_short_structure_large_tfs),
+            'need_min_tfs': neutral_short_structure_need_min_tfs,
+            'min_agree': neutral_short_structure_min_agree,
+            'div_gap': neutral_short_structure_div_gap,
+            'ma_gap': neutral_short_structure_ma_gap,
+            'vp_gap': neutral_short_structure_vp_gap,
+            'fail_open': neutral_short_structure_fail_open,
+            'soften_weak': neutral_short_structure_soften_weak,
+            'soften_mult': neutral_short_structure_soften_mult,
+        })
+        result['neutral_short_structure_gate'] = _nss
+    if use_neutral_book_consensus:
+        result['book_consensus_gate'] = {
+            **book_consensus_stats,
+            'sell_threshold': neutral_book_sell_threshold,
+            'buy_threshold': neutral_book_buy_threshold,
+            'min_confirms': neutral_book_min_confirms,
+            'max_conflicts': neutral_book_max_conflicts,
+            'cs_kdj_threshold_adj': neutral_book_cs_kdj_threshold_adj,
+        }
     if prot_state.get('enabled', False):
         result['protections'] = {
             **prot_state.get('stats', {}),
@@ -1680,6 +2801,15 @@ def _run_strategy_core(
             'daily_pnl_pct': round(float(prot_state.get('daily_pnl_pct', 0.0)) * 100, 2),
             'drawdown_from_peak_pct': round(float(prot_state.get('drawdown_from_peak_pct', 0.0)) * 100, 2),
         }
+    _cl = _build_confidence_result()
+    if _cl:
+        result['confidence_learning'] = _cl
+    _sa = _build_short_adverse_exit_result()
+    if _sa:
+        result['short_adverse_exit'] = _sa
+    _dv = _build_extreme_div_short_veto_result()
+    if _dv:
+        result['extreme_div_short_veto'] = _dv
     return result
 
 
@@ -1695,7 +2825,8 @@ def run_strategy(
     """在指定时间框架上运行六书策略回测。"""
 
     def _single_tf_score(idx, dt, _price):
-        return calc_fusion_score_six(signals, df, idx, dt, config)
+        ss, bs = calc_fusion_score_six(signals, df, idx, dt, config)
+        return ss, bs, {}
 
     return _run_strategy_core(
         df,
@@ -1736,18 +2867,20 @@ def _build_tf_score_index(all_data, all_signals, tfs, config):
     """
     from signal_core import calc_fusion_score_six_batch
 
-    tf_score_map = {'__lookup_cache__': {}}
+    tf_score_map = {'__lookup_cache__': {}, '__feature_map__': {}}
     WARMUP_BARS = 200
     for tf in tfs:
         df = all_data[tf]
         sigs = all_signals[tf]
         warmup = min(max(60, WARMUP_BARS), len(df) - 1)
 
-        score_dict, ordered_ts = calc_fusion_score_six_batch(
+        score_dict, ordered_ts, feature_dict = calc_fusion_score_six_batch(
             sigs, df, config, warmup=warmup,
+            return_features=True,
         )
 
         tf_score_map[tf] = score_dict
+        tf_score_map['__feature_map__'][tf] = feature_dict
         tf_score_map['__lookup_cache__'][tf] = {
             'times': ordered_ts,
             'cursor': 0,
@@ -1835,6 +2968,76 @@ def _get_tf_score_at(tf_score_map, tf, dt, with_valid=False):
     return (ss, bs, True) if with_valid else (ss, bs)
 
 
+def _get_tf_feature_at(tf_score_map, tf, dt, with_valid=False):
+    """
+    读取 tf 在 dt 的六书特征快照（按时效衰减）。
+
+    返回:
+      with_valid=False: feature_dict 或 {}
+      with_valid=True : (feature_dict, valid)
+    """
+    feature_root = tf_score_map.get('__feature_map__', {})
+    features = feature_root.get(tf)
+    if not features:
+        return ({}, False) if with_valid else {}
+
+    # 精确匹配
+    if dt in features:
+        feat = features[dt]
+        return (dict(feat), True) if with_valid else dict(feat)
+
+    # 对齐到 <= dt 的最近评分时间
+    score_map = tf_score_map.get(tf, {})
+    cache = _ensure_tf_lookup_cache(tf_score_map, tf, score_map)
+    times = cache.get('times', [])
+    if not times:
+        return ({}, False) if with_valid else {}
+    if dt < times[0]:
+        return ({}, False) if with_valid else {}
+
+    if dt >= times[-1]:
+        pos = len(times) - 1
+    else:
+        cursor = int(cache.get('cursor', 0))
+        if cursor < 0 or cursor >= len(times):
+            cursor = 0
+        if times[cursor] <= dt:
+            while cursor + 1 < len(times) and times[cursor + 1] <= dt:
+                cursor += 1
+            pos = cursor
+        else:
+            pos = bisect_right(times, dt) - 1
+            if pos < 0:
+                return ({}, False) if with_valid else {}
+
+    cache['cursor'] = pos
+    nearest = times[pos]
+    feat = features.get(nearest)
+    if not feat:
+        return ({}, False) if with_valid else {}
+
+    tf_mins = _MTF_MINUTES.get(tf, 60)
+    age_secs = (dt - nearest).total_seconds()
+    period_secs = tf_mins * 60
+    age_periods = age_secs / period_secs if period_secs > 0 else 999
+    if age_periods <= 1.0:
+        decay = 1.0
+    elif age_periods >= 4.0:
+        decay = 0.0
+    else:
+        decay = max(0.0, 1.0 - (age_periods - 1.0) / 3.0)
+    if decay <= 0.01:
+        return ({}, False) if with_valid else {}
+
+    out = {}
+    for k, v in feat.items():
+        try:
+            out[k] = float(v) * decay
+        except (TypeError, ValueError):
+            out[k] = v
+    return (out, True) if with_valid else out
+
+
 def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
     """
     在指定时刻 dt 计算多周期加权共识评分。
@@ -1846,10 +3049,29 @@ def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
     """
     # 从预计算索引中查找当前时刻各TF的分数
     tf_scores = {}
+    tf_book_features = {}
+    book_keys = (
+        'div_sell', 'div_buy',
+        'ma_sell', 'ma_buy',
+        'cs_sell', 'cs_buy',
+        'bb_sell', 'bb_buy',
+        'vp_sell', 'vp_buy',
+        'kdj_sell', 'kdj_buy',
+        'ma_arr_bonus_sell', 'ma_arr_bonus_buy',
+    )
+    book_weighted = {k: 0.0 for k in book_keys}
+    book_w_sum = 0.0
     for tf in decision_tfs:
         ss, bs, valid = _get_tf_score_at(tf_score_map, tf, dt, with_valid=True)
         if valid:
             tf_scores[tf] = (ss, bs)
+            feat, feat_valid = _get_tf_feature_at(tf_score_map, tf, dt, with_valid=True)
+            if feat_valid and feat:
+                tf_book_features[tf] = feat
+                w = float(_MTF_WEIGHT.get(tf, 5))
+                for k in book_keys:
+                    book_weighted[k] += float(feat.get(k, 0.0) or 0.0) * w
+                book_w_sum += w
 
     # 覆盖率门控可配置:
     # - 传统回测: coverage_min=0.0 (不门控)
@@ -1870,6 +3092,16 @@ def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
     meta["decision"] = result.get("decision", {})
     meta["coverage"] = result.get("coverage", 0.0)
     meta["weighted_scores"] = result.get("weighted_scores", {})
+    meta["weighted_ss"] = float(result.get("weighted_ss", 0.0))
+    meta["weighted_bs"] = float(result.get("weighted_bs", 0.0))
+    meta["tf_consensus_scores"] = result.get("tf_scores", {})
+    meta["book_features_by_tf"] = tf_book_features
+    if book_w_sum > 0:
+        meta["book_features_weighted"] = {
+            k: float(v / book_w_sum) for k, v in book_weighted.items()
+        }
+    else:
+        meta["book_features_weighted"] = {}
     return result["weighted_ss"], result["weighted_bs"], meta
 
 
@@ -1915,7 +3147,7 @@ def run_strategy_multi_tf(
     def _multi_tf_score(_idx, dt, _price):
         ss, bs, meta = calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config)
         ss, bs = _apply_live_parity_gate(ss, bs, meta, config)
-        return ss, bs
+        return ss, bs, meta
 
     return _run_strategy_core(
         primary_df,

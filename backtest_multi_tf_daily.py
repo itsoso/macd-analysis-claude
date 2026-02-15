@@ -205,6 +205,77 @@ def _build_default_config():
         'vol_target_max_scale': _LIVE_DEFAULT.vol_target_max_scale,
         # ── S1: Neutral regime做空门槛覆盖 ──
         'regime_short_threshold': _LIVE_DEFAULT.regime_short_threshold,
+        # ── S1.5: neutral 信号质量门控 ──
+        'use_neutral_quality_gate': _LIVE_DEFAULT.use_neutral_quality_gate,
+        'neutral_min_score_gap': _LIVE_DEFAULT.neutral_min_score_gap,
+        'neutral_min_strength': _LIVE_DEFAULT.neutral_min_strength,
+        'neutral_min_streak': _LIVE_DEFAULT.neutral_min_streak,
+        'neutral_nochain_extra_gap': _LIVE_DEFAULT.neutral_nochain_extra_gap,
+        'neutral_large_conflict_ratio': _LIVE_DEFAULT.neutral_large_conflict_ratio,
+        # ── 信号置信度学习层 ──
+        'use_confidence_learning': _LIVE_DEFAULT.use_confidence_learning,
+        'confidence_min_raw': _LIVE_DEFAULT.confidence_min_raw,
+        'confidence_min_posterior': _LIVE_DEFAULT.confidence_min_posterior,
+        'confidence_min_samples': _LIVE_DEFAULT.confidence_min_samples,
+        'confidence_block_after_samples': _LIVE_DEFAULT.confidence_block_after_samples,
+        'confidence_threshold_gain': _LIVE_DEFAULT.confidence_threshold_gain,
+        'confidence_threshold_min_mult': _LIVE_DEFAULT.confidence_threshold_min_mult,
+        'confidence_threshold_max_mult': _LIVE_DEFAULT.confidence_threshold_max_mult,
+        'confidence_prior_alpha': _LIVE_DEFAULT.confidence_prior_alpha,
+        'confidence_prior_beta': _LIVE_DEFAULT.confidence_prior_beta,
+        'confidence_win_pnl_r': _LIVE_DEFAULT.confidence_win_pnl_r,
+        'confidence_loss_pnl_r': _LIVE_DEFAULT.confidence_loss_pnl_r,
+        # ── Neutral 六书共识门控 ──
+        'use_neutral_book_consensus': _LIVE_DEFAULT.use_neutral_book_consensus,
+        'neutral_book_sell_threshold': _LIVE_DEFAULT.neutral_book_sell_threshold,
+        'neutral_book_buy_threshold': _LIVE_DEFAULT.neutral_book_buy_threshold,
+        'neutral_book_min_confirms': _LIVE_DEFAULT.neutral_book_min_confirms,
+        'neutral_book_max_conflicts': _LIVE_DEFAULT.neutral_book_max_conflicts,
+        'neutral_book_cs_kdj_threshold_adj': _LIVE_DEFAULT.neutral_book_cs_kdj_threshold_adj,
+        # Neutral 结构质量渐进折扣
+        'use_neutral_structural_discount': _LIVE_DEFAULT.use_neutral_structural_discount,
+        'neutral_struct_activity_thr': _LIVE_DEFAULT.neutral_struct_activity_thr,
+        'neutral_struct_discount_0': _LIVE_DEFAULT.neutral_struct_discount_0,
+        'neutral_struct_discount_1': _LIVE_DEFAULT.neutral_struct_discount_1,
+        'neutral_struct_discount_2': _LIVE_DEFAULT.neutral_struct_discount_2,
+        'neutral_struct_discount_3': _LIVE_DEFAULT.neutral_struct_discount_3,
+        'neutral_struct_discount_4plus': _LIVE_DEFAULT.neutral_struct_discount_4plus,
+        # neutral short 结构确认器
+        'use_neutral_short_structure_gate': _LIVE_DEFAULT.use_neutral_short_structure_gate,
+        'neutral_short_structure_large_tfs': _LIVE_DEFAULT.neutral_short_structure_large_tfs,
+        'neutral_short_structure_need_min_tfs': _LIVE_DEFAULT.neutral_short_structure_need_min_tfs,
+        'neutral_short_structure_min_agree': _LIVE_DEFAULT.neutral_short_structure_min_agree,
+        'neutral_short_structure_div_gap': _LIVE_DEFAULT.neutral_short_structure_div_gap,
+        'neutral_short_structure_ma_gap': _LIVE_DEFAULT.neutral_short_structure_ma_gap,
+        'neutral_short_structure_vp_gap': _LIVE_DEFAULT.neutral_short_structure_vp_gap,
+        'neutral_short_structure_fail_open': _LIVE_DEFAULT.neutral_short_structure_fail_open,
+        'neutral_short_structure_soften_weak': _LIVE_DEFAULT.neutral_short_structure_soften_weak,
+        'neutral_short_structure_soften_mult': _LIVE_DEFAULT.neutral_short_structure_soften_mult,
+        # 空单逆势防守退出（结构化风险控制）
+        'use_short_adverse_exit': _LIVE_DEFAULT.use_short_adverse_exit,
+        'short_adverse_min_bars': _LIVE_DEFAULT.short_adverse_min_bars,
+        'short_adverse_loss_r': _LIVE_DEFAULT.short_adverse_loss_r,
+        'short_adverse_bs': _LIVE_DEFAULT.short_adverse_bs,
+        'short_adverse_bs_dom_ratio': _LIVE_DEFAULT.short_adverse_bs_dom_ratio,
+        'short_adverse_ss_cap': _LIVE_DEFAULT.short_adverse_ss_cap,
+        'short_adverse_require_bs_dom': _LIVE_DEFAULT.short_adverse_require_bs_dom,
+        'short_adverse_ma_conflict_gap': _LIVE_DEFAULT.short_adverse_ma_conflict_gap,
+        'short_adverse_conflict_thr': _LIVE_DEFAULT.short_adverse_conflict_thr,
+        'short_adverse_min_conflicts': _LIVE_DEFAULT.short_adverse_min_conflicts,
+        'short_adverse_need_cs_kdj': _LIVE_DEFAULT.short_adverse_need_cs_kdj,
+        'short_adverse_large_bs_min': _LIVE_DEFAULT.short_adverse_large_bs_min,
+        'short_adverse_large_ratio': _LIVE_DEFAULT.short_adverse_large_ratio,
+        'short_adverse_need_chain_long': _LIVE_DEFAULT.short_adverse_need_chain_long,
+        'short_adverse_regimes': _LIVE_DEFAULT.short_adverse_regimes,
+        # 极端 divergence 做空否决
+        'use_extreme_divergence_short_veto': _LIVE_DEFAULT.use_extreme_divergence_short_veto,
+        'extreme_div_short_threshold': _LIVE_DEFAULT.extreme_div_short_threshold,
+        'extreme_div_short_confirm_thr': _LIVE_DEFAULT.extreme_div_short_confirm_thr,
+        'extreme_div_short_min_confirms': _LIVE_DEFAULT.extreme_div_short_min_confirms,
+        'extreme_div_short_regimes': _LIVE_DEFAULT.extreme_div_short_regimes,
+        # 回测日志复盘
+        'print_signal_features': _LIVE_DEFAULT.print_signal_features,
+        'signal_replay_top_n': _LIVE_DEFAULT.signal_replay_top_n,
         # ── S2: 保本止损 ──
         'use_breakeven_after_tp1': _LIVE_DEFAULT.use_breakeven_after_tp1,
         'breakeven_buffer': _LIVE_DEFAULT.breakeven_buffer,
@@ -215,6 +286,9 @@ def _build_default_config():
         'use_ss_quality_sl': _LIVE_DEFAULT.use_ss_quality_sl,
         'ss_quality_sl_threshold': _LIVE_DEFAULT.ss_quality_sl_threshold,
         'ss_quality_sl_mult': _LIVE_DEFAULT.ss_quality_sl_mult,
+        # ── 止损后冷却倍数(v5.2) ──
+        'short_sl_cd_mult': _LIVE_DEFAULT.short_sl_cd_mult,
+        'long_sl_cd_mult': _LIVE_DEFAULT.long_sl_cd_mult,
     }
     return cfg
 
@@ -394,7 +468,7 @@ def _normalize_trade(t):
         except (TypeError, ValueError):
             return None
 
-    return {
+    out = {
         'time': str(t.get('time', '')),
         'action': t.get('action', ''),
         'direction': t.get('direction', ''),
@@ -433,6 +507,140 @@ def _normalize_trade(t):
         'bs': _num(t.get('bs')),
         'atr_pct': _num(t.get('atr_pct')),
     }
+    for k, v in t.items():
+        if k in out:
+            continue
+        if k.startswith('sig_') or k.startswith('book_'):
+            if isinstance(v, (int, float, np.number)):
+                out[k] = _num(v)
+            else:
+                out[k] = v
+    return out
+
+
+def _build_signal_replay_report(trades, top_n=10):
+    """基于交易日志复盘信号质量：开仓→分段TP→平仓配对。"""
+    active = {'short': None, 'long': None}
+    samples = []
+
+    def _finalize(direction, close_trade):
+        ctx = active.get(direction)
+        if not ctx:
+            return
+        entry = ctx['entry']
+        total_pnl = float(ctx.get('partial_pnl', 0.0)) + float(close_trade.get('pnl') or 0.0)
+        entry_margin = float(entry.get('margin') or 0.0)
+        pnl_r = total_pnl / entry_margin if entry_margin > 0 else 0.0
+        samples.append({
+            'direction': direction,
+            'entry_time': entry.get('time'),
+            'exit_time': close_trade.get('time'),
+            'regime': entry.get('regime_label', 'unknown'),
+            'conf_raw': float(entry.get('sig_conf_raw') or 0.0),
+            'conf_eff': float(entry.get('sig_conf_effective') or 0.0),
+            'conf_bucket': str(entry.get('sig_conf_bucket', 'na')),
+            'ss': float(entry.get('ss') or 0.0),
+            'bs': float(entry.get('bs') or 0.0),
+            'entry_margin': entry_margin,
+            'total_pnl': round(total_pnl, 4),
+            'pnl_r': round(pnl_r, 6),
+            'exit_action': close_trade.get('action'),
+            'exit_reason': close_trade.get('reason'),
+            'sig_chain_len': int(entry.get('sig_chain_len') or 0),
+            'sig_coverage': float(entry.get('sig_coverage') or 0.0),
+            'book_div_sell': float(entry.get('book_div_sell') or 0.0),
+            'book_div_buy': float(entry.get('book_div_buy') or 0.0),
+            'book_ma_sell': float(entry.get('book_ma_sell') or 0.0),
+            'book_ma_buy': float(entry.get('book_ma_buy') or 0.0),
+            'book_vp_sell': float(entry.get('book_vp_sell') or 0.0),
+            'book_vp_buy': float(entry.get('book_vp_buy') or 0.0),
+        })
+        active[direction] = None
+
+    for t in trades:
+        action = str(t.get('action', ''))
+        direction = str(t.get('direction', ''))
+        if action == 'OPEN_SHORT':
+            active['short'] = {'entry': t, 'partial_pnl': 0.0}
+        elif action == 'OPEN_LONG':
+            active['long'] = {'entry': t, 'partial_pnl': 0.0}
+        elif action == 'PARTIAL_TP' and direction in ('short', 'long'):
+            if active.get(direction):
+                active[direction]['partial_pnl'] += float(t.get('pnl') or 0.0)
+        elif action in ('CLOSE_SHORT', 'LIQUIDATED') and direction == 'short':
+            _finalize('short', t)
+        elif action in ('CLOSE_LONG', 'LIQUIDATED') and direction == 'long':
+            _finalize('long', t)
+
+    if not samples:
+        return {}
+
+    bucket_stats = {}
+    bucket_map = defaultdict(list)
+    for s in samples:
+        bucket_map[s['conf_bucket']].append(s)
+    for bk, arr in bucket_map.items():
+        n = len(arr)
+        wins = sum(1 for x in arr if x['pnl_r'] > 0)
+        losses = sum(1 for x in arr if x['pnl_r'] < 0)
+        avg_r = float(np.mean([x['pnl_r'] for x in arr])) if arr else 0.0
+        bucket_stats[bk] = {
+            'n': n,
+            'wins': wins,
+            'losses': losses,
+            'win_rate': round(wins / n, 4) if n else 0.0,
+            'avg_pnl_r': round(avg_r, 6),
+        }
+
+    high_conf_misses = sorted(
+        [x for x in samples if x['conf_raw'] >= 0.70 and x['pnl_r'] < 0],
+        key=lambda x: (x['conf_raw'], -x['pnl_r']),
+        reverse=True,
+    )[:max(1, int(top_n))]
+
+    return {
+        'samples': len(samples),
+        'bucket_stats': bucket_stats,
+        'high_conf_misses': high_conf_misses,
+    }
+
+
+def _print_signal_feature_samples(trades, limit=12):
+    """打印开仓信号特征样本，便于人工复盘。"""
+    rows = [t for t in trades if t.get('action') in ('OPEN_LONG', 'OPEN_SHORT')]
+    if not rows:
+        return
+    print(f"\n  {'─' * 60}")
+    print("  信号特征样本 (开仓)")
+    print(f"  {'─' * 60}")
+    print("  time                act   R          conf   cov  chain   ss    bs  div_s  div_b  ma_s  ma_b")
+    for t in rows[:max(1, int(limit))]:
+        print(
+            f"  {str(t.get('time', ''))[:19]:<19} "
+            f"{str(t.get('action', '')):<9} "
+            f"{str(t.get('regime_label', 'unknown')):<10} "
+            f"{float(t.get('sig_conf_raw') or 0.0):>5.2f} "
+            f"{float(t.get('sig_coverage') or 0.0):>5.2f} "
+            f"{int(t.get('sig_chain_len') or 0):>5d} "
+            f"{float(t.get('ss') or 0.0):>5.0f} "
+            f"{float(t.get('bs') or 0.0):>5.0f} "
+            f"{float(t.get('book_div_sell') or 0.0):>6.1f} "
+            f"{float(t.get('book_div_buy') or 0.0):>6.1f} "
+            f"{float(t.get('book_ma_sell') or 0.0):>5.1f} "
+            f"{float(t.get('book_ma_buy') or 0.0):>5.1f}"
+        )
+
+
+def _save_signal_feature_log_csv(trades, run_id, trade_start, trade_end):
+    rows = [t for t in trades if any(k.startswith('sig_') or k.startswith('book_') for k in t.keys())]
+    if not rows:
+        return None
+    base = os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.path.join(base, 'logs', 'signal_audit')
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f'run_{run_id}_{trade_start}_{trade_end}_signal_features.csv')
+    pd.DataFrame(rows).to_csv(path, index=False, encoding='utf-8')
+    return path
 
 
 def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=None):
@@ -774,6 +982,23 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         'fee_drag_pct': fees.get('fee_drag_pct', 0),
         'liquidations': result.get('liquidations', 0),
     }
+    if result.get('neutral_quality_gate'):
+        summary['neutral_quality_gate'] = result.get('neutral_quality_gate')
+    if result.get('book_consensus_gate'):
+        summary['book_consensus_gate'] = result.get('book_consensus_gate')
+    if result.get('neutral_short_structure_gate'):
+        summary['neutral_short_structure_gate'] = result.get('neutral_short_structure_gate')
+    if result.get('confidence_learning'):
+        summary['confidence_learning'] = result.get('confidence_learning')
+    if result.get('short_adverse_exit'):
+        summary['short_adverse_exit'] = result.get('short_adverse_exit')
+    if result.get('extreme_div_short_veto'):
+        summary['extreme_div_short_veto'] = result.get('extreme_div_short_veto')
+    signal_replay = _build_signal_replay_report(
+        trades, top_n=int(config.get('signal_replay_top_n', 10))
+    )
+    if signal_replay:
+        summary['signal_replay'] = signal_replay
 
     run_meta = {
         'start_date': TRADE_START,
@@ -810,6 +1035,74 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
     print(f"  组合PF:      {portfolio_pf:.2f} (含 PARTIAL_TP / SPOT_SELL)")
     print(f"  总费用:      ${fees.get('total_costs', 0):,.2f}")
     print(f"  逐日记录:    {len(daily_records)} 天")
+    if summary.get('neutral_quality_gate'):
+        ng = summary['neutral_quality_gate']
+        br = ng.get('blocked_reason_counts', {}) or {}
+        br_text = ', '.join(f"{k}:{v}" for k, v in sorted(br.items())) if br else '-'
+        print(f"  Neutral门控: short_blocked={ng.get('short_blocked', 0)} "
+              f"long_blocked={ng.get('long_blocked', 0)} reasons[{br_text}]")
+    if summary.get('book_consensus_gate'):
+        bcg = summary['book_consensus_gate']
+        bcr = bcg.get('reason_counts', {}) or {}
+        bcr_text = ', '.join(f"{k}:{v}" for k, v in sorted(bcr.items())) if bcr else '-'
+        print(f"  六书共识:    eval={bcg.get('evaluated', 0)} "
+              f"short_blk={bcg.get('short_blocked', 0)} "
+              f"long_blk={bcg.get('long_blocked', 0)} "
+              f"cs_kdj_adj={bcg.get('cs_kdj_threshold_adj_count', 0)} "
+              f"reasons[{bcr_text}]")
+    if summary.get('neutral_short_structure_gate'):
+        nss = summary['neutral_short_structure_gate']
+        rr = nss.get('reason_counts', {}) or {}
+        rr_text = ', '.join(f"{k}:{v}" for k, v in sorted(rr.items())) if rr else '-'
+        print(f"  Neutral结构: evaluated={nss.get('evaluated', 0)} "
+              f"blocked={nss.get('blocked', 0)} support_avg={nss.get('support_avg', 0.0):.2f} "
+              f"reasons[{rr_text}]")
+    if summary.get('confidence_learning'):
+        cl = summary['confidence_learning']
+        cbr = cl.get('blocked_reason_counts', {}) or {}
+        cbr_text = ', '.join(f"{k}:{v}" for k, v in sorted(cbr.items())) if cbr else '-'
+        print(f"  置信学习:    updates={cl.get('updates', 0)} "
+              f"wins={cl.get('wins', 0)} losses={cl.get('losses', 0)} "
+              f"short_blocked={cl.get('short_blocked', 0)} long_blocked={cl.get('long_blocked', 0)} "
+              f"reasons[{cbr_text}]")
+    if summary.get('short_adverse_exit'):
+        sa = summary['short_adverse_exit']
+        rr = sa.get('reason_counts', {}) or {}
+        rr_text = ', '.join(f"{k}:{v}" for k, v in sorted(rr.items())) if rr else '-'
+        print(f"  逆势防守:    eval={sa.get('evaluated', 0)} "
+              f"triggered={sa.get('triggered', 0)} avg_pnl_r={sa.get('avg_trigger_pnl_r', 0.0):+.4f} "
+              f"reasons[{rr_text}]")
+    if summary.get('extreme_div_short_veto'):
+        dv = summary['extreme_div_short_veto']
+        dr = dv.get('reason_counts', {}) or {}
+        dr_text = ', '.join(f"{k}:{v}" for k, v in sorted(dr.items())) if dr else '-'
+        print(f"  极端Divergence: eval={dv.get('evaluated', 0)} "
+              f"blocked={dv.get('blocked', 0)} avg_div={dv.get('avg_div_sell', 0.0):.2f} "
+              f"reasons[{dr_text}]")
+    if signal_replay:
+        print(f"\n  {'─' * 60}")
+        print("  信号复盘 (开仓→平仓)")
+        print(f"  {'─' * 60}")
+        print(f"  样本数: {signal_replay.get('samples', 0)}")
+        bstats = signal_replay.get('bucket_stats', {})
+        if bstats:
+            print("  置信度分桶:")
+            for bk in ('high', 'mid', 'low', 'off', 'na'):
+                if bk not in bstats:
+                    continue
+                bs = bstats[bk]
+                print(f"    {bk:<4s} n={bs.get('n', 0):>4d} "
+                      f"wr={bs.get('win_rate', 0.0):>6.2%} "
+                      f"avg_r={bs.get('avg_pnl_r', 0.0):>+8.4f}")
+        misses = signal_replay.get('high_conf_misses', [])
+        if misses:
+            print("  高置信错单(top):")
+            for m in misses[:5]:
+                print(f"    {str(m.get('entry_time', ''))[:19]} {m.get('direction')} "
+                      f"conf={m.get('conf_raw', 0):.2f} pnl_r={m.get('pnl_r', 0):+.4f} "
+                      f"R={m.get('regime', 'unknown')} ss={m.get('ss', 0):.0f} bs={m.get('bs', 0):.0f}")
+    if bool(config.get('print_signal_features', True)):
+        _print_signal_feature_samples(trades, limit=12)
 
     # ── 分市场段统计 (按 regime 拆分) ──
     pnl_actions_set = {'CLOSE_LONG', 'CLOSE_SHORT', 'LIQUIDATED', 'PARTIAL_TP', 'SPOT_SELL'}
@@ -863,6 +1156,9 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
     )
     perf_log['5_db_save'] = time.time() - t_db
     print(f"\n💾 结果已写入 DB: {db_path} (run_id={run_id})")
+    signal_log_path = _save_signal_feature_log_csv(trades, run_id, TRADE_START, TRADE_END)
+    if signal_log_path:
+        print(f"🧾 信号特征日志: {signal_log_path}")
 
     # ── 性能瓶颈日志 ──
     total_elapsed = time.time() - t0
