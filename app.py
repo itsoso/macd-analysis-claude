@@ -873,7 +873,7 @@ def page_strategy_tech_doc():
         'page_strategy_tech_doc.html',
         active_page='strategy-tech-doc',
         content=html_content,
-        version='9.0',
+        version='9.0.1',
         last_updated='2026-02-15',
         win_rate='64.9%',
         cpf='2.51',
@@ -900,6 +900,31 @@ def page_strategy_spec():
     return render_template(
         'page_strategy_spec.html',
         active_page='strategy-spec',
+        content=html_content,
+        last_updated='2026-02-15',
+    )
+
+
+# ======================================================
+#   策略技术规格书（Codex 版）
+# ======================================================
+@app.route('/strategy/spec-codex')
+def page_strategy_spec_codex():
+    import markdown
+    spec_path = os.path.join(os.path.dirname(__file__), 'docs', 'strategy_spec_codex.md')
+    try:
+        with open(spec_path, 'r', encoding='utf-8') as f:
+            md_text = f.read()
+    except FileNotFoundError:
+        md_text = '> 文档文件不存在，请检查 `docs/strategy_spec_codex.md`'
+    html_content = markdown.markdown(
+        md_text,
+        extensions=['tables', 'fenced_code', 'codehilite', 'toc'],
+        extension_configs={'codehilite': {'css_class': 'highlight', 'guess_lang': False}},
+    )
+    return render_template(
+        'page_strategy_spec_codex.html',
+        active_page='strategy-spec-codex',
         content=html_content,
         last_updated='2026-02-15',
     )
