@@ -117,9 +117,27 @@ class LiveSignalGenerator:
         # 在K线结束前10秒刷新数据，确保拿到最新收盘数据
         return max(30, minutes * 60 - 10)
 
-    def _build_fusion_config(self) -> Dict:
+    def _build_runtime_config_dict(self) -> Dict:
+        """将 StrategyConfig 转为 dict，供 regime/fusion 共用。"""
+        cfg = dict(getattr(self.config, "__dict__", {}))
+        cfg.setdefault('use_regime_aware', True)
+        return cfg
+
+    def _infer_regime_label(self, df: pd.DataFrame, idx: int) -> str:
+        """与回测同源的 regime 推断（只用 idx-1 及之前数据）。"""
+        if idx < 2:
+            return 'neutral'
+        try:
+            # 延迟导入，避免启动阶段不必要的重依赖
+            from optimize_six_book import _compute_regime_controls
+            ctl = _compute_regime_controls(df, idx - 1, self._build_runtime_config_dict())
+            return str((ctl or {}).get('regime_label', 'neutral') or 'neutral')
+        except Exception:
+            return 'neutral'
+
+    def _build_fusion_config(self, regime_label: str = 'neutral') -> Dict:
         """构造与回测一致的融合参数字典。"""
-        return {
+        cfg = {
             'fusion_mode': self.config.fusion_mode,
             'veto_threshold': self.config.veto_threshold,
             'kdj_bonus': self.config.kdj_bonus,
@@ -133,7 +151,12 @@ class LiveSignalGenerator:
             'bb_bonus': getattr(self.config, 'bb_bonus', 0.10),
             'vp_bonus': getattr(self.config, 'vp_bonus', 0.08),
             'cs_bonus': getattr(self.config, 'cs_bonus', 0.06),
+            # 与回测保持一致：注入当前 regime，触发动态融合分支
+            '_regime_label': regime_label,
         }
+        if getattr(self.config, 'use_regime_adaptive_fusion', False):
+            cfg['fusion_mode'] = 'regime_adaptive'
+        return cfg
 
     # ============================================================
     # 数据获取
@@ -226,10 +249,17 @@ class LiveSignalGenerator:
 
         try:
             dt = df.index[idx]
-            config_dict = self._build_fusion_config()
+            regime_label = self._infer_regime_label(df, idx)
+            config_dict = self._build_fusion_config(regime_label)
             sell_score, buy_score = calc_fusion_score_six(
                 signals, df, idx, dt, config_dict
             )
+            # 与回测 P9 逻辑对齐（仅当未启用 P18 时）
+            if (not getattr(self.config, 'use_regime_adaptive_fusion', False)
+                    and getattr(self.config, 'use_regime_adaptive_reweight', False)
+                    and regime_label == 'neutral'):
+                sell_score *= float(getattr(self.config, 'regime_neutral_ss_dampen', 0.85))
+                buy_score *= float(getattr(self.config, 'regime_neutral_bs_boost', 1.10))
 
             # 提取各维度分数
             components = self._extract_components(signals, idx, dt)
@@ -241,6 +271,7 @@ class LiveSignalGenerator:
             result.sell_score = float(sell_score)
             result.buy_score = float(buy_score)
             result.components = components
+            result.components['regime_label'] = regime_label
             result.bar_index = idx
             result.conflict = (sell_score > 15 and buy_score > 15 and
                               abs(sell_score - buy_score) < 10)
@@ -541,10 +572,16 @@ class LiveSignalGenerator:
 
             # 计算融合分数
             idx = len(df) - 1
-            config_dict = self._build_fusion_config()
+            regime_label = self._infer_regime_label(df, idx)
+            config_dict = self._build_fusion_config(regime_label)
             sell_score, buy_score = calc_fusion_score_six(
                 signals, df, idx, df.index[idx], config_dict
             )
+            if (not getattr(self.config, 'use_regime_adaptive_fusion', False)
+                    and getattr(self.config, 'use_regime_adaptive_reweight', False)
+                    and regime_label == 'neutral'):
+                sell_score *= float(getattr(self.config, 'regime_neutral_ss_dampen', 0.85))
+                buy_score *= float(getattr(self.config, 'regime_neutral_bs_boost', 1.10))
             sell_score = float(sell_score)
             buy_score = float(buy_score)
 
@@ -564,6 +601,7 @@ class LiveSignalGenerator:
                 "price": float(df['close'].iloc[idx]),
                 "timestamp": str(df.index[idx]),
                 "bars": len(df),
+                "regime_label": regime_label,
             }
 
         except Exception as e:

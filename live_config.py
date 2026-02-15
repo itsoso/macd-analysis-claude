@@ -592,7 +592,18 @@ class StrategyConfig:
     # neutral: DIV 大幅降权(25%), CS/KDJ 大幅升权(bonus 15%)
     # trend: DIV 保留高权重(60%), 背离在趋势末端有效
     # high_vol: VP 升权(12%), 量价在高波中更有效
-    use_regime_adaptive_fusion: bool = False
+    use_regime_adaptive_fusion: bool = True
+    # 说明: 信号层会将 div_w/ma_w 归一化后用于基数融合，因此这里直接填“目标占比”
+    regime_trend_div_w: float = 0.60
+    regime_trend_ma_w: float = 0.40
+    regime_low_vol_trend_div_w: float = 0.60
+    regime_low_vol_trend_ma_w: float = 0.40
+    regime_neutral_div_w: float = 0.25
+    regime_neutral_ma_w: float = 0.75
+    regime_high_vol_div_w: float = 0.45
+    regime_high_vol_ma_w: float = 0.55
+    regime_high_vol_choppy_div_w: float = 0.30
+    regime_high_vol_choppy_ma_w: float = 0.70
 
     # ── P24: Regime-Adaptive 止损 ──
     # 空单止损按 regime 差异化: neutral 收紧(错了快认输), trend 保持(给空间)
@@ -603,6 +614,32 @@ class StrategyConfig:
     regime_low_vol_trend_short_sl: float = -0.20
     regime_high_vol_short_sl: float = -0.15      # high_vol 空单止损 -15%
     regime_high_vol_choppy_short_sl: float = -0.15
+
+    # ── V9: 回测口径真实化 (Perp) ──
+    # 强平检测优先使用 mark 价格序列（若本地K线包含相关列）
+    use_mark_price_for_liquidation: bool = False
+    mark_price_col: str = 'mark_price'
+    mark_high_col: str = 'mark_high'
+    mark_low_col: str = 'mark_low'
+    # 资金费率优先使用真实 funding_rate 列（若存在），否则回退旧模型
+    use_real_funding_rate: bool = False
+    funding_rate_col: str = 'funding_rate'
+    funding_interval_hours: float = 8.0
+    funding_interval_hours_col: str = 'funding_interval_hours'
+
+    # ── V9: Leg 级风险预算（regime × direction） ──
+    # 默认关闭；开启后只影响开仓保证金分配，不改变信号本身
+    use_leg_risk_budget: bool = False
+    risk_budget_neutral_long: float = 1.00
+    risk_budget_neutral_short: float = 1.00
+    risk_budget_trend_long: float = 1.00
+    risk_budget_trend_short: float = 1.00
+    risk_budget_low_vol_trend_long: float = 1.00
+    risk_budget_low_vol_trend_short: float = 1.00
+    risk_budget_high_vol_long: float = 1.00
+    risk_budget_high_vol_short: float = 1.00
+    risk_budget_high_vol_choppy_long: float = 1.00
+    risk_budget_high_vol_choppy_short: float = 1.00
 
     # ── 多头冲突软折扣（neutral/low_vol_trend） ──
     # 目标: 买入信号中若卖方divergence过强，先减仓再观察，降低中性体制假突破亏损。

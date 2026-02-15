@@ -517,11 +517,11 @@ def _fuse_scores(mode, config,
 
         # Regime-specific 权重矩阵 (可通过 config 覆盖)
         _default_weights = {
-            'trend':        {'div_w': 0.60, 'ma_w': 0.25, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
-            'low_vol_trend':{'div_w': 0.60, 'ma_w': 0.25, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
-            'neutral':      {'div_w': 0.25, 'ma_w': 0.25, 'cs_b': 0.15, 'kdj_b': 0.15, 'bb_b': 0.12, 'vp_b': 0.06},
-            'high_vol':     {'div_w': 0.45, 'ma_w': 0.25, 'cs_b': 0.08, 'kdj_b': 0.08, 'bb_b': 0.06, 'vp_b': 0.12},
-            'high_vol_choppy':{'div_w': 0.30, 'ma_w': 0.25, 'cs_b': 0.12, 'kdj_b': 0.12, 'bb_b': 0.10, 'vp_b': 0.10},
+            'trend':        {'div_w': 0.60, 'ma_w': 0.40, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
+            'low_vol_trend':{'div_w': 0.60, 'ma_w': 0.40, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
+            'neutral':      {'div_w': 0.25, 'ma_w': 0.75, 'cs_b': 0.15, 'kdj_b': 0.15, 'bb_b': 0.12, 'vp_b': 0.06},
+            'high_vol':     {'div_w': 0.45, 'ma_w': 0.55, 'cs_b': 0.08, 'kdj_b': 0.08, 'bb_b': 0.06, 'vp_b': 0.12},
+            'high_vol_choppy':{'div_w': 0.30, 'ma_w': 0.70, 'cs_b': 0.12, 'kdj_b': 0.12, 'bb_b': 0.10, 'vp_b': 0.10},
         }
         _w = _default_weights.get(_regime, _default_weights['neutral'])
         _div_w = float(config.get(f'regime_{_regime}_div_w', _w['div_w']))

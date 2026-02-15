@@ -1042,11 +1042,11 @@ def _run_strategy_core(
     # ── P18: Regime-Adaptive 六维融合权重 (回测路径: 从 book_features 重新融合) ──
     use_regime_adaptive_fusion = config.get('use_regime_adaptive_fusion', False)
     _p18_weights = {
-        'trend':          {'div_w': 0.60, 'ma_w': 0.25, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
-        'low_vol_trend':  {'div_w': 0.60, 'ma_w': 0.25, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
-        'neutral':        {'div_w': 0.25, 'ma_w': 0.25, 'cs_b': 0.15, 'kdj_b': 0.15, 'bb_b': 0.12, 'vp_b': 0.06},
-        'high_vol':       {'div_w': 0.45, 'ma_w': 0.25, 'cs_b': 0.08, 'kdj_b': 0.08, 'bb_b': 0.06, 'vp_b': 0.12},
-        'high_vol_choppy':{'div_w': 0.30, 'ma_w': 0.25, 'cs_b': 0.12, 'kdj_b': 0.12, 'bb_b': 0.10, 'vp_b': 0.10},
+        'trend':          {'div_w': 0.60, 'ma_w': 0.40, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
+        'low_vol_trend':  {'div_w': 0.60, 'ma_w': 0.40, 'cs_b': 0.06, 'kdj_b': 0.06, 'bb_b': 0.05, 'vp_b': 0.05},
+        'neutral':        {'div_w': 0.25, 'ma_w': 0.75, 'cs_b': 0.15, 'kdj_b': 0.15, 'bb_b': 0.12, 'vp_b': 0.06},
+        'high_vol':       {'div_w': 0.45, 'ma_w': 0.55, 'cs_b': 0.08, 'kdj_b': 0.08, 'bb_b': 0.06, 'vp_b': 0.12},
+        'high_vol_choppy':{'div_w': 0.30, 'ma_w': 0.70, 'cs_b': 0.12, 'kdj_b': 0.12, 'bb_b': 0.10, 'vp_b': 0.10},
     }
 
     # ── P24: Regime-Adaptive 止损 ──
@@ -1754,11 +1754,60 @@ def _run_strategy_core(
         '10m': 1/6, '15m': 0.25, '30m': 0.5, '1h': 1, '2h': 2, '3h': 3,
         '4h': 4, '6h': 6, '8h': 8, '12h': 12, '16h': 16, '24h': 24,
     }
-    bars_per_8h = max(1, int(8 / tf_hours.get(primary_tf, 1)))
-    bars_per_day = max(1, int(round(24 / tf_hours.get(primary_tf, 1))))
+    primary_tf_hours = float(tf_hours.get(primary_tf, 1))
+    bars_per_8h = max(1, int(round(8 / primary_tf_hours)))
+    bars_per_day = max(1, int(round(24 / primary_tf_hours)))
     stagnation_reentry_bars = max(1, int(round(max(0.0, stagnation_reentry_days) * bars_per_day)))
     stagnation_reentry_cooldown_bars = max(0, int(round(max(0.0, stagnation_reentry_cooldown_days) * bars_per_day)))
     last_spot_trade_idx = init_idx
+
+    # ── V9: Mark/Funding 更真实口径（默认关闭，保持兼容） ──
+    use_mark_price_for_liquidation = bool(config.get('use_mark_price_for_liquidation', False))
+    mark_price_col = str(config.get('mark_price_col', 'mark_price') or 'mark_price')
+    mark_high_col = str(config.get('mark_high_col', 'mark_high') or 'mark_high')
+    mark_low_col = str(config.get('mark_low_col', 'mark_low') or 'mark_low')
+
+    liq_high_series = high_series
+    liq_low_series = low_series
+    mark_price_series = None
+    if use_mark_price_for_liquidation:
+        if mark_high_col in primary_df.columns and mark_low_col in primary_df.columns:
+            liq_high_series = pd.to_numeric(primary_df[mark_high_col], errors='coerce').fillna(high_series)
+            liq_low_series = pd.to_numeric(primary_df[mark_low_col], errors='coerce').fillna(low_series)
+        elif mark_price_col in primary_df.columns:
+            mark_price_series = pd.to_numeric(primary_df[mark_price_col], errors='coerce').fillna(close_series)
+            liq_high_series = mark_price_series
+            liq_low_series = mark_price_series
+
+    use_real_funding_rate = bool(config.get('use_real_funding_rate', False))
+    funding_rate_col = str(config.get('funding_rate_col', 'funding_rate') or 'funding_rate')
+    funding_interval_hours = float(config.get('funding_interval_hours', 8.0) or 8.0)
+    funding_interval_hours_col = str(
+        config.get('funding_interval_hours_col', 'funding_interval_hours') or 'funding_interval_hours'
+    )
+    bars_per_funding_default = max(1, int(round(max(1.0, funding_interval_hours) / primary_tf_hours)))
+    funding_rate_series = None
+    if use_real_funding_rate and funding_rate_col in primary_df.columns:
+        funding_rate_series = pd.to_numeric(primary_df[funding_rate_col], errors='coerce')
+    funding_interval_series = None
+    if funding_interval_hours_col in primary_df.columns:
+        funding_interval_series = pd.to_numeric(primary_df[funding_interval_hours_col], errors='coerce')
+
+    # ── V9: Leg 级风险预算（regime × side） ──
+    use_leg_risk_budget = bool(config.get('use_leg_risk_budget', False))
+    _risk_regs = ('neutral', 'trend', 'low_vol_trend', 'high_vol', 'high_vol_choppy')
+    _risk_sides = ('long', 'short')
+    _risk_budget_map = {}
+    for _rr in _risk_regs:
+        for _ss in _risk_sides:
+            _k = f'risk_budget_{_rr}_{_ss}'
+            _risk_budget_map[(_rr, _ss)] = float(config.get(_k, 1.0) or 1.0)
+
+    def _leg_budget_mult(regime_label, side):
+        if not use_leg_risk_budget:
+            return 1.0
+        _m = float(_risk_budget_map.get((str(regime_label or 'neutral'), str(side)), 1.0))
+        return float(np.clip(_m, 0.0, 2.5))
 
     record_interval = max(1, len(primary_df) // 500)
 
@@ -1821,12 +1870,14 @@ def _run_strategy_core(
         had_long_before_liq = eng.futures_long is not None
         _bar_high = float(high_series.iloc[idx])
         _bar_low = float(low_series.iloc[idx])
+        _liq_high = float(liq_high_series.iloc[idx])
+        _liq_low = float(liq_low_series.iloc[idx])
         # 空仓强平检查用 bar HIGH (价格上涨对空头不利)
         if eng.futures_short:
-            eng.check_liquidation(_bar_high, dt)
+            eng.check_liquidation(_liq_high, dt)
         # 多仓强平检查用 bar LOW (价格下跌对多头不利)
         if eng.futures_long:
-            eng.check_liquidation(_bar_low, dt)
+            eng.check_liquidation(_liq_low, dt)
         # 强平后设置冷却期, 防止同bar立即重新开仓
         if had_short_before_liq and eng.futures_short is None:
             short_cd = max(short_cd, cooldown * 6)
@@ -1840,16 +1891,31 @@ def _run_strategy_core(
 
         # 资金费率
         eng.funding_counter += 1
-        if eng.funding_counter % bars_per_8h == 0:
-            is_neg = (eng.funding_counter * 7 + 3) % 10 < 3
-            rate = FuturesEngine.FUNDING_RATE if not is_neg else -FuturesEngine.FUNDING_RATE * 0.5
+        bars_per_funding = bars_per_funding_default
+        if funding_interval_series is not None:
+            _fh = float(funding_interval_series.iloc[idx])
+            if np.isfinite(_fh) and _fh > 0:
+                bars_per_funding = max(1, int(round(_fh / primary_tf_hours)))
+        if eng.funding_counter % bars_per_funding == 0:
+            if use_real_funding_rate and funding_rate_series is not None:
+                _fr_idx = idx - 1 if idx > 0 else idx
+                _rate = float(funding_rate_series.iloc[_fr_idx])
+                rate = _rate if np.isfinite(_rate) else 0.0
+            else:
+                is_neg = (eng.funding_counter * 7 + 3) % 10 < 3
+                rate = FuturesEngine.FUNDING_RATE if not is_neg else -FuturesEngine.FUNDING_RATE * 0.5
+            funding_price = (
+                float(mark_price_series.iloc[idx])
+                if (mark_price_series is not None and idx < len(mark_price_series))
+                else price
+            )
             if eng.futures_long:
-                cost = eng.futures_long.quantity * price * rate
+                cost = eng.futures_long.quantity * funding_price * rate
                 eng.usdt -= cost
                 if cost > 0: eng.total_funding_paid += cost
                 else: eng.total_funding_received += abs(cost)
             if eng.futures_short:
-                income = eng.futures_short.quantity * price * rate
+                income = eng.futures_short.quantity * funding_price * rate
                 eng.usdt += income
                 if income > 0: eng.total_funding_received += income
                 else: eng.total_funding_paid += abs(income)
@@ -2437,6 +2503,7 @@ def _run_strategy_core(
             _rc[_r] = int(_rc.get(_r, 0)) + 1
         if _short_candidate and short_conf_info.get('allow', True):
             margin = eng.available_margin() * cur_margin_use
+            margin *= _leg_budget_mult(_regime_label, 'short')
             # ── Neutral 结构质量仓位调节: 弱共识信号减仓，保持交易时序不变 ──
             if (use_neutral_structural_discount
                     and _regime_label in structural_discount_short_regimes
@@ -2930,6 +2997,7 @@ def _run_strategy_core(
             _cbc[_cr] = int(_cbc.get(_cr, 0)) + 1
         if _long_candidate and long_conf_info.get('allow', True):
             margin = eng.available_margin() * cur_margin_use
+            margin *= _leg_budget_mult(_regime_label, 'long')
             # ── Neutral 结构质量仓位调节 (做多) ──
             if (use_neutral_structural_discount
                     and _regime_label in structural_discount_long_regimes
