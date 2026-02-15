@@ -346,6 +346,17 @@ def cmd_test_signal(args):
         print("  ❌ 信号计算失败")
 
 
+def _safe_components(comp: dict) -> dict:
+    """安全地将 components 字典转为 JSON 可序列化格式，跳过非数值字段。"""
+    out = {}
+    for k, v in comp.items():
+        try:
+            out[k] = round(float(v), 1)
+        except (TypeError, ValueError):
+            out[k] = str(v)
+    return out
+
+
 def _compute_single_tf(tf, base_config):
     """在线程中计算单个时间框架的信号（供 cmd_test_signal_multi 并行调用）"""
     import copy
@@ -372,10 +383,8 @@ def _compute_single_tf(tf, base_config):
                 "action": sig.action,
                 "reason": sig.reason,
                 "conflict": bool(sig.conflict),
-                "components": {
-                    k: (round(float(v), 1) if isinstance(v, (int, float)) else str(v))
-                    for k, v in sig.components.items()
-                },
+                "regime_label": getattr(sig, 'regime_label', 'neutral'),
+                "components": _safe_components(sig.components),
                 "bars": len(gen._df) if gen._df is not None else 0,
             })
         else:

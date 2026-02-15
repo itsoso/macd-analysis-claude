@@ -54,6 +54,7 @@ class SignalResult:
         self.reason: str = ""
         self.conflict: bool = False
         self.bar_index: int = 0
+        self.regime_label: str = "neutral"
 
     def to_dict(self) -> dict:
         return {
@@ -62,6 +63,7 @@ class SignalResult:
             "sell_score": self.sell_score,
             "buy_score": self.buy_score,
             "components": self.components,
+            "regime_label": self.regime_label,
             "action": self.action,
             "reason": self.reason,
             "conflict": self.conflict,
@@ -314,7 +316,7 @@ class LiveSignalGenerator:
             result.sell_score = float(sell_score)
             result.buy_score = float(buy_score)
             result.components = components
-            result.components['regime_label'] = regime_label
+            result.regime_label = regime_label
             result.bar_index = idx
             result.conflict = (sell_score > 15 and buy_score > 15 and
                               abs(sell_score - buy_score) < 10)
