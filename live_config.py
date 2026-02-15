@@ -192,19 +192,30 @@ STRATEGY_PARAM_VERSIONS = {
         "use_partial_tp_2": True,
         "short_max_hold": 48,
     },
-    "v4": {  # v5.1: P0前视修复 + 参数重优化 (run#190/221)
-        "short_threshold": 40,   # 保持 (扫描验证 st=40 最稳健)
-        "long_threshold": 25,    # 降低(30→25): BS 30-50多单WR=100%, 新增2笔全赢多单, WR+0.5%
-        "short_sl": -0.20,       # v5.1: 放宽止损, P0修复后需更大呼吸空间 (v4旧:-0.16)
-        "short_tp": 0.60,        # 更大目标利润 (v2:0.50)
-        "long_sl": -0.10,        # 多头保持 (v2:-0.08)
-        "long_tp": 0.40,         # 保持 (v2一致)
-        "partial_tp_1": 0.15,    # 保持v2 (v3 early由use_partial_tp_v3控制)
+    "v4": {  # v7.0 (B3): neutral short 强门控 + 冲突折扣扩展 + 激进结构折扣
+        # ── 基础参数 (继承 v6.0) ──
+        "short_threshold": 40,
+        "long_threshold": 25,
+        "short_sl": -0.20,
+        "short_tp": 0.60,
+        "long_sl": -0.10,
+        "long_tp": 0.40,
+        "partial_tp_1": 0.15,
         "use_partial_tp_2": True,
-        "short_max_hold": 48,    # 保持
-        "short_trail": 0.19,     # P1优化: 追踪灵敏度微调(0.20→0.19), WR 61.9%→63.1% 同时收益+3.6%
-        "long_trail": 0.12,      # 多头追踪 (v2:0.20)
-        "trail_pullback": 0.50,  # 稍微收紧 (v2:0.60)
+        "short_max_hold": 48,
+        "short_trail": 0.19,
+        "long_trail": 0.12,
+        "trail_pullback": 0.50,
+        # ── v7.0 B3 新增: neutral short 入场质量修正 ──
+        # P4 实证: neutral short 六书均无判别力 (DIV d=-0.64 反向)
+        # B3 A/B: OOS Ret +36→+41.6%, PF 1.67→2.33, WR 60.7→61.0%
+        "cooldown": 6,                          # B3: 冷却 4→6
+        "regime_short_threshold": "neutral:60",  # B3: neutral 空单门槛 45→60
+        "short_conflict_regimes": "trend,high_vol,neutral",  # B3: 冲突折扣扩展到 neutral
+        "neutral_struct_discount_0": 0.0,        # B3: 0本→禁止
+        "neutral_struct_discount_1": 0.05,       # B3: 1本→5%
+        "neutral_struct_discount_2": 0.15,       # B3: 2本→15%
+        "neutral_struct_discount_3": 0.50,       # B3: 3本→50%
     },
 }
 _ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v4")
@@ -304,7 +315,7 @@ class StrategyConfig:
     single_pct: float = 0.20
     total_pct: float = 0.50
     # 冷却
-    cooldown: int = 4
+    cooldown: int = 6  # v7.0 B3: 4→6, 近似 ghost cooldown (IS+0.9%, OOS+5.6%)
     spot_cooldown: int = 12
     # NoTP 提前退出（长短独立 + regime 白名单）
     # 兼容旧参数: no_tp_exit_bars / no_tp_exit_min_pnl / no_tp_exit_regimes
@@ -409,10 +420,11 @@ class StrategyConfig:
     partial_tp_2_early: float = 0.25    # v3触发TP2 (+25% vs 默认+50%)
     use_partial_tp_v3: bool = True      # 启用v3分段止盈(早期锁利, A/B已验证)
 
-    # ── S1: Regime做空门槛覆盖 (neutral shorts -$47K/88笔 → 抑制) ──
-    # 最新回归: 在关闭 BE/Ratchet/SSQ 后, neutral:45 复现最优收益/组合PF
-    # 格式 "regime:threshold,..." 例 "neutral:45" → neutral中SS须>=45才开空
-    regime_short_threshold: str = 'neutral:45'
+    # ── S1: Regime做空门槛覆盖 ──
+    # v7.0 B3: neutral 门槛提高到 60 (P4实证neutral short无alpha, B3 OOS +5.6%)
+    # 回退 B1b: 设为 'neutral:999' 可完全禁止 neutral 空单
+    # 格式 "regime:threshold,..." 例 "neutral:60" → neutral中SS须>=60才开空
+    regime_short_threshold: str = 'neutral:60'
 
     # ── S1.5: neutral 体制信号质量门控（结构性过滤，减少震荡假突破） ──
     # 逻辑: 方向强度 + 共识链条 + 大周期不冲突 + 信号连续性
@@ -459,10 +471,10 @@ class StrategyConfig:
     # 5本结构书(CS/KDJ/MA/BB/VP), 排除在neutral中无判别力的divergence。
     use_neutral_structural_discount: bool = True
     neutral_struct_activity_thr: float = 10.0     # 书"活跃"阈值
-    neutral_struct_discount_0: float = 0.10       # 0本确认: 仅div驱动 (33% WR) →极大减仓 (Codex run#465验证)
-    neutral_struct_discount_1: float = 0.20       # 1本确认: 微弱支撑 (50% WR) →大幅减仓 (Codex run#465验证)
-    neutral_struct_discount_2: float = 1.00       # 2本确认: 尚可 (62.5% WR) →全额
-    neutral_struct_discount_3: float = 1.00       # 3本确认: 强共识→全额
+    neutral_struct_discount_0: float = 0.0        # v7.0 B3: 0本确认→直接不做 (P4: confirms与WR无单调关系)
+    neutral_struct_discount_1: float = 0.05       # v7.0 B3: 1本确认→5%仓位
+    neutral_struct_discount_2: float = 0.15       # v7.0 B3: 2本确认→15%仓位
+    neutral_struct_discount_3: float = 0.50       # v7.0 B3: 3本确认→50%仓位
     neutral_struct_discount_4plus: float = 1.00   # 4-5本: 极强共识→全额
     # 结构折扣生效的 regime（仅 neutral: trend/high_vol扩展测试 ret下降19% →回退）
     structural_discount_short_regimes: str = 'neutral'
@@ -483,8 +495,8 @@ class StrategyConfig:
     # ── 趋势/高波动下空单冲突软折扣（策略层） ──
     # 目标: 避免“卖出极强但买方div也很强”的高冲突做空放大尾部止损。
     # 默认关闭，仅用于A/B验证。
-    use_short_conflict_soft_discount: bool = True   # P1.1: Codex run#465 验证有效 (+1.3% ret, +0.12 pPF)
-    short_conflict_regimes: str = 'trend,high_vol'
+    use_short_conflict_soft_discount: bool = True  # v7.0 B3: 扩展到 neutral
+    short_conflict_regimes: str = 'trend,high_vol,neutral'  # v7.0 B3: +neutral
     short_conflict_div_buy_min: float = 50.0
     short_conflict_ma_sell_min: float = 12.0
     short_conflict_discount_mult: float = 0.60      # Codex验证最优值 (0.50太激进)
