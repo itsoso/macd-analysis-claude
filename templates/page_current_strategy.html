@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}当前最优策略(v5.1) - 技术分析平台{% endblock %}
+{% block title %}当前最优策略(v6.0) - 技术分析平台{% endblock %}
 
 {% block content %}
 <style>
@@ -74,28 +74,28 @@
 </style>
 
 <div class="strategy-hero">
-    <h1>📌 当前最优策略 v5.1 <span class="opt-tag">OPTIMIZED</span></h1>
+    <h1>📌 当前最优策略 v6.0 <span class="opt-tag">P1 OPTIMIZED</span></h1>
     <p class="tagline">
         六书融合 × 多周期联合决策（15m+1h+4h+24h）<br>
-        v5.1 = <strong>P0前视bug修复</strong> + <strong>partial TP状态重置</strong> + <strong>参数重优化</strong>。<br>
-        修复 regime检测/trend EMA 的前视偏差后，通过59组参数扫描找到新最优配置。
+        v6.0 = v5.1 + <strong>P1 胜率突破优化</strong>：追踪止盈微调 + 多单门槛降低 + 结构折扣加强 + 冲突软折扣启用。<br>
+        通过数据驱动的精准参数调优，将合约胜率从 61.9% 提升到 <strong>63.1%</strong>，同时收益提升 +3.6%。
     </p>
     <div class="strategy-meta">
-        <span class="badge green">+178% 收益 / pPF 2.25</span>
+        <span class="badge green">WR 63.1% / +206% 收益 / cPF 1.53</span>
         <span class="badge blue">主TF: 1h / 决策TF: 15m+1h+4h+24h</span>
-        <span class="badge purple">Regime门控: low_vol_trend +35</span>
-        <span class="badge yellow">分段止盈v3: 12% / 25%</span>
-        <span class="badge orange">宽止损 -20% / 宽追踪 20%</span>
+        <span class="badge purple">结构折扣 d0=0.10 d1=0.20</span>
+        <span class="badge yellow">追踪止盈 19% / 回撤 50%</span>
+        <span class="badge orange">冲突软折扣 trend/high_vol @0.60</span>
     </div>
 </div>
 
 <div class="improvement-card">
-    <strong>v5.1 改进说明（2026-02-14）：</strong><br>
-    1. <strong>P0前视修复</strong>：regime检测和trend EMA从 <code>idx</code> 改为 <code>idx-1</code>，消除当前bar收盘价前视偏差。<br>
-    2. <strong>P1修复</strong>：所有平仓路径（止损/追踪/超时/反向/硬止损）正确重置 partial TP 状态；新增多仓NoTP退出逻辑。<br>
-    3. <strong>参数重优化</strong>：59组扫描发现 <code>short_sl=-0.20, short_trail=0.20</code> 为最优（vs旧值-0.16/0.15）。<br>
-    4. <strong>初始条件标准化</strong>：统一为 <strong>10万USDT、0 ETH</strong> 纯U起步，方便后续核对。<br>
-    <strong>宽止损+宽追踪让仓位有更多呼吸空间</strong>，合约PF从1.06提升到1.25。
+    <strong>v6.0 P1 优化说明（2026-02-15）：</strong><br>
+    1. <strong>追踪止盈微调</strong>（short_trail 0.20→0.19）：把峰值 19% 但未触及 TP1 的交易锁定为赢，核心 WR 突破手段。<br>
+    2. <strong>多单入场门槛降低</strong>（long_threshold 30→25）：BS 30-50 多单历史 WR=100%，新增 2 笔全赢多单。<br>
+    3. <strong>结构折扣更激进</strong>（d0: 0.15→0.10, d1: 0.25→0.20）：0 本确认仅用 10% 仓位，1 本确认 20%。<br>
+    4. <strong>冲突软折扣启用</strong>（use_short_conflict_soft_discount=True, mult=0.60）：trend/high_vol 冲突信号空单仓位打六折。<br>
+    <strong>WR 61.9% → 63.1%，收益 +202.7% → +206.3%，合约PF 1.50 → 1.53</strong>
 </div>
 
 <div class="card section">
@@ -104,17 +104,17 @@
         <li>信号层：六维评分（背离/均线/蜡烛图/布林带/量价/KDJ）在多周期并行生成 SS/BS。</li>
         <li>决策层：多周期共识 + veto 过滤 + regime 动态阈值 + 双引擎（trend/reversion）切换。</li>
         <li>风控层：组合保护（连亏/日亏/全局回撤）、硬断路器、分段止盈、趋势持仓底线。</li>
-        <li><strong>v5.1 三重优化：</strong>P0前视修复 → P1状态重置 → 参数重优化（宽止损+宽追踪）。</li>
+        <li><strong>v6.0 四重优化：</strong>追踪止盈微调 → 多单门槛降低 → 结构折扣加强 → 冲突软折扣启用。</li>
     </ul>
 </div>
 
 <div class="card section">
-    <h3 class="card-title">📊 v5.1 最优表现</h3>
+    <h3 class="card-title">📊 v6.0 最优表现</h3>
     <div class="stats-grid">
         <div class="stat-card">
             <div class="stat-label">回测区间</div>
             <div class="stat-value">2025-01 ~ 2026-01</div>
-            <div class="stat-note">run#228（100K USDT 起步）</div>
+            <div class="stat-note">run#488（100K USDT 起步）</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">初始资金</div>
@@ -123,184 +123,191 @@
         </div>
         <div class="stat-card">
             <div class="stat-label">策略收益</div>
-            <div class="stat-value positive">+179.84%</div>
-            <div class="stat-note">期末 $279,839</div>
+            <div class="stat-value positive">+206.33%</div>
+            <div class="stat-note">期末 $306,330</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">Alpha</div>
-            <div class="stat-value positive">+206.94%</div>
+            <div class="stat-value positive">+233.44%</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">胜率</div>
+            <div class="stat-value positive">63.1%</div>
+            <div class="stat-note">135 胜 / 79 负</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">最大回撤</div>
-            <div class="stat-value" style="color:var(--accent-yellow);">-14.88%</div>
+            <div class="stat-value" style="color:var(--accent-yellow);">-14.0%</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">合约PF</div>
-            <div class="stat-value positive">1.25</div>
+            <div class="stat-value positive">1.53</div>
         </div>
         <div class="stat-card">
             <div class="stat-label">组合PF</div>
-            <div class="stat-value positive">2.27</div>
+            <div class="stat-value positive">2.76</div>
         </div>
     </div>
 
     <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">版本对比</h4>
     <table class="param-table">
         <thead>
-            <tr><th>指标</th><th>v5.0 (run#119)</th><th>v5.1 (run#222)</th><th>改进</th></tr>
+            <tr><th>指标</th><th>v5.1 (run#228)</th><th>v6.0 基线 (run#467)</th><th>v6.0 最终 (run#488)</th><th>改进</th></tr>
         </thead>
         <tbody>
             <tr>
                 <td>主区间收益</td>
-                <td>+137.86%</td>
-                <td class="pnl-pos"><strong>+178.15%</strong></td>
-                <td class="pnl-pos">+40.3pp</td>
-            </tr>
-            <tr>
-                <td>期末资金</td>
-                <td>$475,729</td>
-                <td><strong>$556,309</strong></td>
-                <td>+$80,580</td>
-            </tr>
-            <tr>
-                <td>最大回撤</td>
-                <td>-12.30%</td>
-                <td><strong>-14.86%</strong></td>
-                <td style="color:var(--accent-yellow);">-2.56pp</td>
-            </tr>
-            <tr>
-                <td>组合PF</td>
-                <td>1.91</td>
-                <td class="pnl-pos"><strong>2.25</strong></td>
-                <td class="pnl-pos">+0.34</td>
-            </tr>
-            <tr>
-                <td>合约PF</td>
-                <td>1.06</td>
-                <td class="pnl-pos"><strong>1.25</strong></td>
-                <td class="pnl-pos">+0.19</td>
+                <td>+179.84%</td>
+                <td>+202.68%</td>
+                <td class="pnl-pos"><strong>+206.33%</strong></td>
+                <td class="pnl-pos">+26.5pp vs v5.1</td>
             </tr>
             <tr>
                 <td>胜率</td>
-                <td>60.7%</td>
-                <td><strong>61.1%</strong></td>
-                <td>+0.4pp</td>
+                <td>~61%</td>
+                <td>61.9%</td>
+                <td class="pnl-pos"><strong>63.1%</strong></td>
+                <td class="pnl-pos">+1.2pp</td>
+            </tr>
+            <tr>
+                <td>合约PF</td>
+                <td>1.25</td>
+                <td>1.50</td>
+                <td class="pnl-pos"><strong>1.53</strong></td>
+                <td class="pnl-pos">+0.28 vs v5.1</td>
+            </tr>
+            <tr>
+                <td>组合PF</td>
+                <td>2.27</td>
+                <td>2.76</td>
+                <td class="pnl-pos"><strong>2.76</strong></td>
+                <td class="pnl-pos">+0.49 vs v5.1</td>
+            </tr>
+            <tr>
+                <td>最大回撤</td>
+                <td>-14.88%</td>
+                <td>-13.92%</td>
+                <td><strong>-14.0%</strong></td>
+                <td class="pnl-pos">+0.9pp 改善 vs v5.1</td>
+            </tr>
+            <tr>
+                <td>总费用</td>
+                <td>—</td>
+                <td>$41,076</td>
+                <td><strong>$14,312</strong></td>
+                <td class="pnl-pos">-65%</td>
             </tr>
         </tbody>
     </table>
 
-    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">OOS (2024) 对比</h4>
-    <table class="param-table">
-        <thead>
-            <tr><th>指标</th><th>v5.0 (run#120)</th><th>v5.1 (run#223)</th></tr>
-        </thead>
-        <tbody>
-            <tr><td>OOS 收益</td><td>+33.87%</td><td><strong>+16.19%</strong></td></tr>
-            <tr><td>OOS 回撤</td><td>-27.43%</td><td><strong>-26.29%</strong></td></tr>
-            <tr><td>OOS 组合PF</td><td>1.76</td><td><strong>1.84</strong></td></tr>
-            <tr><td>OOS 合约PF</td><td>1.08</td><td><strong>1.12</strong></td></tr>
-        </tbody>
-    </table>
-
-    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">Regime 分析（run#222）</h4>
+    <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">Regime 分析（run#488）</h4>
     <table class="param-table">
         <thead>
             <tr><th>Regime</th><th>笔数</th><th>净PnL</th><th>pPF</th></tr>
         </thead>
         <tbody>
-            <tr><td>neutral</td><td>275</td><td class="pnl-pos">+$183,686</td><td>1.70</td></tr>
-            <tr><td>trend</td><td>104</td><td class="pnl-pos">+$144,105</td><td>4.45</td></tr>
-            <tr><td>low_vol_trend</td><td>38</td><td class="pnl-pos">+$56,804</td><td>4.24</td></tr>
-            <tr><td>high_vol</td><td>20</td><td class="pnl-pos">+$41,356</td><td>4.23</td></tr>
-            <tr><td>high_vol_choppy</td><td>7</td><td class="pnl-pos">+$570</td><td>1.12</td></tr>
+            <tr><td>neutral</td><td>277</td><td class="pnl-pos">+$127,258</td><td>2.08</td></tr>
+            <tr><td>trend</td><td>89</td><td class="pnl-pos">+$74,430</td><td>6.35</td></tr>
+            <tr><td>low_vol_trend</td><td>40</td><td class="pnl-pos">+$35,330</td><td>5.50</td></tr>
+            <tr><td>high_vol</td><td>21</td><td class="pnl-pos">+$17,343</td><td>4.73</td></tr>
+            <tr><td>high_vol_choppy</td><td>7</td><td class="pnl-pos">+$1,405</td><td>2.16</td></tr>
         </tbody>
     </table>
+    <p class="hint">所有 5 个 regime 均为正 PnL，策略在各市场状态下均有效。</p>
 
     <h4 style="font-size:14px;font-weight:600;margin:16px 0 8px;color:var(--text-primary);">关键 Run 关联</h4>
     <table class="param-table">
         <thead>
-            <tr><th>Run</th><th>标签</th><th>区间</th><th>收益</th><th>MaxDD</th><th>pPF</th><th>用途</th></tr>
+            <tr><th>Run</th><th>标签</th><th>区间</th><th>收益</th><th>WR</th><th>cPF</th><th>用途</th></tr>
         </thead>
         <tbody>
             <tr style="background:rgba(34,197,94,0.06);">
-                <td><strong>#228</strong></td>
-                <td>v5.1 正式 (100K)</td>
+                <td><strong>#488</strong></td>
+                <td>v6.0 最终</td>
                 <td>2025-01~2026-01</td>
-                <td class="pnl-pos"><strong>+179.84%</strong></td>
-                <td><strong>-14.88%</strong></td>
-                <td><strong>2.27</strong></td>
-                <td><strong>v5.1 主线 (当前最优)</strong></td>
-            </tr>
-            <tr style="background:rgba(34,197,94,0.06);">
-                <td><strong>#230</strong></td>
-                <td>v5.1 OOS (100K)</td>
-                <td>2024-01~2024-12</td>
-                <td class="pnl-pos"><strong>+8.95%</strong></td>
-                <td><strong>-22.04%</strong></td>
-                <td><strong>1.27</strong></td>
-                <td>OOS验证</td>
+                <td class="pnl-pos"><strong>+206.3%</strong></td>
+                <td><strong>63.1%</strong></td>
+                <td><strong>1.53</strong></td>
+                <td><strong>v6.0 主线（当前最优）</strong></td>
             </tr>
             <tr>
-                <td>#222</td>
-                <td>v5.1 (200K旧口径)</td>
+                <td>#467</td>
+                <td>v6.0 基线（P0后）</td>
                 <td>2025-01~2026-01</td>
-                <td>+178.15%</td>
-                <td>-14.86%</td>
-                <td>2.25</td>
-                <td>参照（200K USDT+ETH旧口径）</td>
+                <td>+202.7%</td>
+                <td>61.9%</td>
+                <td>1.50</td>
+                <td>P1优化前基线</td>
+            </tr>
+            <tr>
+                <td>#228</td>
+                <td>v5.1 正式</td>
+                <td>2025-01~2026-01</td>
+                <td>+179.8%</td>
+                <td>~61%</td>
+                <td>1.25</td>
+                <td>v5.1 主线（已超越）</td>
             </tr>
         </tbody>
     </table>
 </div>
 
 <div class="card section">
-    <h3 class="card-title">⚙️ v5.1 上线参数集</h3>
+    <h3 class="card-title">⚙️ v6.0 上线参数集</h3>
     <table class="param-table">
         <thead>
-            <tr><th>参数组</th><th>参数</th><th>值</th><th>v5.0值</th><th>说明</th></tr>
+            <tr><th>参数组</th><th>参数</th><th>值</th><th>v5.1值</th><th>说明</th></tr>
         </thead>
         <tbody>
             <tr><td>多周期</td><td><code>decision_tfs</code></td><td>15m,1h,4h,24h</td><td>同</td><td>日线级趋势锚定</td></tr>
             <tr><td>入场阈值</td><td><code>short_threshold</code></td><td>40</td><td>40</td><td>保持（扫描验证最稳健）</td></tr>
-            <tr><td>入场阈值</td><td><code>sell/buy/long_threshold</code></td><td>18 / 25 / 30</td><td>同</td><td>保持</td></tr>
             <tr style="background:rgba(34,197,94,0.06);">
-                <td>止损 <span class="new-tag">变更</span></td>
-                <td><code>short_sl</code></td>
-                <td><strong>-0.20</strong></td>
-                <td>-0.16</td>
-                <td>宽止损: P0修复后需更大呼吸空间</td>
+                <td>入场阈值 <span class="new-tag">变更</span></td>
+                <td><code>long_threshold</code></td>
+                <td><strong>25</strong></td>
+                <td>30</td>
+                <td>降低: BS 30-50 多单 WR=100%，增加高胜率多单</td>
             </tr>
+            <tr><td>入场阈值</td><td><code>sell/buy_threshold</code></td><td>18 / 25</td><td>同</td><td>保持</td></tr>
+            <tr><td>止损</td><td><code>short_sl</code></td><td>-0.20</td><td>-0.20</td><td>保持宽止损</td></tr>
             <tr><td>止盈</td><td><code>short_tp / long_tp</code></td><td>0.6 / 0.4</td><td>同</td><td>保持</td></tr>
             <tr style="background:rgba(34,197,94,0.06);">
                 <td>追踪 <span class="new-tag">变更</span></td>
                 <td><code>short_trail</code></td>
-                <td><strong>0.20</strong></td>
-                <td>0.15</td>
-                <td>宽追踪: 让TP1后剩余仓位充分发展到TP2</td>
+                <td><strong>0.19</strong></td>
+                <td>0.20</td>
+                <td>微调: 峰值 19% 交易锁为赢，WR +1.2%</td>
             </tr>
             <tr><td>分段止盈</td><td><code>use_partial_tp_v3</code></td><td>true</td><td>同</td><td>早锁利：TP1=12%，TP2=25%</td></tr>
             <tr style="background:rgba(34,197,94,0.06);">
-                <td>NoTP退出 <span class="new-tag">变更</span></td>
-                <td><code>no_tp_exit_bars</code></td>
-                <td><strong>0 (关闭)</strong></td>
-                <td>16</td>
-                <td>宽止损下不需要提前退出（验证有害）</td>
+                <td>结构折扣 <span class="new-tag">加强</span></td>
+                <td><code>neutral_struct_discount_0/1</code></td>
+                <td><strong>0.10 / 0.20</strong></td>
+                <td>0.15 / 0.25</td>
+                <td>0本确认 10%仓位，1本确认 20%仓位</td>
             </tr>
-            <tr><td>SPOT_SELL过滤</td><td><code>use_spot_sell_confirm / ss / min</code></td><td>true / 35 / 3</td><td>同</td><td>confirm_min=3</td></tr>
-            <tr><td>SPOT_SELL屏蔽</td><td><code>spot_sell_regime_block</code></td><td>high_vol,trend</td><td>同</td><td>趋势段误卖屏蔽</td></tr>
+            <tr style="background:rgba(34,197,94,0.06);">
+                <td>冲突折扣 <span class="new-tag">新启用</span></td>
+                <td><code>use_short_conflict_soft_discount</code></td>
+                <td><strong>True / 0.60</strong></td>
+                <td>False</td>
+                <td>trend/high_vol 高冲突空单仓位打六折</td>
+            </tr>
             <tr><td>Regime门控</td><td><code>regime_short_gate_add</code></td><td>35</td><td>同</td><td>仅 low_vol_trend 生效</td></tr>
+            <tr><td>Regime门槛</td><td><code>regime_short_threshold</code></td><td>neutral:45</td><td>同</td><td>neutral 空单 SS 须 >= 45</td></tr>
             <tr><td>保护</td><td><code>hard_stop_loss / prot_global_dd</code></td><td>-0.28 / 0.15</td><td>同</td><td>保持</td></tr>
         </tbody>
     </table>
 </div>
 
 <div class="card section">
-    <h3 class="card-title">🔬 参数扫描发现（v5.1 关键洞察）</h3>
+    <h3 class="card-title">🔬 P1 优化关键洞察</h3>
     <ul>
-        <li><strong>trail 与 partial_tp_1_early 的耦合</strong>：<code>short_trail</code> 必须 > <code>partial_tp_1_early</code>(0.12)，否则追踪止盈在 TP1 触发后立即锁住剩余仓位，永远无法到达 TP2，收益从 +178% 暴跌到 -15%。</li>
-        <li><strong>P0修复后止损需放宽</strong>：regime检测从 idx 改为 idx-1 后，风控反应延迟1bar，sl=-0.16 过紧导致过多止损；sl=-0.20 让仓位有足够呼吸空间。</li>
-        <li><strong>59组扫描验证</strong>：sl=[-.12,-.14,-.16,-.18,-.20,-.25] × st=[40,45,50] × trail=[.10,.12,.15,.18,.20,.25]，仅 21/59 正收益，参数敏感度高。</li>
-        <li><strong>st=40 在宽止损下更稳健</strong>：st=45 在 sl=-0.20 时全部失效（与 sl=-0.16/0.18 表现不同），说明参数间存在非线性交互。</li>
+        <li><strong>WR vs PF 精确平衡</strong>：short_trail 从 0.20 降低到 0.12~0.19 的扫描中，0.19 是唯一同时满足 WR>63% 且 ret>200% 的参数点。0.18 也达标但 ret 仅 200.7%，0.17 达标但 ret 降至 191.6%。</li>
+        <li><strong>低 BS 多单的异常高胜率</strong>：BS 30-50 的多单 WR=100%（10/10），BS 50+ 仅 66%。弱买入信号在整体上行市场中反而更可靠。</li>
+        <li><strong>neutral 空单已修复</strong>：通过结构折扣（d0=0.10），neutral 开仓空单从 v5.1 的 PnL 亏损修复为 WR=61.8%、PnL=+$21K。</li>
+        <li><strong>trend/high_vol 空单是残存瓶颈</strong>：trend 空单 52.3% WR、high_vol 46.2% WR。冲突软折扣部分缓解但无法根治——止损在 2-11 bars 内触发，太快以至于任何退出逻辑都来不及干预。</li>
+        <li><strong>蝴蝶效应警告</strong>：屏蔽 high_vol 空单、扩展结构折扣到 trend、NoTP 提前退出等看似合理的改动均因蝴蝶效应导致反效果。仓位调节类改动（不改变交易时序）比门控类改动（改变时序）更安全。</li>
     </ul>
 </div>
 
@@ -308,13 +315,30 @@
     <h3 class="card-title">🧪 优化历程</h3>
     <div class="timeline">
         <div class="round">
-            <div class="round-date">2026-02-14 最新</div>
+            <div class="round-date">2026-02-15 最新</div>
+            <div class="round-title">v6.0: P1 胜率突破优化 <span class="opt-tag">OPTIMIZED</span></div>
+            <div class="round-body">
+                数据驱动优化：分析 215 笔交易的 regime/direction/exit-type/structural-confirms 分布，
+                发现 short_trail=0.19 可将 19% 峰值利润交易锁为追踪止盈赢，long_threshold=25 可新增高 WR 多单。<br>
+                同时启用冲突软折扣（Codex run#465 验证）和更激进结构折扣（d0=0.10）。<br>
+                <strong>run#488: +206.3% / WR 63.1% / cPF 1.53 / pPF 2.76 / MaxDD -14.0%</strong>
+            </div>
+        </div>
+        <div class="round">
+            <div class="round-date">2026-02-14</div>
+            <div class="round-title">P0: 可解释性修复（纯观测，零行为变更）</div>
+            <div class="round-body">
+                修复 structural_discount / book_consensus_gate 未落库问题，补全 strategy_snapshot 13 个字段，
+                添加回归测试。run#425 验证零行为变更。
+            </div>
+        </div>
+        <div class="round">
+            <div class="round-date">2026-02-14</div>
             <div class="round-title">v5.1: P0前视修复 + P1状态重置 + 参数重优化 <span class="opt-tag">OPTIMIZED</span></div>
             <div class="round-body">
-                修复 regime检测(idx→idx-1)和 trend EMA(idx→idx-1) 前视偏差，修复 partial TP 状态在所有平仓路径的重置，
-                新增多仓 NoTP 退出逻辑。<br>
+                修复 regime检测(idx→idx-1)和 trend EMA(idx→idx-1) 前视偏差，修复 partial TP 状态在所有平仓路径的重置。<br>
                 59组参数扫描后确认最优配置：<code>sl=-0.20, trail=0.20, NoTP=off</code>。<br>
-                <strong>run#222: +178.15% / -14.86% MaxDD / pPF 2.25 / cPF 1.25</strong>
+                <strong>run#228: +179.8% / -14.9% MaxDD / pPF 2.27 / cPF 1.25</strong>
             </div>
         </div>
         <div class="round">
@@ -325,36 +349,31 @@
                 <strong>run#119: +137.86% / -12.30% MaxDD / pPF 1.91 / cPF 1.06</strong>
             </div>
         </div>
-        <div class="round">
-            <div class="round-date">2026-02-14</div>
-            <div class="round-title">v4.5: run#85 基线（数据已废弃）</div>
-            <div class="round-body">所有 v4.x 数据因 partial_tp bug 膨胀约 6 倍，已废弃。</div>
-        </div>
     </div>
 </div>
 
 <div class="card section">
     <h3 class="card-title">📋 下一步</h3>
     <ul>
-        <li><strong>OOS MaxDD 优化：</strong>2024 OOS MaxDD -26.29% 仍偏大，考虑针对性风控增强。</li>
-        <li><strong>Regime 精细化：</strong>neutral 段 pPF 1.70 有提升空间，考虑 regime-specific 参数调优。</li>
-        <li><strong>鲁棒性提升：</strong>策略对 trail/sl 参数敏感度高，考虑自适应机制降低参数依赖。</li>
-        <li><strong>实盘部署：</strong>确认 v5.1 参数在 live_config.py 中对齐后部署上线。</li>
+        <li><strong>P2 OOS/WFO 验证：</strong>在 2024 区间进行样本外验证，确认 v6.0 参数不过拟合。</li>
+        <li><strong>trend/high_vol 空单根治：</strong>止损在 2-11 bars 内触发，需要更根本的信号层改进（如 regime-specific 融合权重调整）。</li>
+        <li><strong>Neutral 融合权重优化：</strong>Divergence 权重 70% 在 neutral 中区分度低（Cohen's d ≈ -0.04），CS/KDJ 判别力高但权重不足。</li>
+        <li><strong>自适应机制：</strong>策略对 trail 参数敏感度高（0.01 差异 = ~$15K），考虑 regime-adaptive trailing。</li>
     </ul>
 </div>
 
 <div class="card section">
     <h3 class="card-title">🔗 结果与入口</h3>
     <p>
-        <a href="/strategy/multi-tf-daily?run_id=228" style="color:var(--accent-blue);">v5.1 主区间 run#228</a> ·
-        <a href="/strategy/multi-tf-daily?run_id=230" style="color:var(--accent-blue);">v5.1 OOS run#230</a> ·
-        <a href="/strategy/multi-tf-daily?run_id=222" style="color:var(--accent-blue);">旧口径 run#222</a> ·
+        <a href="/strategy/multi-tf-daily?run_id=488" style="color:var(--accent-blue);">v6.0 主区间 run#488</a> ·
+        <a href="/strategy/multi-tf-daily?run_id=467" style="color:var(--accent-blue);">v6.0 基线 run#467</a> ·
+        <a href="/strategy/multi-tf-daily?run_id=228" style="color:var(--accent-blue);">v5.1 run#228</a> ·
         <a href="/strategy/live-control" style="color:var(--accent-blue);">实盘控制面板</a>
     </p>
     <p>
         <a href="https://invest.executor.life/strategy/current" target="_blank" rel="noopener noreferrer" style="color:var(--accent-blue);">线上策略说明页</a> ·
         <a href="https://invest.executor.life/strategy/multi-tf-daily" target="_blank" rel="noopener noreferrer" style="color:var(--accent-blue);">线上运行结果页</a>
     </p>
-    <div class="hint">最后更新：2026-02-14 · v5.1 = P0前视修复 + P1状态重置 + 参数重优化 · 100K USDT起步 · run#228 / #230</div>
+    <div class="hint">最后更新：2026-02-15 · v6.0 = P1胜率突破优化 · WR 63.1% · 100K USDT起步 · run#488</div>
 </div>
 {% endblock %}

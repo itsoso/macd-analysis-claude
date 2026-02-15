@@ -279,6 +279,14 @@ def _build_strategy_snapshot(config):
         'long_conflict_div_sell_min': config.get('long_conflict_div_sell_min'),
         'long_conflict_ma_buy_min': config.get('long_conflict_ma_buy_min'),
         'long_conflict_discount_mult': config.get('long_conflict_discount_mult'),
+        # long 高置信错单候选门控（A/B）
+        'use_long_high_conf_gate_a': config.get('use_long_high_conf_gate_a', False),
+        'long_high_conf_gate_a_conf_min': config.get('long_high_conf_gate_a_conf_min'),
+        'long_high_conf_gate_a_regime': config.get('long_high_conf_gate_a_regime'),
+        'use_long_high_conf_gate_b': config.get('use_long_high_conf_gate_b', False),
+        'long_high_conf_gate_b_conf_min': config.get('long_high_conf_gate_b_conf_min'),
+        'long_high_conf_gate_b_regime': config.get('long_high_conf_gate_b_regime'),
+        'long_high_conf_gate_b_vp_buy_min': config.get('long_high_conf_gate_b_vp_buy_min'),
         # 空单逆势防守退出（结构化风控）
         'use_short_adverse_exit': config.get('use_short_adverse_exit', False),
         'short_adverse_min_bars': config.get('short_adverse_min_bars'),

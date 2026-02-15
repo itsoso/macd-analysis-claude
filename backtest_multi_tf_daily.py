@@ -264,6 +264,14 @@ def _build_default_config():
         'long_conflict_div_sell_min': _LIVE_DEFAULT.long_conflict_div_sell_min,
         'long_conflict_ma_buy_min': _LIVE_DEFAULT.long_conflict_ma_buy_min,
         'long_conflict_discount_mult': _LIVE_DEFAULT.long_conflict_discount_mult,
+        # long 高置信错单候选门控（A/B）
+        'use_long_high_conf_gate_a': _LIVE_DEFAULT.use_long_high_conf_gate_a,
+        'long_high_conf_gate_a_conf_min': _LIVE_DEFAULT.long_high_conf_gate_a_conf_min,
+        'long_high_conf_gate_a_regime': _LIVE_DEFAULT.long_high_conf_gate_a_regime,
+        'use_long_high_conf_gate_b': _LIVE_DEFAULT.use_long_high_conf_gate_b,
+        'long_high_conf_gate_b_conf_min': _LIVE_DEFAULT.long_high_conf_gate_b_conf_min,
+        'long_high_conf_gate_b_regime': _LIVE_DEFAULT.long_high_conf_gate_b_regime,
+        'long_high_conf_gate_b_vp_buy_min': _LIVE_DEFAULT.long_high_conf_gate_b_vp_buy_min,
         # 空单逆势防守退出（结构化风险控制）
         'use_short_adverse_exit': _LIVE_DEFAULT.use_short_adverse_exit,
         'short_adverse_min_bars': _LIVE_DEFAULT.short_adverse_min_bars,
@@ -1011,6 +1019,8 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         summary['short_conflict_soft_discount'] = result.get('short_conflict_soft_discount')
     if result.get('long_conflict_soft_discount'):
         summary['long_conflict_soft_discount'] = result.get('long_conflict_soft_discount')
+    if result.get('long_high_conf_gates'):
+        summary['long_high_conf_gates'] = result.get('long_high_conf_gates')
     if result.get('extreme_div_short_veto'):
         summary['extreme_div_short_veto'] = result.get('extreme_div_short_veto')
     signal_replay = _build_signal_replay_report(
@@ -1111,6 +1121,13 @@ def main(trade_start=None, trade_end=None, version_tag=None, experiment_notes=No
         rr_text = ', '.join(f"{k}:{v}" for k, v in sorted(rr.items())) if rr else '-'
         print(f"  多单冲突折扣: eval={lc.get('evaluated', 0)} "
               f"triggered={lc.get('triggered', 0)} avg_mult={lc.get('avg_mult_on_triggered', 1.0):.3f} "
+              f"reasons[{rr_text}]")
+    if summary.get('long_high_conf_gates'):
+        lg = summary['long_high_conf_gates']
+        rr = lg.get('reason_counts', {}) or {}
+        rr_text = ', '.join(f"{k}:{v}" for k, v in sorted(rr.items())) if rr else '-'
+        print(f"  多单高置信门控: eval={lg.get('evaluated', 0)} "
+              f"blocked={lg.get('blocked', 0)} A={lg.get('blocked_a', 0)} B={lg.get('blocked_b', 0)} "
               f"reasons[{rr_text}]")
     if summary.get('extreme_div_short_veto'):
         dv = summary['extreme_div_short_veto']

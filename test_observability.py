@@ -196,3 +196,28 @@ def test_strategy_snapshot_contains_long_conflict_soft_discount_fields():
     ]
     for key in required_keys:
         assert key in snapshot
+
+
+def test_strategy_snapshot_contains_long_high_conf_gate_fields():
+    """strategy_snapshot 必须包含 long 高置信候选门控字段。"""
+    config = {
+        'use_long_high_conf_gate_a': True,
+        'long_high_conf_gate_a_conf_min': 0.85,
+        'long_high_conf_gate_a_regime': 'low_vol_trend',
+        'use_long_high_conf_gate_b': True,
+        'long_high_conf_gate_b_conf_min': 0.90,
+        'long_high_conf_gate_b_regime': 'neutral',
+        'long_high_conf_gate_b_vp_buy_min': 30.0,
+    }
+    snapshot = db_mod._build_strategy_snapshot(config)
+    required_keys = [
+        'use_long_high_conf_gate_a',
+        'long_high_conf_gate_a_conf_min',
+        'long_high_conf_gate_a_regime',
+        'use_long_high_conf_gate_b',
+        'long_high_conf_gate_b_conf_min',
+        'long_high_conf_gate_b_regime',
+        'long_high_conf_gate_b_vp_buy_min',
+    ]
+    for key in required_keys:
+        assert key in snapshot

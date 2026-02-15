@@ -870,6 +870,14 @@ def _run_strategy_core(
     long_conflict_div_sell_min = float(config.get('long_conflict_div_sell_min', 50.0))
     long_conflict_ma_buy_min = float(config.get('long_conflict_ma_buy_min', 12.0))
     long_conflict_discount_mult = float(config.get('long_conflict_discount_mult', 0.50))
+    # 多单高置信错单候选门控（A/B）：仅用于验证，不改变默认行为
+    use_long_high_conf_gate_a = bool(config.get('use_long_high_conf_gate_a', False))
+    long_high_conf_gate_a_conf_min = float(config.get('long_high_conf_gate_a_conf_min', 0.85))
+    long_high_conf_gate_a_regime = str(config.get('long_high_conf_gate_a_regime', 'low_vol_trend') or 'low_vol_trend')
+    use_long_high_conf_gate_b = bool(config.get('use_long_high_conf_gate_b', False))
+    long_high_conf_gate_b_conf_min = float(config.get('long_high_conf_gate_b_conf_min', 0.90))
+    long_high_conf_gate_b_regime = str(config.get('long_high_conf_gate_b_regime', 'neutral') or 'neutral')
+    long_high_conf_gate_b_vp_buy_min = float(config.get('long_high_conf_gate_b_vp_buy_min', 30.0))
 
     # P1a: NoTP 提前退出（长短独立 + regime 白名单）
     # 兼容旧参数: no_tp_exit_bars / no_tp_exit_min_pnl / no_tp_exit_regimes
@@ -1021,6 +1029,16 @@ def _run_strategy_core(
         'sum_mult': 0.0,
         'reason_counts': {},
         'regime_counts': {},
+    }
+    long_high_conf_gate_stats = {
+        'enabled': bool(use_long_high_conf_gate_a or use_long_high_conf_gate_b),
+        'enabled_a': use_long_high_conf_gate_a,
+        'enabled_b': use_long_high_conf_gate_b,
+        'evaluated': 0,
+        'blocked': 0,
+        'blocked_a': 0,
+        'blocked_b': 0,
+        'reason_counts': {},
     }
     book_consensus_stats = {
         'enabled': use_neutral_book_consensus,
@@ -2534,6 +2552,32 @@ def _run_strategy_core(
             and not micro_block_long and neutral_long_ok
             and _bk_long_ok
         )
+        _long_high_conf_block = False
+        _long_high_conf_reason = ''
+        if _long_candidate and (use_long_high_conf_gate_a or use_long_high_conf_gate_b):
+            long_high_conf_gate_stats['evaluated'] += 1
+            _lhc_raw = float(long_conf_info.get('raw', 0.0) or 0.0)
+            _lhc_book = signal_meta.get('book_features_weighted', {}) if isinstance(signal_meta, dict) else {}
+            _lhc_vp_buy = float(_lhc_book.get('vp_buy', 0.0) or 0.0) if isinstance(_lhc_book, dict) else 0.0
+            if (use_long_high_conf_gate_a
+                    and _regime_label == long_high_conf_gate_a_regime
+                    and _lhc_raw >= long_high_conf_gate_a_conf_min):
+                _long_high_conf_block = True
+                _long_high_conf_reason = 'gate_a_low_vol_trend_high_conf'
+                long_high_conf_gate_stats['blocked_a'] += 1
+            if (not _long_high_conf_block
+                    and use_long_high_conf_gate_b
+                    and _regime_label == long_high_conf_gate_b_regime
+                    and _lhc_raw >= long_high_conf_gate_b_conf_min
+                    and _lhc_vp_buy >= long_high_conf_gate_b_vp_buy_min):
+                _long_high_conf_block = True
+                _long_high_conf_reason = 'gate_b_neutral_vp_buy'
+                long_high_conf_gate_stats['blocked_b'] += 1
+            if _long_high_conf_block:
+                long_high_conf_gate_stats['blocked'] += 1
+                _rc = long_high_conf_gate_stats['reason_counts']
+                _rc[_long_high_conf_reason] = int(_rc.get(_long_high_conf_reason, 0)) + 1
+                _long_candidate = False
         if use_confidence_learning and _long_candidate and not long_conf_info.get('allow', True):
             confidence_stats['long_blocked'] += 1
             _cr = str(long_conf_info.get('reason', 'unknown'))
@@ -2896,6 +2940,25 @@ def _run_strategy_core(
         })
         return out
 
+    def _build_long_high_conf_gates_result():
+        if not (use_long_high_conf_gate_a or use_long_high_conf_gate_b):
+            return None
+        out = dict(long_high_conf_gate_stats)
+        out.update({
+            'gate_a': {
+                'enabled': use_long_high_conf_gate_a,
+                'regime': long_high_conf_gate_a_regime,
+                'conf_min': long_high_conf_gate_a_conf_min,
+            },
+            'gate_b': {
+                'enabled': use_long_high_conf_gate_b,
+                'regime': long_high_conf_gate_b_regime,
+                'conf_min': long_high_conf_gate_b_conf_min,
+                'vp_buy_min': long_high_conf_gate_b_vp_buy_min,
+            },
+        })
+        return out
+
     if len(trade_df) > 1:
         result = eng.get_result(trade_df)
         if use_neutral_quality_gate:
@@ -2949,6 +3012,9 @@ def _run_strategy_core(
         _lc = _build_long_conflict_soft_discount_result()
         if _lc:
             result['long_conflict_soft_discount'] = _lc
+        _lhc = _build_long_high_conf_gates_result()
+        if _lhc:
+            result['long_high_conf_gates'] = _lhc
         _dv = _build_extreme_div_short_veto_result()
         if _dv:
             result['extreme_div_short_veto'] = _dv
@@ -3006,6 +3072,9 @@ def _run_strategy_core(
     _lc = _build_long_conflict_soft_discount_result()
     if _lc:
         result['long_conflict_soft_discount'] = _lc
+    _lhc = _build_long_high_conf_gates_result()
+    if _lhc:
+        result['long_high_conf_gates'] = _lhc
     _dv = _build_extreme_div_short_veto_result()
     if _dv:
         result['extreme_div_short_veto'] = _dv
