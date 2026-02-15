@@ -22,7 +22,13 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from binance_fetcher import fetch_binance_klines
+from binance_fetcher import (
+    fetch_binance_klines,
+    fetch_mark_price_klines,
+    fetch_funding_rate_history,
+    fetch_open_interest_history,
+    merge_perp_data_into_klines,
+)
 from indicators import add_all_indicators
 from strategy_enhanced import analyze_signals_enhanced, get_signal_at, DEFAULT_SIG
 from strategy_futures_v4 import _calc_top_score, _calc_bottom_score
@@ -185,6 +191,43 @@ class LiveSignalGenerator:
                         f"数据不足: {len(df) if df is not None else 0} bars"
                     )
                 return False
+
+            # ── V9: 获取衍生品数据 (Mark Price / Funding Rate / OI) ──
+            # 非阻塞: 任何衍生品数据获取失败不影响主信号
+            _perp_days = min(self.lookback_days, 90)
+            mark_df = None
+            funding_df = None
+            oi_df = None
+            try:
+                mark_df = fetch_mark_price_klines(
+                    self.symbol, interval=self.timeframe, days=_perp_days
+                )
+            except Exception as _e:
+                if self.logger:
+                    self.logger.warning(f"Mark Price 获取失败 (非致命): {_e}")
+            try:
+                funding_df = fetch_funding_rate_history(
+                    self.symbol, days=_perp_days
+                )
+            except Exception as _e:
+                if self.logger:
+                    self.logger.warning(f"Funding Rate 获取失败 (非致命): {_e}")
+            try:
+                oi_df = fetch_open_interest_history(
+                    self.symbol, interval=self.timeframe, days=_perp_days
+                )
+            except Exception as _e:
+                if self.logger:
+                    self.logger.warning(f"OI 获取失败 (非致命): {_e}")
+
+            # 合并衍生品数据到主 DataFrame
+            if any(x is not None for x in (mark_df, funding_df, oi_df)):
+                df = merge_perp_data_into_klines(df, mark_df, funding_df, oi_df)
+                _perp_cols = [c for c in ('mark_high', 'mark_low', 'funding_rate',
+                                          'open_interest', 'taker_buy_quote')
+                              if c in df.columns and df[c].notna().any()]
+                if self.logger:
+                    self.logger.info(f"衍生品数据已合并: {_perp_cols}")
 
             # 计算指标
             df = add_all_indicators(df)

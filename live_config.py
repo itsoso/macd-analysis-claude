@@ -222,11 +222,20 @@ STRATEGY_PARAM_VERSIONS = {
         "continuous_trail_max_pb": 0.60,          # 低利润时最宽回撤容忍 60%
         "continuous_trail_min_pb": 0.30,          # 高利润时最紧回撤容忍 30%
     },
-    "v5": {  # v8.1 (P20): v8.0 + 空头追踪收紧
-        # ── 基础参数 (继承 v8.0) ──
+    "v5": {
+        # ═══════════════════════════════════════════════════════════════
+        #  v9.0 — 架构简化版
+        #  核心变更 (四大模型共识):
+        #    1. B1b: 彻底禁止 neutral short (不再修补, 而是去除)
+        #    2. P24: 空头止损分 regime 差异化 (不再全局 -20%)
+        #    3. 简化: 移除了因 B1b 而冗余的 neutral short 复杂门控
+        #  结果: 决策逻辑从"大量门控修补 DIV 信号"简化为"不做 neutral short"
+        # ═══════════════════════════════════════════════════════════════
+        #
+        # ── 基础参数 ──
         "short_threshold": 40,
         "long_threshold": 25,
-        "short_sl": -0.20,
+        "short_sl": -0.20,          # 全局默认 (被 P24 regime SL 覆盖)
         "short_tp": 0.60,
         "long_sl": -0.10,
         "long_tp": 0.40,
@@ -236,23 +245,39 @@ STRATEGY_PARAM_VERSIONS = {
         "short_trail": 0.19,
         "long_trail": 0.12,
         "trail_pullback": 0.50,
-        # ── v7.0 B3: neutral short 入场质量修正 ──
         "cooldown": 6,
-        "regime_short_threshold": "neutral:60",
-        "short_conflict_regimes": "trend,high_vol,neutral",
+        #
+        # ── B1b: 禁止 neutral short ──
+        # 数据: OOS PF 2.09, +40.8%; neutral DIV Cohen's d = -0.64 (反向指标)
+        # 策略: 不再用折扣/门控修补 neutral short, 直接禁止
+        "regime_short_threshold": "neutral:999",
+        #
+        # ── 因 B1b 简化: 冲突折扣仅保留 trend/high_vol (neutral 已无空头) ──
+        "short_conflict_regimes": "trend,high_vol",
+        #
+        # ── 结构折扣: 仍对 neutral long 有效 ──
         "neutral_struct_discount_0": 0.0,
         "neutral_struct_discount_1": 0.05,
         "neutral_struct_discount_2": 0.15,
         "neutral_struct_discount_3": 0.50,
-        # ── v8.0 P13: 连续追踪止盈 ──
+        #
+        # ── P13: 连续追踪止盈 ──
         "use_continuous_trail": True,
         "continuous_trail_start_pnl": 0.05,
         "continuous_trail_max_pb": 0.60,
         "continuous_trail_min_pb": 0.30,
-        # ── v8.1 P20: 空头追踪收紧 ──
-        # P20 A/B: IS +5.5%, PF 0.92→0.96, OOS 无回退
-        # 空头追踪回撤容忍从 60%→40%, 更早锁定利润
+        #
+        # ── P20: 空头追踪收紧 (40% vs 多头 60%) ──
         "continuous_trail_max_pb_short": 0.40,
+        #
+        # ── P24: Regime-Adaptive Stop-Loss ──
+        # 空头止损从全局 -20% 改为分 regime 差异化
+        "use_regime_adaptive_sl": True,
+        "regime_neutral_short_sl": -0.12,        # 理论上被 B1b 禁止
+        "regime_trend_short_sl": -0.15,           # trend: 收紧至 -15%
+        "regime_low_vol_trend_short_sl": -0.18,   # low_vol_trend: -18%
+        "regime_high_vol_short_sl": -0.12,        # high_vol: 挤压风险高, -12%
+        "regime_high_vol_choppy_short_sl": -0.12,
     },
 }
 _ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v5")
@@ -419,6 +444,11 @@ class StrategyConfig:
     micro_score_boost: float = 0.08
     micro_score_dampen: float = 0.10
     micro_margin_mult_step: float = 0.06
+    # V9 Anti-Squeeze Filter: 显式组合条件阻止逆拥挤方向开仓
+    # 多头拥挤: funding_rate >= 0.08% + OI z >= 1.0 + taker_imb >= 0.12 → 阻止开空
+    anti_squeeze_fr_threshold: float = 0.0008       # funding rate 阈值 (0.08%)
+    anti_squeeze_oi_z_threshold: float = 1.0         # OI z-score 阈值
+    anti_squeeze_taker_imb_threshold: float = 0.12   # taker imbalance 阈值
     micro_mode_override: bool = True
 
     # ── 双引擎(趋势/反转) ──

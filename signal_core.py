@@ -850,6 +850,10 @@ def calc_fusion_score_six_batch(signals, df, config, warmup=60, return_features=
         return {}, []
 
     mode = config.get("fusion_mode", "c6_veto_4")
+    # V9: regime_adaptive 的实际权重调整在回测主循环中逐 bar 完成
+    # (optimize_six_book.py L2174-2221), 批量路径只需提供基础分数和 features
+    if mode == "regime_adaptive":
+        mode = "c6_veto_4"
     index = df.index
 
     # ─── 1. 对齐背离信号到 df.index (前向填充) ───

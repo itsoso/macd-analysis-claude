@@ -620,6 +620,24 @@ def _apply_microstructure_overlay(ss, bs, micro_state, config):
         if d >= 2.5:
             overlay['block_long'] = True
 
+    # ── V9 Anti-Squeeze Filter (显式组合条件) ──
+    # GPT Pro 核心建议: funding rate 高 + OI 上升 + taker buy 主导 = 多头拥挤挤空风险
+    # 此时开空极危险 (短期内就止损的主因), 直接阻止或大幅减仓
+    _anti_sq_fr_thr = float(config.get('anti_squeeze_fr_threshold', 0.0008))
+    _anti_sq_oi_thr = float(config.get('anti_squeeze_oi_z_threshold', 1.0))
+    _anti_sq_imb_thr = float(config.get('anti_squeeze_taker_imb_threshold', 0.12))
+    _fr = float(micro_state.get('funding_rate', 0.0))
+    _oi_z = float(micro_state.get('oi_z', 0.0))
+    _imb = float(micro_state.get('taker_imbalance', 0.0))
+    # 多头拥挤: funding 高 + OI 上升 + 主动买盘强 → 阻止开空
+    if _fr >= _anti_sq_fr_thr and _oi_z >= _anti_sq_oi_thr and _imb >= _anti_sq_imb_thr:
+        overlay['block_short'] = True
+        overlay['margin_mult'] *= 0.60  # 如果已有空仓, 大幅减仓
+    # 空头拥挤 (镜像): funding 极低 + OI 上升 + 主动卖盘强 → 阻止开多
+    if _fr <= -_anti_sq_fr_thr and _oi_z >= _anti_sq_oi_thr and _imb <= -_anti_sq_imb_thr:
+        overlay['block_long'] = True
+        overlay['margin_mult'] *= 0.60
+
     # 拥挤状态降风险（即使方向一致也避免过热追单）
     if abs(float(micro_state.get('basis_z', 0.0))) >= float(config.get('micro_basis_crowded_z', 2.2)):
         overlay['margin_mult'] *= 0.80
