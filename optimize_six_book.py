@@ -1011,6 +1011,69 @@ def _run_strategy_core(
     trend_short_min_confirms_regimes = set(r.strip() for r in _tsmc_str.split(',') if r.strip())
     trend_short_min_confirms_n = int(config.get('trend_short_min_confirms_n', 3))
 
+    # ── P23: 加权结构确认 (基于 Cohen's d 先验) ──
+    # 替代简单计数: sum(1 if feat>thr) → sum(alpha_weight * strength) - sum(penalty)
+    use_weighted_confirms = bool(config.get('use_weighted_confirms', False))
+    # 各书在 sell 方向的 alpha 权重 (正: 有判别力, 0: 无效)
+    # 基于 P16 Cohen's d 分析: MA/CS 较强, KDJ 中等, BB/VP 弱
+    _wc_sell_weights = {
+        'ma_sell':  float(config.get('wc_ma_sell_w', 1.5)),
+        'cs_sell':  float(config.get('wc_cs_sell_w', 1.4)),
+        'kdj_sell': float(config.get('wc_kdj_sell_w', 1.0)),
+        'vp_sell':  float(config.get('wc_vp_sell_w', 0.6)),
+        'bb_sell':  float(config.get('wc_bb_sell_w', 0.3)),
+    }
+    _wc_buy_weights = {
+        'ma_buy':  float(config.get('wc_ma_buy_w', 1.5)),
+        'cs_buy':  float(config.get('wc_cs_buy_w', 1.4)),
+        'kdj_buy': float(config.get('wc_kdj_buy_w', 1.0)),
+        'vp_buy':  float(config.get('wc_vp_buy_w', 0.6)),
+        'bb_buy':  float(config.get('wc_bb_buy_w', 0.3)),
+    }
+    # 加权确认的等效阈值 (替代 neutral_book_min_confirms)
+    wc_min_score = float(config.get('wc_min_score', 2.0))
+    # 冲突方向的惩罚缩放系数
+    wc_conflict_penalty_scale = float(config.get('wc_conflict_penalty_scale', 0.5))
+    # 结构折扣映射: 加权分 → 折扣乘数 (替代固定的 confirms=0/1/2/3 表)
+    wc_struct_discount_thresholds = [
+        float(config.get('wc_struct_discount_thr_0', 0.5)),   # < thr_0 → discount_0
+        float(config.get('wc_struct_discount_thr_1', 1.5)),   # < thr_1 → discount_1
+        float(config.get('wc_struct_discount_thr_2', 2.5)),   # < thr_2 → discount_2
+        float(config.get('wc_struct_discount_thr_3', 3.5)),   # < thr_3 → discount_3
+    ]
+
+    def _weighted_confirm_score(book_feat, direction, threshold):
+        """P23: 计算加权结构确认分数.
+        返回 (confirm_score, conflict_score, n_confirms_compat)
+        n_confirms_compat: 兼容旧逻辑的等效确认数
+        """
+        if direction == 'short':
+            confirm_weights = _wc_sell_weights
+            conflict_weights = _wc_buy_weights
+        else:
+            confirm_weights = _wc_buy_weights
+            conflict_weights = _wc_sell_weights
+
+        confirm_score = 0.0
+        conflict_score = 0.0
+        n_confirms = 0
+
+        for key, weight in confirm_weights.items():
+            val = float(book_feat.get(key, 0) or 0)
+            if val > threshold:
+                # strength = clip(val / 100, 0, 1), 归一化特征值到 [0, 1]
+                strength = min(max(val / 100.0, 0.0), 1.0)
+                confirm_score += weight * strength
+                n_confirms += 1
+
+        for key, weight in conflict_weights.items():
+            val = float(book_feat.get(key, 0) or 0)
+            if val > threshold:
+                strength = min(max(val / 100.0, 0.0), 1.0)
+                conflict_score += weight * strength * wc_conflict_penalty_scale
+
+        return confirm_score, conflict_score, n_confirms
+
     # ── P6: Ghost cooldown ──
     use_ghost_cooldown = config.get('use_ghost_cooldown', False)
     ghost_cooldown_bars = int(config.get('ghost_cooldown_bars', 3))
@@ -1344,14 +1407,27 @@ def _run_strategy_core(
             confirm_thr = neutral_book_buy_threshold
             conflict_thr = neutral_book_sell_threshold
 
-        confirms = sum(
-            1 for k in confirm_keys
-            if float(book_feat.get(k, 0) or 0) > confirm_thr
-        )
-        conflicts = sum(
-            1 for k in conflict_keys
-            if float(book_feat.get(k, 0) or 0) > conflict_thr
-        )
+        # P23: 加权确认模式 vs 简单计数模式
+        if use_weighted_confirms:
+            wc_score, wc_conflict, n_confirms = _weighted_confirm_score(
+                book_feat, direction, confirm_thr
+            )
+            confirms = n_confirms
+            conflicts = sum(
+                1 for k in conflict_keys
+                if float(book_feat.get(k, 0) or 0) > conflict_thr
+            )
+        else:
+            wc_score = 0.0
+            wc_conflict = 0.0
+            confirms = sum(
+                1 for k in confirm_keys
+                if float(book_feat.get(k, 0) or 0) > confirm_thr
+            )
+            conflicts = sum(
+                1 for k in conflict_keys
+                if float(book_feat.get(k, 0) or 0) > conflict_thr
+            )
 
         # CS + KDJ 双确认检查 (最具判别力的两本书)
         if direction == 'short':
@@ -1364,10 +1440,17 @@ def _run_strategy_core(
         diag['confirms'] = confirms
         diag['conflicts'] = conflicts
         diag['cs_kdj_confirm'] = cs_kdj
+        diag['wc_score'] = float(wc_score)
+        diag['wc_conflict'] = float(wc_conflict)
 
-        # Gate 1: 确认数不足 → 阻止 (divergence-only 信号不可靠)
-        if confirms < neutral_book_min_confirms:
-            return False, 'insufficient_confirms', diag
+        # Gate 1: 确认不足 → 阻止
+        if use_weighted_confirms:
+            net_score = wc_score - wc_conflict
+            if net_score < wc_min_score:
+                return False, 'insufficient_confirms', diag
+        else:
+            if confirms < neutral_book_min_confirms:
+                return False, 'insufficient_confirms', diag
 
         # Gate 2: 冲突数过多 → 阻止 (方向不一致)
         if conflicts >= neutral_book_max_conflicts:
@@ -1793,6 +1876,40 @@ def _run_strategy_core(
     if funding_interval_hours_col in primary_df.columns:
         funding_interval_series = pd.to_numeric(primary_df[funding_interval_hours_col], errors='coerce')
 
+    # V9: UTC 锚定 funding 结算时点 (替代 counter % bars_per_funding)
+    # 标准 8h 结算点: 00:00, 08:00, 16:00 UTC
+    # 动态间隔时进一步细分 (4h -> 每4h, 1h -> 每1h)
+    _FUNDING_HOURS_8H = [0, 8, 16]  # 标准 8h 结算时刻 (UTC hour)
+
+    def _crosses_funding_settlement(prev_ts, cur_ts, interval_h=8.0):
+        """判断 (prev_ts, cur_ts] 区间内是否跨越了 funding 结算时点.
+        interval_h: 当前 funding 间隔(小时), 默认 8h.
+        对于 8h: 检查 00:00/08:00/16:00 UTC
+        对于 4h: 检查 00:00/04:00/08:00/12:00/16:00/20:00 UTC
+        对于 1h: 每整点结算
+        """
+        import datetime as _dt_mod
+        if prev_ts is None:
+            return False
+        # 转换为 UTC timestamp (秒)
+        if hasattr(prev_ts, 'timestamp'):
+            t0 = prev_ts.timestamp()
+            t1 = cur_ts.timestamp()
+        else:
+            t0 = float(prev_ts)
+            t1 = float(cur_ts)
+        # 计算结算周期 (秒)
+        interval_s = max(3600, interval_h * 3600)  # 最小 1h
+        # UTC 零点锚定: 结算发生在 UTC epoch 整除 interval_s 的时刻
+        # 即 t 是结算时刻 iff t % interval_s == 0 (相对 UTC 零点)
+        # 检查 (t0, t1] 内是否存在 k * interval_s
+        # 最近的下一个结算点 = ceil(t0 / interval_s) * interval_s
+        next_settlement = np.ceil(t0 / interval_s) * interval_s
+        # 如果恰好等于 t0, 则下一个
+        if next_settlement <= t0:
+            next_settlement += interval_s
+        return next_settlement <= t1
+
     # ── V9: Leg 级风险预算（regime × side） ──
     use_leg_risk_budget = bool(config.get('use_leg_risk_budget', False))
     _risk_regs = ('neutral', 'trend', 'low_vol_trend', 'high_vol', 'high_vol_choppy')
@@ -1808,6 +1925,53 @@ def _run_strategy_core(
             return 1.0
         _m = float(_risk_budget_map.get((str(regime_label or 'neutral'), str(side)), 1.0))
         return float(np.clip(_m, 0.0, 2.5))
+
+    # ── P21: Risk-per-trade (R) 仓位模型 ──
+    use_risk_per_trade = bool(config.get('use_risk_per_trade', False))
+    risk_per_trade_pct = float(config.get('risk_per_trade_pct', 0.015))
+    risk_stop_mode = str(config.get('risk_stop_mode', 'atr'))
+    risk_atr_mult_short = float(config.get('risk_atr_mult_short', 2.5))
+    risk_atr_mult_long = float(config.get('risk_atr_mult_long', 2.0))
+    risk_fixed_stop_short = float(config.get('risk_fixed_stop_short', 0.04))
+    risk_fixed_stop_long = float(config.get('risk_fixed_stop_long', 0.03))
+    risk_max_margin_pct = float(config.get('risk_max_margin_pct', 0.50))
+    risk_min_margin_pct = float(config.get('risk_min_margin_pct', 0.05))
+
+    def _calc_risk_margin(side: str, entry_price: float, atr_pct: float, equity: float, lev: int) -> float:
+        """P21: 根据 R(风险单位) 和止损距离反推仓位保证金.
+        side: 'short' or 'long'
+        entry_price: 预期入场价格
+        atr_pct: 当前 ATR / price 百分比
+        equity: 当前权益
+        lev: 杠杆
+        返回: margin (保证金)
+        """
+        risk_amount = equity * risk_per_trade_pct  # 每笔最大风险金额
+
+        # 计算止损距离 (价格百分比)
+        if risk_stop_mode == 'atr' and atr_pct > 0:
+            mult = risk_atr_mult_short if side == 'short' else risk_atr_mult_long
+            stop_dist_pct = atr_pct * mult
+        else:
+            stop_dist_pct = risk_fixed_stop_short if side == 'short' else risk_fixed_stop_long
+
+        stop_dist_pct = max(stop_dist_pct, 0.005)  # 最小 0.5% 止损距离
+
+        # 仓位 = risk / (stop_distance * entry_price)
+        # notional = qty * entry_price
+        # margin = notional / lev
+        # 亏损 = qty * stop_distance * entry_price = notional * stop_dist_pct
+        # risk_amount = notional * stop_dist_pct
+        # notional = risk_amount / stop_dist_pct
+        # margin = notional / lev = risk_amount / (stop_dist_pct * lev)
+        margin = risk_amount / (stop_dist_pct * max(lev, 1))
+
+        # clip 到合理范围
+        max_margin = equity * risk_max_margin_pct
+        min_margin = equity * risk_min_margin_pct
+        margin = float(np.clip(margin, min_margin, max_margin))
+
+        return margin
 
     record_interval = max(1, len(primary_df) // 500)
 
@@ -1844,6 +2008,8 @@ def _run_strategy_core(
     if bool(config.get('use_trend_enhance', False)):
         trend_ema10 = close_series.ewm(span=10, adjust=False).mean()
         trend_ema30 = close_series.ewm(span=30, adjust=False).mean()
+
+    _prev_dt = None  # V9: 用于 UTC 锚定 funding 结算
 
     for idx in range(warmup, len(primary_df)):
         dt = index_values[idx]
@@ -1889,16 +2055,19 @@ def _run_strategy_core(
             long_bars = 0; long_max_pnl = 0
         short_just_opened = False; long_just_opened = False
 
-        # 资金费率
-        eng.funding_counter += 1
-        bars_per_funding = bars_per_funding_default
+        # 资金费率 — V9: 基于 UTC 时间戳锚定结算时点
+        eng.funding_counter += 1  # 保留用于模拟模式的伪随机
+        _current_funding_interval_h = funding_interval_hours  # 默认 8h
         if funding_interval_series is not None:
             _fh = float(funding_interval_series.iloc[idx])
             if np.isfinite(_fh) and _fh > 0:
-                bars_per_funding = max(1, int(round(_fh / primary_tf_hours)))
-        if eng.funding_counter % bars_per_funding == 0:
+                _current_funding_interval_h = _fh
+        _is_funding_settlement = _crosses_funding_settlement(
+            _prev_dt, dt, _current_funding_interval_h
+        )
+        if _is_funding_settlement:
             if use_real_funding_rate and funding_rate_series is not None:
-                _fr_idx = idx - 1 if idx > 0 else idx
+                _fr_idx = idx - 1 if idx > 0 else idx  # 防前视: 用上一个 bar 的 funding rate
                 _rate = float(funding_rate_series.iloc[_fr_idx])
                 rate = _rate if np.isfinite(_rate) else 0.0
             else:
@@ -2421,25 +2590,44 @@ def _run_strategy_core(
                     _r_counts[_short_conflict_reason] = int(_r_counts.get(_short_conflict_reason, 0)) + 1
                     _g_counts = short_conflict_soft_discount_stats['regime_counts']
                     _g_counts[_regime_label] = int(_g_counts.get(_regime_label, 0)) + 1
-        # ── Neutral 结构质量: 计算确认数 (用于仓位调节, 不影响入场判断) ──
+        # ── Neutral 结构质量: 计算确认分 (用于仓位调节, 不影响入场判断) ──
         _struct_short_mult = 1.0
         _struct_short_confirms = -1  # -1 = 未评估
+        _struct_short_wc_score = 0.0
         if (use_neutral_structural_discount
                 and _regime_label in structural_discount_short_regimes
                 and isinstance(signal_meta, dict)):
             _sd_bf = signal_meta.get('book_features_weighted', {})
             if isinstance(_sd_bf, dict) and _sd_bf:
-                _sd_keys = ('ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell')
-                _struct_short_confirms = sum(
-                    1 for kk in _sd_keys
-                    if float(_sd_bf.get(kk, 0) or 0) > neutral_struct_activity_thr
-                )
+                if use_weighted_confirms:
+                    # P23: 加权结构分
+                    _struct_short_wc_score, _, _struct_short_confirms = _weighted_confirm_score(
+                        _sd_bf, 'short', neutral_struct_activity_thr
+                    )
+                else:
+                    _sd_keys = ('ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell')
+                    _struct_short_confirms = sum(
+                        1 for kk in _sd_keys
+                        if float(_sd_bf.get(kk, 0) or 0) > neutral_struct_activity_thr
+                    )
                 structural_discount_stats['evaluated'] += 1
                 _sd_reg = str(_regime_label or 'unknown')
                 _sd_rec = structural_discount_stats['regime_eval_counts']
                 _sd_rec[_sd_reg] = int(_sd_rec.get(_sd_reg, 0)) + 1
-                structural_discount_stats['confirm_distribution'][min(_struct_short_confirms, 5)] += 1
-                if _struct_short_confirms <= 0:
+                structural_discount_stats['confirm_distribution'][min(max(_struct_short_confirms, 0), 5)] += 1
+                if use_weighted_confirms:
+                    # P23: 加权分 → 折扣乘数 (连续映射)
+                    if _struct_short_wc_score < wc_struct_discount_thresholds[0]:
+                        _struct_short_mult = neutral_struct_discount_0
+                    elif _struct_short_wc_score < wc_struct_discount_thresholds[1]:
+                        _struct_short_mult = neutral_struct_discount_1
+                    elif _struct_short_wc_score < wc_struct_discount_thresholds[2]:
+                        _struct_short_mult = neutral_struct_discount_2
+                    elif _struct_short_wc_score < wc_struct_discount_thresholds[3]:
+                        _struct_short_mult = neutral_struct_discount_3
+                    else:
+                        _struct_short_mult = 1.0
+                elif _struct_short_confirms <= 0:
                     _struct_short_mult = neutral_struct_discount_0
                 elif _struct_short_confirms == 1:
                     _struct_short_mult = neutral_struct_discount_1
@@ -2502,7 +2690,13 @@ def _run_strategy_core(
             _rc = neutral_short_structure_stats['reason_counts']
             _rc[_r] = int(_rc.get(_r, 0)) + 1
         if _short_candidate and short_conf_info.get('allow', True):
-            margin = eng.available_margin() * cur_margin_use
+            actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
+            # P21: Risk-per-trade 仓位模型
+            if use_risk_per_trade:
+                _equity = eng.total_value(price)
+                margin = _calc_risk_margin('short', exec_price, _atr_pct_val, _equity, actual_lev)
+            else:
+                margin = eng.available_margin() * cur_margin_use
             margin *= _leg_budget_mult(_regime_label, 'short')
             # ── Neutral 结构质量仓位调节: 弱共识信号减仓，保持交易时序不变 ──
             if (use_neutral_structural_discount
@@ -2511,7 +2705,6 @@ def _run_strategy_core(
                 margin *= _struct_short_mult
             if _short_conflict_triggered and _short_conflict_mult < 1.0:
                 margin *= _short_conflict_mult
-            actual_lev = min(cur_lev if ss >= 50 else min(cur_lev, 3) if ss >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')
             _short_extra = _build_signal_extra('short', ss, bs, signal_meta, short_conf_info)
             _short_extra['sig_neutral_struct_support'] = int(neutral_struct_short_diag.get('support', 0))
@@ -2600,17 +2793,15 @@ def _run_strategy_core(
                     short_partial_done = False
                     short_partial2_done = False
 
-            # 硬断路器: 绝对止损上限, 使用 bar HIGH 检测 intrabar 穿越
+            # 硬断路器: 绝对止损上限, 使用 mark/bar HIGH 检测 intrabar 穿越
             # 空仓最坏情况 = bar内最高价(价格上涨对空头不利)
+            # V9: 当 use_mark_price_for_liquidation 启用时, 使用 _liq_high (mark 口径)
             if eng.futures_short:
                 hard_sl = config.get('hard_stop_loss', -0.35)
-                _high_price = float(high_series.iloc[idx])
+                _high_price = float(liq_high_series.iloc[idx])
                 _worst_pnl_r_short = eng.futures_short.calc_pnl(_high_price) / eng.futures_short.margin
                 if _worst_pnl_r_short < hard_sl and eng.futures_short:
-                    # 计算硬止损触发价格: (entry - stop_p) * qty / margin = hard_sl
-                    # stop_p = entry - hard_sl * margin / qty
                     _sl_price = eng.futures_short.entry_price - hard_sl * eng.futures_short.margin / eng.futures_short.quantity
-                    # 实际成交价不能比 bar HIGH 更差(取两者较优)
                     _sl_exec = min(_sl_price, _high_price)
                     eng.close_short(_sl_exec, dt, f"硬止损 {_worst_pnl_r_short*100:.0f}%→限{hard_sl*100:.0f}%",
                                     bar_low=_bar_low, bar_high=_bar_high)
@@ -2924,25 +3115,44 @@ def _run_strategy_core(
                     _r_counts_l[_long_conflict_reason] = int(_r_counts_l.get(_long_conflict_reason, 0)) + 1
                     _g_counts_l = long_conflict_soft_discount_stats['regime_counts']
                     _g_counts_l[_regime_label] = int(_g_counts_l.get(_regime_label, 0)) + 1
-        # ── Neutral 结构质量: 计算确认数 (做多, 用于仓位调节) ──
+        # ── Neutral 结构质量: 计算确认分 (做多, 用于仓位调节) ──
         _struct_long_mult = 1.0
         _struct_long_confirms = -1
+        _struct_long_wc_score = 0.0
         if (use_neutral_structural_discount
                 and _regime_label in structural_discount_long_regimes
                 and isinstance(signal_meta, dict)):
             _sd_bf_l = signal_meta.get('book_features_weighted', {})
             if isinstance(_sd_bf_l, dict) and _sd_bf_l:
-                _sd_keys_l = ('ma_buy', 'cs_buy', 'bb_buy', 'vp_buy', 'kdj_buy')
-                _struct_long_confirms = sum(
-                    1 for kk in _sd_keys_l
-                    if float(_sd_bf_l.get(kk, 0) or 0) > neutral_struct_activity_thr
-                )
+                if use_weighted_confirms:
+                    # P23: 加权结构分
+                    _struct_long_wc_score, _, _struct_long_confirms = _weighted_confirm_score(
+                        _sd_bf_l, 'long', neutral_struct_activity_thr
+                    )
+                else:
+                    _sd_keys_l = ('ma_buy', 'cs_buy', 'bb_buy', 'vp_buy', 'kdj_buy')
+                    _struct_long_confirms = sum(
+                        1 for kk in _sd_keys_l
+                        if float(_sd_bf_l.get(kk, 0) or 0) > neutral_struct_activity_thr
+                    )
                 structural_discount_stats['evaluated'] += 1
                 _sd_reg_l = str(_regime_label or 'unknown')
                 _sd_rec_l = structural_discount_stats['regime_eval_counts']
                 _sd_rec_l[_sd_reg_l] = int(_sd_rec_l.get(_sd_reg_l, 0)) + 1
-                structural_discount_stats['confirm_distribution'][min(_struct_long_confirms, 5)] += 1
-                if _struct_long_confirms <= 0:
+                structural_discount_stats['confirm_distribution'][min(max(_struct_long_confirms, 0), 5)] += 1
+                if use_weighted_confirms:
+                    # P23: 加权分 → 折扣乘数
+                    if _struct_long_wc_score < wc_struct_discount_thresholds[0]:
+                        _struct_long_mult = neutral_struct_discount_0
+                    elif _struct_long_wc_score < wc_struct_discount_thresholds[1]:
+                        _struct_long_mult = neutral_struct_discount_1
+                    elif _struct_long_wc_score < wc_struct_discount_thresholds[2]:
+                        _struct_long_mult = neutral_struct_discount_2
+                    elif _struct_long_wc_score < wc_struct_discount_thresholds[3]:
+                        _struct_long_mult = neutral_struct_discount_3
+                    else:
+                        _struct_long_mult = 1.0
+                elif _struct_long_confirms <= 0:
                     _struct_long_mult = neutral_struct_discount_0
                 elif _struct_long_confirms == 1:
                     _struct_long_mult = neutral_struct_discount_1
@@ -2996,7 +3206,13 @@ def _run_strategy_core(
             _cbc = confidence_stats['blocked_reason_counts']
             _cbc[_cr] = int(_cbc.get(_cr, 0)) + 1
         if _long_candidate and long_conf_info.get('allow', True):
-            margin = eng.available_margin() * cur_margin_use
+            actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
+            # P21: Risk-per-trade 仓位模型
+            if use_risk_per_trade:
+                _equity = eng.total_value(price)
+                margin = _calc_risk_margin('long', exec_price, _atr_pct_val, _equity, actual_lev)
+            else:
+                margin = eng.available_margin() * cur_margin_use
             margin *= _leg_budget_mult(_regime_label, 'long')
             # ── Neutral 结构质量仓位调节 (做多) ──
             if (use_neutral_structural_discount
@@ -3005,7 +3221,6 @@ def _run_strategy_core(
                 margin *= _struct_long_mult
             if _long_conflict_triggered and _long_conflict_mult < 1.0:
                 margin *= _long_conflict_mult
-            actual_lev = min(cur_lev if bs >= 50 else min(cur_lev, 3) if bs >= 35 else 2, eng.max_leverage)
             _regime_label = regime_ctl.get('regime_label', 'neutral')
             _long_extra = _build_signal_extra('long', ss, trend_long_bs, signal_meta, long_conf_info)
             _long_extra['sig_book_consensus_confirms'] = int(_bk_long_diag.get('confirms', 0))
@@ -3035,10 +3250,11 @@ def _run_strategy_core(
             long_bars += 1
             pnl_r = eng.futures_long.calc_pnl(price) / eng.futures_long.margin
 
-            # 硬断路器: 做多绝对止损上限, 使用 bar LOW 检测 intrabar 穿越
+            # 硬断路器: 做多绝对止损上限, 使用 mark/bar LOW 检测 intrabar 穿越
             # 多仓最坏情况 = bar内最低价(价格下跌对多头不利)
+            # V9: 当 use_mark_price_for_liquidation 启用时, 使用 liq_low_series (mark 口径)
             hard_sl = config.get('hard_stop_loss', -0.35)
-            _low_price = float(low_series.iloc[idx])
+            _low_price = float(liq_low_series.iloc[idx])
             _worst_pnl_r_long = eng.futures_long.calc_pnl(_low_price) / eng.futures_long.margin
             if _worst_pnl_r_long < hard_sl and eng.futures_long:
                 # 计算硬止损触发价格: (stop_p - entry) * qty / margin = hard_sl
@@ -3210,6 +3426,7 @@ def _run_strategy_core(
         # ── 在当前 bar 收盘后计算信号, 供下一根 bar 执行 ──
         pending_ss, pending_bs, pending_meta = _safe_signal_triplet(score_provider(idx, dt, price))
         has_pending_signal = True
+        _prev_dt = dt  # V9: 更新上一个 bar 的时间戳
 
     # 期末平仓: 若指定 end_dt，则在 end_dt 所在窗口结束价结算。
     settle_df = primary_df

@@ -592,7 +592,7 @@ class StrategyConfig:
     # neutral: DIV 大幅降权(25%), CS/KDJ 大幅升权(bonus 15%)
     # trend: DIV 保留高权重(60%), 背离在趋势末端有效
     # high_vol: VP 升权(12%), 量价在高波中更有效
-    use_regime_adaptive_fusion: bool = True
+    use_regime_adaptive_fusion: bool = False
     # 说明: 信号层会将 div_w/ma_w 归一化后用于基数融合，因此这里直接填“目标占比”
     regime_trend_div_w: float = 0.60
     regime_trend_ma_w: float = 0.40
@@ -640,6 +640,43 @@ class StrategyConfig:
     risk_budget_high_vol_short: float = 1.00
     risk_budget_high_vol_choppy_long: float = 1.00
     risk_budget_high_vol_choppy_short: float = 1.00
+
+    # ── P21: Risk-per-trade (R) 仓位模型 ──
+    # GPT Pro 最高价值建议: 用固定风险百分比 + 止损距离反推仓位, 消灭"少数大亏单主导"
+    # 替代现有 margin_use * available_margin 的固定比例仓位
+    # risk_per_trade: 每笔最大风险 = equity × R%
+    # 仓位 = risk_amount / (stop_distance_pct × entry_price), 再 clip 到 margin 上限
+    # 优势: 尾部可控, 几何增长对大亏极敏感, 控制单笔尾部后可安全加大风险预算
+    use_risk_per_trade: bool = False
+    risk_per_trade_pct: float = 0.015    # 每笔最大风险占 equity 的 1.5%
+    risk_stop_mode: str = 'atr'          # 止损距离计算方式: 'atr' 或 'fixed'
+    risk_atr_mult_short: float = 2.5     # 空单: 止损 = entry ± ATR × 倍数
+    risk_atr_mult_long: float = 2.0      # 多单: 止损 = entry ± ATR × 倍数
+    risk_fixed_stop_short: float = 0.04  # 空单固定止损距离 4% (当 mode='fixed')
+    risk_fixed_stop_long: float = 0.03   # 多单固定止损距离 3% (当 mode='fixed')
+    risk_max_margin_pct: float = 0.50    # 仓位上限 = equity × 50% (防极端)
+    risk_min_margin_pct: float = 0.05    # 仓位下限 = equity × 5% (避免过小)
+
+    # ── P23: 加权结构确认 (基于 Cohen's d 先验) ──
+    # 替代简单计数: sum(1 if feat>thr) → sum(alpha_weight * strength) - penalty
+    # 权重基于 P16 的 Cohen's d 分析: MA/CS 判别力最强, KDJ 中等, BB/VP 弱
+    use_weighted_confirms: bool = False
+    wc_ma_sell_w: float = 1.5     # MA 卖方权重 (Cohen's d 较大)
+    wc_cs_sell_w: float = 1.4     # CS 卖方权重
+    wc_kdj_sell_w: float = 1.0    # KDJ 卖方权重
+    wc_vp_sell_w: float = 0.6     # VP 卖方权重 (较弱)
+    wc_bb_sell_w: float = 0.3     # BB 卖方权重 (偏负/无效)
+    wc_ma_buy_w: float = 1.5      # MA 买方权重
+    wc_cs_buy_w: float = 1.4      # CS 买方权重
+    wc_kdj_buy_w: float = 1.0     # KDJ 买方权重
+    wc_vp_buy_w: float = 0.6      # VP 买方权重
+    wc_bb_buy_w: float = 0.3      # BB 买方权重
+    wc_min_score: float = 2.0     # 加权确认最低分 (替代 min_confirms)
+    wc_conflict_penalty_scale: float = 0.5  # 冲突方向惩罚系数
+    wc_struct_discount_thr_0: float = 0.5   # 加权分 < 0.5 → 最大折扣
+    wc_struct_discount_thr_1: float = 1.5   # 加权分 < 1.5 → 折扣1
+    wc_struct_discount_thr_2: float = 2.5   # 加权分 < 2.5 → 折扣2
+    wc_struct_discount_thr_3: float = 3.5   # 加权分 < 3.5 → 折扣3
 
     # ── 多头冲突软折扣（neutral/low_vol_trend） ──
     # 目标: 买入信号中若卖方divergence过强，先减仓再观察，降低中性体制假突破亏损。

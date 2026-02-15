@@ -14,6 +14,10 @@ from urllib.error import URLError
 
 
 BINANCE_KLINE_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_FUTURES_BASE = "https://fapi.binance.com"
+BINANCE_FUTURES_MARK_KLINE_URL = f"{BINANCE_FUTURES_BASE}/fapi/v1/markPriceKlines"
+BINANCE_FUTURES_FUNDING_RATE_URL = f"{BINANCE_FUTURES_BASE}/fapi/v1/fundingRate"
+BINANCE_FUTURES_OI_HIST_URL = f"{BINANCE_FUTURES_BASE}/futures/data/openInterestHist"
 
 INTERVAL_MAP = {
     '1m': '1m', '3m': '3m', '5m': '5m', '15m': '15m', '30m': '30m',
@@ -70,7 +74,8 @@ def _try_load_local(symbol: str, interval: str, days: int) -> pd.DataFrame | Non
         df.index = df.index.tz_localize(None)
 
     # 只保留标准列 (与API返回格式一致)
-    standard_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
+    standard_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume',
+                     'taker_buy_base', 'taker_buy_quote']
     keep = [c for c in standard_cols if c in df.columns]
     df = df[keep].copy()
     df = df[~df.index.duplicated(keep='first')]
@@ -194,21 +199,32 @@ def fetch_binance_klines(symbol: str = "ETHUSDT",
         print(f"  剔除 {n_dropped} 根未闭合K线")
     df = df.drop(columns=['_close_time_ms'])
 
-    df = df[['open', 'high', 'low', 'close', 'volume', 'quote_volume']].copy()
+    # 保留 taker_buy 列用于微结构分析 (taker imbalance)
+    for col in ['taker_buy_base', 'taker_buy_quote']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    keep_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume',
+                 'taker_buy_base', 'taker_buy_quote']
+    keep_cols = [c for c in keep_cols if c in df.columns]
+    df = df[keep_cols].copy()
     df = df[~df.index.duplicated(keep='first')]
     df = df.sort_index()
 
     # 如果需要重采样到10分钟
     if need_resample and resample_rule:
         print(f"  将 {actual_interval} 数据重采样为 {interval}...")
-        df = df.resample(resample_rule).agg({
+        agg_dict = {
             'open': 'first',
             'high': 'max',
             'low': 'min',
             'close': 'last',
             'volume': 'sum',
-            'quote_volume': 'sum'
-        }).dropna()
+            'quote_volume': 'sum',
+        }
+        for _tc in ['taker_buy_base', 'taker_buy_quote']:
+            if _tc in df.columns:
+                agg_dict[_tc] = 'sum'
+        df = df.resample(resample_rule).agg(agg_dict).dropna()
 
     # 去掉时区信息使后续处理一致
     if df.index.tz is not None:
@@ -221,7 +237,454 @@ def fetch_binance_klines(symbol: str = "ETHUSDT",
     return df
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# P22: Binance Futures 衍生品数据获取 (Mark Price / Funding Rate)
+# ═══════════════════════════════════════════════════════════════════════
+
+_MARK_DIR = os.path.join(_BASE_DIR, 'data', 'mark_klines')
+_FUNDING_DIR = os.path.join(_BASE_DIR, 'data', 'funding_rates')
+_OI_DIR = os.path.join(_BASE_DIR, 'data', 'open_interest')
+
+
+def _api_get_json(url: str, max_retries: int = 3) -> list:
+    """通用 API GET 请求, 带重试"""
+    for attempt in range(max_retries):
+        try:
+            req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urlopen(req, timeout=20) as response:
+                return json.loads(response.read().decode())
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                print(f"  请求失败 (尝试 {attempt+1}/{max_retries}): {e}, {wait}s 后重试...")
+                time.sleep(wait)
+            else:
+                print(f"  请求最终失败: {e}")
+                return []
+
+
+def fetch_mark_price_klines(symbol: str = "ETHUSDT",
+                            interval: str = "15m",
+                            days: int = 365,
+                            force_api: bool = False) -> pd.DataFrame:
+    """
+    获取 Binance Futures Mark Price K线数据
+
+    Mark Price = 现货指数 + 资金费率衰减移动平均, 用于计算未实现 PnL 和强平
+    与标准 K 线格式相同, 但基于 Mark Price 而非 Last Trade Price
+
+    返回: DataFrame with mark_open, mark_high, mark_low, mark_close columns
+    """
+    # ── 先尝试本地缓存 ──
+    if not force_api:
+        cache_path = os.path.join(_MARK_DIR, symbol, f'{interval}.parquet')
+        if os.path.exists(cache_path):
+            try:
+                df = pd.read_parquet(cache_path)
+                if df is not None and len(df) >= 100:
+                    if df.index.tz is not None:
+                        df.index = df.index.tz_localize(None)
+                    df = df[~df.index.duplicated(keep='first')].sort_index()
+                    print(f"  [本地] {symbol} mark {interval} 加载 {len(df)} 条 "
+                          f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+                          f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+                    return df
+            except Exception as e:
+                print(f"  Mark kline 缓存读取失败: {e}")
+
+    # ── API 获取 ──
+    # Mark klines 支持的 interval 与标准 klines 相同
+    actual_interval = INTERVAL_MAP.get(interval, interval)
+    # mark price klines limit 最大 1500
+    limit = 1500
+
+    all_klines = []
+    end_time = int(datetime.now().timestamp() * 1000)
+    start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+    current_start = start_time
+
+    print(f"正在从 Binance Futures API 获取 {symbol} Mark Price {interval} K线 (最近{days}天)...")
+
+    while current_start < end_time:
+        url = (f"{BINANCE_FUTURES_MARK_KLINE_URL}?symbol={symbol}"
+               f"&interval={actual_interval}"
+               f"&startTime={current_start}"
+               f"&limit={limit}")
+
+        data = _api_get_json(url)
+        if not data:
+            break
+
+        all_klines.extend(data)
+        current_start = data[-1][0] + 1
+
+        if len(data) < limit:
+            break
+        time.sleep(0.15)
+
+    if not all_klines:
+        print("  未获取到 Mark Price 数据!")
+        return pd.DataFrame()
+
+    # Mark Price Klines 格式同标准 Klines
+    df = pd.DataFrame(all_klines, columns=[
+        'open_time', 'open', 'high', 'low', 'close', 'volume',
+        'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+        'taker_buy_quote', 'ignore'
+    ])
+
+    df['date'] = pd.to_datetime(df['open_time'], unit='ms')
+    df = df.set_index('date')
+
+    for col in ['open', 'high', 'low', 'close']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # 重命名为 mark_ 前缀
+    df = df[['open', 'high', 'low', 'close']].copy()
+    df.columns = ['mark_open', 'mark_high', 'mark_low', 'mark_close']
+    df = df[~df.index.duplicated(keep='first')].sort_index()
+
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+
+    # 剔除未闭合 K 线 (最后一条如果 close_time > now)
+    # (Mark klines 的 volume 字段通常为 0, 无法用 close_time 判断, 简单剔除最后一条)
+    if len(df) > 1:
+        last_expected_close = df.index[-1] + pd.Timedelta(actual_interval)
+        if last_expected_close > pd.Timestamp.now():
+            df = df.iloc[:-1]
+
+    # 如果原始 interval 需要重采样 (如 24h)
+    RESAMPLE_MAP = {
+        '10m': '10min', '3h': '3h', '16h': '16h',
+        '24h': '24h', '32h': '32h',
+    }
+    if interval in RESAMPLE_MAP:
+        rule = RESAMPLE_MAP[interval]
+        df = df.resample(rule).agg({
+            'mark_open': 'first',
+            'mark_high': 'max',
+            'mark_low': 'min',
+            'mark_close': 'last',
+        }).dropna()
+
+    # ── 保存缓存 ──
+    cache_dir = os.path.join(_MARK_DIR, symbol)
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f'{interval}.parquet')
+    df.to_parquet(cache_path)
+
+    print(f"  Mark Price K线获取完成: {len(df)} 条 "
+          f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+          f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+    print(f"  已缓存至: {cache_path}")
+
+    return df
+
+
+def fetch_funding_rate_history(symbol: str = "ETHUSDT",
+                               days: int = 365,
+                               force_api: bool = False) -> pd.DataFrame:
+    """
+    获取 Binance Futures 历史资金费率
+
+    Binance funding 结算周期:
+    - 标准: 每 8h (00:00/08:00/16:00 UTC)
+    - 动态: 当费率触及上下限时可缩至 4h 或 1h (2025-05-02 后)
+
+    返回: DataFrame with columns:
+        - funding_rate: 资金费率 (如 0.0001 表示 0.01%)
+        - mark_price: 结算时的 mark price
+        - funding_interval_hours: 当前结算间隔 (小时)
+    """
+    # ── 先尝试本地缓存 ──
+    if not force_api:
+        cache_path = os.path.join(_FUNDING_DIR, f'{symbol}_funding.parquet')
+        if os.path.exists(cache_path):
+            try:
+                df = pd.read_parquet(cache_path)
+                if df is not None and len(df) >= 10:
+                    if df.index.tz is not None:
+                        df.index = df.index.tz_localize(None)
+                    end_dt = pd.Timestamp.now()
+                    start_dt = end_dt - pd.Timedelta(days=days)
+                    # 检查缓存是否足够新 (不超过 24h 的 gap)
+                    if df.index[-1] >= (end_dt - pd.Timedelta(hours=24)):
+                        df = df[df.index >= start_dt]
+                        df = df[~df.index.duplicated(keep='first')].sort_index()
+                        print(f"  [本地] {symbol} funding rate 加载 {len(df)} 条 "
+                              f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+                              f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+                        return df
+            except Exception as e:
+                print(f"  Funding rate 缓存读取失败: {e}")
+
+    # ── API 获取 ──
+    # fundingRate API limit=1000, 8h 间隔约 3 条/天, 1000 条 ≈ 333 天
+    all_records = []
+    end_time = int(datetime.now().timestamp() * 1000)
+    start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+    current_start = start_time
+
+    print(f"正在从 Binance Futures API 获取 {symbol} 资金费率 (最近{days}天)...")
+
+    while current_start < end_time:
+        url = (f"{BINANCE_FUTURES_FUNDING_RATE_URL}?symbol={symbol}"
+               f"&startTime={current_start}"
+               f"&endTime={end_time}"
+               f"&limit=1000")
+
+        data = _api_get_json(url)
+        if not data:
+            break
+
+        all_records.extend(data)
+        # 下一批从最后一条之后
+        current_start = data[-1]['fundingTime'] + 1
+
+        if len(data) < 1000:
+            break
+        time.sleep(0.15)
+
+    if not all_records:
+        print("  未获取到 Funding Rate 数据!")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_records)
+    df['date'] = pd.to_datetime(df['fundingTime'], unit='ms')
+    df = df.set_index('date')
+
+    df['funding_rate'] = pd.to_numeric(df['fundingRate'], errors='coerce')
+    if 'markPrice' in df.columns:
+        df['mark_price_at_funding'] = pd.to_numeric(df['markPrice'], errors='coerce')
+    else:
+        df['mark_price_at_funding'] = np.nan
+
+    # 计算 funding 间隔 (小时)
+    # 标准 8h, 但 2025-05-02 后可能动态变化
+    time_diffs = df.index.to_series().diff()
+    df['funding_interval_hours'] = time_diffs.dt.total_seconds() / 3600
+    # 第一条无法计算差分, 设为 8h
+    df.loc[df.index[0], 'funding_interval_hours'] = 8.0
+    # 清理异常值 (间隔 < 0.5h 或 > 24h)
+    df['funding_interval_hours'] = df['funding_interval_hours'].clip(0.5, 24.0)
+
+    df = df[['funding_rate', 'mark_price_at_funding', 'funding_interval_hours']].copy()
+    df = df[~df.index.duplicated(keep='first')].sort_index()
+
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+
+    # ── 保存缓存 ──
+    os.makedirs(_FUNDING_DIR, exist_ok=True)
+    cache_path = os.path.join(_FUNDING_DIR, f'{symbol}_funding.parquet')
+    df.to_parquet(cache_path)
+
+    print(f"  Funding Rate 获取完成: {len(df)} 条 "
+          f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+          f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+    print(f"  平均间隔: {df['funding_interval_hours'].mean():.1f}h, "
+          f"最短: {df['funding_interval_hours'].min():.1f}h, "
+          f"最长: {df['funding_interval_hours'].max():.1f}h")
+    print(f"  费率: 均值={df['funding_rate'].mean()*100:.4f}%, "
+          f"中位={df['funding_rate'].median()*100:.4f}%, "
+          f"标准差={df['funding_rate'].std()*100:.4f}%")
+    print(f"  已缓存至: {cache_path}")
+
+    return df
+
+
+def fetch_open_interest_history(symbol: str = "ETHUSDT",
+                                interval: str = "15m",
+                                days: int = 365,
+                                force_api: bool = False) -> pd.DataFrame:
+    """
+    获取 Binance Futures 历史 Open Interest 数据
+
+    Binance /futures/data/openInterestHist 支持的 period:
+    5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d
+
+    返回: DataFrame with columns:
+        - open_interest: 持仓量 (合约张数, sumOpenInterest)
+        - open_interest_value: 持仓价值 (USDT, sumOpenInterestValue)
+    """
+    # 映射 interval -> OI API 支持的 period
+    OI_PERIOD_MAP = {
+        '5m': '5m', '15m': '15m', '30m': '30m',
+        '1h': '1h', '2h': '2h', '4h': '4h',
+        '6h': '6h', '12h': '12h', '1d': '1d',
+        '10m': '15m',  # 回退到 15m
+    }
+    period = OI_PERIOD_MAP.get(interval, '15m')
+
+    # ── 先尝试本地缓存 ──
+    if not force_api:
+        cache_path = os.path.join(_OI_DIR, symbol, f'{period}.parquet')
+        if os.path.exists(cache_path):
+            try:
+                df = pd.read_parquet(cache_path)
+                if df is not None and len(df) >= 50:
+                    if df.index.tz is not None:
+                        df.index = df.index.tz_localize(None)
+                    end_dt = pd.Timestamp.now()
+                    # 检查缓存是否足够新
+                    if df.index[-1] >= (end_dt - pd.Timedelta(hours=24)):
+                        start_dt = end_dt - pd.Timedelta(days=days)
+                        df = df[df.index >= start_dt]
+                        df = df[~df.index.duplicated(keep='first')].sort_index()
+                        print(f"  [本地] {symbol} OI {period} 加载 {len(df)} 条 "
+                              f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+                              f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+                        return df
+            except Exception as e:
+                print(f"  OI 缓存读取失败: {e}")
+
+    # ── API 获取 ──
+    # openInterestHist: limit=500, 按 period 粒度返回
+    all_records = []
+    end_time = int(datetime.now().timestamp() * 1000)
+    start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
+    current_start = start_time
+
+    print(f"正在从 Binance Futures API 获取 {symbol} Open Interest {period} (最近{days}天)...")
+
+    while current_start < end_time:
+        url = (f"{BINANCE_FUTURES_OI_HIST_URL}?symbol={symbol}"
+               f"&period={period}"
+               f"&startTime={current_start}"
+               f"&endTime={end_time}"
+               f"&limit=500")
+
+        data = _api_get_json(url)
+        if not data:
+            break
+
+        all_records.extend(data)
+        # 下一批从最后一条之后
+        current_start = data[-1]['timestamp'] + 1
+
+        if len(data) < 500:
+            break
+        time.sleep(0.15)
+
+    if not all_records:
+        print("  未获取到 Open Interest 数据!")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_records)
+    df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df = df.set_index('date')
+
+    df['open_interest'] = pd.to_numeric(df['sumOpenInterest'], errors='coerce')
+    df['open_interest_value'] = pd.to_numeric(df['sumOpenInterestValue'], errors='coerce')
+
+    df = df[['open_interest', 'open_interest_value']].copy()
+    df = df[~df.index.duplicated(keep='first')].sort_index()
+
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+
+    # ── 保存缓存 ──
+    cache_dir = os.path.join(_OI_DIR, symbol)
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f'{period}.parquet')
+    df.to_parquet(cache_path)
+
+    print(f"  OI 获取完成: {len(df)} 条 "
+          f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+          f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+    oi_mean = df['open_interest_value'].mean()
+    oi_max = df['open_interest_value'].max()
+    print(f"  OI 价值: 均值=${oi_mean/1e6:.1f}M, 峰值=${oi_max/1e6:.1f}M")
+    print(f"  已缓存至: {cache_path}")
+
+    return df
+
+
+def merge_perp_data_into_klines(kline_df: pd.DataFrame,
+                                 mark_df: pd.DataFrame | None = None,
+                                 funding_df: pd.DataFrame | None = None,
+                                 oi_df: pd.DataFrame | None = None) -> pd.DataFrame:
+    """
+    将 Mark Price K线、Funding Rate 和 Open Interest 数据合并到标准 K 线 DataFrame
+
+    合并策略:
+    - mark_high/mark_low/mark_close: 按时间戳对齐 (reindex + ffill)
+    - funding_rate: 前向填充到每根 K 线 bar (结算前使用上一期费率, 防前视)
+    - funding_interval_hours: 同上
+    - open_interest/open_interest_value: 前向填充 (每根 bar 看到的是最近一次快照)
+
+    返回: 合并后的 DataFrame (原始列 + mark_* + funding_* + open_interest*)
+    """
+    result = kline_df.copy()
+
+    if mark_df is not None and len(mark_df) > 0:
+        # 按时间对齐, 用 reindex + ffill (mark klines 与 klines 应该时间对齐)
+        for col in ['mark_open', 'mark_high', 'mark_low', 'mark_close']:
+            if col in mark_df.columns:
+                aligned = mark_df[col].reindex(result.index, method='ffill')
+                result[col] = aligned
+
+    if funding_df is not None and len(funding_df) > 0:
+        # Funding rate: 前向填充 (每根 bar 看到的是最近一次结算的费率)
+        for col in ['funding_rate', 'funding_interval_hours']:
+            if col in funding_df.columns:
+                aligned = funding_df[col].reindex(result.index, method='ffill')
+                result[col] = aligned
+
+    if oi_df is not None and len(oi_df) > 0:
+        # Open Interest: 前向填充到每根 bar
+        for col in ['open_interest', 'open_interest_value']:
+            if col in oi_df.columns:
+                aligned = oi_df[col].reindex(result.index, method='ffill')
+                result[col] = aligned
+
+    return result
+
+
 if __name__ == '__main__':
-    df = fetch_binance_klines("ETHUSDT", interval="10m", days=30)
-    print(f"\n数据预览:\n{df.tail(10)}")
-    print(f"\n数据统计:\n{df.describe()}")
+    import sys
+    mode = sys.argv[1] if len(sys.argv) > 1 else 'kline'
+
+    if mode == 'kline':
+        df = fetch_binance_klines("ETHUSDT", interval="10m", days=30)
+        print(f"\n数据预览:\n{df.tail(10)}")
+        print(f"\n数据统计:\n{df.describe()}")
+
+    elif mode == 'mark':
+        df = fetch_mark_price_klines("ETHUSDT", interval="15m", days=90)
+        print(f"\n数据预览:\n{df.tail(10)}")
+
+    elif mode == 'funding':
+        df = fetch_funding_rate_history("ETHUSDT", days=365)
+        print(f"\n数据预览:\n{df.tail(20)}")
+
+    elif mode == 'oi':
+        df = fetch_open_interest_history("ETHUSDT", interval="15m", days=90)
+        print(f"\n数据预览:\n{df.tail(20)}")
+
+    elif mode == 'all':
+        # 获取所有数据并合并
+        symbol = "ETHUSDT"
+        days = 365
+        print(f"\n{'='*80}")
+        print(f"  获取 {symbol} 完整衍生品数据 (最近 {days} 天)")
+        print(f"{'='*80}")
+
+        kline_df = fetch_binance_klines(symbol, interval="15m", days=days)
+        mark_df = fetch_mark_price_klines(symbol, interval="15m", days=days)
+        funding_df = fetch_funding_rate_history(symbol, days=days)
+        oi_df = fetch_open_interest_history(symbol, interval="15m", days=days)
+
+        if len(kline_df) > 0:
+            merged = merge_perp_data_into_klines(kline_df, mark_df, funding_df, oi_df)
+            print(f"\n合并后 DataFrame: {len(merged)} 行, 列: {list(merged.columns)}")
+            print(f"\n数据预览:\n{merged.tail(10)}")
+            # 检查覆盖率
+            for col in ['mark_high', 'mark_low', 'funding_rate', 'funding_interval_hours',
+                         'open_interest', 'open_interest_value', 'taker_buy_quote']:
+                if col in merged.columns:
+                    coverage = merged[col].notna().mean() * 100
+                    print(f"  {col} 覆盖率: {coverage:.1f}%")
+    else:
+        print(f"用法: python3 binance_fetcher.py [kline|mark|funding|oi|all]")
