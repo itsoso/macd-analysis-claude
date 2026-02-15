@@ -46,6 +46,7 @@ class FuturesPosition:
         self.leverage = leverage
         self.margin = margin  # 投入的保证金(USDT)
         self.unrealized_pnl = 0
+        self.accumulated_funding = 0.0  # v10: 持仓期间累积资金费率 (正=支出, 负=收入)
 
     def calc_pnl(self, current_price):
         """计算未实现盈亏"""
@@ -344,6 +345,9 @@ class FuturesEngine:
         margin_released = pos.margin
         lev = pos.leverage
         qty = pos.quantity
+        acc_funding = getattr(pos, 'accumulated_funding', 0.0)
+        # v10: net_pnl = trade pnl - funding cost
+        net_pnl = pnl - acc_funding
         # 修正: margin已在usdt内(只是被frozen), 平仓只需加PnL减fee
         self.usdt += pnl - fee
         self.frozen_margin -= pos.margin
@@ -353,7 +357,7 @@ class FuturesEngine:
         self._record_trade(dt, price, 'CLOSE_LONG', 'long', qty,
                            notional, fee, lev, reason,
                            exec_price=actual_p, slippage_cost=slippage_cost,
-                           pnl=pnl, entry_price=entry_price,
+                           pnl=net_pnl, entry_price=entry_price,
                            margin_released=margin_released)
 
     def open_short(self, price, dt, margin, leverage, reason, *, bar_low=None, bar_high=None, extra=None):
@@ -396,6 +400,9 @@ class FuturesEngine:
         margin_released = pos.margin
         lev = pos.leverage
         qty = pos.quantity
+        acc_funding = getattr(pos, 'accumulated_funding', 0.0)
+        # v10: net_pnl = trade pnl - funding cost
+        net_pnl = pnl - acc_funding
         # 修正: margin已在usdt内(只是被frozen), 平仓只需加PnL减fee
         self.usdt += pnl - fee
         self.frozen_margin -= pos.margin
@@ -405,7 +412,7 @@ class FuturesEngine:
         self._record_trade(dt, price, 'CLOSE_SHORT', 'short', qty,
                            notional, fee, lev, reason,
                            exec_price=actual_p, slippage_cost=slippage_cost,
-                           pnl=pnl, entry_price=entry_price,
+                           pnl=net_pnl, entry_price=entry_price,
                            margin_released=margin_released)
 
     def check_liquidation(self, price, dt):

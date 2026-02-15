@@ -395,29 +395,39 @@ def _fuse_scores(mode, config,
         vp_bonus = config.get("vp_bonus", 0.08)
         cs_bonus = config.get("cs_bonus", 0.06)
         veto_dampen = config.get("veto_dampen", 0.30)
+        use_soft_veto = config.get("use_soft_veto", False)
 
-        sell_vetoes = sum(1 for s in [bb_buy, vp_buy, cs_buy, kdj_buy] if s >= veto_threshold)
-        buy_vetoes = sum(1 for s in [bb_sell, vp_sell, cs_sell, kdj_sell] if s >= veto_threshold)
+        # 四书加成 (始终计算)
+        sb = 0
+        if bb_sell >= 15: sb += bb_bonus
+        if vp_sell >= 15: sb += vp_bonus
+        if cs_sell >= 25: sb += cs_bonus
+        if kdj_sell >= 15: sb += kdj_bonus
+        bb_ = 0
+        if bb_buy >= 15: bb_ += bb_bonus
+        if vp_buy >= 15: bb_ += vp_bonus
+        if cs_buy >= 25: bb_ += cs_bonus
+        if kdj_buy >= 15: bb_ += kdj_bonus
 
-        if sell_vetoes >= 2:
-            sell_score = base_sell * veto_dampen
+        if use_soft_veto:
+            import math
+            _sv_k = config.get("soft_veto_steepness", 3.0)
+            _sv_m = config.get("soft_veto_midpoint", 1.0)
+            _vt_range = max(100 - veto_threshold, 1)
+            # 连续反向强度: 每本书超出阈值的比例之和
+            sell_opp = sum(max(0, s - veto_threshold) for s in [bb_buy, vp_buy, cs_buy, kdj_buy]) / _vt_range
+            buy_opp = sum(max(0, s - veto_threshold) for s in [bb_sell, vp_sell, cs_sell, kdj_sell]) / _vt_range
+            # Sigmoid: 1.0 → veto_dampen, 连续过渡
+            sell_penalty = veto_dampen + (1.0 - veto_dampen) / (1.0 + math.exp(_sv_k * (sell_opp - _sv_m)))
+            buy_penalty = veto_dampen + (1.0 - veto_dampen) / (1.0 + math.exp(_sv_k * (buy_opp - _sv_m)))
+            sell_score = base_sell * (1 + sb) * sell_penalty
+            buy_score = base_buy * (1 + bb_) * buy_penalty
         else:
-            sb = 0
-            if bb_sell >= 15: sb += bb_bonus
-            if vp_sell >= 15: sb += vp_bonus
-            if cs_sell >= 25: sb += cs_bonus
-            if kdj_sell >= 15: sb += kdj_bonus
-            sell_score = base_sell * (1 + sb)
-
-        if buy_vetoes >= 2:
-            buy_score = base_buy * veto_dampen
-        else:
-            bb_ = 0
-            if bb_buy >= 15: bb_ += bb_bonus
-            if vp_buy >= 15: bb_ += vp_bonus
-            if cs_buy >= 25: bb_ += cs_bonus
-            if kdj_buy >= 15: bb_ += kdj_bonus
-            buy_score = base_buy * (1 + bb_)
+            # 原始硬 veto 逻辑
+            sell_vetoes = sum(1 for s in [bb_buy, vp_buy, cs_buy, kdj_buy] if s >= veto_threshold)
+            buy_vetoes = sum(1 for s in [bb_sell, vp_sell, cs_sell, kdj_sell] if s >= veto_threshold)
+            sell_score = base_sell * veto_dampen if sell_vetoes >= 2 else base_sell * (1 + sb)
+            buy_score = base_buy * veto_dampen if buy_vetoes >= 2 else base_buy * (1 + bb_)
 
     elif mode == "c6_veto":
         base_sell = (div_sell * 0.7 + ma_sell * 0.3) * ma_arr_bonus_sell
@@ -710,18 +720,9 @@ def _vectorized_fuse_scores(mode, config, n,
         vp_b = config.get("vp_bonus", 0.08)
         cs_b = config.get("cs_bonus", 0.06)
         veto_dampen = config.get("veto_dampen", 0.30)
+        use_soft_veto = config.get("use_soft_veto", False)
 
-        # 否决计数 (向量化)
-        sell_vetoes = ((bb_buy >= veto_threshold).astype(np.int32) +
-                       (vp_buy >= veto_threshold).astype(np.int32) +
-                       (cs_buy >= veto_threshold).astype(np.int32) +
-                       (kdj_buy >= veto_threshold).astype(np.int32))
-        buy_vetoes = ((bb_sell >= veto_threshold).astype(np.int32) +
-                      (vp_sell >= veto_threshold).astype(np.int32) +
-                      (cs_sell >= veto_threshold).astype(np.int32) +
-                      (kdj_sell >= veto_threshold).astype(np.int32))
-
-        # 加成 (向量化)
+        # 加成 (向量化, 始终计算)
         sell_bonus = ((bb_sell >= 15).astype(np.float64) * bb_b +
                       (vp_sell >= 15).astype(np.float64) * vp_b +
                       (cs_sell >= 25).astype(np.float64) * cs_b +
@@ -731,12 +732,40 @@ def _vectorized_fuse_scores(mode, config, n,
                      (cs_buy >= 25).astype(np.float64) * cs_b +
                      (kdj_buy >= 15).astype(np.float64) * kdj_b)
 
-        sell_score = np.where(sell_vetoes >= 2,
-                              base_sell * veto_dampen,
-                              base_sell * (1 + sell_bonus))
-        buy_score = np.where(buy_vetoes >= 2,
-                             base_buy * veto_dampen,
-                             base_buy * (1 + buy_bonus))
+        if use_soft_veto:
+            _sv_k = config.get("soft_veto_steepness", 3.0)
+            _sv_m = config.get("soft_veto_midpoint", 1.0)
+            _vt_range = max(100 - veto_threshold, 1)
+            # 连续反向强度 (向量化)
+            sell_opp = (np.maximum(0, bb_buy - veto_threshold) +
+                        np.maximum(0, vp_buy - veto_threshold) +
+                        np.maximum(0, cs_buy - veto_threshold) +
+                        np.maximum(0, kdj_buy - veto_threshold)) / _vt_range
+            buy_opp = (np.maximum(0, bb_sell - veto_threshold) +
+                       np.maximum(0, vp_sell - veto_threshold) +
+                       np.maximum(0, cs_sell - veto_threshold) +
+                       np.maximum(0, kdj_sell - veto_threshold)) / _vt_range
+            # Sigmoid penalty (向量化)
+            sell_penalty = veto_dampen + (1.0 - veto_dampen) / (1.0 + np.exp(_sv_k * (sell_opp - _sv_m)))
+            buy_penalty = veto_dampen + (1.0 - veto_dampen) / (1.0 + np.exp(_sv_k * (buy_opp - _sv_m)))
+            sell_score = base_sell * (1 + sell_bonus) * sell_penalty
+            buy_score = base_buy * (1 + buy_bonus) * buy_penalty
+        else:
+            # 原始硬 veto 逻辑 (向量化)
+            sell_vetoes = ((bb_buy >= veto_threshold).astype(np.int32) +
+                           (vp_buy >= veto_threshold).astype(np.int32) +
+                           (cs_buy >= veto_threshold).astype(np.int32) +
+                           (kdj_buy >= veto_threshold).astype(np.int32))
+            buy_vetoes = ((bb_sell >= veto_threshold).astype(np.int32) +
+                          (vp_sell >= veto_threshold).astype(np.int32) +
+                          (cs_sell >= veto_threshold).astype(np.int32) +
+                          (kdj_sell >= veto_threshold).astype(np.int32))
+            sell_score = np.where(sell_vetoes >= 2,
+                                  base_sell * veto_dampen,
+                                  base_sell * (1 + sell_bonus))
+            buy_score = np.where(buy_vetoes >= 2,
+                                 base_buy * veto_dampen,
+                                 base_buy * (1 + buy_bonus))
 
     elif mode == "c6_veto":
         base_sell = (div_sell * 0.7 + ma_sell * 0.3) * ma_arr_bonus_sell

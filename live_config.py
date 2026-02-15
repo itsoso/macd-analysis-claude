@@ -247,13 +247,13 @@ STRATEGY_PARAM_VERSIONS = {
         "trail_pullback": 0.50,
         "cooldown": 6,
         #
-        # ── B1b: 禁止 neutral short ──
-        # 数据: OOS PF 2.09, +40.8%; neutral DIV Cohen's d = -0.64 (反向指标)
-        # 策略: 不再用折扣/门控修补 neutral short, 直接禁止
-        "regime_short_threshold": "neutral:999",
+        # ── v10: B1b 软化 — 恢复 B3 门槛 + leg budget 降权 ──
+        # v9 B1b (neutral:999) 回测: IS PF=0.90 (<1.0), 误杀盈利信号
+        # v10: 恢复 neutral:60 + leg budget 10% + soft veto → IS PF=1.31, OOS +7.9%
+        "regime_short_threshold": "neutral:60",
         #
-        # ── 因 B1b 简化: 冲突折扣仅保留 trend/high_vol (neutral 已无空头) ──
-        "short_conflict_regimes": "trend,high_vol",
+        # ── v10: 恢复 B3 冲突折扣含 neutral ──
+        "short_conflict_regimes": "trend,high_vol,neutral",
         #
         # ── 结构折扣: 仍对 neutral long 有效 ──
         "neutral_struct_discount_0": 0.0,
@@ -278,6 +278,19 @@ STRATEGY_PARAM_VERSIONS = {
         "regime_low_vol_trend_short_sl": -0.18,   # low_vol_trend: -18%
         "regime_high_vol_short_sl": -0.12,        # high_vol: 挤压风险高, -12%
         "regime_high_vol_choppy_short_sl": -0.12,
+        #
+        # ── v10: Soft Veto (sigmoid 连续衰减替代硬二元门控) ──
+        # 回测: IS PF 1.19→1.03 (soft veto alone), +leg budget → 1.31
+        "use_soft_veto": True,
+        "soft_veto_steepness": 3.0,
+        "soft_veto_midpoint": 1.0,
+        #
+        # ── v10: Soft Struct (confirms=0 → 2% 仓位, 非硬禁止) ──
+        "soft_struct_min_mult": 0.02,
+        #
+        # ── v10: Leg Risk Budget (neutral short → 10% 仓位, 替代 B1b 硬禁止) ──
+        "use_leg_risk_budget": True,
+        "risk_budget_neutral_short": 0.10,
     },
 }
 _ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v5")
@@ -634,6 +647,15 @@ class StrategyConfig:
     regime_high_vol_ma_w: float = 0.55
     regime_high_vol_choppy_div_w: float = 0.30
     regime_high_vol_choppy_ma_w: float = 0.70
+
+    # ── v10: Soft Veto (连续衰减替代二元门控) ──
+    # 原 veto: ≥2 本书反向 → score×0.30 (hard switch)
+    # soft veto: 计算反向强度 → sigmoid 衰减 → score×penalty (连续)
+    use_soft_veto: bool = False
+    soft_veto_steepness: float = 3.0       # sigmoid 陡度 (越大越接近硬开关)
+    soft_veto_midpoint: float = 1.0        # 惩罚中点 (1.0 ≈ 原2本书@阈值水平)
+    # v10: 结构折扣最小乘数 (替代 confirms=0 → margin×0.0 的硬禁止)
+    soft_struct_min_mult: float = 0.0      # 0.0=硬禁止(原行为), 0.02=2%仓位(soft)
 
     # ── P24: Regime-Adaptive 止损 ──
     # 空单止损按 regime 差异化: neutral 收紧(错了快认输), trend 保持(给空间)

@@ -2099,11 +2099,13 @@ def _run_strategy_core(
             if eng.futures_long:
                 cost = eng.futures_long.quantity * funding_price * rate
                 eng.usdt -= cost
+                eng.futures_long.accumulated_funding += cost  # v10: 累积到仓位
                 if cost > 0: eng.total_funding_paid += cost
                 else: eng.total_funding_received += abs(cost)
             if eng.futures_short:
                 income = eng.futures_short.quantity * funding_price * rate
                 eng.usdt += income
+                eng.futures_short.accumulated_funding -= income  # v10: 累积到仓位 (空头付出=正)
                 if income > 0: eng.total_funding_received += income
                 else: eng.total_funding_paid += abs(income)
 
@@ -2646,7 +2648,8 @@ def _run_strategy_core(
                     else:
                         _struct_short_mult = 1.0
                 elif _struct_short_confirms <= 0:
-                    _struct_short_mult = neutral_struct_discount_0
+                    _struct_short_mult = max(neutral_struct_discount_0,
+                                             float(config.get('soft_struct_min_mult', 0.0)))
                 elif _struct_short_confirms == 1:
                     _struct_short_mult = neutral_struct_discount_1
                 elif _struct_short_confirms == 2:
@@ -3171,7 +3174,8 @@ def _run_strategy_core(
                     else:
                         _struct_long_mult = 1.0
                 elif _struct_long_confirms <= 0:
-                    _struct_long_mult = neutral_struct_discount_0
+                    _struct_long_mult = max(neutral_struct_discount_0,
+                                             float(config.get('soft_struct_min_mult', 0.0)))
                 elif _struct_long_confirms == 1:
                     _struct_long_mult = neutral_struct_discount_1
                 elif _struct_long_confirms == 2:
