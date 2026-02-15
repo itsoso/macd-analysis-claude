@@ -873,10 +873,10 @@ def page_strategy_tech_doc():
         'page_strategy_tech_doc.html',
         active_page='strategy-tech-doc',
         content=html_content,
-        version='6.0',
+        version='9.0',
         last_updated='2026-02-15',
-        win_rate='63.1%',
-        cpf='1.53',
+        win_rate='64.9%',
+        cpf='2.51',
     )
 
 

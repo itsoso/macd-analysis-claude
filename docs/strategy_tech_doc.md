@@ -1,16 +1,23 @@
-# ETH/USDT 六书融合量化交易策略 v8.1 — 完整技术规格书
+# ETH/USDT 六书融合量化交易策略 v9.0 — 完整技术规格书
 
-**交易标的**: ETH/USDT 永续合约 (Binance)
+**交易标的**: ETH/USDT 永续合约 (Binance Futures)
 **主时间框架**: 1h K线
 **决策时间框架**: 15m, 1h, 4h, 24h (多周期联合决策)
 **回测区间 (IS)**: 2025-01 ~ 2026-01 (12个月)
 **OOS验证区间**: 2024-01 ~ 2024-12 (12个月)
 **Walk-Forward验证**: 6窗口滚动 (2024Q1 ~ 2025Q4)
 **初始资金**: $100,000 USDT
-**策略版本**: v8.1 (P20) — v8.0 + 空头追踪收紧
+**策略版本**: v9.0 — 架构简化版 (B1b + P24 + Anti-Squeeze + 衍生品数据集成)
+**生产配置版本**: v5 (`STRATEGY_VERSION=v5`)
 
-> **v8.1 更新**: 评估口径统一 (P17: 12h→24h)，空头连续追踪回撤容忍收紧 (P20: 60%→40%)。
-> P18 (Regime-Adaptive 融合) 已实现但因 IS/OOS 分裂暂不启用，保留为实验功能。
+> **v9.0 更新摘要** (2026-02-15):
+> 1. **B1b**: 彻底禁止 neutral short（neutral:999），不再用复杂折扣/门控修补 DIV 信号失效问题
+> 2. **P24**: 空头止损按 regime 差异化（trend -15%、high_vol -12%，替代全局 -20%）
+> 3. **Anti-Squeeze Filter**: 显式组合条件（funding 高 + OI 上升 + taker 买强）阻止逆拥挤方向开仓
+> 4. **实盘衍生品数据集成**: live_signal_generator 集成 Mark Price / Funding Rate / OI 数据获取
+> 5. **架构简化**: 移除因 B1b 冗余的 neutral short 门控，决策路径从"大量门控修补"简化为"直接禁止+差异化止损"
+
+---
 
 <h2 id="section-1">一、策略概述与核心指标</h2>
 
@@ -39,6 +46,18 @@
 | 交易笔数 | — | — | 77笔 |
 | 最大回撤 | -16.84% | 改善 | — |
 
+**v9.0 Round 3 A/B 实验 (P17 统一口径)**
+
+| 变体 | IS Ret | IS PF | OOS Ret | OOS PF | Calmar | Worst-5 |
+|------|--------|-------|---------|--------|--------|---------|
+| E0 baseline (bugfix) | +49.1% | 0.93 | -3.3% | 1.70 | — | -$15k |
+| E1 P23 weighted | +44.2% | 0.88 | -8.1% | 1.52 | — | -$12k |
+| E2 P21 risk-R | +32.5% | 0.81 | -5.7% | 1.55 | — | -$9k |
+| **E4 P18lite+P23** | +38.7% | 0.85 | **+28.9%** | **1.95** | — | -$10k |
+| **E5 full v9** | +35.1% | 0.82 | +18.2% | 1.78 | — | **-$7k** |
+
+> **关键发现**: E4 (P18-lite + P23 加权确认) OOS 收益从 -3.3% 飙升至 +28.9%，说明 regime-adaptive 融合权重与加权确认的组合能显著提升 OOS 泛化能力。E5 (全 v9 候选) 大幅降低尾部风险（Worst-5 从 -$15k 降至 -$7k）。
+
 **Walk-Forward 验证 (6窗口滚动)**
 
 | 指标 | 值 |
@@ -46,8 +65,7 @@
 | 盈利窗口 | 3/6 (50%) |
 | 平均季度收益 | +9.6%/Q |
 | 平均胜率 | 始终 >54% |
-
-> v8.0 核心改进: 在 v7.0 (B3) 基础上，P13 连续追踪止盈替代离散门槛触发，IS PF +0.17、OOS PF +0.18，同时通过 P6-P16 全量诊断实验验证策略边界。v7.0 核心改进方向: 通过 P0-P4 系统诊断发现 neutral short 无 alpha 信号支撑（Cohen's d 全部无效），B3 方案以**强门控 + 激进折扣 + 冲突扩展 + 长冷却**四重机制大幅压缩 neutral 无效空单暴露，OOS PF 提升 39.5%。
+| 平均PF | 1.77 |
 
 ### Regime 分布表现 (IS run#499)
 
@@ -59,9 +77,7 @@
 | high_vol | 21 | +$17,343 | 4.73 |
 | high_vol_choppy | 7 | +$1,405 | 2.16 |
 
-所有 5 个 regime 均为正 PnL，策略在各市场状态下均有效。
-
-### OOS Regime 表现 (2024)
+### OOS Regime × 方向 表现 (2024)
 
 | Regime × 方向 | 笔数 | WR | PF | 净PnL |
 |---------------|------|-----|-----|-------|
@@ -70,89 +86,147 @@
 | trend × short | 15 | 46.7% | 0.84 | -$606 |
 | high_vol × short | 6 | 33.3% | 0.47 | -$1,050 |
 
-> **关键洞察**: neutral long 是 OOS 核心利润来源 (WR=85%, PF=17.67)，而 neutral short 贡献微弱 (PF=1.07)。v7.0 的核心就是压缩 neutral short 的无效暴露。
+> **v9.0 架构决策依据**: neutral long 是核心利润来源 (WR=85%, PF=17.67)。neutral short 贡献微弱 (PF=1.07) 且 DIV Cohen's d=-0.64（反向指标）。**四大 LLM 共识**: 与其用复杂门控修补 neutral short，不如直接禁止 (B1b)。
 
 ---
 
-<h2 id="section-2">二、架构分层</h2>
+<h2 id="section-2">二、系统架构</h2>
 
-策略采用 **信号层 → 融合层 → 决策层 → 执行层 → 风控层** 五层架构：
+### 2.1 五层架构 (v9.0)
 
 ```
-┌─────────────────────────────────────────────┐
-│  Layer 1: 信号生成 (signal_core.py)          │
-│  六维独立评分: DIV / MA / CS / BB / VP / KDJ  │
-│  每本书独立输出 sell_score 和 buy_score (0-100) │
-└──────────────┬──────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Layer 0: 数据层 (binance_fetcher.py)                    │
+│  K线数据 + Mark Price + Funding Rate + OI + Taker Volume │
+│  merge_perp_data_into_klines() 合并衍生品数据              │
+└──────────────┬──────────────────────────────────────────┘
                ▼
-┌─────────────────────────────────────────────┐
-│  Layer 2: 多周期融合 (multi_tf_consensus.py)  │
-│  4个TF的6书分数 → 加权共识 SS/BS              │
-│  链式一致性检测 + 大小周期冲突检查              │
-└──────────────┬──────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Layer 1: 信号生成 (signal_core.py)                      │
+│  六维独立评分: DIV / MA / CS / BB / VP / KDJ              │
+│  每本书独立输出 sell_score 和 buy_score (0-100)            │
+│  向量化批量计算 + 多进程并行 (P0/P1 优化)                  │
+└──────────────┬──────────────────────────────────────────┘
                ▼
-┌─────────────────────────────────────────────┐
-│  Layer 3: 决策引擎 (optimize_six_book.py)    │
-│  Regime检测 → 双引擎切换 → 微结构叠加          │
-│  → 入场条件判断 → 仓位计算                     │
-│  → v7.0: 结构折扣 + 冲突折扣(扩展neutral)     │
-│  → v7.0: regime门槛60 + cooldown=6           │
-│  → v8.0: P13连续追踪止盈替代离散门槛           │
-└──────────────┬──────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Layer 2: 多周期融合 (multi_tf_consensus.py)              │
+│  4个TF的6书分数 → 加权共识 SS/BS                          │
+│  链式一致性检测 + 大小周期冲突检查                          │
+│  book_features_weighted 传递给后续层                       │
+└──────────────┬──────────────────────────────────────────┘
                ▼
-┌─────────────────────────────────────────────┐
-│  Layer 4: 执行引擎 (FuturesEngine)           │
-│  延迟执行(T+1 open) → 滑点/手续费建模         │
-│  分段止盈(TP1@12%,TP2@25%) → 追踪止盈        │
-└──────────────┬──────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Layer 3: 决策引擎 (optimize_six_book.py)                │
+│  Regime检测 → P24 Regime-Adaptive SL                     │
+│  → B1b neutral short 禁止 (neutral:999)                  │
+│  → Anti-Squeeze Filter (OI+Funding+Taker组合)            │
+│  → 微结构叠加 → 入场条件判断 → 仓位计算                    │
+│  → P13 连续追踪止盈 + P20 空头追踪收紧                    │
+└──────────────┬──────────────────────────────────────────┘
                ▼
-┌─────────────────────────────────────────────┐
-│  Layer 5: 风控保护                            │
-│  硬断路器(-28%) → 日亏/周亏/连亏熔断           │
-│  全局回撤停机(15%) → 现货趋势底仓保护          │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Layer 4: 执行引擎 (FuturesEngine / live_runner.py)      │
+│  延迟执行(T+1 open) → 滑点/手续费建模                     │
+│  分段止盈(TP1@12%,TP2@25%) → P13连续追踪止盈              │
+│  Mark Price 强平检测                                     │
+└──────────────┬──────────────────────────────────────────┘
+               ▼
+┌─────────────────────────────────────────────────────────┐
+│  Layer 5: 风控保护                                       │
+│  硬断路器(-28%) → 日亏/周亏/连亏熔断                       │
+│  全局回撤停机(15%) → 现货趋势底仓保护                      │
+└─────────────────────────────────────────────────────────┘
 ```
+
+### 2.2 数据流水线 (v9.0 新增)
+
+```
+  实盘 (live_signal_generator.py)           回测 (optimize_six_book.py)
+  ┌─────────────────────────┐              ┌─────────────────────────┐
+  │ fetch_binance_klines()  │              │ 从本地 DB 加载 K线       │
+  │ fetch_mark_price_klines()│←── 新增 ──→ │ merge_perp_data()       │
+  │ fetch_funding_rate_history()│           │ (mark/funding/OI 合并)  │
+  │ fetch_open_interest_history()│          │                         │
+  │ merge_perp_data_into_klines()│         │ _compute_microstructure()│
+  └──────────┬──────────────┘              └──────────┬──────────────┘
+             │                                        │
+             ▼                                        ▼
+    compute_signals_six()                    _vectorized_fuse_scores()
+    calc_fusion_score_six()                  _apply_microstructure_overlay()
+                                             └─ Anti-Squeeze Filter
+```
+
+### 2.3 核心代码文件
+
+| 文件 | 行数 | 职责 |
+|------|------|------|
+| `optimize_six_book.py` | ~4900 | 回测引擎核心: Regime检测、持仓管理、Anti-Squeeze |
+| `live_config.py` | ~977 | 策略参数、版本管理 (v1-v5)、风控配置 |
+| `signal_core.py` | ~978 | 六书信号计算、融合评分（单bar+批量向量化） |
+| `live_signal_generator.py` | ~675 | 实盘信号: 数据获取(含衍生品)、信号计算、交易决策 |
+| `binance_fetcher.py` | ~690 | Binance API: K线+Mark Price+Funding+OI 获取/缓存 |
+| `multi_tf_consensus.py` | ~641 | 多周期共识、TF权重、链式检测 |
+| `live_runner.py` | — | 实盘运行入口、systemd 管理 |
+| `app.py` | — | Flask Web 应用、监控面板 |
 
 ---
 
 <h2 id="section-3">三、信号生成 — 六书融合</h2>
 
-**六本书（Six Books）** 是六个独立的技术指标维度，每本书在每根K线上输出一个 `sell_score` 和 `buy_score`（0-100分）:
+**六本书（Six Books）** 是六个独立的技术指标维度，每本书在每根K线上输出 `sell_score` 和 `buy_score`（0-100分）:
 
-| 书名 | 缩写 | 核心指标 | 融合权重 |
-|------|------|---------|---------|
-| Divergence | DIV | MACD柱/DIF与价格背离 | 55% (div_weight=0.55) |
-| Moving Average | MA | 均线排列/交叉/斜率 | 隐含在veto中 |
-| Candlestick | CS | K线形态识别(锤子/吞没等) | 6% (cs_bonus=0.06) |
-| Bollinger Band | BB | 布林带突破/挤压/回归 | 10% (bb_bonus=0.10) |
-| Volume-Price | VP | 量价关系/量能异常 | 8% (vp_bonus=0.08) |
-| KDJ | KDJ | 超买超卖+趋势确认 | 15% (kdj_weight=0.15) |
+| 书名 | 缩写 | 核心指标 | 默认融合权重 |
+|------|------|---------|-------------|
+| Divergence | DIV | MACD柱/DIF与价格背离 | 55% (div_weight) |
+| Moving Average | MA | 均线排列/交叉/斜率 | 30% (基数中隐含) |
+| Candlestick | CS | K线形态识别(锤子/吞没等) | 6% (cs_bonus) |
+| Bollinger Band | BB | 布林带突破/挤压/回归 | 10% (bb_bonus) |
+| Volume-Price | VP | 量价关系/量能异常 | 8% (vp_bonus) |
+| KDJ | KDJ | 超买超卖+趋势确认 | 9% (kdj_bonus) |
 
-### 融合模式: `c6_veto_4`
+### 融合模式: `c6_veto_4` (生产默认)
 
 ```python
-# 融合公式 (简化):
-raw_ss = div_sell * 0.55 + kdj_sell * 0.15 + bb_bonus + vp_bonus + cs_bonus
-# Veto 机制: 任一本书的反向分数 > veto_threshold(25) → 融合分数打折
-if any_book_buy > 25:
-    raw_ss *= veto_dampen(0.30)
-# KDJ 强化: KDJ 方向一致时乘以 1.25, 反向时乘以 0.70
+# 融合公式:
+base_ss = (div_sell * 0.70 + ma_sell * 0.30) * ma_arrangement_bonus
+# 四书加成: BB/VP/KDJ (>=15分) + CS (>=25分) → 乘法加成
+# Veto 机制: 反向书 >=2 本超过 veto_threshold(25) → 分数 * 0.30
+```
+
+### P18: Regime-Adaptive 融合 (已实现，当前未在 v5 中启用)
+
+```python
+# 每个 regime 有独立的权重矩阵:
+# neutral:  DIV 25% + MA 75% (DIV d=-0.64 反向, 大幅降权)
+# trend:    DIV 60% + MA 40% (背离在趋势末端有效)
+# high_vol: DIV 45% + MA 55% + VP bonus 12% (量价在高波中更有效)
+# 实现路径: 主循环中逐 bar 从 book_features 重新融合 (L2174-2221)
+# 批量路径: regime_adaptive 回退到 c6_veto_4, 主循环覆盖分数
 ```
 
 ### P4 信号判别力诊断（Cohen's d）
 
-v7.0/v8.0 决策基础 — P4 实验对 neutral short 交易的六书信号做了 win/loss 判别力分析：
+| 书 | Cohen's d (neutral short) | 判别等级 | 说明 |
+|----|--------------------------|---------|------|
+| DIV_sell | **-0.64** | **反向** | 赢单DIV分数反而更低 |
+| CS_sell | +0.11 | 无效 | d < 0.20 |
+| KDJ_sell | +0.08 | 无效 | d < 0.20 |
+| BB_sell | +0.05 | 无效 | d < 0.20 |
+| VP_sell | +0.03 | 无效 | d < 0.20 |
+| MA_sell | -0.02 | 无效 | d < 0.20 |
 
-| 书 | Cohen's d | 判别等级 | 说明 |
-|----|-----------|---------|------|
-| DIV_sell | **-0.64** | ❌ 反向 | 赢单DIV分数反而更低 |
-| CS_sell | +0.11 | ❌ 无效 | d < 0.20 |
-| KDJ_sell | +0.08 | ❌ 无效 | d < 0.20 |
-| BB_sell | +0.05 | ❌ 无效 | d < 0.20 |
-| VP_sell | +0.03 | ❌ 无效 | d < 0.20 |
-| MA_sell | -0.02 | ❌ 无效 | d < 0.20 |
+> **v9.0 决策**: 不再尝试修补 neutral short，而是通过 B1b 直接禁止。
 
-> **结论**: Neutral 做空中，所有六本书均无法区分赢/输单。DIV 甚至是反向指标。这证明 neutral short 不存在可靠的 alpha 信号，只能通过仓位管控 (结构折扣) 和门槛提高来降低暴露。
+### P16 六书全 regime 信号判别力
+
+| 书 | 全 regime Cohen's d (空仓) | Alpha等级 |
+|------|--------------------------|----------|
+| CS | **+0.215** | 正向 (最强) |
+| MA | **+0.215** | 正向 (最强) |
+| VP | +0.178 | 正向 |
+| KDJ | +0.135 | 正向 |
+| BB | 负向 | 无正alpha |
+| DIV | 负向 | 无正alpha |
 
 ---
 
@@ -165,9 +239,8 @@ _MTF_WEIGHT = {
     '15m': 5, '30m': 8, '1h': 15, '2h': 12,
     '4h': 20, '8h': 18, '12h': 15, '24h': 25,
 }
+# v9.0: 决策TF = ['15m', '1h', '4h', '24h'] (P17统一口径)
 ```
-
-24h 权重最高(25)，作为趋势锚定；1h 权重15作为主执行框架。
 
 ### 4.2 共识融合流程
 
@@ -177,10 +250,7 @@ _MTF_WEIGHT = {
 4. 覆盖率门控: 有效TF数 / 总TF数 >= 0.5 才出信号
 5. 方向决策: dominance_ratio=1.3, 即 SS > BS*1.3 才判定为"卖"
 6. 输出: (consensus_ss, consensus_bs, meta_dict)
-
-### 4.3 六书特征加权聚合
-
-每个TF的6本书细分特征（`div_sell`, `ma_buy`, `cs_sell` 等12个维度）也按TF权重加权汇总，输出 `book_features_weighted`，供后续结构折扣、冲突折扣使用。
+7. **book_features_weighted**: 12维特征加权汇总，供 P18/结构折扣使用
 
 ---
 
@@ -196,680 +266,399 @@ atr_pct = 14bar ATR / price
 
 # 判定逻辑:
 if vol >= 0.020 or atr_pct >= 0.018:
-    if abs(trend) <= 0.006:  # 高波动 + 弱趋势
-        regime = 'high_vol_choppy'  # 提门槛+22%, 降杠杆*0.58
-    else:
-        regime = 'high_vol'         # 提门槛+12%, 降杠杆*0.75
+    regime = 'high_vol' / 'high_vol_choppy'
 elif vol <= 0.007 and abs(trend) >= 0.015:
-    regime = 'low_vol_trend'        # 略降门槛*0.95
+    regime = 'low_vol_trend'
 elif abs(trend) >= 0.015:
-    regime = 'trend'                # 略降门槛*0.98
+    regime = 'trend'
 else:
-    regime = 'neutral'              # 默认状态
+    regime = 'neutral'
 ```
 
-Regime 还根据趋势方向做**顺逆势倾斜**: 上升趋势中做多门槛 *0.88（更容易开多），做空门槛 *1.10（更难开空）。
+### v9.0 Regime 对策略行为的影响
 
-### Regime 对阈值和风险的影响
-
-| Regime | 入场门槛乘数 | 杠杆乘数 | 退出门槛乘数 |
-|--------|------------|---------|------------|
-| neutral | 1.00 | 1.00 | 1.00 |
-| trend | 0.98 | 1.00 | 1.00 |
-| low_vol_trend | 0.95 | 1.00 | 1.05 |
-| high_vol | 1.12 | 0.75 | 0.95 |
-| high_vol_choppy | 1.22 | 0.58 | 0.90 |
-
-### P0b Regime 一致性验证
-
-OOS 验证显示: 每笔交易有且仅有 1 个 `entry_regime` 标签，口径一致。28.6% 的交易在持仓期间经历了 regime 切换，策略在入场时锁定 regime 而非动态调整，这是合理设计。
+| Regime | 空单决策 (v9.0) | 止损 (P24) | 门槛乘数 | 杠杆乘数 |
+|--------|----------------|-----------|---------|---------|
+| **neutral** | **禁止开空 (B1b)** | N/A | 1.00 | 1.00 |
+| trend | 允许, Anti-Squeeze过滤 | **-15%** | 0.98 | 1.00 |
+| low_vol_trend | 允许, +35门槛 | -18% | 0.95 | 1.00 |
+| high_vol | 允许, Anti-Squeeze过滤 | **-12%** | 1.12 | 0.75 |
+| high_vol_choppy | 允许, Anti-Squeeze过滤 | -12% | 1.22 | 0.58 |
 
 ---
 
-<h2 id="section-6">六、开仓逻辑</h2>
+<h2 id="section-6">六、v9.0 核心变更: 开仓逻辑</h2>
 
-### 6.1 信号延迟执行
-
-**核心设计**: 消除 same-bar execution bias。
+### 6.1 信号延迟执行 (T+1)
 
 ```python
-# 在 bar[i] 的收盘时计算信号 → 存入 pending_ss/pending_bs
-# 在 bar[i+1] 的 open 价格执行交易
-exec_price = open_prices[idx]  # 当前bar的开盘价
-ss, bs = pending_ss, pending_bs  # 上一根bar计算的信号
+# 在 bar[i] 收盘时计算信号 → 存入 pending_ss/pending_bs
+# 在 bar[i+1] 的 open 价格执行交易 → 消除 same-bar bias
+exec_price = open_prices[idx]
+ss, bs = pending_ss, pending_bs
 ```
 
-### 6.2 开空条件 (做空)
-
-所有条件必须**同时满足**:
+### 6.2 v9.0 开空条件 (做空)
 
 ```python
 _short_candidate = (
-    short_cd == 0                        # 冷却期结束 (v7.0: cooldown=6)
+    short_cd == 0                        # 冷却期结束 (cooldown=6)
     and ss >= effective_short_threshold   # SS >= 动态阈值
     and not eng.futures_short             # 无存量空仓
-    and not eng.futures_long              # 无存量多仓（不同时持有）
-    and sell_dom                          # SS > BS * entry_dom_ratio(1.5)
+    and not eng.futures_long              # 无存量多仓
+    and sell_dom                          # SS > BS * 1.5
     and not in_conflict                   # 非冲突区间
     and can_open_risk                     # 风控允许
-    and not micro_block_short             # 微结构不阻止
-    and neutral_short_ok                  # Neutral质量门控通过
+    and not micro_block_short             # 微结构不阻止 ← 含Anti-Squeeze
     and _bk_short_ok                      # 六书共识门控通过
-    and extreme_div_short_ok             # 极端背离否决未触发
-    and neutral_struct_short_ok          # 结构确认器通过
+    # v9.0 B1b: regime_short_threshold = "neutral:999"
+    # → neutral 中 SS 永远达不到 999, 等效于完全禁止
 )
 ```
 
-### 6.3 `effective_short_threshold` 的动态计算
+### 6.3 v9.0 Anti-Squeeze Filter (新增)
 
 ```python
-base = 40  # short_threshold (v4配置)
-# 1. Regime动态调整 → 高波动时 *1.12~1.22
-# 2. 双引擎调整 → trend引擎*0.95, reversion引擎*1.12
-# 3. Regime门控 → low_vol_trend 加 +35
-# 4. Regime特定阈值 → v7.0: neutral 中 SS须>=60 (v6.0: 45)
-# 5. 趋势保护 → 上升趋势中提高到 max(base, 55)
+# 位于 _apply_microstructure_overlay() 中
+# 三条件组合 (全部满足才触发):
+
+# 多头拥挤 → 禁止开空:
+if (funding_rate >= 0.08%        # 多头付费, 拥挤
+    and oi_z_score >= 1.0        # OI 上升, 杠杆堆积
+    and taker_imbalance >= 0.12): # 主动买盘强
+    block_short = True
+    margin_mult *= 0.60          # 已有空仓降风险
+
+# 空头拥挤 → 禁止开多 (镜像):
+if (funding_rate <= -0.08%
+    and oi_z_score >= 1.0
+    and taker_imbalance <= -0.12):
+    block_long = True
+    margin_mult *= 0.60
 ```
 
-### 6.4 开多条件 (做多)
-
-与开空逻辑对称，但有额外的**趋势做多增强**:
-- 上升趋势中门槛降至 min(cur_long_threshold, 25)
-- dominance 降低为 bs > ss 即可
-- 如果 gate 后 bs=0 但趋势明确，查看 4h/24h 原始信号绕过 gate
-
-### 6.5 仓位计算
+### 6.4 仓位计算
 
 ```python
 margin = available_margin * cur_margin_use  # 基础仓位
 
-# v7.0 结构折扣 (仅neutral regime, 激进化)
-if struct_confirms == 0: margin *= 0.0    # 0本确认→直接不做
-elif struct_confirms == 1: margin *= 0.05 # 1本→5%仓
-elif struct_confirms == 2: margin *= 0.15 # 2本→15%仓
-elif struct_confirms == 3: margin *= 0.50 # 3本→50%仓
-# 4-5本确认 → 全额
+# 结构折扣 (neutral long 仍有效)
+if struct_confirms == 0: margin *= 0.0    # 0本→禁止
+elif struct_confirms == 1: margin *= 0.05 # 1本→5%
+elif struct_confirms == 2: margin *= 0.15 # 2本→15%
+elif struct_confirms == 3: margin *= 0.50 # 3本→50%
 
-# v7.0 冲突软折扣 (扩展到 trend/high_vol/neutral)
-if div_buy >= 50 and ma_sell >= 12:
-    margin *= 0.60  # 打六折
+# v9.0: 冲突折扣仅保留 trend/high_vol (neutral 已无空头)
+if regime in ('trend', 'high_vol'):
+    if div_buy >= 50 and ma_sell >= 12:
+        margin *= 0.60
 
 # 杠杆动态调整
 actual_lev = 5 if ss >= 50 else 3 if ss >= 35 else 2
-```
-
-### 6.6 v7.0 Neutral Short 四重防护
-
-v7.0 对 neutral short 实施了四重叠加防护机制:
-
-```
-   ┌────────────────────────────────────────────┐
-   │ 第1层: 门槛提高 (regime_short_threshold)     │
-   │   neutral 中 SS 须 >= 60 才允许开空          │
-   │   (v6.0 为 45, 提高33%)                     │
-   ├────────────────────────────────────────────┤
-   │ 第2层: 结构折扣 (neutral_struct_discount)    │
-   │   0本确认→0% | 1本→5% | 2本→15% | 3本→50%  │
-   │   (v6.0: 10% / 20% / 100% / 100%)          │
-   ├────────────────────────────────────────────┤
-   │ 第3层: 冲突折扣 (short_conflict)             │
-   │   neutral新增: div_buy>=50 且 ma_sell>=12   │
-   │   → 仓位再 ×0.60                            │
-   ├────────────────────────────────────────────┤
-   │ 第4层: 冷却延长 (cooldown)                   │
-   │   4 bars → 6 bars, 近似ghost cooldown       │
-   │   减少连续低质量neutral空单                   │
-   └────────────────────────────────────────────┘
 ```
 
 ---
 
 <h2 id="section-7">七、持仓管理与退出</h2>
 
-### 7.1 退出优先级 (空仓为例，从高到低)
+### 7.1 退出优先级 (空仓)
 
-| 优先级 | 退出类型 | 条件 |
-|--------|---------|------|
-| 1 | 强平检测 | 使用 bar HIGH 检测 intrabar 穿越 |
-| 2 | 硬断路器 | PnL < -28% → 强制止损 |
-| 3 | 分段止盈TP1 | PnL >= +12% → 平仓30% |
-| 4 | 分段止盈TP2 | PnL >= +25% → 再平仓30% |
-| 5 | 完全止盈 | PnL >= +60% → 全部平仓 |
-| 6 | **P13连续追踪止盈** | 利润≥5%起追踪, 回撤容忍60%→30%动态 |
-| 7 | **反向信号平仓** | BS >= 40 且 SS < BS*0.7 且持仓>=8bars |
-| 8 | 常规止损 | PnL < -20% → 按止损价成交 |
-| 9 | **超时平仓** | 持仓 >= 48 bars |
+| 优先级 | 退出类型 | 条件 | 备注 |
+|--------|---------|------|------|
+| 1 | 强平检测 | Mark Price HIGH 穿越强平价 | v9.0: 使用 mark_high/mark_low |
+| 2 | 硬断路器 | PnL < -28% | 安全网 |
+| 3 | **P24 Regime-Adaptive SL** | trend: -15%, high_vol: -12% | **v9.0 新增** |
+| 4 | 分段止盈TP1 | PnL >= +12% → 平仓30% | |
+| 5 | 分段止盈TP2 | PnL >= +25% → 再平仓30% | |
+| 6 | 完全止盈 | PnL >= +60% → 全部平仓 | |
+| 7 | **P13连续追踪止盈** | 利润≥5%起追踪, 回撤容忍60%→30% | |
+| 8 | **P20空头追踪收紧** | 空头回撤容忍40% (vs多头60%) | **v8.1** |
+| 9 | 反向信号平仓 | BS >= 40 且 SS < BS*0.7 且持仓>=8bars | |
+| 10 | 超时平仓 | 持仓 >= 48 bars | |
 
-### P3 退出路径消融实验结论
-
-| 退出机制 | 禁用后IS变化 | 禁用后OOS变化 | 重要性 |
-|---------|-------------|-------------|--------|
-| **反向平仓** | Ret -3.5% | Ret -8.2% | ⭐⭐⭐ 核心 |
-| **超时平仓** | Ret -2.1% | Ret -5.7% | ⭐⭐⭐ 核心 |
-| 追踪止盈 | Ret **+0.3%** | Ret +0.1% | ⚠️ 微负贡献 (v8.0 P13已重构) |
-| 硬断路器 | Ret -0.1% | Ret -0.2% | 低 (保守风控) |
-| 常规止损 | Ret +0.0% | Ret -0.1% | 低 (保守风控) |
-
-> **关键发现**: 反向平仓和超时是策略的核心退出支柱。追踪止盈在 v7.0 参数下微幅负贡献，v8.0 已通过 P13 连续化重构解决。
-
-### 7.2 分段止盈 (v3 早期锁利)
+### 7.2 P13 连续追踪止盈 (v8.0 核心)
 
 ```python
-# 一段止盈: +12% → 平仓30%
-if pnl_r >= 0.12 and not partial_done:
-    close_qty = position * 0.30
-    partial_done = True
-
-# 二段止盈: +25% → 再平仓30%  (elif 避免同bar双触发)
-elif pnl_r >= 0.25 and partial_done and not partial2_done:
-    close_qty = position * 0.30
-    partial2_done = True
-
-# 剩余40%仓位由追踪止盈/完全止盈管理
-```
-
-### 7.3 追踪止盈 (v7.0 离散版, v8.0 已被 P13 替代)
-
-> ⚠️ v8.0 中此离散追踪止盈已被 P13 连续追踪止盈替代，保留此节作为历史参考。
-
-```python
-# [v7.0] 空仓: 当峰值利润 >= 19% (short_trail=0.19) 时启动追踪
-if short_max_pnl >= 0.19:
-    # 当前利润回撤到峰值的 50% 以下时平仓
-    if pnl_r < short_max_pnl * 0.50:
-        close_position()
-```
-
-### 7.4 P13 连续追踪止盈 (v8.0 新增)
-
-v8.0 核心改进 — 用**连续动态回撤容忍度**替代 v7.0 的离散门槛触发式追踪止盈。
-
-**问题**: v7.0 的追踪止盈在 `short_trail=0.19` 处有二元开关（未达到=不追踪，达到=固定50%回撤平仓），P3 消融实验证明其微负贡献。
-
-**P13 方案**: 从低利润即开始追踪，容忍度随利润增长平滑收紧。
-
-```python
-# P13 连续追踪止盈参数
-continuous_trail_start_pnl = 0.05   # 利润达到5%即开始追踪
-continuous_trail_max_pb    = 0.60   # 低利润时: 宽容忍度60%
-continuous_trail_min_pb    = 0.30   # 高利润时: 紧容忍度30%
+continuous_trail_start_pnl = 0.05   # 利润达5%即开始追踪
+continuous_trail_max_pb    = 0.60   # 低利润: 宽容忍度 60%
+continuous_trail_min_pb    = 0.30   # 高利润: 紧容忍度 30%
+# v9.0 P20: 空头专用
+continuous_trail_max_pb_short = 0.40  # 空头更紧: 40%
 
 # 动态回撤计算
-progress = min(max_pnl / TP, 1.0)  # 利润接近TP的程度 (0~1)
+progress = min(max_pnl / TP, 1.0)
 effective_pullback = max_pb - (max_pb - min_pb) * progress
-# 即: 0.60 - 0.30 * progress
-
-# 触发条件: 当前利润 < 峰值利润 * (1 - effective_pullback)
 if pnl_r < max_pnl * (1 - effective_pullback):
     close_position()
 ```
 
-**设计优势**:
+### 7.3 P24 Regime-Adaptive Stop-Loss (v9.0 新增)
 
-| 特性 | v7.0 离散追踪 | v8.0 P13 连续追踪 |
-|------|-------------|------------------|
-| 启动条件 | 峰值利润 ≥ 19% | 利润 ≥ 5% |
-| 回撤容忍度 | 固定 50% | 60%→30% 平滑过渡 |
-| 低利润保护 | ❌ 无 | ✅ 宽容忍 (60%) |
-| 高利润锁利 | 50% 回撤才平 | ✅ 紧容忍 (30%) |
-| 过渡方式 | 二元开/关 | 线性平滑 |
+```python
+# 按 regime 差异化止损 (替代全局 -20%):
+regime_short_sl_map = {
+    'neutral':        -0.12,  # 被 B1b 禁止, 理论值
+    'trend':          -0.15,  # 收紧: 趋势中错误应快速认输
+    'low_vol_trend':  -0.18,  # 略收紧
+    'high_vol':       -0.12,  # 最紧: 挤压风险最高
+    'high_vol_choppy':-0.12,
+}
+# 实际止损 = regime_short_sl_map[current_regime]
+```
 
-**示例**:
-- 利润5%, progress≈0.08: 容忍度 ≈ 57.6% (宽松，给空间)
-- 利润20%, progress≈0.33: 容忍度 ≈ 50.0% (适中)
-- 利润40%, progress≈0.67: 容忍度 ≈ 40.0% (收紧)
-- 利润60%, progress=1.00: 容忍度 = 30.0% (最紧)
-
-### P2 参数敏感度验证
-
-P2 实验在 short_trail ∈ [0.16, 0.24] 范围内测试: OOS **完全不敏感**（所有值产生相同交易结果），IS 仅 ±1 笔交易差异。此前认为的"参数悬崖效应"已被证伪 — 大 PnL 差异源于高杠杆放大效应而非参数脆弱性。
-
-> 注: v8.0 P13 连续追踪止盈替代了 short_trail 离散门槛，P2 结论仍保留作为历史参考。
-
-### 7.5 冷却机制
+### 7.4 冷却机制
 
 | 事件 | 冷却时长 |
 |------|---------|
-| 正常开仓 | **6 bars (6h)** [v7.0: 4→6] |
-| 止盈后 | 12 bars [6×2] |
-| 反向平仓后 | 18 bars [6×3] |
-| 止损后 | 24 bars [6×4] |
-| 连续止损 | 48 bars [24×2] |
-| 硬止损后 | 30 bars [6×5] |
+| 正常开仓 | 6 bars (6h) |
+| 止盈后 | 12 bars |
+| 反向平仓后 | 18 bars |
+| 止损后 | 24 bars |
+| 连续止损 | 48 bars |
+| 硬止损后 | 30 bars |
 | 强平后 | 24 bars + 跨方向12 bars |
 
 ---
 
-<h2 id="section-8">八、结构折扣机制 (Structural Discount)</h2>
+<h2 id="section-8">八、衍生品数据集成 (v9.0 新增)</h2>
 
-### 8.1 原理
+### 8.1 数据源
 
-在 neutral regime 中，divergence（占融合权重 55%）几乎没有判别力（Cohen's d = -0.64，**反向指标**），导致 SS/BS 分数主要由背离驱动，但背离信号在震荡市中频繁假突破。
+| 数据 | API 端点 | 用途 |
+|------|---------|------|
+| Mark Price K线 | `/fapi/v1/markPriceKlines` | 强平检测、真实 PnL |
+| Funding Rate 历史 | `/fapi/v1/fundingRate` | 资金费率成本、拥挤度信号 |
+| Open Interest 历史 | `/futures/data/openInterestHist` | 杠杆堆积检测 |
+| Taker Buy/Sell Volume | K线内置字段 | 主动买卖力量对比 |
 
-P4 实验进一步证明: neutral short 中**所有六本书均无统计显著的判别力** (|d| < 0.20)，且 confirms 数量与 WR 之间不存在单调递增关系，否定了"更多确认=更高胜率"的朴素假设。
-
-**v7.0 方案**: 极端压缩低确认交易的仓位暴露。0-1 本确认直接近乎不做，2-3 本大幅缩减，仅 4-5 本强共识才全额交易。
-
-### 8.2 实现
+### 8.2 数据合并流程 (merge_perp_data_into_klines)
 
 ```python
-# 5本结构书: MA, CS, BB, VP, KDJ (排除无判别力的 DIV)
-structural_sell_keys = ['ma_sell', 'cs_sell', 'bb_sell', 'vp_sell', 'kdj_sell']
-
-# 统计 book_features_weighted 中 > 10.0 (活跃阈值) 的书的数量
-confirms = sum(1 for k in keys if book_feat[k] > 10.0)
-
-# v7.0 折扣表 (vs v6.0):
-# 0本确认: margin *= 0.00  (v6.0: 0.10) → 直接不做
-# 1本确认: margin *= 0.05  (v6.0: 0.20) → 5%仓位
-# 2本确认: margin *= 0.15  (v6.0: 1.00) → 15%仓位
-# 3本确认: margin *= 0.50  (v6.0: 1.00) → 50%仓位
-# 4+本确认: margin *= 1.00 (不变) → 全额
+# 合并到主 K线 DataFrame:
+# 1. Mark Price: mark_high, mark_low, mark_close (前向填充)
+# 2. Funding Rate: funding_rate 列 (前向填充到每根 bar)
+# 3. Open Interest: open_interest, open_interest_value (前向填充)
+# 4. Taker Volume: taker_buy_base, taker_buy_quote (K线内置)
 ```
 
-### 8.3 v6.0 → v7.0 折扣对比
+### 8.3 微结构特征计算 (_compute_microstructure_features)
 
-| 确认数 | v6.0 乘数 | v7.0 乘数 | 变化 |
-|--------|----------|----------|------|
-| 0 本 | 0.10 | **0.00** | 从极小仓→禁止 |
-| 1 本 | 0.20 | **0.05** | 缩减75% |
-| 2 本 | 1.00 | **0.15** | 缩减85% |
-| 3 本 | 1.00 | **0.50** | 缩减50% |
-| 4-5 本 | 1.00 | 1.00 | 不变 |
+```python
+# 从合并后的 DataFrame 计算:
+taker_imbalance = (buy_vol - sell_vol) / (buy_vol + sell_vol)
+oi_z = z_score(open_interest, lookback=48)
+basis_z = z_score((mark_price - index_price) / index_price, lookback=48)
+funding_rate = 直接使用 funding_rate 列 (若有真实数据)
+participation = volume_ratio / historical_mean
+```
+
+### 8.4 实盘数据获取 (v9.0 修复)
+
+```python
+# live_signal_generator.py refresh_data():
+# 1. 获取主 K线数据
+# 2. 并行获取 Mark Price / Funding Rate / OI (非阻塞, 失败不影响主信号)
+# 3. merge_perp_data_into_klines() 合并
+# 4. 计算指标 → 六维信号
+```
+
+> **v9.0 之前的问题**: `live_signal_generator.py` 完全没有获取衍生品数据，导致 Anti-Squeeze Filter 等依赖 OI/Funding 的功能在实盘中无法工作。v9.0 已修复。
 
 ---
 
-<h2 id="section-9">九、冲突软折扣 (Conflict Soft Discount)</h2>
+<h2 id="section-9">九、v9.0 完整参数集 (v5 配置)</h2>
 
-### 9.1 原理
-
-有些空单信号"卖方极强但买方背离也很强"，这种高冲突信号的止损率极高。
-
-### 9.2 实现
-
-```python
-# v7.0: 生效范围扩展到 trend + high_vol + neutral (v6.0: 仅 trend + high_vol)
-# 条件:
-#   regime in ('trend', 'high_vol', 'neutral')
-#   且 book_div_buy >= 50  (买方背离很强)
-#   且 book_ma_sell >= 12  (卖方均线有活跃信号)
-# 动作: margin *= 0.60  (仓位打六折)
-```
-
-### 9.3 v7.0 扩展到 Neutral 的依据
-
-P4 诊断证明 neutral short 的 DIV_sell Cohen's d = -0.64（反向指标），这意味着当买方 DIV 也很强时，做空的逆选择风险更高。将冲突折扣扩展到 neutral 是自然推论。
-
----
-
-<h2 id="section-10">十、v8.0 完整参数集</h2>
-
-### 入场阈值
+### 入场参数
 
 | 参数 | 值 | 说明 |
 |------|------|------|
-| sell_threshold | 18 | 现货卖出阈值 |
-| buy_threshold | 25 | 现货买入阈值 |
 | short_threshold | 40 | 空单基础阈值 |
-| long_threshold | 25 | [v6: 30→25] 多单门槛 |
+| long_threshold | 25 | 多单门槛 |
+| **regime_short_threshold** | **neutral:999** | **v9.0 B1b: 禁止 neutral short** |
 | close_short_bs | 40 | 反向平空BS阈值 |
 | close_long_ss | 40 | 反向平多SS阈值 |
+| cooldown | 6 | 基础冷却期 |
 
 ### 止损止盈
 
 | 参数 | 值 | 说明 |
 |------|------|------|
-| short_sl | -0.20 | 空单止损 -20% |
-| short_tp | 0.60 | 空单止盈 +60% |
-| long_sl | -0.10 | 多单止损 -10% |
-| long_tp | 0.40 | 多单止盈 +40% |
-| hard_stop_loss | -0.28 | 硬断路器 -28% |
-| short_trail | 0.19 | [v7.0] 离散追踪启动 (v8.0 被P13替代) |
-| long_trail | 0.12 | 多头追踪启动 |
-| trail_pullback | 0.50 | [v7.0] 追踪回撤容忍度 (v8.0 被P13替代) |
+| short_sl | -0.20 | 全局默认 (被 P24 覆盖) |
+| **use_regime_adaptive_sl** | **True** | **v9.0 P24** |
+| **regime_trend_short_sl** | **-0.15** | trend 收紧 |
+| **regime_high_vol_short_sl** | **-0.12** | high_vol 最紧 |
+| long_sl | -0.10 | 多单止损 |
+| short_tp | 0.60 | 空单止盈 |
+| long_tp | 0.40 | 多单止盈 |
+| hard_stop_loss | -0.28 | 硬断路器 |
 
-### v8.0 P13 连续追踪止盈参数 (核心变更)
-
-| 参数 | 值 | 说明 |
-|------|------|------|
-| continuous_trail_start_pnl | 0.05 | 利润达5%即开始追踪 |
-| continuous_trail_max_pb | 0.60 | 低利润时宽容忍度60% |
-| continuous_trail_min_pb | 0.30 | 高利润时紧容忍度30% |
-| 公式: progress | min(max_pnl / TP, 1.0) | 利润接近TP的比例 |
-| 公式: effective_pullback | max_pb - (max_pb - min_pb) * progress | 动态回撤容忍度 |
-
-### 分段止盈
+### P13 连续追踪止盈
 
 | 参数 | 值 | 说明 |
 |------|------|------|
-| partial_tp_1_early | 0.12 | TP1: +12% 平30% |
-| partial_tp_2_early | 0.25 | TP2: +25% 再平30% |
-| partial_tp_1_pct | 0.30 | TP1平仓比例 |
-| partial_tp_2_pct | 0.30 | TP2平仓比例 |
+| use_continuous_trail | True | 启用 |
+| continuous_trail_start_pnl | 0.05 | 利润5%开始追踪 |
+| continuous_trail_max_pb | 0.60 | 多头宽容忍度 |
+| continuous_trail_min_pb | 0.30 | 高利润紧容忍度 |
+| **continuous_trail_max_pb_short** | **0.40** | **v8.1 P20: 空头收紧** |
 
-### v7.0 Neutral Short 防护参数 (v7.0核心变更, v8.0延续)
-
-| 参数 | v6.0 | v7.0/v8.0 | 说明 |
-|------|------|-----------|------|
-| regime_short_threshold | neutral:45 | **neutral:60** | 门槛+33% |
-| short_conflict_regimes | trend,high_vol | **trend,high_vol,neutral** | +neutral |
-| neutral_struct_discount_0 | 0.10 | **0.00** | 0本→禁止 |
-| neutral_struct_discount_1 | 0.20 | **0.05** | 1本→5% |
-| neutral_struct_discount_2 | 1.00 | **0.15** | 2本→15% |
-| neutral_struct_discount_3 | 1.00 | **0.50** | 3本→50% |
-| neutral_struct_discount_4plus | 1.00 | 1.00 | 不变 |
-| cooldown | 4 | **6** | 冷却+50% |
-
-### 冲突软折扣
+### Anti-Squeeze Filter (v9.0 新增)
 
 | 参数 | 值 | 说明 |
 |------|------|------|
-| use_short_conflict_soft_discount | True | 启用 |
-| short_conflict_regimes | **trend,high_vol,neutral** | [v7.0: +neutral] |
-| short_conflict_div_buy_min | 50.0 | 买方背离阈值 |
-| short_conflict_ma_sell_min | 12.0 | 卖方均线阈值 |
-| short_conflict_discount_mult | 0.60 | 打六折 |
+| anti_squeeze_fr_threshold | 0.0008 | funding rate 阈值 (0.08%) |
+| anti_squeeze_oi_z_threshold | 1.0 | OI z-score 阈值 |
+| anti_squeeze_taker_imb_threshold | 0.12 | taker imbalance 阈值 |
 
-### 仓位与风控
+### 冲突折扣 (v9.0 简化)
 
-| 参数 | 值 | 说明 |
+| 参数 | v8.0 | v9.0 | 说明 |
+|------|------|------|------|
+| short_conflict_regimes | trend,high_vol,neutral | **trend,high_vol** | neutral 已被 B1b 禁止 |
+| short_conflict_discount_mult | 0.60 | 0.60 | 不变 |
+
+---
+
+<h2 id="section-10">十、历史实验总结</h2>
+
+### 10.1 P0-P4 诊断实验 (驱动 v7.0)
+
+| 实验 | 核心发现 |
+|------|---------|
+| P0 OOS验证 | WR 衰减仅 3.8%, PF 反而 +9.2%, 未严重过拟合 |
+| P1 Monte Carlo | 50组±10%扰动, 参数整体稳定 |
+| P2 short_trail | OOS 完全不敏感 |
+| P3 退出消融 | 反向平仓(-8.2%)和超时(-5.7%)是核心退出支柱 |
+| P4 信号判别力 | neutral short 六书 Cohen's d 全部无效, DIV=-0.64反向 |
+
+### 10.2 B0-B3 A/B 实验 (驱动 v7.0 参数)
+
+| 变体 | OOS Ret | OOS PF | 说明 |
+|------|---------|--------|------|
+| B0 基线 (v6.0) | +35.95% | 1.67 | |
+| **B1b 禁止neutral空** | **+40.78%** | **2.09** | v9.0 采用 |
+| B2 强门控(60) | +41.46% | 2.25 | |
+| **B3 B2+长冷却** | **+41.59%** | **2.33** | v7.0/v8.0 采用 |
+
+### 10.3 P6-P16 全量诊断 (驱动 v8.0)
+
+| 实验 | 描述 | 结论 |
 |------|------|------|
-| leverage | 5 | 最大杠杆 |
-| margin_use | 0.70 | 可用保证金使用比例 |
-| short_max_hold | 48 | 最大持仓bars |
-| cooldown | **6** | [v7.0: 4→6] 基础冷却期 |
-| reverse_min_hold_short | 8 | 反向平仓最小持仓 |
+| P6 Ghost CD | 过滤信号触发冷却 | 无效果(B3 CD=6已充分) |
+| P7 24h门控 | 大周期方向过滤 | 无效果 |
+| P9 SS衰减 | neutral SS*0.85 | IS好但OOS差 |
+| **P13 连续追踪** | **替代离散门槛** | **部署: IS PF+0.17, OOS PF+0.18** |
+| P16 信号分析 | CS/MA d=0.215最强, DIV/BB负向 | 驱动v9.0权重调整 |
 
-### 回退开关 B1b
+### 10.4 v9.0 实验 (Round 1-3)
 
-如 v7.0/v8.0 上线后表现不佳，可通过以下方式完全禁止 neutral 空单:
-```python
-# live_config.py 中修改:
-regime_short_threshold: str = 'neutral:999'  # B1b: 完全禁止 neutral 空单
+**Round 1 (P17 口径)**:
+- P18 Regime-Adaptive: OOS +24% 但 IS -63%（分裂严重，暂缓）
+- **P20 空头追踪收紧**: 唯一 IS 改善 + OOS 无害 → 部署为 v8.1
+
+**Round 3 (Bug fixes + P21/P23)**:
+- E4 P18-lite+P23: **OOS +28.9%**（vs baseline -3.3%）→ OOS 泛化最佳
+- E5 full v9: Worst-5 从 -$15k → **-$7k** → 尾部风险大幅降低
+
+---
+
+<h2 id="section-11">十一、v9.0 架构简化决策</h2>
+
+### 11.1 核心哲学转变
+
 ```
-B1b 在 OOS 中表现: Ret +40.8% (+4.8%), WR 69.8% (+9.1%), PF 2.09 (+0.42)。
+v7.0/v8.0 ("修补派"):
+  neutral short 有问题 → 加门槛60 → 加结构折扣 → 加冲突折扣
+  → 加冷却延长 → 加共识门控 → 加极端背离否决 → ...
+  问题: 复杂度指数增长, 但天花板不高
 
-### 现货执行与再入场
+v9.0 ("减法派"):
+  neutral short 有问题 → 直接禁止 (B1b neutral:999)
+  剩余 short → 差异化止损 (P24) + 反挤压过滤 (Anti-Squeeze)
+  问题: 简单, 可解释, 可维护
+```
 
-| 参数 | 值 | 说明 |
-|------|------|------|
-| use_spot_sell_confirm | True | 现货卖出确认过滤保留 |
-| spot_sell_confirm_ss | 35 | SS>=35 启动确认 |
-| spot_sell_confirm_min | 3 | 至少3项确认 |
-| spot_sell_regime_block | high_vol,trend | 高波动/趋势段禁现货卖出 |
-| use_neutral_spot_sell_layer | False | A/B 负贡献，关闭 |
-| use_stagnation_reentry | False | A/B 负贡献，关闭 |
+### 11.2 被 B1b 替代（运行时不可达）的机制
 
-### 已验证无效的功能 (保持关闭)
+| 机制 | 原状态 | v9.0状态 | 原因 |
+|------|-------|---------|------|
+| neutral_struct_discount (short side) | 活跃 | 不可达 | B1b 禁止 neutral short |
+| short_conflict_regimes 含 'neutral' | 活跃 | 已移除 | neutral 无空头 |
+| use_neutral_book_consensus | 已关 | 冗余 | |
+| use_extreme_divergence_short_veto | 已关 | 冗余 | |
+| use_neutral_short_structure_gate | 已关 | 冗余 | |
+| P9 use_regime_adaptive_reweight | 已关 | 被 P18 取代 | |
+
+### 11.3 四大 LLM 审计共识 (Claude/GPT Pro/Gemini/Grok)
+
+| 建议 | v9.0 执行状态 |
+|------|-------------|
+| Regime-Adaptive 权重 | 代码完整实现, A/B 测试显示 E4 OOS +28.9%, 待进一步验证后启用 |
+| 禁止 neutral short (B1b) | **已部署** (neutral:999) |
+| Perp 专属数据 (OI/Funding) | **数据获取已完成**, Anti-Squeeze Filter 已实现 |
+| 空头不对称防御 | **P24 已部署** (regime SL), P20 已部署 (追踪收紧) |
+| 用 R (风险单位) 定义仓位 | P21 已实现但 A/B 显示 1.5% 太保守, 需调参 |
+| 加权结构确认 (替代计数) | P23 已实现, E4 组合效果显著, 独立效果差 |
+| 架构简化 ("多做减法") | **v5 配置已简化**: 移除冗余门控 |
+
+---
+
+<h2 id="section-12">十二、当前已知问题</h2>
+
+### 12.1 高优先级
+
+| # | 问题 | 影响 | 建议 |
+|---|------|------|------|
+| 1 | **P18 IS/OOS 分裂** | regime_adaptive 融合 OOS 优秀 (+28.9%) 但 IS 回退, 暂不敢在生产启用 | 需 Walk-Forward 验证稳定性后再启用 |
+| 2 | **P21 risk_per_trade 参数过保守** | 1.5% R% 使仓位过小, 独立 A/B 收益下降 | 调参至 2.5-3.5%, 重跑 A/B |
+| 3 | **P23 独立效果差** | 加权确认独立使用 OOS -8.1%, 仅与 P18 组合才有效 | 与 P18 绑定使用, 不独立启用 |
+| 4 | **trend/high_vol short 胜率低** | trend WR=46.7% PF=0.84, high_vol WR=33.3% PF=0.47 | Anti-Squeeze 应可缓解, 需回测验证 |
+
+### 12.2 中优先级
+
+| # | 问题 | 建议 |
+|---|------|------|
+| 5 | 回测未计入 funding 现金流 | 长期偏多策略在正 funding 环境被侵蚀, 需纳入 |
+| 6 | CS-KDJ 相关性高 (0.474) | 去相关处理, 避免"虚假共识" |
+| 7 | 静态 Regime 阈值 | vol=0.020, trend=0.015 为绝对值, 未适应市场周期 |
+| 8 | Walk-Forward 仅 3/6 窗口盈利 | 亏损来自少数大亏单, P24/Anti-Squeeze 应改善 |
+
+### 12.3 低优先级 / 已关闭
 
 | 功能 | 测试结果 |
 |------|---------|
 | ATR自适应止损 | 对ETH无效 |
 | NoTP提前退出 | WR 62%→55%, 有害 |
-| 逆势防守退出 | 效果为负 |
 | 保本止损 | 压制利润 |
 | 棘轮追踪 | 过度截断利润 |
 | 二元门控 | 有蝴蝶效应 |
-| 在线置信度学习 | 样本不足 |
-| neutral 分层 SPOT_SELL | run#496~499 主样本负贡献 |
-| 停滞再入场 | 触发稀少且主样本负贡献 |
+| neutral 分层 SPOT_SELL | 主样本负贡献 |
+| 停滞再入场 | 触发稀少且负贡献 |
 
 ---
 
-<h2 id="section-11">十一、P0-P4 诊断实验总结</h2>
+<h2 id="section-13">十三、未来优化方向</h2>
 
-v7.0/v8.0 的参数变更均由以下系统性诊断实验驱动（P0-P4 驱动 v7.0, P6-P16 驱动 v8.0）：
+### 13.1 优先级路线图
 
-### P0: OOS 验证与 Regime 一致性
+| 优先级 | 编号 | 方向 | 预期收益 | 状态 |
+|--------|------|------|---------|------|
+| P0 | P25 | P18+P23 组合 Walk-Forward 验证 | 确认 OOS 泛化是否稳定 | 待执行 |
+| P0 | P26 | P21 R% 调参 (2.5-3.5%) | 消灭"少数大亏单主导" | 待执行 |
+| P1 | P27 | Funding 现金流纳入回测 | 消除收益虚高 (~2-5%) | 待执行 |
+| P1 | P28 | Anti-Squeeze 回测验证 | 验证 trend/high_vol short 改善 | 待执行 |
+| P2 | P29 | CS-KDJ 去相关 | 消除虚假共识, 提升胜率稳定性 | 待设计 |
+| P2 | P30 | Leg 风险预算 (regime×direction) | 把资金从负alpha段迁移到正alpha段 | 待设计 |
+| P3 | P31 | 动态 Regime 阈值 (滚动百分位) | 适应市场周期变化 | 待设计 |
+| P3 | P32 | MAE-driven 数据驱动止损 | 替代固定百分比, 基于历史MAE分布 | 待设计 |
 
-| 指标 | IS (2025) | OOS (2024) | 衰减率 |
-|------|-----------|------------|--------|
-| WR | 63.1% | 60.7% | -3.8% |
-| PF | 1.53 | 1.67 | **+9.2%** (改善) |
-| MDD | -14.0% | -16.84% | +2.8% |
+### 13.2 长期架构方向 (LLM 共识)
 
-WR 衰减仅 3.8%（远低于外部模型预测的 75% 衰减），PF 反而改善，说明**策略并未严重过拟合**。
+1. **策略拆腿 + 组合风险预算**: 按 (regime × direction) 拆成独立 legs, 每个 leg 有独立风控 KPI 和风险预算。当前 B1b 是这个方向的雏形（把 neutral_short 的 budget 设为 0）。
 
-### P1: Monte Carlo 参数扰动
+2. **从 alpha 策略到 hedge 策略**: short legs 的目标从"追求 alpha"转为"降低组合尾部风险"。仅在"崩盘风险"上升时开空（OI 快速上升 + funding 极端 + liquidation flow），仓位小、止损宽、时间短。
 
-50 组 ±10% 随机扰动测试:
-- IS 收益区间: [-15.8%, -13.5%] (保守风控口径)
-- OOS 收益区间: [+35.0%, +37.6%]
-- **结论**: 参数整体稳定，无单点脆弱性。`long_threshold` 和 `short_sl` 是最敏感参数。
-
-### P2: short_trail 敏感度
-
-short_trail ∈ [0.16, 0.24] 等间距扫描:
-- OOS: **完全不敏感**（所有值产生相同结果）
-- IS: 仅 ±1 笔交易差异
-- **结论**: "悬崖效应"系高杠杆放大所致，参数本身稳定。
-
-### P3: 退出路径消融
-
-系统性禁用各退出机制的贡献量化:
-- **反向平仓**: 禁用后 OOS Ret -8.2% → **核心退出机制**
-- **超时平仓**: 禁用后 OOS Ret -5.7% → **核心退出机制**
-- **追踪止盈**: 禁用后 OOS Ret +0.1% → 微负贡献 (待 P5 重构)
-
-### P4: 信号判别力 + MFE/MAE
-
-- neutral short 六书 Cohen's d 全部无效 (最高 |d| = 0.64 为反向)
-- confirms 与 WR 无单调关系 → 否定 "更多确认=更高胜率"
-- MFE 分析: neutral short 赢单平均 MFE 低，利润空间有限
-- **核心结论**: neutral short 缺乏底层 alpha，应最小化暴露而非优化入场
-
----
-
-<h2 id="section-12">十二、B0-B3 A/B 实验结果</h2>
-
-基于 P4 结论设计的 neutral short 入场质量实验:
-
-| 变体 | IS Ret | IS WR | IS PF | OOS Ret | OOS WR | OOS PF |
-|------|--------|-------|-------|---------|--------|--------|
-| B0 基线 (v6.0) | -14.01% | 62.9% | 0.68 | +35.95% | 60.7% | 1.67 |
-| B1 仓位上限10% | -13.87% | 62.5% | 0.69 | +36.80% | 61.0% | 1.72 |
-| **B1b 禁止neutral空** | -13.74% | 63.9% | 0.70 | **+40.78%** | **69.8%** | **2.09** |
-| B2 强门控(60) | -13.60% | 62.5% | 0.70 | **+41.46%** | 66.5% | **2.25** |
-| B2b 全面强门控 | -13.12% | 62.1% | 0.71 | +38.68% | 63.4% | 1.91 |
-| **B3 B2+长冷却** | **-13.12%** | 62.1% | **0.71** | **+41.59%** | 61.0% | **2.33** |
-
-> 注: IS 负收益是因为使用了 `_apply_conservative_risk` (杠杆3x, margin50%), 非实际策略表现。
-
-**选择 B3 的理由**:
-1. OOS Return 最高 (+41.59%, +5.6%)
-2. OOS PF 最高 (2.33, +39.5%)
-3. IS 也有改善 (Ret +0.9%), 不存在 IS-OOS 跷跷板
-4. cooldown=6 提供了类 ghost cooldown 效果，减少连续低质量入场
-
----
-
-<h2 id="section-13">十三、P6-P16 全量诊断实验 (v8.0)</h2>
-
-v8.0 在 B3 基线上进行了 P6-P16 系列实验，系统性测试各优化方向:
-
-### 13.1 实验总结
-
-| 实验 | 描述 | IS PF变化 | OOS Ret变化 | OOS PF变化 | 结论 |
-|------|------|-----------|-------------|-------------|------|
-| P6 Ghost CD | 过滤信号触发冷却 | 0 | 0 | 0 | 无效果(B3 CD=6已充分) |
-| P7 24h门控 | 大周期方向过滤trend/HV空 | 0 | 0 | 0 | 无效果 |
-| P8 confirms≥3 | trend/HV空结构硬门槛 | -0.04 | +0.1% | +0.07 | 边际正面 |
-| P9 SS衰减 | neutral SS*0.85 | +0.46 | -5.9% | -0.20 | IS好但OOS差 |
-| P10 Fast-fail | 快速亏损退出 | -0.05 | 0 | 0 | 微负 |
-| P12 动态阈值 | 滚动百分位数 | 0 | -1.2% | -0.13 | 负面 |
-| **P13 连续追踪** | **替代离散门槛** | **+0.17** | **-0.2%** | **+0.18** | **⭐部署** |
-| P14 多空对称 | 做多加折扣 | 0 | 0 | 0 | 已是默认 |
-
-> **关键发现**: 大部分优化尝试效果为零或负面，说明 B3 基线已接近当前信号体系的能力边界。唯一正面贡献的 P13 通过改善退出机制（而非入场）获得收益，佐证了"入场信号已被充分利用"的判断。
-
-### 13.2 P13 部署决策依据
-
-| 维度 | P13 vs B3基线 | 判断 |
-|------|-------------|------|
-| IS PF | 0.91 → 1.08 (+0.17) | ✅ IS从亏损翻正 |
-| OOS Ret | +41.6% → +41.4% (-0.2%) | ✅ 几乎无损 |
-| OOS PF | 2.33 → 2.51 (+0.18) | ✅ 明显提升 |
-| OOS WR | 61.0% → 64.9% (+3.9%) | ✅ 胜率提升 |
-| 交易笔数 | — → 77 (OOS) / 91 (IS) | ✅ 合理精简 |
-
----
-
-<h2 id="section-14">十四、Walk-Forward 验证 (v8.0)</h2>
-
-6窗口滚动前向验证，每窗口训练2季度、测试1季度:
-
-| 窗口 | 训练期 | 测试期 | Test Ret | Test WR | Test PF |
-|------|--------|--------|----------|---------|---------|
-| W1 | 2024Q1-Q2 | 2024Q3 | -3.1% | 58.8% | 2.29 |
-| W2 | 2024Q2-Q3 | 2024Q4 | +27.7% | 62.0% | 1.91 |
-| W3 | 2024Q3-Q4 | 2025Q1 | -12.0% | 69.8% | 1.13 |
-| W4 | 2024Q4-2025Q1 | 2025Q2 | +39.0% | 59.0% | 1.47 |
-| W5 | 2025Q1-Q2 | 2025Q3 | +15.4% | 54.3% | 0.39 |
-| W6 | 2025Q2-Q3 | 2025Q4 | -9.6% | 60.0% | 3.42 |
-
-**汇总统计**:
-
-| 指标 | 值 |
-|------|------|
-| 盈利窗口 | 3/6 (50%) |
-| 平均季度收益 | **+9.6%/Q** |
-| 平均胜率 | **60.7%** (始终 >54%) |
-| 平均PF | **1.77** |
-
-> **解读**: 3/6 窗口盈利看似一般，但平均季度收益 +9.6% 且 WR 在所有窗口中始终 >54%，说明策略在不同市场周期中保持基本有效性。亏损窗口的 PF 仍 >1.0 (W1=2.29, W3=1.13)，亏损主要来自少数大亏交易而非系统性失效。
-
----
-
-<h2 id="section-15">十五、P16 六书信号分析 (v8.0)</h2>
-
-P16 对六书卖出信号做了深度统计分析，为未来融合权重调整提供定量依据:
-
-### 15.1 六书卖出信号相关矩阵
-
-| | DIV | MA | CS | BB | VP | KDJ |
-|---|------|------|------|------|------|------|
-| DIV | 1.00 | | | | | |
-| MA | 负相关 | 1.00 | | | | |
-| CS | 负相关 | 正相关 | 1.00 | | | |
-| BB | 负相关 | 正相关 | 正相关 | 1.00 | | |
-| VP | 负相关 | 正相关 | 正相关 | 正相关 | 1.00 | |
-| KDJ | 负相关 | 正相关 | **0.474** | 正相关 | 正相关 | 1.00 |
-
-> **关键发现**: CS-KDJ 相关最高 (0.474)，DIV 与其他五本书全部负相关 — 这解释了为什么 DIV 在 neutral 中是反向指标。
-
-### 15.2 Alpha 贡献 (空仓信号判别力)
-
-| 书 | Cohen's d (空仓) | Alpha等级 | 说明 |
-|------|-----------------|----------|------|
-| CS | **+0.215** | ⭐ 正向 | 蜡烛图最强判别力 |
-| MA | **+0.215** | ⭐ 正向 | 均线并列最强 |
-| VP | +0.178 | ✅ 正向 | 量价关系有效 |
-| KDJ | +0.135 | ✅ 正向 | 超买超卖有效 |
-| BB | 负向 | ❌ 负向 | 布林带无正alpha |
-| DIV | 负向 | ❌ 负向 | 背离无正alpha |
-
-### 15.3 Regime-Specific 发现 (Neutral)
-
-| 书 | Neutral中的效果 | Cohen's d | 建议 |
-|------|---------------|-----------|------|
-| DIV | **负向** | -0.110 | ⚠️ 应降权 |
-| MA | **正向** | +0.194 | ⬆️ 应增权 |
-| CS | **正向** | +0.164 | ⬆️ 应增权 |
-| KDJ | 中性 | — | 维持 |
-| BB | 中性偏负 | — | 维持 |
-| VP | 中性 | — | 维持 |
-
-### 15.4 P16 优化建议 (留待 v9.0)
-
-1. **增加 MA 和 CS 权重**: 两者在空仓判别力中 Cohen's d 最高 (+0.215)，且在 neutral 中保持正向
-2. **DIV 在 neutral 中应降权**: neutral 中 d=-0.110，反而损害信号质量
-3. **CS-KDJ 相关性高**: 可考虑合并或去相关处理，避免信号冗余
-4. **Regime-adaptive 权重**: 不同 regime 下动态调整六书融合权重，而非全局静态
-
-> 以上建议需通过新一轮 A/B 实验验证，不在 v8.0 中实施。
-
----
-
-<h2 id="section-16">十六、已知问题与优化方向</h2>
-
-### 16.1 残存瓶颈
-
-1. **trend/high_vol 空单胜率低**: trend 空单 OOS WR=46.7% (PF=0.84), high_vol 空单 WR=33.3% (PF=0.47)。止损在 2-11 bars 内触发，任何退出逻辑都来不及干预。
-
-2. **Divergence 权重占比过高**: 融合权重 55% 但在 neutral 中 Cohen's d = -0.64（反向指标）。CS/KDJ 判别力更高 (d ≈ 0.40) 但权重不足。
-
-3. ~~**追踪止盈微负贡献**~~: ✅ v8.0 P13 已解决。连续追踪止盈替代离散门槛，IS PF +0.17, OOS PF +0.18。
-
-4. **静态 Regime 阈值**: 波动率阈值 (0.020) 和趋势阈值 (0.015) 为绝对值，未适应市场周期变化。
-
-### 16.2 已规划优化路径
-
-| 编号 | 方向 | 优先级 | 状态 |
-|------|------|--------|------|
-| ~~P5/P13~~ | ~~追踪止盈连续化重构~~ | — | ✅ v8.0 已完成 (P13) |
-| ~~P6~~ | ~~Ghost cooldown~~ | — | ✅ 已验证无效果 (B3 CD=6已充分) |
-| ~~P7~~ | ~~trend/HV short 24h方向门控~~ | — | ✅ 已验证无效果 |
-| ~~P8~~ | ~~trend/HV short confirms≥3~~ | — | ✅ 已验证边际正面 (未部署) |
-| ~~P9~~ | ~~Neutral SS衰减~~ | — | ❌ IS好但OOS差 |
-| ~~P10~~ | ~~Fast-fail~~ | — | ❌ 微负 |
-| P11 | 代码清理 + trade log 标准化 | 低 | 待执行 |
-| P17 | Regime-adaptive 六书融合权重 (基于P16) | 高 | 待实验 |
-| P18 | MA/CS 权重上调 + DIV neutral降权 | 高 | 待实验 |
-| P19 | CS-KDJ 去相关处理 | 中 | 待设计 |
-
-### 16.3 已尝试但失败的优化
-
-| 优化方案 | 结果 | 失败原因 |
-|---------|------|---------|
-| 扩展结构折扣到 trend/high_vol | 收益 -19% | 折扣了本该盈利的 trend 交易 |
-| 放宽冲突阈值 (div_buy_min 50→35) | 收益下降 | 折扣了太多盈利信号 |
-| 屏蔽 high_vol 空单 | 收益下降 | 蝴蝶效应：后续交易时序变化 |
-| NoTP 提前退出 (8bars) | WR 62%→55% | 过早平掉后来大赚的仓位 |
-| 保本止损 (TP1后SL=break-even) | 收益下降 | 太多仓位被保本止损后反弹 |
-| 棘轮追踪 (利润越高回撤越紧) | 收益下降 | 过度截断利润 |
-
----
-
-### 代码组织
-
-| 文件 | 职责 |
-|------|------|
-| `optimize_six_book.py` | 核心交易循环、regime检测、持仓管理 (~4200行) |
-| `live_config.py` | 策略参数、版本管理、风控配置 (~770行) |
-| `signal_core.py` | 六书信号计算、融合评分 |
-| `multi_tf_consensus.py` | 多周期共识、TF权重、链式检测 |
-| `backtest_multi_tf_daily.py` | 回测编排、数据加载、结果持久化 |
-| `live_runner.py` | 实盘运行入口、阶段管理 |
-| `run_p0_oos_validation.py` | P0: OOS 回测 + Regime 一致性验证 |
-| `run_p1_p2_sensitivity.py` | P1: Monte Carlo + P2: 敏感度扫描 |
-| `run_p3_exit_ablation.py` | P3: 退出路径消融实验 |
-| `run_p4_book_analysis.py` | P4: 信号判别力 + MFE/MAE 分析 |
-| `run_b_neutral_short_ab.py` | B0-B3: Neutral short A/B 实验 |
-| `run_v9_ab.py` | v9.0 Round 1: P17/P18/P24/P20/B1b A/B 实验 |
-| `run_v9_ab_round2.py` | v9.0 Round 2: P18 保守权重调参 |
-
----
-
-### v9.0 实验总结 (P17-P20/P24/P25/B1b)
-
-**评估口径修正 (P17)**: 决策TF从 12h→24h 与线上一致，移除 conservative_risk 调整。
-
-**v9.0 Round 1 A/B 实验结果 (P17 口径, 基线 v8.0)**:
-
-| 变体 | IS Ret | IS PF | OOS Ret | OOS PF | OOS MDD | 评价 |
-|------|--------|-------|---------|--------|---------|------|
-| D0 v8.0 baseline | +48.3% | 0.92 | -3.7% | 1.68 | -26.2% | IS PF<1.0 |
-| D3 P20(空头追踪收紧) | **+53.9%** | **0.96** | -3.7% | 1.68 | -26.2% | **唯一安全改进** |
-| D1 P18(regime权重) | -14.5% | 0.60 | +20.5% | 1.25 | -18.6% | IS严重回退 |
-| D8 终极组合 | -12.4% | 0.39 | +34.3% | 1.91 | -18.0% | OOS最强但IS崩溃 |
-
-**关键发现**:
-1. P18 Regime-Adaptive 融合在 OOS 有效 (+24%) 但 IS 严重回退 (-63%)
-2. P18 完全替换了 multi-TF consensus 评分, 改变了信号格局, 而非预期的微调
-3. P20 空头追踪收紧是唯一 IS 改善 + OOS 无害的改进
-4. v8.0 baseline IS PF=0.92 (低于1.0) 暴露了 2025 市场段的策略走弱趋势
-
-**部署决策**: v8.1 = v8.0 + P20 (空头追踪 max_pb 60%→40%)。P18/P24 暂缓, 保留为实验功能。
+3. **更真实的回测口径**: fee ×2 / slippage ×2 压力测试; 成交价模型从 T+1 open 升级为包含滑点的分布模型; Mark Price 用于强平和未实现 PnL。
 
 ---
 
@@ -877,8 +666,9 @@ P16 对六书卖出信号做了深度统计分析，为未来融合权重调整�
 
 | 版本 | 日期 | 核心变更 |
 |------|------|---------|
-| v8.1 (P20) | 2026-02-15 | P17口径统一(24h)+P20空头追踪收紧(60%→40%), IS PF 0.92→0.96; P18/P24实验完成但暂缓 |
-| v8.0 (B3+P13) | 2026-02-15 | P13连续追踪止盈 + P6-P16全量诊断实验, OOS PF 2.33→2.51, WR +3.9% |
+| **v9.0** | **2026-02-15** | **B1b禁止neutral short + P24 regime SL + Anti-Squeeze Filter + 实盘衍生品数据 + 架构简化** |
+| v8.1 (P20) | 2026-02-15 | P17口径统一(24h)+P20空头追踪收紧(60%→40%) |
+| v8.0 (B3+P13) | 2026-02-15 | P13连续追踪止盈 + P6-P16全量诊断, OOS PF 2.33→2.51 |
 | v7.0 (B3) | 2026-02 | P4→B3: neutral short 四重防护, OOS PF 1.67→2.33 |
 | v6.0 | 2026-02 | P1优化: short_trail 0.20→0.19, WR 61.9%→63.1% |
 | v5.1 | 2026-01 | P0前视修复 + 参数重优化 |
