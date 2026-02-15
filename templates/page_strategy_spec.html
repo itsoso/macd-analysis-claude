@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}策略完整规格书 - 技术分析平台{% endblock %}
+
+{% block content %}
+<style>
+    .tech-doc {
+        max-width: 960px;
+        line-height: 1.8;
+        font-size: 14px;
+        color: var(--text-secondary);
+    }
+    .tech-doc h1 {
+        font-size: 26px; font-weight: 700; color: var(--text-primary);
+        margin: 32px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--accent-blue);
+    }
+    .tech-doc h1:first-child { margin-top: 0; }
+    .tech-doc h2 {
+        font-size: 20px; font-weight: 700; color: var(--text-primary);
+        margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+    }
+    .tech-doc h3 {
+        font-size: 16px; font-weight: 600; color: var(--text-primary);
+        margin: 20px 0 8px;
+    }
+    .tech-doc h4 {
+        font-size: 14px; font-weight: 600; color: var(--text-primary);
+        margin: 16px 0 6px;
+    }
+    .tech-doc p { margin: 8px 0; }
+    .tech-doc ul, .tech-doc ol { margin: 8px 0 8px 20px; }
+    .tech-doc li { margin: 4px 0; }
+    .tech-doc strong { color: var(--text-primary); }
+    .tech-doc code {
+        background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px;
+        font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+        color: var(--accent-blue);
+    }
+    .tech-doc pre {
+        background: var(--bg-secondary); border: 1px solid var(--border);
+        border-radius: 8px; padding: 16px; margin: 12px 0;
+        overflow-x: auto; font-size: 12px; line-height: 1.6;
+    }
+    .tech-doc pre code {
+        background: none; padding: 0; color: var(--text-secondary);
+    }
+    .tech-doc table {
+        width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px;
+    }
+    .tech-doc th, .tech-doc td {
+        text-align: left; padding: 8px 12px;
+        border-bottom: 1px solid var(--border); vertical-align: top;
+    }
+    .tech-doc th { color: var(--text-muted); font-weight: 600; background: var(--bg-secondary); }
+    .tech-doc hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+    .tech-doc blockquote {
+        border-left: 3px solid var(--accent-blue); padding: 8px 16px; margin: 12px 0;
+        background: rgba(74,158,255,0.05); border-radius: 0 6px 6px 0;
+    }
+    .tech-doc a { color: var(--accent-blue); text-decoration: none; }
+    .tech-doc a:hover { text-decoration: underline; }
+    .doc-meta {
+        display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px;
+    }
+    .doc-meta .badge {
+        padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;
+    }
+    .doc-meta .blue { background: rgba(74,158,255,0.15); color: var(--accent-blue); }
+    .doc-meta .green { background: rgba(0,214,143,0.15); color: var(--accent-green); }
+    .doc-meta .purple { background: rgba(168,85,247,0.15); color: var(--accent-purple); }
+    .doc-toc {
+        background: var(--bg-secondary); border: 1px solid var(--border);
+        border-radius: 10px; padding: 16px 20px; margin-bottom: 24px;
+    }
+    .doc-toc h4 { margin: 0 0 8px; font-size: 13px; color: var(--text-muted); }
+    .doc-toc ul { list-style: none; margin: 0; padding: 0; }
+    .doc-toc li { margin: 3px 0; }
+    .doc-toc a { font-size: 13px; color: var(--text-secondary); }
+    .doc-toc a:hover { color: var(--accent-blue); }
+    .update-hint {
+        font-size: 12px; color: var(--text-muted);
+        margin-top: 32px; padding-top: 12px;
+        border-top: 1px solid var(--border);
+    }
+</style>
+
+<div class="doc-meta">
+    <span class="badge blue">STRATEGY_SPEC</span>
+    <span class="badge green">{{ last_updated }}</span>
+    <span class="badge purple">六书融合 v8.0 完整规格 · Claude Code</span>
+</div>
+
+<div class="doc-toc">
+    <h4>📑 目录</h4>
+    <ul>
+        <li><a href="#一策略架构总览">一、策略架构总览</a></li>
+        <li><a href="#二六维信号计算">二、六维信号计算</a></li>
+        <li><a href="#三多周期联合决策">三、多周期联合决策</a></li>
+        <li><a href="#四regime-分类与动态阈值">四、Regime 分类与动态阈值</a></li>
+        <li><a href="#五微结构叠加与双引擎-v70-新增">五、微结构叠加与双引擎</a></li>
+        <li><a href="#六门控过滤层入场前多层过滤">六、门控过滤层</a></li>
+        <li><a href="#七执行引擎参数-v70-b3">七、执行引擎参数</a></li>
+        <li><a href="#八信号时序与执行流程">八、信号时序与执行流程</a></li>
+        <li><a href="#九回测验证结果">九、回测验证结果</a></li>
+        <li><a href="#十已验证无效的实验功能-默认关闭">十、已验证无效的实验功能</a></li>
+        <li><a href="#十一已知弱点与改进方向">十一、已知弱点与改进方向</a></li>
+        <li><a href="#十二下一步改进路线图-多模型共识">十二、改进路线图</a></li>
+        <li><a href="#附录-a-完整参数清单-v70-b3-部署值">附录 A: 完整参数清单</a></li>
+        <li><a href="#附录-b-关键源码文件索引">附录 B: 源码文件索引</a></li>
+        <li><a href="#附录-c-回测准确性审查结论">附录 C: 回测准确性审查</a></li>
+        <li><a href="#附录-d-v60--v70-b3-变更摘要">附录 D: v6→v7 变更</a></li>
+    </ul>
+</div>
+
+<div class="tech-doc">
+    {{ content | safe }}
+</div>
+
+<div class="update-hint">
+    本文档由策略审计自动生成 · 文件路径: <code>STRATEGY_SPEC.md</code>
+</div>
+{% endblock %}

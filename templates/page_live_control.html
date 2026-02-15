@@ -153,6 +153,34 @@
     .history-note {
         margin-top: 8px; font-size: 11px; color: var(--text-muted);
     }
+    .ops-hint {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg-secondary);
+        font-size: 12px;
+        color: var(--text-secondary);
+    }
+    .ops-hint.warn {
+        border-color: rgba(255, 170, 0, 0.45);
+        color: var(--accent-yellow);
+    }
+    .report-card { margin-top: 16px; }
+    .report-toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .report-editor {
+        width: 100%;
+        min-height: 220px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #0d0f17;
+        color: var(--text-primary);
+        padding: 12px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        line-height: 1.6;
+        resize: vertical;
+    }
 
     /* 多TF信号检测 */
     .tf-checkbox-grid {
@@ -522,6 +550,54 @@
             <div class="history-metric"><div class="label">净PnL(估算)</div><div class="value" id="h_net_pnl">--</div></div>
         </div>
         <div class="history-note" id="historyBalanceNote">最新余额快照: --</div>
+        <div class="ops-hint" id="opsActionHint">监控建议: --</div>
+    </div>
+
+    <div class="ctrl-card" style="margin-bottom: 20px;">
+        <div class="history-toolbar">
+            <h3>🧭 v7.0 首周监控指标</h3>
+            <div class="btn-group">
+                <button class="btn btn-outline btn-sm" onclick="generateDailyReport()">生成日报</button>
+                <button class="btn btn-outline btn-sm" onclick="copyDailyReport()">复制日报</button>
+                <button class="btn btn-outline btn-sm" onclick="loadMonitorRules()">加载阈值</button>
+                <button class="btn btn-outline btn-sm" onclick="saveMonitorRules()">保存阈值</button>
+            </div>
+        </div>
+        <div class="history-grid" style="margin-bottom:10px;">
+            <div class="history-metric">
+                <div class="label">PF预警阈值</div>
+                <input id="rule_pf_threshold" class="history-select" type="number" step="0.01" min="0.1" max="5" value="1.00" style="width:100%;margin-top:6px;">
+            </div>
+            <div class="history-metric">
+                <div class="label">PF最小样本数</div>
+                <input id="rule_pf_min_count" class="history-select" type="number" step="1" min="1" max="200" value="8" style="width:100%;margin-top:6px;">
+            </div>
+            <div class="history-metric">
+                <div class="label">连亏天数预警</div>
+                <input id="rule_loss_streak_days" class="history-select" type="number" step="1" min="1" max="30" value="3" style="width:100%;margin-top:6px;">
+            </div>
+            <div class="history-metric">
+                <div class="label">最差单日净PnL阈值</div>
+                <input id="rule_worst_day_alert" class="history-select" type="number" step="100" min="-1000000" max="-1" value="-2000" style="width:100%;margin-top:6px;">
+            </div>
+        </div>
+        <div class="history-note" id="monitorRulesNote">阈值状态: 默认</div>
+        <div class="history-grid">
+            <div class="history-metric"><div class="label">已实现PF</div><div class="value" id="h_realized_pf">--</div></div>
+            <div class="history-metric"><div class="label">费用拖累</div><div class="value" id="h_fee_drag">--</div></div>
+            <div class="history-metric"><div class="label">最佳单日净PnL</div><div class="value" id="h_best_day">--</div></div>
+            <div class="history-metric"><div class="label">最差单日净PnL</div><div class="value" id="h_worst_day">--</div></div>
+            <div class="history-metric"><div class="label">连亏天数(最大)</div><div class="value" id="h_max_loss_streak_days">--</div></div>
+            <div class="history-metric"><div class="label">连亏天数(当前)</div><div class="value" id="h_current_loss_streak_days">--</div></div>
+        </div>
+        <div class="report-card">
+            <div class="history-note">日报模板（可直接发群/归档）</div>
+            <div class="report-toolbar">
+                <button class="btn btn-outline btn-sm" onclick="generateDailyReport()">刷新模板</button>
+                <button class="btn btn-outline btn-sm" onclick="copyDailyReport()">复制到剪贴板</button>
+            </div>
+            <textarea id="dailyReportTemplate" class="report-editor" readonly>暂无日报数据，点击“刷新模板”生成。</textarea>
+        </div>
     </div>
 
     <div class="grid-1">
@@ -1234,6 +1310,202 @@ function setMetricValue(id, text, cls = '') {
     el.className = 'value' + (cls ? ' ' + cls : '');
 }
 
+function toNumber(value, fallback = 0) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+let _latestStatusPayload = null;
+let _latestHistoryPayload = null;
+let _monitorRules = {
+    pf_alert_threshold: 1.0,
+    pf_min_realized_count: 8,
+    current_loss_streak_alert_days: 3,
+    worst_day_net_alert_usdt: -2000,
+};
+
+function getMonitorRulesFromInputs() {
+    return {
+        pf_alert_threshold: toNumber(document.getElementById('rule_pf_threshold')?.value, 1.0),
+        pf_min_realized_count: toNumber(document.getElementById('rule_pf_min_count')?.value, 8),
+        current_loss_streak_alert_days: toNumber(document.getElementById('rule_loss_streak_days')?.value, 3),
+        worst_day_net_alert_usdt: toNumber(document.getElementById('rule_worst_day_alert')?.value, -2000),
+    };
+}
+
+function applyMonitorRulesToInputs(rules) {
+    if (!rules) return;
+    const pf = toNumber(rules.pf_alert_threshold, 1.0);
+    const minCnt = toNumber(rules.pf_min_realized_count, 8);
+    const lossDays = toNumber(rules.current_loss_streak_alert_days, 3);
+    const worstDay = toNumber(rules.worst_day_net_alert_usdt, -2000);
+    const pfEl = document.getElementById('rule_pf_threshold');
+    const cntEl = document.getElementById('rule_pf_min_count');
+    const lossEl = document.getElementById('rule_loss_streak_days');
+    const worstEl = document.getElementById('rule_worst_day_alert');
+    if (pfEl) pfEl.value = pf.toFixed(2);
+    if (cntEl) cntEl.value = String(Math.round(minCnt));
+    if (lossEl) lossEl.value = String(Math.round(lossDays));
+    if (worstEl) worstEl.value = String(Math.round(worstDay));
+}
+
+function renderMonitorRulesNote(text, warn = false) {
+    const noteEl = document.getElementById('monitorRulesNote');
+    if (!noteEl) return;
+    noteEl.textContent = text;
+    noteEl.style.color = warn ? 'var(--accent-yellow)' : 'var(--text-muted)';
+}
+
+async function loadMonitorRules() {
+    try {
+        const data = await apiCall('/api/live/monitor_rules');
+        if (data.success && data.rules) {
+            _monitorRules = data.rules;
+            applyMonitorRulesToInputs(_monitorRules);
+            renderMonitorRulesNote('阈值状态: 已从服务端加载');
+            if (_latestHistoryPayload?.trade_stats) {
+                renderOpsHint(_latestHistoryPayload.trade_stats);
+                generateDailyReport();
+            }
+        }
+    } catch (e) {
+        renderMonitorRulesNote('阈值状态: 加载失败', true);
+    }
+}
+
+async function saveMonitorRules() {
+    const rules = getMonitorRulesFromInputs();
+    try {
+        const data = await apiCall('/api/live/monitor_rules', {
+            method: 'POST',
+            body: JSON.stringify({ rules })
+        });
+        if (data.success && data.rules) {
+            _monitorRules = data.rules;
+            applyMonitorRulesToInputs(_monitorRules);
+            renderMonitorRulesNote('阈值状态: 已保存并生效');
+            if (_latestHistoryPayload?.trade_stats) {
+                renderOpsHint(_latestHistoryPayload.trade_stats);
+                generateDailyReport();
+            }
+        } else {
+            renderMonitorRulesNote('阈值状态: 保存失败', true);
+        }
+    } catch (e) {
+        renderMonitorRulesNote('阈值状态: 保存失败', true);
+    }
+}
+
+function renderOpsHint(stats) {
+    const hintEl = document.getElementById('opsActionHint');
+    if (!hintEl) return;
+    const rules = _monitorRules || {};
+    const pfThreshold = toNumber(rules.pf_alert_threshold, 1.0);
+    const pfMinCount = toNumber(rules.pf_min_realized_count, 8);
+    const streakAlertDays = toNumber(rules.current_loss_streak_alert_days, 3);
+    const worstDayAlert = toNumber(rules.worst_day_net_alert_usdt, -2000);
+    const realizedPf = toNumber(stats.realized_pf, 0);
+    const currentLossStreak = toNumber(stats.current_consecutive_loss_days, 0);
+    const worstDay = toNumber(stats.worst_day_net_pnl, 0);
+
+    let msg = '监控建议: 继续观察，保持 v7.0 参数。';
+    let warn = false;
+    if (realizedPf > 0 && realizedPf < pfThreshold && toNumber(stats.total_realized_count, 0) >= pfMinCount) {
+        msg = `监控建议: 近窗 PF<${pfThreshold.toFixed(2)}（样本≥${Math.round(pfMinCount)}），建议评估切回 B1b（neutral:999）或降仓。`;
+        warn = true;
+    }
+    if (currentLossStreak >= streakAlertDays) {
+        msg = `监控建议: 已连续${Math.round(streakAlertDays)}天亏损，优先触发回退预案（B1b）并复盘 neutral short。`;
+        warn = true;
+    } else if (worstDay <= worstDayAlert) {
+        msg = `监控建议: 单日净PnL低于 ${formatUsd(worstDayAlert)}，建议缩小仓位并检查开仓过滤命中。`;
+        warn = true;
+    }
+    hintEl.textContent = msg;
+    hintEl.className = 'ops-hint' + (warn ? ' warn' : '');
+}
+
+function buildDailyReportText(statusData, historyData) {
+    const proc = statusData?.process || {};
+    const eng = statusData?.engine || {};
+    const risk = statusData?.risk || {};
+    const perf = statusData?.performance_summary || statusData?.performance || {};
+    const stats = historyData?.trade_stats || {};
+    const rules = _monitorRules || {};
+    const dailyRows = historyData?.daily_records || [];
+    const today = dailyRows.length ? dailyRows[0] : {};
+
+    const now = new Date();
+    const todayStr = now.toLocaleDateString('zh-CN');
+    const nowStr = now.toLocaleString('zh-CN', { hour12: false });
+    const phase = eng.phase || proc.phase || '--';
+    const engineState = proc.running ? '运行中' : '未运行';
+    const equity = eng.equity ?? perf.current_equity;
+    const totalPnl = risk.total_pnl ?? perf.total_pnl;
+    const ddPct = risk.max_drawdown != null ? toNumber(risk.max_drawdown) * 100 : toNumber(perf.max_drawdown_pct, 0);
+    const pfThreshold = toNumber(rules.pf_alert_threshold, 1.0);
+    const pfMinCount = toNumber(rules.pf_min_realized_count, 8);
+    const fallbackSuggestion = toNumber(stats.realized_pf, 0) < pfThreshold && toNumber(stats.total_realized_count, 0) >= pfMinCount
+        ? '建议触发 B1b 回退（neutral:999）'
+        : '继续 v7.0 观察';
+
+    return [
+        `# v7.0 实盘日报（${todayStr}）`,
+        '',
+        '## 1) 运行状态',
+        `- 时间: ${nowStr}`,
+        `- 引擎: ${engineState}`,
+        `- 阶段: ${phase}`,
+        `- 当前权益: ${formatUsd(equity)}`,
+        `- 未实现PnL: ${formatSignedUsd(eng.unrealized_pnl)}`,
+        '',
+        '## 2) 近窗交易表现',
+        `- 观察窗口: 最近 ${toNumber(stats.days, 0)} 天`,
+        `- 总交易/已实现: ${toNumber(stats.total_trade_count, 0)} / ${toNumber(stats.total_realized_count, 0)}`,
+        `- 胜率: ${formatPct(stats.win_rate_pct, 1)}`,
+        `- 已实现PnL: ${formatSignedUsd(stats.realized_pnl)}`,
+        `- 净PnL(估算): ${formatSignedUsd(stats.net_pnl)}`,
+        `- 已实现PF: ${stats.realized_pf != null ? toNumber(stats.realized_pf).toFixed(2) : '--'}`,
+        `- 费用拖累: ${formatPct(stats.fee_drag_pct, 1)}`,
+        `- 回退阈值: PF<${pfThreshold.toFixed(2)} 且样本≥${Math.round(pfMinCount)}`,
+        '',
+        '## 3) 当日快照',
+        `- 当日交易/已实现: ${toNumber(today.trade_count, 0)} / ${toNumber(today.realized_count, 0)}`,
+        `- 当日已实现PnL: ${formatSignedUsd(today.realized_pnl)}`,
+        `- 当日净PnL(估算): ${formatSignedUsd(today.net_pnl)}`,
+        `- 当日胜率: ${formatPct(today.win_rate_pct, 0)}`,
+        '',
+        '## 4) 风险与回退',
+        `- 连亏天数(当前/最大): ${toNumber(stats.current_consecutive_loss_days, 0)} / ${toNumber(stats.max_consecutive_loss_days, 0)}`,
+        `- 最大回撤: ${ddPct.toFixed(2)}%`,
+        `- 最差单日净PnL: ${formatSignedUsd(stats.worst_day_net_pnl)}`,
+        `- 回退建议: ${fallbackSuggestion}`,
+        '',
+        `## 5) 累计`,
+        `- 累计已实现PnL: ${formatSignedUsd(totalPnl)}`,
+        `- 累计手续费: ${formatUsd(stats.fees)}`,
+    ].join('\n');
+}
+
+function generateDailyReport() {
+    const text = buildDailyReportText(_latestStatusPayload || {}, _latestHistoryPayload || {});
+    const ta = document.getElementById('dailyReportTemplate');
+    if (ta) ta.value = text;
+}
+
+async function copyDailyReport() {
+    const ta = document.getElementById('dailyReportTemplate');
+    if (!ta || !ta.value) {
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(ta.value);
+    } catch (e) {
+        ta.select();
+        document.execCommand('copy');
+    }
+}
+
 function renderLiveHistory(data) {
     const stats = data.trade_stats || {};
     const latestBalance = data.latest_balance || null;
@@ -1249,6 +1521,19 @@ function renderLiveHistory(data) {
     setMetricValue('h_fees', formatUsd(stats.fees));
     setMetricValue('h_net_pnl', formatSignedUsd(stats.net_pnl),
         Number(stats.net_pnl || 0) >= 0 ? 'green' : 'red');
+    setMetricValue('h_realized_pf', stats.realized_pf != null ? toNumber(stats.realized_pf).toFixed(2) : '--',
+        toNumber(stats.realized_pf, 0) >= 1 ? 'green' : 'red');
+    setMetricValue('h_fee_drag', formatPct(stats.fee_drag_pct, 1),
+        toNumber(stats.fee_drag_pct, 0) <= 35 ? 'green' : 'red');
+    setMetricValue('h_best_day', formatSignedUsd(stats.best_day_net_pnl),
+        toNumber(stats.best_day_net_pnl, 0) >= 0 ? 'green' : '');
+    setMetricValue('h_worst_day', formatSignedUsd(stats.worst_day_net_pnl),
+        toNumber(stats.worst_day_net_pnl, 0) < 0 ? 'red' : 'green');
+    setMetricValue('h_max_loss_streak_days', String(toNumber(stats.max_consecutive_loss_days, 0)),
+        toNumber(stats.max_consecutive_loss_days, 0) >= 3 ? 'red' : '');
+    setMetricValue('h_current_loss_streak_days', String(toNumber(stats.current_consecutive_loss_days, 0)),
+        toNumber(stats.current_consecutive_loss_days, 0) >= 2 ? 'red' : '');
+    renderOpsHint(stats);
 
     const noteEl = document.getElementById('historyBalanceNote');
     if (noteEl) {
@@ -1317,7 +1602,14 @@ async function refreshLiveHistoryData() {
     try {
         const data = await apiCall(`/api/live/history?days=${days}&limit=180`);
         if (data.success) {
+            _latestHistoryPayload = data;
+            if (data.monitor_rules) {
+                _monitorRules = data.monitor_rules;
+                applyMonitorRulesToInputs(_monitorRules);
+                renderMonitorRulesNote('阈值状态: 已同步服务端规则');
+            }
             renderLiveHistory(data);
+            generateDailyReport();
         }
     } catch (e) {
         console.error('History refresh failed:', e);
@@ -1327,6 +1619,7 @@ async function refreshLiveHistoryData() {
 async function refreshStatus() {
     try {
         const data = await apiCall('/api/live/status');
+        _latestStatusPayload = data;
 
         // 进程状态
         const proc = data.process || {};
@@ -1637,6 +1930,7 @@ restoreTFSelection();
 restoreLastResult();   // async, 优先从服务器读缓存
 restoreActiveTab();
 restoreAutoDetect();   // 恢复自动检测开关
+loadMonitorRules();
 refreshStatus();
 setInterval(refreshStatus, 30000); // 每30秒刷新状态
 </script>

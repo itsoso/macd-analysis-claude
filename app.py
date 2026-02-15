@@ -218,6 +218,14 @@ def api_multi_tf_date_range_report():
 
 # ── 裸K线交易法 · 逐日盈亏 (从 DB 读取) ──
 NAKED_KLINE_DB_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'naked_kline_backtest.db')
+LIVE_MONITOR_RULES_FILE = os.path.join(BASE_DIR, 'data', 'live', 'monitor_rules.json')
+
+DEFAULT_LIVE_MONITOR_RULES = {
+    "pf_alert_threshold": 1.00,              # 已实现PF低于该值触发预警
+    "pf_min_realized_count": 8,              # 至少多少笔已实现交易才判定PF有效
+    "current_loss_streak_alert_days": 3,     # 当前连亏天数预警阈值
+    "worst_day_net_alert_usdt": -2000.0,     # 最差单日净PnL预警阈值(USDT)
+}
 
 
 @app.route('/api/naked_kline_daily')
@@ -872,6 +880,31 @@ def page_strategy_tech_doc():
     )
 
 
+# ======================================================
+#   策略完整规格书（STRATEGY_SPEC.md Markdown 渲染）
+# ======================================================
+@app.route('/strategy/spec')
+def page_strategy_spec():
+    import markdown
+    spec_path = os.path.join(os.path.dirname(__file__), 'STRATEGY_SPEC.md')
+    try:
+        with open(spec_path, 'r', encoding='utf-8') as f:
+            md_text = f.read()
+    except FileNotFoundError:
+        md_text = '> 文档文件不存在，请检查 `STRATEGY_SPEC.md`'
+    html_content = markdown.markdown(
+        md_text,
+        extensions=['tables', 'fenced_code', 'codehilite', 'toc'],
+        extension_configs={'codehilite': {'css_class': 'highlight', 'guess_lang': False}},
+    )
+    return render_template(
+        'page_strategy_spec.html',
+        active_page='strategy-spec',
+        content=html_content,
+        last_updated='2026-02-15',
+    )
+
+
 #   实盘控制面板
 # ======================================================
 @app.route('/strategy/live-control')
@@ -1156,6 +1189,35 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def _normalize_live_monitor_rules(raw):
+    raw = raw or {}
+    rules = dict(DEFAULT_LIVE_MONITOR_RULES)
+    # 阈值范围做基础裁剪，避免前端误填导致监控建议失真
+    rules["pf_alert_threshold"] = float(max(0.1, min(5.0, _safe_float(raw.get("pf_alert_threshold"), rules["pf_alert_threshold"]))))
+    rules["pf_min_realized_count"] = int(max(1, min(200, _safe_float(raw.get("pf_min_realized_count"), rules["pf_min_realized_count"]))))
+    rules["current_loss_streak_alert_days"] = int(max(1, min(30, _safe_float(raw.get("current_loss_streak_alert_days"), rules["current_loss_streak_alert_days"]))))
+    rules["worst_day_net_alert_usdt"] = float(min(-1.0, _safe_float(raw.get("worst_day_net_alert_usdt"), rules["worst_day_net_alert_usdt"])))
+    return rules
+
+
+def _load_live_monitor_rules():
+    try:
+        if os.path.exists(LIVE_MONITOR_RULES_FILE):
+            with open(LIVE_MONITOR_RULES_FILE, 'r', encoding='utf-8') as f:
+                return _normalize_live_monitor_rules(json.load(f))
+    except Exception:
+        pass
+    return dict(DEFAULT_LIVE_MONITOR_RULES)
+
+
+def _save_live_monitor_rules(rules):
+    normalized = _normalize_live_monitor_rules(rules)
+    os.makedirs(os.path.dirname(LIVE_MONITOR_RULES_FILE), exist_ok=True)
+    with open(LIVE_MONITOR_RULES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(normalized, f, ensure_ascii=False, indent=2)
+    return normalized
+
+
 def _parse_log_timestamp(ts_text):
     if not ts_text:
         return None
@@ -1330,6 +1392,23 @@ def _build_live_history_payload(days=30, limit=120):
         r.pop("_sort_key", None)
     recent_trades = trade_records[:max(20, min(limit, 500))]
 
+    realized_pnls = []
+    for r in trade_records:
+        pnl = _safe_float(r.get("pnl"), 0.0)
+        action = str(r.get("action", ""))
+        is_realized = (
+            action.startswith("CLOSE")
+            or action.startswith("PARTIAL")
+            or action in {"STOP_LOSS", "LIQUIDATION"}
+            or abs(pnl) > 1e-12
+        )
+        if is_realized:
+            realized_pnls.append(pnl)
+
+    gross_profit = sum(p for p in realized_pnls if p > 0)
+    gross_loss = abs(sum(p for p in realized_pnls if p < 0))
+    realized_pf = (gross_profit / gross_loss) if gross_loss > 1e-12 else None
+
     total_realized = sum(r["realized_pnl"] for r in daily_records)
     total_fees = sum(r["fees"] for r in daily_records)
     total_slippage = sum(r["slippage"] for r in daily_records)
@@ -1339,6 +1418,33 @@ def _build_live_history_payload(days=30, limit=120):
     total_losses = sum(r["losses"] for r in daily_records)
     total_trade_count = len(trade_records)
     total_net = total_realized - total_fees + total_funding
+
+    daily_sorted = sorted(daily_records, key=lambda x: x.get("date", ""))
+    daily_net_values = [float(r.get("net_pnl", 0.0)) for r in daily_sorted]
+    positive_days = sum(1 for v in daily_net_values if v > 0)
+    negative_days = sum(1 for v in daily_net_values if v < 0)
+    best_day_net = max(daily_net_values) if daily_net_values else 0.0
+    worst_day_net = min(daily_net_values) if daily_net_values else 0.0
+    avg_daily_net = (sum(daily_net_values) / len(daily_net_values)) if daily_net_values else 0.0
+
+    max_consecutive_loss_days = 0
+    current_loss_streak = 0
+    for v in daily_net_values:
+        if v < 0:
+            current_loss_streak += 1
+            if current_loss_streak > max_consecutive_loss_days:
+                max_consecutive_loss_days = current_loss_streak
+        else:
+            current_loss_streak = 0
+
+    current_consecutive_loss_days = 0
+    for v in reversed(daily_net_values):
+        if v < 0:
+            current_consecutive_loss_days += 1
+        else:
+            break
+
+    fee_drag_pct = (total_fees / gross_profit * 100.0) if gross_profit > 1e-12 else 0.0
 
     stats = {
         "days": days,
@@ -1353,6 +1459,17 @@ def _build_live_history_payload(days=30, limit=120):
         "funding": total_funding,
         "net_pnl": total_net,
         "avg_realized_pnl": (total_realized / total_realized_count) if total_realized_count > 0 else 0.0,
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "realized_pf": realized_pf,
+        "fee_drag_pct": fee_drag_pct,
+        "avg_daily_net_pnl": avg_daily_net,
+        "best_day_net_pnl": best_day_net,
+        "worst_day_net_pnl": worst_day_net,
+        "positive_days": positive_days,
+        "negative_days": negative_days,
+        "max_consecutive_loss_days": max_consecutive_loss_days,
+        "current_consecutive_loss_days": current_consecutive_loss_days,
     }
 
     return {
@@ -1360,6 +1477,7 @@ def _build_live_history_payload(days=30, limit=120):
         "daily_records": daily_records,
         "trade_records": recent_trades,
         "latest_balance": latest_balance,
+        "monitor_rules": _load_live_monitor_rules(),
     }
 
 
@@ -1470,6 +1588,24 @@ def api_live_history():
     limit = max(20, min(limit, 500))
     payload = _build_live_history_payload(days=days, limit=limit)
     return jsonify({"success": True, **payload})
+
+
+@app.route('/api/live/monitor_rules')
+def api_live_monitor_rules_get():
+    """读取实盘监控规则阈值。"""
+    return jsonify({"success": True, "rules": _load_live_monitor_rules()})
+
+
+@app.route('/api/live/monitor_rules', methods=['POST'])
+def api_live_monitor_rules_save():
+    """保存实盘监控规则阈值。"""
+    data = request.get_json(silent=True) or {}
+    raw_rules = data.get("rules", data)
+    try:
+        saved = _save_live_monitor_rules(raw_rules)
+        return jsonify({"success": True, "rules": saved, "message": "监控阈值已保存"})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route('/api/live/start', methods=['POST'])
