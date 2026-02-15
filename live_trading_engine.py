@@ -156,6 +156,12 @@ class LiveTradingEngine:
         self._consensus_min_strength = config.strategy.consensus_min_strength
         self._consensus_position_scale = config.strategy.consensus_position_scale
 
+        # --- v11: Score Calibrator ---
+        self._score_calibrator = None
+        self._score_cal_stats = {'evaluated': 0, 'allowed': 0, 'blocked': 0}
+        if getattr(config.strategy, 'use_score_calibration', False):
+            self._init_score_calibrator()
+
         # 加载持久化状态
         self._load_state()
 
@@ -289,6 +295,11 @@ class LiveTradingEngine:
                 # 7b. 多周期共识门控 —— 开仓决策需要共识确认
                 if self._use_multi_tf and sig.action in ("OPEN_LONG", "OPEN_SHORT"):
                     sig = self._apply_multi_tf_gate(sig)
+
+                # 7c. v11 Score Calibration 门控
+                if (getattr(self.config.strategy, 'use_score_calibration', False)
+                        and sig.action in ("OPEN_LONG", "OPEN_SHORT")):
+                    sig = self._apply_score_calibration_gate(sig)
 
                 self._last_signal = sig
 
@@ -507,6 +518,89 @@ class LiveTradingEngine:
                 sig.action = "HOLD"
                 sig.reason = f"多周期计算异常 fail-closed: {e}"
                 return sig
+
+    # ============================================================
+    # v11: Score Calibration 门控
+    # ============================================================
+    def _init_score_calibrator(self):
+        """加载 Score Calibration 模型"""
+        try:
+            from score_calibrator import ScoreCalibrator
+            model_path = getattr(self.config.strategy, 'score_calibration_model_path', '')
+            if not model_path:
+                # 自动查找默认路径
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                for candidate in ('score_calibration.json', 'data/score_calibration.json'):
+                    p = os.path.join(base_dir, candidate)
+                    if os.path.exists(p):
+                        model_path = p
+                        break
+            if model_path and os.path.exists(model_path):
+                cal = ScoreCalibrator()
+                cal.load(model_path)
+                self._score_calibrator = cal
+                self.logger.info(f"[ScoreCal] 校准模型已加载: {model_path}")
+            else:
+                self.logger.warning(
+                    "[ScoreCal] 未找到校准模型文件, Score Calibration 将以 shadow 模式运行 "
+                    "(仅记录, 不拦截)"
+                )
+        except Exception as e:
+            self.logger.warning(f"[ScoreCal] 初始化失败(非致命): {e}")
+
+    def _apply_score_calibration_gate(self, sig: SignalResult) -> SignalResult:
+        """
+        Score Calibration 门控:
+        - 有校准模型时: 使用 should_enter() 判断
+        - shadow_mode=True 时: 只记录不拦截
+        - 无模型时: 透传
+        """
+        cfg = self.config.strategy
+        shadow_mode = getattr(cfg, 'score_calibration_shadow_mode', True)
+        cost = float(getattr(cfg, 'score_calibration_cost', 0.0015))
+        min_p = float(getattr(cfg, 'score_calibration_min_p_win', 0.48))
+
+        if self._score_calibrator is None:
+            return sig
+
+        try:
+            direction = 'short' if sig.action == 'OPEN_SHORT' else 'long'
+            score = sig.sell_score if direction == 'short' else sig.buy_score
+            regime = sig.regime_label
+
+            self._score_cal_stats['evaluated'] += 1
+            ok, info = self._score_calibrator.should_enter(direction, regime, score, cost, min_p)
+
+            p_win = info.get('calibrated_p_win', 0)
+            e_r = info.get('calibrated_e_r', 0)
+
+            if ok:
+                self._score_cal_stats['allowed'] += 1
+                self.logger.info(
+                    f"[ScoreCal] ✅ {direction} {regime} score={score:.1f} "
+                    f"p_win={p_win:.3f} E[R]={e_r:.4f} → 放行"
+                )
+            else:
+                self._score_cal_stats['blocked'] += 1
+                if shadow_mode:
+                    self.logger.info(
+                        f"[ScoreCal] 👻 SHADOW: {direction} {regime} score={score:.1f} "
+                        f"p_win={p_win:.3f} E[R]={e_r:.4f} → 本应拦截(shadow模式放行)"
+                    )
+                else:
+                    sig.action = "HOLD"
+                    sig.reason = (
+                        f"ScoreCal拦截: {direction} {regime} score={score:.1f} "
+                        f"p_win={p_win:.3f}<{min_p} E[R]={e_r:.4f}"
+                    )
+                    self.logger.info(
+                        f"[ScoreCal] ⛔ 拦截: {direction} {regime} score={score:.1f} "
+                        f"p_win={p_win:.3f} E[R]={e_r:.4f}"
+                    )
+        except Exception as e:
+            self.logger.warning(f"[ScoreCal] 评估失败(非致命, 放行): {e}")
+
+        return sig
 
     # ============================================================
     # 反手 (Reverse) 逻辑

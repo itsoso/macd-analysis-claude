@@ -474,6 +474,68 @@
 
 <!-- Tab: 配置 -->
 <div class="tab-panel" id="tab-config">
+    <!-- v11 功能开关 -->
+    <div class="ctrl-card" style="margin-bottom: 20px; border-color: rgba(74,158,255,0.3);">
+        <h3>🧪 v11 优化功能开关</h3>
+        <p class="desc">回测验证有效的 v11 功能，可在此快速开关。修改后需重启引擎生效。</p>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px;">
+            <!-- Soft Anti-Squeeze -->
+            <div style="background: var(--bg-secondary); border-radius: 10px; padding: 16px; border: 1px solid rgba(255,255,255,0.06);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-weight: 600; font-size: 14px;">🛡️ Soft Anti-Squeeze</span>
+                    <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer;">
+                        <input type="checkbox" id="toggle_soft_antisqueeze" onchange="onV11ToggleChange()"
+                               style="opacity:0;width:0;height:0;">
+                        <span style="position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.1);border-radius:12px;transition:0.3s;"></span>
+                        <span id="toggle_soft_antisqueeze_dot" style="position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;transition:0.3s;"></span>
+                    </label>
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.6;">
+                    将硬门控 Anti-Squeeze 替换为连续 sigmoid 惩罚。<br>
+                    多头/空头拥挤时对 SS/BS 施加连续折扣，而非直接阻断。<br>
+                    <span style="color: var(--accent-green);">回测效果: OOS PF +0.04 (1.51→1.55)</span>
+                </div>
+                <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
+                    参数: midpoint=1.5, steepness=2.0, max_discount=50%
+                </div>
+            </div>
+
+            <!-- Score Calibration -->
+            <div style="background: var(--bg-secondary); border-radius: 10px; padding: 16px; border: 1px solid rgba(255,255,255,0.06);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-weight: 600; font-size: 14px;">🎯 Score Calibration</span>
+                    <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer;">
+                        <input type="checkbox" id="toggle_score_calibration" onchange="onV11ToggleChange()"
+                               style="opacity:0;width:0;height:0;">
+                        <span style="position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.1);border-radius:12px;transition:0.3s;"></span>
+                        <span id="toggle_score_calibration_dot" style="position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;transition:0.3s;"></span>
+                    </label>
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.6;">
+                    使用 isotonic regression 将 SS/BS 映射为 P(win) 和 E[R]。<br>
+                    仅放行 E[R] > cost 且 P(win) > 0.48 的入场信号。<br>
+                    <span style="color: var(--accent-green);">回测效果: OOS PF +30% (1.51→1.96)</span>
+                </div>
+                <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
+                    <label style="cursor:pointer;">
+                        <input type="checkbox" id="toggle_score_cal_shadow" checked onchange="onV11ToggleChange()"
+                               style="margin-right:4px;">
+                        Shadow 模式 (只记录不拦截，安全观察)
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="btn-group" style="margin-top: 16px;">
+            <button class="btn btn-primary btn-sm" onclick="saveV11Toggles()">
+                <span id="v11SaveBtnText">💾 保存并应用</span>
+            </button>
+            <button class="btn btn-outline btn-sm" onclick="loadV11Toggles()">刷新状态</button>
+        </div>
+        <div id="v11ToggleResult" style="margin-top: 8px;"></div>
+    </div>
+
     <div class="ctrl-card">
         <h3>📝 配置文件编辑器</h3>
         <p class="desc">编辑 live_trading_config.json — 修改 API Key、交易参数、风控设置</p>
@@ -1925,12 +1987,96 @@ function autoRefreshLogs() {
     }
 }
 
+// ============================================================
+// v11 功能开关
+// ============================================================
+function _updateToggleStyle(checkboxId, dotId) {
+    const cb = document.getElementById(checkboxId);
+    const dot = document.getElementById(dotId);
+    const track = dot?.previousElementSibling;
+    if (!cb || !dot || !track) return;
+    if (cb.checked) {
+        track.style.background = 'var(--accent-blue)';
+        dot.style.transform = 'translateX(20px)';
+    } else {
+        track.style.background = 'rgba(255,255,255,0.1)';
+        dot.style.transform = 'translateX(0)';
+    }
+}
+
+function onV11ToggleChange() {
+    _updateToggleStyle('toggle_soft_antisqueeze', 'toggle_soft_antisqueeze_dot');
+    _updateToggleStyle('toggle_score_calibration', 'toggle_score_calibration_dot');
+}
+
+async function loadV11Toggles() {
+    try {
+        const data = await apiCall('/api/live/load_config');
+        if (data.success && data.config) {
+            const strategy = data.config.strategy || {};
+            document.getElementById('toggle_soft_antisqueeze').checked =
+                !!strategy.use_soft_antisqueeze;
+            document.getElementById('toggle_score_calibration').checked =
+                !!strategy.use_score_calibration;
+            document.getElementById('toggle_score_cal_shadow').checked =
+                strategy.score_calibration_shadow_mode !== false;
+            onV11ToggleChange();
+            document.getElementById('v11ToggleResult').innerHTML =
+                '<span class="result-badge success">✓ 状态已刷新</span>';
+        }
+    } catch(e) {
+        document.getElementById('v11ToggleResult').innerHTML =
+            '<span class="result-badge error">加载失败: ' + e.message + '</span>';
+    }
+}
+
+async function saveV11Toggles() {
+    setLoading('v11SaveBtnText', true);
+    try {
+        // 先加载现有配置
+        const loadData = await apiCall('/api/live/load_config');
+        if (!loadData.success || !loadData.config) {
+            throw new Error('无法加载现有配置');
+        }
+        const config = loadData.config;
+        if (!config.strategy) config.strategy = {};
+
+        // 更新 v11 开关
+        config.strategy.use_soft_antisqueeze =
+            document.getElementById('toggle_soft_antisqueeze').checked;
+        config.strategy.use_score_calibration =
+            document.getElementById('toggle_score_calibration').checked;
+        config.strategy.score_calibration_shadow_mode =
+            document.getElementById('toggle_score_cal_shadow').checked;
+
+        // 保存
+        const saveData = await apiCall('/api/live/save_config', {
+            method: 'POST', body: JSON.stringify(config)
+        });
+
+        if (saveData.success) {
+            document.getElementById('v11ToggleResult').innerHTML =
+                '<span class="result-badge success">✓ 已保存，重启引擎后生效</span>';
+            // 同步到配置编辑器
+            document.getElementById('configEditor').value = JSON.stringify(config, null, 2);
+        } else {
+            document.getElementById('v11ToggleResult').innerHTML =
+                '<span class="result-badge error">' + saveData.message + '</span>';
+        }
+    } catch(e) {
+        document.getElementById('v11ToggleResult').innerHTML =
+            '<span class="result-badge error">保存失败: ' + e.message + '</span>';
+    }
+    setLoading('v11SaveBtnText', false);
+}
+
 // 初始加载: 恢复持久化状态
 restoreTFSelection();
 restoreLastResult();   // async, 优先从服务器读缓存
 restoreActiveTab();
 restoreAutoDetect();   // 恢复自动检测开关
 loadMonitorRules();
+loadV11Toggles();      // 加载 v11 开关状态
 refreshStatus();
 setInterval(refreshStatus, 30000); // 每30秒刷新状态
 </script>

@@ -502,6 +502,14 @@ class StrategyConfig:
     anti_squeeze_oi_z_threshold: float = 1.0         # OI z-score 阈值
     anti_squeeze_taker_imb_threshold: float = 0.12   # taker imbalance 阈值
     micro_mode_override: bool = True
+    # V11 Soft Anti-Squeeze: 将硬门控改为连续 sigmoid 惩罚
+    use_soft_antisqueeze: bool = False                # 默认关闭, Web 页面可开启
+    soft_antisqueeze_w_fz: float = 0.5               # funding z 权重
+    soft_antisqueeze_w_oi: float = 0.3               # OI z 权重
+    soft_antisqueeze_w_imb: float = 0.2              # taker imbalance 权重
+    soft_antisqueeze_midpoint: float = 1.5           # sigmoid 中点
+    soft_antisqueeze_steepness: float = 2.0          # sigmoid 陡度
+    soft_antisqueeze_max_discount: float = 0.50      # 最大折扣
 
     # ── 双引擎(趋势/反转) ──
     use_dual_engine: bool = True
@@ -532,6 +540,13 @@ class StrategyConfig:
     regime_atr_high: float = 0.018      # ATR高波动阈值
     regime_lookback_bars: int = 48      # Regime 回望窗口
     regime_atr_bars: int = 14           # Regime ATR 计算周期
+
+    # ── V11 Score Calibration: 基于校准模型过滤低质量入场 ──
+    use_score_calibration: bool = False              # 默认关闭, Web 页面可开启
+    score_calibration_model_path: str = ''           # 校准模型 JSON 路径(空=自动查找)
+    score_calibration_cost: float = 0.0015           # 单笔交易成本 (fee+slippage)
+    score_calibration_min_p_win: float = 0.48        # 最低胜率门槛
+    score_calibration_shadow_mode: bool = True       # shadow 模式: 只记录不拦截
 
     # ── 分段止盈增强(v3 早期锁利) ──
     # A/B 测试: TP1+12%/TP2+25% 比 TP1+15%/TP2+50% 收益+205pp, 回撤更优

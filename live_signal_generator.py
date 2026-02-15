@@ -306,8 +306,18 @@ class LiveSignalGenerator:
                 sell_score *= float(getattr(self.config, 'regime_neutral_ss_dampen', 0.85))
                 buy_score *= float(getattr(self.config, 'regime_neutral_bs_boost', 1.10))
 
+            # ── v11: Soft Anti-Squeeze (微结构连续降权) ──
+            _antisq_info = {}
+            if getattr(self.config, 'use_soft_antisqueeze', False):
+                sell_score, buy_score, _antisq_info = self._apply_soft_antisqueeze(
+                    df, idx, sell_score, buy_score
+                )
+
             # 提取各维度分数
             components = self._extract_components(signals, idx, dt)
+            if _antisq_info:
+                components['antisq_long_penalty'] = _antisq_info.get('long_penalty', 0)
+                components['antisq_short_penalty'] = _antisq_info.get('short_penalty', 0)
 
             # 构建结果
             result = SignalResult()
@@ -379,6 +389,105 @@ class LiveSignalGenerator:
         components['kdj_b'] = _safe_get(signals['kdj_buy'], idx)
 
         return components
+
+    # ============================================================
+    # v11: Soft Anti-Squeeze
+    # ============================================================
+    def _apply_soft_antisqueeze(self, df, idx, sell_score, buy_score):
+        """
+        计算微结构拥挤度，对 SS/BS 施加连续惩罚。
+        与回测 optimize_six_book.py 中的 soft anti-squeeze 逻辑一致，
+        但这里直接作用于分数（因为实盘不经过 margin_mult）。
+
+        多头拥挤 → 做空有风险 → 降低 sell_score
+        空头拥挤 → 做多有风险 → 降低 buy_score
+        """
+        import math
+        info = {'long_penalty': 0.0, 'short_penalty': 0.0,
+                'funding_z': 0.0, 'oi_z': 0.0, 'taker_imb': 0.0}
+
+        try:
+            # 获取微结构数据 — 复用 _build_microstructure_features 逻辑
+            lookback = max(8, int(getattr(self.config, 'micro_lookback_bars', 48)))
+            minp = max(5, lookback // 3)
+
+            close = pd.to_numeric(df['close'], errors='coerce')
+            volume = pd.to_numeric(df.get('volume', pd.Series(0.0, index=df.index)), errors='coerce')
+            quote_volume = df.get('quote_volume')
+            if quote_volume is None:
+                quote_volume = close * volume
+            quote_volume = pd.to_numeric(quote_volume, errors='coerce').replace(0, np.nan)
+
+            taker_buy_quote = df.get('taker_buy_quote')
+            if taker_buy_quote is None:
+                taker_buy_quote = quote_volume * 0.5
+            taker_buy_quote = pd.to_numeric(taker_buy_quote, errors='coerce')
+
+            taker_buy_ratio = (taker_buy_quote / quote_volume).clip(0.0, 1.0).fillna(0.5)
+            taker_imb = float(((taker_buy_ratio - 0.5) * 2.0).clip(-1.0, 1.0).iloc[idx])
+
+            # OI z-score
+            oi_series = None
+            for col in ('open_interest', 'oi'):
+                if col in df.columns:
+                    oi_series = pd.to_numeric(df[col], errors='coerce')
+                    break
+            if oi_series is None:
+                oi_series = quote_volume
+            oi_mean = oi_series.rolling(lookback, min_periods=minp).mean()
+            oi_std = oi_series.rolling(lookback, min_periods=minp).std(ddof=0).replace(0, np.nan)
+            oi_z = float(((oi_series - oi_mean) / oi_std).clip(-5.0, 5.0).fillna(0.0).iloc[idx])
+
+            # Funding z-score
+            if 'funding_rate' in df.columns:
+                funding_rate = pd.to_numeric(df['funding_rate'], errors='coerce').fillna(0.0)
+            else:
+                funding_rate = pd.Series(0.0, index=df.index)
+            fr_mean = funding_rate.rolling(lookback, min_periods=minp).mean()
+            fr_std = funding_rate.rolling(lookback, min_periods=minp).std(ddof=0).replace(0, np.nan)
+            funding_z = float(((funding_rate - fr_mean) / fr_std).clip(-5.0, 5.0).fillna(0.0).iloc[idx])
+
+            info['funding_z'] = funding_z
+            info['oi_z'] = oi_z
+            info['taker_imb'] = taker_imb
+
+            # Sigmoid penalty 计算
+            _w_fz = float(getattr(self.config, 'soft_antisqueeze_w_fz', 0.5))
+            _w_oi = float(getattr(self.config, 'soft_antisqueeze_w_oi', 0.3))
+            _w_imb = float(getattr(self.config, 'soft_antisqueeze_w_imb', 0.2))
+            _mid = float(getattr(self.config, 'soft_antisqueeze_midpoint', 1.5))
+            _steep = float(getattr(self.config, 'soft_antisqueeze_steepness', 2.0))
+            _max_disc = float(getattr(self.config, 'soft_antisqueeze_max_discount', 0.50))
+
+            # 多头拥挤评分
+            _long_crowd = _w_fz * max(0, funding_z) + _w_oi * max(0, oi_z) + _w_imb * max(0, taker_imb / 0.12)
+            _long_penalty = 1.0 / (1.0 + math.exp(-_steep * (_long_crowd - _mid)))
+
+            # 空头拥挤评分
+            _short_crowd = _w_fz * max(0, -funding_z) + _w_oi * max(0, oi_z) + _w_imb * max(0, -taker_imb / 0.12)
+            _short_penalty = 1.0 / (1.0 + math.exp(-_steep * (_short_crowd - _mid)))
+
+            info['long_penalty'] = _long_penalty
+            info['short_penalty'] = _short_penalty
+
+            # 多头拥挤 → 做空有风险 → 降低 sell_score
+            if _long_penalty > 0.05:
+                sell_score *= (1.0 - _long_penalty * _max_disc)
+            # 空头拥挤 → 做多有风险 → 降低 buy_score
+            if _short_penalty > 0.05:
+                buy_score *= (1.0 - _short_penalty * _max_disc)
+
+            if self.logger and (_long_penalty > 0.1 or _short_penalty > 0.1):
+                self.logger.info(
+                    f"[AntiSqueeze] fz={funding_z:.2f} oi_z={oi_z:.2f} imb={taker_imb:.3f} "
+                    f"long_pen={_long_penalty:.3f} short_pen={_short_penalty:.3f}"
+                )
+
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"[AntiSqueeze] 计算失败(非致命): {e}")
+
+        return sell_score, buy_score, info
 
     # ============================================================
     # 交易决策
