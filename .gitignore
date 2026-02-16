@@ -37,3 +37,6 @@ backtest_results.db
 
 # 大体量结果 JSON (由回测生成, 不跟踪)
 candlestick_result.json
+
+# 实盘配置 (服务器本地, 已同步到DB)
+live_trading_config.json
