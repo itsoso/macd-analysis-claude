@@ -1,13 +1,13 @@
 # MACD Analysis 六书融合策略 — 完整技术规格
 
-> 版本: v9.0.1 (B1b + P13 + P20 + P24 + Anti-Squeeze)
+> 版本: v11.0 (三阶段优化路线图全面实施)
 > 编写时间: 2026-02-15 18:47:20 CST (北京时间)
-> 最后更新: 2026-02-15 v9.0.1 回测验证 (含 v5 完整回测、IS PF<1.0 发现) + 附录F GPT Pro 外部审计 + 附录G 多模型共识审计 + 附录H 未完成工作盘点
+> 最后更新: 2026-02-16 v11.0 三阶段优化路线图实施 — MAE 校准 + Score Calibration + WF 验证管道 + DSR/PSR + 清算流/OI 采集
 > 生产配置: live_config.py v5 (`STRATEGY_VERSION=v5`)
 > 标的: ETH/USDT 永续合约 + 现货
 > 主周期: 1h | 决策周期: 15m + 1h + 4h + 24h
 >
-> **⚠️ v9.0.1 关键发现**: v5 生产配置 IS PF=0.90 (<1.0)。B1b 误杀 IS 盈利 neutral short, P24 过度截断 trend short 利润。OOS 因无 short 交易无法验证 v9 新特性。新增 P33/P34/P35 紧急优化项。
+> **v11.0 核心变更**: 基于 GPT Pro / Claude 跨模型建议分析，实施三阶段优化路线图 —— Phase 1 利用已有数据立即改进 (MAE 校准 + Soft Anti-Squeeze + 反手追踪), Phase 2 自适应框架建设 (Score Calibration + P18 Shrinkage + Rolling Regime), Phase 3 统计验证 + 新数据源 (Walk-Forward + DSR/PSR + 清算流 + OI 采集)。
 
 ---
 
@@ -1050,19 +1050,19 @@ P13 连续追踪止盈通过渐进式回撤容忍 (60%→30%) 消除了硬阈值
 | P0 | P25 | P18+P23 组合 Walk-Forward 验证 | 确认 E4 OOS+28.9% 泛化稳定性 | 待执行 |
 | P0 | P26 | P21 R% 调参 (2.5-3.5%) | 消灭"少数大亏单主导" | 待执行 |
 
-### 原有优先级路线图 (已部分实现)
+### 原有优先级路线图 (v11 进度更新)
 
 | 优先级 | 编号 | 方向 | 状态 |
 |--------|------|------|------|
-| P0 | 真实永续合约数据管道 | 数据获取函数**已完成** (binance_fetcher.py), 需整合到回测 | **P28待执行** |
-| P1 | MAE/MFE 诊断追踪 | ~15行代码, 记录 min_pnl_r 到 trade dict | 待执行 |
+| P0 | 真实永续合约数据管道 | 数据获取函数**已完成** + OI/清算流采集器 | ✅ `oi_collector.py` + `liquidation_collector.py` |
+| P1 | MAE/MFE 诊断追踪 | min_pnl_r/max_pnl_r 已记录 + MAE 校准器 | ✅ `mae_calibrator.py` |
 | P1 | P27 Funding 现金流纳入回测 | 消除收益虚高 (~2-5%) | 待执行 |
-| P1 | P28 Anti-Squeeze 回测验证 | 用真实 OI/Funding 数据验证 | 待执行 |
+| P1 | P28 Anti-Squeeze 回测验证 | 需等 OI 数据积累 ≥3 个月 | 🔬 数据积累中 |
 | P2 | 费用压力测试 | fee×2 + slippage×2 环境验证 | 待执行 |
 | P2 | P29 CS-KDJ 去相关 | 消除虚假共识 (r=0.474) | 待设计 |
 | P2 | P30 Leg 风险预算 | 按 regime×direction 分配资本 | 待设计 |
-| P3 | P31 动态 Regime 阈值 | 滚动百分位替代固定值 | 待设计 |
-| P3 | P32 MAE-driven 数据驱动止损 | 替代固定百分比 | 待设计 |
+| P3 | P31 动态 Regime 阈值 | 滚动百分位替代固定值 | ✅ v11 Phase 2c 已实现 |
+| P3 | P32 MAE-driven 数据驱动止损 | 替代固定百分比 | ✅ v11 Phase 1a 已实现 |
 
 ### 长期架构方向 (LLM 共识)
 
@@ -1107,6 +1107,391 @@ P13 连续追踪止盈通过渐进式回撤容忍 (60%→30%) 消除了硬阈值
 | P18 Regime-Adaptive Fusion | `use_regime_adaptive_fusion` | E4 OOS+28.9%, 但 IS 分裂严重, 待 WF 验证 |
 | P21 R-based 仓位管理 | `use_risk_per_trade` | 1.5% R% 过保守, IS-10%, 需调参 |
 | P23 加权结构确认 | `use_weighted_confirms` | 独立 OOS-12.6%, 仅与 P18 组合有效 |
+
+---
+
+## 十四、v11 三阶段优化路线图实施
+
+> 版本: v11.0 | 实施日期: 2026-02-16 | 部署状态: 已部署生产
+
+基于附录 F (GPT Pro 审计) 和附录 G (多模型共识审计) 的建议，v11 实施三阶段优化路线图，覆盖 MAE 数据驱动校准、自适应框架、统计验证和新数据源四大方向。
+
+### 14.1 Phase 1: 利用已有数据立即改进
+
+#### 14.1.1 MAE 驱动 ATR 止损校准 (mae_calibrator.py)
+
+**目标**: 用历史交易的 Maximum Adverse Excursion (MAE) 分布，数据驱动地校准 regime-specific ATR 乘数，替代手工设定。
+
+**核心算法**:
+
+```python
+# mae_calibrator.py: MAECalibrator 类
+# 1. 收集盈利单的 MAE 数据 (min_pnl_r)
+# 2. 按 (regime, direction) 分层
+# 3. 计算 MAE P90 (90 百分位 = 盈利交易中 90% 的最大回撤不超过此值)
+# 4. ATR mult 校准: atr_sl_mult = -mae_p90 / (avg_atr_pct × safety_factor)
+```
+
+**输入**: 回测交易记录 (含 `min_pnl_r`, `max_pnl_r` 字段)
+**输出**: 校准后的 `atr_sl_mult` 和 `atr_sl_floor`/`atr_sl_ceil` per (regime, direction)
+
+| Regime | 方向 | 当前 ATR mult | MAE P90 校准建议 |
+|--------|------|-------------|-----------------|
+| trend | short | 3.5x | 基于 MAE P90 数据驱动 |
+| neutral | long | 2.0x | 基于 MAE P90 数据驱动 |
+| high_vol | short | 2.5x | 基于 MAE P90 数据驱动 |
+
+**运行方式**:
+
+```bash
+# 分析已有回测结果
+python mae_calibrator.py --analyze optimize_six_book_result.json
+
+# 运行新回测 + 校准
+python mae_calibrator.py --run-backtest --start-date 2024-01-01
+```
+
+#### 14.1.2 Anti-Squeeze 硬门控 → Soft Penalty (Sigmoid 连续惩罚)
+
+**变更**: 将 Anti-Squeeze 从二元 block/allow 门控改为 Sigmoid 连续折扣，消除 cliff effect。
+
+**之前 (v9.0 硬门控)**:
+```python
+# 三条件组合满足 → 完全阻止开仓
+if funding_rate >= 0.0008 and oi_z >= 1.0 and taker_imbalance >= 0.12:
+    block_short = True  # 二元决策
+```
+
+**之后 (v11 Soft Penalty)**:
+```python
+# Sigmoid 连续折扣
+squeeze_z = w_fz * funding_z + w_oi * oi_z + w_imb * taker_imb_z
+# w_fz=0.5, w_oi=0.3, w_imb=0.2
+discount = 1.0 / (1.0 + exp(steepness * (squeeze_z - midpoint)))
+# steepness=2.0, midpoint=1.5, max_discount=0.50
+margin *= max(discount, 1.0 - max_discount)
+```
+
+**配置参数** (live_config.py v5):
+```python
+use_soft_antisqueeze = True       # v11 启用
+soft_antisqueeze_w_fz = 0.5      # Funding z-score 权重
+soft_antisqueeze_w_oi = 0.3      # OI z-score 权重
+soft_antisqueeze_w_imb = 0.2     # Taker imbalance 权重
+soft_antisqueeze_midpoint = 1.5  # Sigmoid 中点
+soft_antisqueeze_steepness = 2.0 # Sigmoid 陡度
+soft_antisqueeze_max_discount = 0.50  # 最大折扣 50%
+```
+
+**优势**: 消除硬阈值的 cliff effect；中等拥挤度仍可开仓但仓位缩减；参数连续可调。
+
+#### 14.1.3 反手逻辑回测验证
+
+**验证目标**: 确认反手平仓后反向开仓的门控逻辑正确性（cooldown×3 应用于刚关闭方向，不应阻止反方向）。
+
+**验证方法**: 在 `optimize_six_book.py` 中增加 `reverse_hand_stats` 计数器:
+
+```python
+reverse_hand_stats = {
+    'reverse_close_short': 0,    # 反手平空次数
+    'reverse_close_long': 0,     # 反手平多次数
+    'reverse_reopen_short': 0,   # 反手重开空次数
+    'reverse_reopen_long': 0,    # 反手重开多次数
+}
+```
+
+**回测结果已集成**: stats 计入最终回测输出 JSON，可直接验证反手逻辑触发频率和方向正确性。
+
+### 14.2 Phase 2: 自适应框架建设
+
+#### 14.2.1 Score Calibration — Isotonic Regression (score_calibrator.py)
+
+**目标**: 将原始信号分数 (SS/BS, 0-100) 映射到校准后的 p(win) 和 E[return]，实现"同分同概率"。
+
+**算法**: Pool Adjacent Violators (PAV) — 保序回归:
+
+```python
+# score_calibrator.py: IsotonicRegression 类 (自实现, 无外部依赖)
+# PAV 算法保证: 如果 score_a < score_b, 则 p(win|a) ≤ p(win|b)
+class IsotonicRegression:
+    def fit(self, x, y):
+        # 按 x 排序后, 合并违反单调性的相邻块
+        # 块内取加权平均, 保证输出严格非递减
+    def predict(self, x_new):
+        # 分段常数插值
+```
+
+**校准流程**:
+
+```
+历史交易 → 按 (direction, regime) 分层
+  → 每层: scores[] → win/loss labels → IsotonicRegression.fit()
+  → 产出: score → p(win) 映射表
+  → 同步: scores[] → pnl_r values → IsotonicRegression.fit()
+  → 产出: score → E[return] 映射表
+```
+
+**入场决策逻辑**:
+```python
+# 校准后决策 (替代固定阈值):
+calibrated_p_win = p_win_model.predict(score)
+calibrated_e_return = e_return_model.predict(score)
+cost = 2 * taker_fee + slippage  # 往返成本 ≈ 0.30%
+if calibrated_e_return > cost and calibrated_p_win > min_p_win:
+    open_position()
+```
+
+**模型持久化**: JSON 格式保存/加载 per (direction, regime) 校准模型。
+
+#### 14.2.2 P18 Shrinkage — Regime-Adaptive 混合权重
+
+**目标**: 解决 P18 regime-adaptive 融合权重在 IS/OOS 分裂的问题（E4 OOS+28.9% 但 IS 崩）。
+
+**方法**: Shrinkage 混合 — 用全局权重约束 regime-specific 权重:
+
+```python
+# λ = min(max_lambda, 1.0 - n_trades / n_scale)
+# n_trades = 当前 regime 下的历史交易数
+# 样本少 → λ 大 → 偏向全局权重 (保守)
+# 样本多 → λ 小 → 偏向 regime 权重 (自适应)
+w_final = (1 - λ) × w_regime + λ × w_global
+```
+
+**配置参数**:
+```python
+p18_shrinkage_max_lambda = 0.40   # 最大 shrinkage (样本极少时)
+p18_shrinkage_n_scale = 100.0     # 100 笔交易时 λ→0
+```
+
+**解决的问题**: 原始 P18 在小样本 regime 中过拟合 → 硬切换导致 IS/OOS 性能不稳定。Shrinkage 确保权重在样本不足时回退到全局先验。
+
+#### 14.2.3 Rolling Percentile Regime 阈值
+
+**目标**: 用滚动百分位数替代固定 regime 分类阈值，适应市场结构变化。
+
+```python
+# 替代固定阈值 vol_high=0.020, trend_strong=0.015
+if use_dynamic_regime_thresholds:
+    vol_high = rolling_vol.quantile(dynamic_regime_vol_quantile, window=lookback_bars)
+    # dynamic_regime_vol_quantile = 0.80 (80th percentile)
+    # dynamic_regime_lookback_bars = 2160 (≈90 天)
+    trend_strong = rolling_trend.quantile(dynamic_regime_trend_quantile, window=lookback_bars)
+```
+
+**配置参数**:
+```python
+use_dynamic_regime_thresholds = True     # v11 启用
+dynamic_regime_lookback_bars = 2160      # 90 天滚动窗口
+dynamic_regime_vol_quantile = 0.80       # 波动率分类百分位
+dynamic_regime_trend_quantile = 0.80     # 趋势分类百分位
+```
+
+### 14.3 Phase 3: 统计验证与新数据源
+
+#### 14.3.1 Walk-Forward 验证管道 (walk_forward_pipeline.py)
+
+**目标**: 建立标准化的 Walk-Forward Optimization (WFO) 管道，系统性评估策略泛化能力。
+
+**管道设计**:
+
+```
+数据: 2021-01-01 ~ 2026-02-16 (44,904 bars)
+窗口: IS=6 个月, OOS=1 个月, Step=1 个月
+→ ~55 个滚动窗口
+→ 每窗口: IS 训练 → OOS 测试 (参数固定)
+→ 聚合: OOS 盈利窗口比例, IS/OOS 衰减比, 累计 OOS 收益
+```
+
+**关键指标**:
+
+| 指标 | 含义 | 目标 |
+|------|------|------|
+| OOS Win Rate | 盈利 OOS 窗口占比 | ≥ 65% |
+| IS→OOS Decay | OOS/IS 收益衰减比 | < 50% (越小越好, 0=无过拟合) |
+| Cumulative OOS Return | 累计 OOS 收益 | > 0 |
+| Max Consecutive Loss | 最大连续亏损窗口数 | < 4 |
+
+**运行方式**:
+```bash
+python walk_forward_pipeline.py --start 2021-01-01 --is-months 6 --oos-months 1
+```
+
+#### 14.3.2 统计验证指标 (stat_validation.py)
+
+实现四项高级统计检验:
+
+**1. Probabilistic Sharpe Ratio (PSR)**:
+```python
+# 检验: 观测 Sharpe Ratio 是否显著大于基准 SR*
+# PSR = Φ((SR_observed - SR*) / SE(SR))
+# SE(SR) = sqrt((1 + 0.5×SR² - γ₃×SR + (γ₄-1)/4 × SR²) / (T-1))
+# γ₃ = skewness, γ₄ = kurtosis
+psr = compute_psr(returns, benchmark_sr=0.0)
+# → 返回 p-value, 显著性判断 (p < 0.05)
+```
+
+**2. Deflated Sharpe Ratio (DSR)**:
+```python
+# 修正: 多重测试偏差 (测试了 M 个策略变体, 选最好的)
+# DSR 用 E[max(SR)] 替代 SR*=0:
+# E[max] ≈ (1 - γ_euler) × Φ⁻¹(1 - 1/M) + γ_euler × Φ⁻¹(1 - 1/(M×e))
+# γ_euler ≈ 0.5772
+dsr = compute_dsr(returns, num_trials=20)  # 20 个策略变体
+```
+
+**3. Probability of Backtest Overfitting (PBO)**:
+```python
+# 方法: Combinatorial Symmetric Cross-Validation (CSCV)
+# 将回测数据分成 S 段 (默认 S=16)
+# 枚举所有 C(S, S/2) 种 IS/OOS 划分 (或随机采样 num_combos 个)
+# 统计: IS 最优策略在 OOS 中表现低于中位数的比例
+pbo = compute_pbo(returns_matrix, num_combos=100)
+# → PBO < 0.50 表示策略大概率不是过拟合
+```
+
+**4. 综合策略统计**:
+```python
+stats = compute_strategy_stats(equity_curve)
+# → annual_return, annual_vol, sharpe_ratio, sortino_ratio,
+#   max_drawdown, max_drawdown_duration, calmar_ratio,
+#   win_rate, profit_factor, avg_win/avg_loss, tail_ratio
+```
+
+#### 14.3.3 清算流采集 (liquidation_collector.py)
+
+**目标**: 实时采集 Binance 强平数据，为 Anti-Squeeze 提供真实清算流信号。
+
+**数据源**: Binance WebSocket `wss://fstream.binance.com/ws/<symbol>@forceOrder`
+
+**采集流程**:
+```
+WebSocket 连接 → forceOrder 事件
+→ 解析: symbol, side, price, qty, timestamp
+→ 实时聚合 (每小时):
+    - total_notional: 清算总额 (USDT)
+    - long_short_imbalance: (多头清算 - 空头清算) / 总清算
+    - count: 清算笔数
+→ 持久化: data/liquidations/{symbol}/{YYYY-MM}.parquet
+```
+
+**运行模式**:
+```bash
+# 前台运行
+python liquidation_collector.py --symbol ETHUSDT
+
+# 后台守护进程
+python liquidation_collector.py --symbol ETHUSDT --daemon
+
+# 导出已有数据
+python liquidation_collector.py --symbol ETHUSDT --export --start 2026-02-01
+
+# 查看统计
+python liquidation_collector.py --symbol ETHUSDT --stats
+```
+
+**输出字段**:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| timestamp | datetime | 小时级时间戳 |
+| total_notional | float | 该小时清算总额 (USDT) |
+| long_liq_notional | float | 多头清算总额 |
+| short_liq_notional | float | 空头清算总额 |
+| long_short_imbalance | float | 多空清算失衡 [-1, +1] |
+| count | int | 清算笔数 |
+
+#### 14.3.4 OI 自采集 (oi_collector.py)
+
+**目标**: 解决 Binance `openInterestHist` API 仅提供 30 天历史数据的限制，通过定时采集积累长期 OI 数据集。
+
+**背景** (附录 F P0-2):
+> `data/open_interest/` 目录为空。回测中所有 `oi_z` 均基于 `quote_volume` 代理值，与真实 OI 的经济含义和统计分布完全不同。Anti-Squeeze 的 OI 维度在回测中实质无效。
+
+**数据源**: Binance REST API
+- Open Interest: `GET /fapi/v1/openInterest` (当前快照)
+- Funding Rate: `GET /fapi/v1/fundingRate` (历史)
+
+**采集策略**:
+```python
+# oi_collector.py
+# 每小时采集: OI 快照 + Funding Rate 历史
+# 存储: data/oi_snapshots/{symbol}/{YYYY-MM}.parquet
+# 字段: timestamp, symbol, open_interest, open_interest_value,
+#        funding_rate, funding_time, mark_price
+```
+
+**运行模式**:
+```bash
+# 单次采集
+python oi_collector.py --symbol ETHUSDT --collect
+
+# 回填最近 30 天
+python oi_collector.py --symbol ETHUSDT --backfill --days 30
+
+# 后台守护 (每小时自动采集)
+python oi_collector.py --symbol ETHUSDT --daemon
+
+# 查看已采集数据
+python oi_collector.py --symbol ETHUSDT --view --last 48
+```
+
+**数据积累策略**:
+- Binance API 限制: 仅 30 天历史 → 需要从现在开始持续采集
+- 第 1 个月: 30 天 OI 数据可用
+- 第 3 个月: 90 天数据 → 可做初步 Anti-Squeeze 验证
+- 第 6 个月: 180 天数据 → 可做 OI-enhanced 回测
+- 第 12 个月: 覆盖多种市场 regime → 可做完整验证
+
+### 14.4 v11 新增文件索引
+
+| 文件 | 职责 | Phase |
+|------|------|-------|
+| `mae_calibrator.py` | MAE 分布分析 + ATR mult 数据驱动校准 | Phase 1 |
+| `score_calibrator.py` | Isotonic Regression: SS/BS → p(win), E[return] 映射 | Phase 2 |
+| `walk_forward_pipeline.py` | 标准化 Walk-Forward Optimization 管道 | Phase 3 |
+| `stat_validation.py` | PSR + DSR + PBO + 综合策略统计 | Phase 3 |
+| `liquidation_collector.py` | Binance WebSocket 清算流实时采集 | Phase 3 |
+| `oi_collector.py` | Binance API Open Interest 定时采集 | Phase 3 |
+
+### 14.5 v11 配置变更汇总
+
+**live_config.py v5 新增参数**:
+
+| 参数 | 值 | 所属 Phase |
+|------|-----|-----------|
+| `use_soft_antisqueeze` | `True` | Phase 1 |
+| `soft_antisqueeze_w_fz` | `0.5` | Phase 1 |
+| `soft_antisqueeze_w_oi` | `0.3` | Phase 1 |
+| `soft_antisqueeze_w_imb` | `0.2` | Phase 1 |
+| `soft_antisqueeze_midpoint` | `1.5` | Phase 1 |
+| `soft_antisqueeze_steepness` | `2.0` | Phase 1 |
+| `soft_antisqueeze_max_discount` | `0.50` | Phase 1 |
+| `p18_shrinkage_max_lambda` | `0.40` | Phase 2 |
+| `p18_shrinkage_n_scale` | `100.0` | Phase 2 |
+| `use_dynamic_regime_thresholds` | `True` | Phase 2 |
+| `dynamic_regime_lookback_bars` | `2160` | Phase 2 |
+| `dynamic_regime_vol_quantile` | `0.80` | Phase 2 |
+| `dynamic_regime_trend_quantile` | `0.80` | Phase 2 |
+
+### 14.6 v11 架构影响分析
+
+```
+v9.0/v10.x ("补丁演进"):
+  Anti-Squeeze 硬门控 → MAE 手工校准 → Regime 固定阈值
+  → 问题: 离散决策边界, 参数手工设定, 无统计验证框架
+
+v11.0 ("数据驱动 + 连续化"):
+  Anti-Squeeze Sigmoid 连续惩罚 → MAE P90 数据驱动校准
+  → Score Calibration 概率化决策 → Shrinkage 防过拟合
+  → Rolling Percentile 自适应 regime → WFO + DSR 统计验证
+  → 清算流 + OI 真实数据采集
+
+核心哲学转变:
+  1. 硬阈值 → Sigmoid 连续函数 (Anti-Squeeze, Regime 边界)
+  2. 手工参数 → 数据驱动校准 (MAE P90, Isotonic Regression)
+  3. 单次回测 → 统计验证管道 (WFO, DSR, PBO, Bootstrap)
+  4. 代理数据 → 真实数据积累 (OI 采集, 清算流采集)
+```
 
 ---
 
@@ -1238,6 +1623,22 @@ P13 连续追踪止盈通过渐进式回撤容忍 (60%→30%) 消除了硬阈值
   "anti_squeeze_oi_z_threshold": 1.0,
   "anti_squeeze_taker_imb_threshold": 0.12,
 
+  "use_soft_antisqueeze": true,
+  "soft_antisqueeze_w_fz": 0.5,
+  "soft_antisqueeze_w_oi": 0.3,
+  "soft_antisqueeze_w_imb": 0.2,
+  "soft_antisqueeze_midpoint": 1.5,
+  "soft_antisqueeze_steepness": 2.0,
+  "soft_antisqueeze_max_discount": 0.50,
+
+  "p18_shrinkage_max_lambda": 0.40,
+  "p18_shrinkage_n_scale": 100.0,
+
+  "use_dynamic_regime_thresholds": true,
+  "dynamic_regime_lookback_bars": 2160,
+  "dynamic_regime_vol_quantile": 0.80,
+  "dynamic_regime_trend_quantile": 0.80,
+
   "use_trend_enhance": true,
   "trend_floor_ratio": 0.50,
   "use_spot_sell_confirm": true,
@@ -1275,6 +1676,17 @@ P13 连续追踪止盈通过渐进式回撤容忍 (60%→30%) 消除了硬阈值
 | kdj_strategy.py | KDJ 九章 + KD-MACD + 多TF共振 |
 | turtle_strategy.py | 海龟 Donchian/ATR/System1+2 |
 
+### v11 新增模块
+
+| 文件 | 行数 | 职责 |
+|------|------|------|
+| mae_calibrator.py | ~350 | MAE 分布分析, ATR mult 数据驱动校准, P90 百分位 |
+| score_calibrator.py | ~400 | Isotonic Regression (PAV), SS/BS→p(win)+E[R] 映射, 模型持久化 |
+| walk_forward_pipeline.py | ~350 | WFO 管道: IS/OOS 滚动窗口, 聚合指标, 泛化评估 |
+| stat_validation.py | ~350 | PSR + DSR + PBO (CSCV) + 综合策略统计, 无外部 ML 依赖 |
+| liquidation_collector.py | ~400 | Binance WebSocket forceOrder 实时采集, 小时级聚合, Parquet 存储 |
+| oi_collector.py | ~350 | Binance API OI 快照 + Funding 历史, 定时采集, 月度 Parquet |
+
 ### 回测实验
 
 | 文件 | 职责 |
@@ -1288,11 +1700,13 @@ P13 连续追踪止盈通过渐进式回撤容忍 (60%→30%) 消除了硬阈值
 | run_p15_walk_forward.py | P15: 6窗口Walk-Forward验证 |
 | run_p16_signal_analysis.py | P16: 518笔交易信号拆解 |
 
-### 数据与实盘
+### 数据采集与实盘
 
 | 文件 | 职责 |
 |------|------|
 | binance_fetcher.py | Binance K线数据 + mark_price + funding_rate + OI |
+| liquidation_collector.py | WebSocket 清算流采集 (forceOrder), 小时级聚合 |
+| oi_collector.py | REST API OI 快照 + Funding 历史定时采集 |
 | live_runner.py | 实盘入口 + 多TF信号检测 + 共识算法 |
 | live_signal_generator.py | 实盘信号生成器 |
 | app.py | Flask Web 应用 + API 路由 |
@@ -1364,6 +1778,23 @@ P13 连续追踪止盈通过渐进式回撤容忍 (60%→30%) 消除了硬阈值
 | B1b 误杀 neutral short | IS WR=68% PnL=+$985 被禁止 | 评估 neutral:70-80 |
 | P24 截断 trend profit | $9,121→$374 | 回退 -15%→-18% |
 | OOS 无 short 交易 | v9 新特性零验证 | P35: 扩展 OOS 窗口 |
+
+### v9.0.1 → v11.0 (三阶段优化路线图, 2026-02-16)
+
+| 变更 | 说明 | Phase | 关联 P# |
+|------|------|-------|--------|
+| **MAE 校准器** | `mae_calibrator.py`: MAE P90 分布分析 → ATR mult 数据驱动校准 | Phase 1 | P32, P1-4 |
+| **Soft Anti-Squeeze** | Sigmoid 连续惩罚替代硬门控 (w_fz/w_oi/w_imb 加权 z-score) | Phase 1 | P0-1 |
+| **反手验证** | `reverse_hand_stats` 计数器集成回测输出 | Phase 1 | — |
+| **Score Calibration** | `score_calibrator.py`: PAV isotonic regression, SS→p(win)+E[R] | Phase 2 | P1-1 |
+| **P18 Shrinkage** | λ×w_global + (1-λ)×w_regime, λ 随样本量自适应 | Phase 2 | P1-2 |
+| **Rolling Percentile Regime** | 动态 percentile 替代固定 vol/trend 阈值 (80th, 2160 bars) | Phase 2 | P31 |
+| **Walk-Forward 管道** | `walk_forward_pipeline.py`: IS/OOS 滚动窗口, 聚合泛化指标 | Phase 3 | P15 |
+| **统计验证** | `stat_validation.py`: PSR + DSR + PBO (CSCV), 无外部 ML 依赖 | Phase 3 | — |
+| **清算流采集** | `liquidation_collector.py`: WebSocket forceOrder 实时采集 + Parquet | Phase 3 | P0-2 |
+| **OI 自采集** | `oi_collector.py`: REST API 定时采集, 解决 30 天限制 | Phase 3 | P0-2, P28 |
+| **v5 配置更新** | 13 个新参数 (soft_antisqueeze, shrinkage, dynamic_regime) | 全部 | — |
+| **依赖新增** | `websocket-client` (清算流采集 WebSocket 连接) | Phase 3 | — |
 
 ---
 
@@ -2020,30 +2451,30 @@ else: SLIPPAGE = 0.001                        # 0.10% default
 - Bootstrap: p=0.45 (pPF), p=0.47 (Calmar) — **不显著**
 - 压力测试: ✅ 全场景 pPF>1.0
 
-#### H.2.3 第三类: v11 Phase 1 (MAE 校准 + Anti-Squeeze Soft + 反手)
+#### H.2.3 第三类: v11 Phase 1 (MAE 校准 + Anti-Squeeze Soft + 反手) — ✅ 代码已实现
 
-脚本: `run_v11_phase1.py` — **从未执行**
+脚本: `run_v11_phase1.py` — 实验待执行, 但核心模块已实现并部署
 
-| 实验 | 描述 | 关联 P# | 配置差异 |
+| 实验 | 描述 | 关联 P# | 实现状态 |
 |------|------|--------|---------|
-| E0 | v10.2 生产基线 | — | 当前 prod 配置 |
-| E1 | MAE-calibrated ATR mults | P32, P1-4 | 用盈利单 MAE₉₀ 校准 regime-specific ATR mult |
-| E2 | Anti-Squeeze soft penalty | P0-1 | 连续 sigmoid 替代硬门控 |
-| E3 | open_dominance 1.5→1.3 | — | 放宽开仓比率, 验证反手逻辑 |
-| E4 | Phase 1 组合 (E1+E2+E3) | — | 完整 Phase 1 |
+| E0 | v10.2 生产基线 | — | ✅ 当前 prod 配置 |
+| E1 | MAE-calibrated ATR mults | P32, P1-4 | ✅ `mae_calibrator.py` 已实现 |
+| E2 | Anti-Squeeze soft penalty | P0-1 | ✅ `use_soft_antisqueeze=True` 已启用 |
+| E3 | open_dominance 1.5→1.3 | — | ✅ `reverse_hand_stats` 已集成 |
+| E4 | Phase 1 组合 (E1+E2+E3) | — | 🔬 待运行实验 |
 
-#### H.2.4 第四类: v11 Phase 2 (Score 校准 + P18 Shrinkage + Rolling Regime)
+#### H.2.4 第四类: v11 Phase 2 (Score 校准 + P18 Shrinkage + Rolling Regime) — ✅ 代码已实现
 
-脚本: `run_v11_phase2.py` — **从未执行**
+脚本: `run_v11_phase2.py` — 实验待执行, 但核心模块已实现并部署
 
-| 实验 | 描述 | 关联 P# | 配置差异 |
+| 实验 | 描述 | 关联 P# | 实现状态 |
 |------|------|--------|---------|
-| E0 | Baseline (v10.2 + Phase1 soft) | — | 含 soft anti-squeeze |
-| E1 | Score Calibration (isotonic regression SS→p(win), E[R]) | P1-1 | `use_score_calibration=True` |
-| E2 | P18 Shrinkage (w = (1-λ)×w_base + λ×w_regime, λ=0.3) | P1-2 | `use_regime_adaptive_fusion=True`, shrinkage |
-| E3 | Rolling Percentile Regime (动态阈值) | P31 | `use_rolling_percentile_regime=True` |
-| E4 | Phase 2 full (E1+E2+E3) | — | 完整 Phase 2 |
-| E5 | Phase 2 conservative (E2+E3) | — | 无 score calibration |
+| E0 | Baseline (v10.2 + Phase1 soft) | — | ✅ 含 soft anti-squeeze |
+| E1 | Score Calibration (isotonic regression SS→p(win), E[R]) | P1-1 | ✅ `score_calibrator.py` 已实现 |
+| E2 | P18 Shrinkage (w = (1-λ)×w_base + λ×w_regime, λ=0.3) | P1-2 | ✅ `p18_shrinkage_*` 参数已加入 v5 |
+| E3 | Rolling Percentile Regime (动态阈值) | P31 | ✅ `use_dynamic_regime_thresholds=True` |
+| E4 | Phase 2 full (E1+E2+E3) | — | 🔬 待运行实验 |
+| E5 | Phase 2 conservative (E2+E3) | — | 🔬 待运行实验 |
 
 #### H.2.5 第五类: 新增代码工作 (附录 F/G 审计产出)
 
@@ -2073,7 +2504,8 @@ else: SLIPPAGE = 0.001                        # 0.10% default
 
 | 工作 | 状态 | 优先级 | 备注 |
 |------|------|--------|------|
-| OI 数据定时抓取管道 (P0-2) | 未实现 | P1 | Binance API 限 30 天; 需 cron 每日抓取积累 |
+| OI 数据定时抓取管道 (P0-2) | ✅ **已实现** | P1 | `oi_collector.py` — 支持快照/回填/守护模式 |
+| 清算流数据采集 (P0-2) | ✅ **已实现** | P1 | `liquidation_collector.py` — WebSocket forceOrder 实时采集 |
 | 自适应滑点 (vol-regime 驱动) | 未实现 | P3 | 影响小 (固定 0.1% 已有压力测试覆盖) |
 | TF 权重 lead-lag 校准 | 未实现 | P3 | 大型研究项目; 高过拟合风险 |
 
@@ -2132,18 +2564,33 @@ else: SLIPPAGE = 0.001                        # 0.10% default
 | 压力测试 (fee×2) | pPF > 1.0 | ✅ 通过 | 达标 |
 | OOS PF | > 1.0 | 无 short 交易, 无法验证 | 需 P35 扩展 |
 
-### H.5 已完成项目汇总 (v10.0-v10.2)
+### H.5 已完成项目汇总 (v10.0-v11.0)
 
 | 版本 | 已完成 P# | 关键特性 |
 |------|----------|---------|
 | v10.0 | P13 连续追踪基础 | Soft Veto + Leg Budget 5×2 + Funding-in-PnL |
 | v10.1 | P21 (放开) + ATR-SL | ATR-SL regime-specific mults; risk_per_trade 2.5% |
 | v10.2 | Regime Sigmoid + MAE + TP禁 | Regime 连续化; MAE 追踪; 趋势禁 TP; 5×2 Leg Budget |
+| **v11.0** | **三阶段路线图** | MAE 校准 + Soft Anti-Squeeze + Score Calibration + Shrinkage + Rolling Regime + WFO + DSR/PSR + 清算流/OI 采集 |
+
+**v11.0 新增实现** (2026-02-16):
+- ✅ Phase 1a: MAE 校准器 (`mae_calibrator.py`)
+- ✅ Phase 1b: Anti-Squeeze Soft Penalty (`use_soft_antisqueeze=True`)
+- ✅ Phase 1c: 反手逻辑回测验证 (`reverse_hand_stats`)
+- ✅ Phase 2a: Score Calibration (`score_calibrator.py`)
+- ✅ Phase 2b: P18 Shrinkage (`p18_shrinkage_max_lambda=0.40`)
+- ✅ Phase 2c: Rolling Percentile Regime (`use_dynamic_regime_thresholds=True`)
+- ✅ Phase 3a: Walk-Forward 管道 (`walk_forward_pipeline.py`)
+- ✅ Phase 3b: 统计验证 PSR/DSR/PBO (`stat_validation.py`)
+- ✅ Phase 3c: 清算流采集 (`liquidation_collector.py`)
+- ✅ Phase 3d: OI 自采集 (`oi_collector.py`)
 
 **已完成的实验/验证任务**: P0 (OOS 验证), P1/P2 (敏感度), P3 (退出消融), P4 (六书判别力), P16 (Cohen's d 分析)
 
-**已关闭/拒绝的特性**: P6 (Ghost Cooldown), P7 (24h 方向门控), P8 (结构确认硬门槛), P9 (Regime 调权), P10 (Fast-fail), P12 (动态 Regime 阈值), P14 (多头折扣)
+**已关闭/拒绝的特性**: P6 (Ghost Cooldown), P7 (24h 方向门控), P8 (结构确认硬门槛), P9 (Regime 调权), P10 (Fast-fail), P14 (多头折扣)
+
+> **注意**: P12 (动态 Regime 阈值) 之前在 AB 测试中关闭 (OOS -1.23%), 但 v11 Phase 2c 以改进形式重新启用 (滚动百分位 + 2160 bars 窗口), 需运行实验验证效果是否改善。
 
 ### H.6 版本说明
 
-本附录基于 2026-02-15 代码快照。所有脚本路径和行号引用在该日期有效。随着阶段 1-4 逐步执行, 本附录将持续更新进度状态。
+本附录最后更新于 2026-02-16 (v11.0 三阶段优化路线图实施后)。所有脚本路径在该日期有效。v11 新增模块已部署生产，但实验脚本尚未全部执行 — 需运行 `run_v11_phase1.py` 和 `run_v11_phase2.py` 获取实验数据。

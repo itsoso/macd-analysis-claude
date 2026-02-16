@@ -13,6 +13,30 @@ import traceback
 from datetime import datetime, timedelta
 from typing import Optional, Dict
 
+try:
+    import numpy as np
+    _HAS_NUMPY = True
+except ImportError:
+    _HAS_NUMPY = False
+
+
+class _NumpyEncoder(json.JSONEncoder):
+    """处理 numpy 类型的 JSON 编码器"""
+    def default(self, obj):
+        if _HAS_NUMPY:
+            if isinstance(obj, (np.bool_,)):
+                return bool(obj)
+            if isinstance(obj, (np.integer,)):
+                return int(obj)
+            if isinstance(obj, (np.floating,)):
+                return float(obj)
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+        # 兜底: 尝试常见类型转换
+        if hasattr(obj, 'item'):
+            return obj.item()
+        return super().default(obj)
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from live_config import LiveTradingConfig, TradingPhase, StrategyConfig
@@ -1175,7 +1199,7 @@ class LiveTradingEngine:
         os.makedirs(self.config.data_dir, exist_ok=True)
         filepath = os.path.join(self.config.data_dir, "engine_state.json")
         with open(filepath, 'w') as f:
-            json.dump(state, f, indent=2, ensure_ascii=False)
+            json.dump(state, f, indent=2, ensure_ascii=False, cls=_NumpyEncoder)
 
         # 同步保存风控状态
         try:
