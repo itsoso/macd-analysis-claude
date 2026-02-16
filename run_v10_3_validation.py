@@ -277,7 +277,10 @@ def bootstrap_delta(base_values: np.ndarray, var_values: np.ndarray, n: int = 10
         b_pf = _calc_pf([{"action": "CLOSE_SHORT", "pnl": x} for x in b], {"CLOSE_SHORT"})
         v_pf = _calc_pf([{"action": "CLOSE_SHORT", "pnl": x} for x in v], {"CLOSE_SHORT"})
         deltas[i] = v_pf - b_pf
-    delta_obs = float(np.mean(var_values) - np.mean(base_values))
+    # 观测差值与 CI 保持同口径：都用 PF 差值，而不是均值PnL差值。
+    base_pf_obs = _calc_pf([{"action": "CLOSE_SHORT", "pnl": x} for x in base_values], {"CLOSE_SHORT"})
+    var_pf_obs = _calc_pf([{"action": "CLOSE_SHORT", "pnl": x} for x in var_values], {"CLOSE_SHORT"})
+    delta_obs = float(var_pf_obs - base_pf_obs)
     if delta_obs >= 0:
         p_val = float(np.mean(deltas <= 0))
     else:
