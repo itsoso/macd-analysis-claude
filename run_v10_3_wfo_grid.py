@@ -87,6 +87,11 @@ def main():
     p.add_argument("--neutral-short-thresholds", default="45,60,999")
     p.add_argument("--cooldowns", default="4,6")
     p.add_argument("--risk-pcts", default="0.020,0.025")
+    p.add_argument(
+        "--neutral-short-budgets",
+        default="0.10",
+        help="risk_budget_neutral_short 候选列表，逗号分隔",
+    )
     p.add_argument("--override", action="append", default=[], help="基线覆盖 key=value")
     p.add_argument("--output-dir", default="logs/v10_3_wfo_grid")
     args = p.parse_args()
@@ -117,12 +122,15 @@ def main():
     shorts = _parse_int_list(args.neutral_short_thresholds)
     cds = _parse_int_list(args.cooldowns)
     rps = _parse_float_list(args.risk_pcts)
-    combos = list(product(longs, shorts, cds, rps))
+    nbs = _parse_float_list(args.neutral_short_budgets)
+    combos = list(product(longs, shorts, cds, rps, nbs))
 
     print(f"组合总数: {len(combos)}")
     rows = []
-    for i, (lt, nst, cd, rp) in enumerate(combos, 1):
+    for i, (lt, nst, cd, rp, nb) in enumerate(combos, 1):
         cfg = _apply_combo(base_cfg, lt, nst, cd, rp)
+        cfg["risk_budget_neutral_short"] = float(nb)
+        cfg["use_leg_risk_budget"] = True
         full_res = run_once(all_data, all_signals, cfg, start_ts, end_ts)
         full_m = _extract_metrics(full_res, start_ts, end_ts)
 
@@ -154,6 +162,7 @@ def main():
             "neutral_short_threshold": int(nst),
             "cooldown": int(cd),
             "risk_per_trade_pct": float(rp),
+            "risk_budget_neutral_short": float(nb),
             "full_return_pct": float(full_m["return_pct"]),
             "full_portfolio_pf": float(full_m["portfolio_pf"]),
             "full_contract_pf": float(full_m["contract_pf"]),
@@ -163,7 +172,7 @@ def main():
         }
         rows.append(row)
         print(
-            f"[{i:02d}/{len(combos)}] lt={lt} nst={nst} cd={cd} rp={rp:.3f} | "
+            f"[{i:02d}/{len(combos)}] lt={lt} nst={nst} cd={cd} rp={rp:.3f} nbs={nb:.3f} | "
             f"WFO(win={win_ratio:.1%},medPPF={median_ppf:.3f},pass={pass_flag}) | "
             f"Full(Ret={row['full_return_pct']:+.2f}%,pPF={row['full_portfolio_pf']:.3f})"
         )
@@ -187,6 +196,7 @@ def main():
             "neutral_short_thresholds": shorts,
             "cooldowns": cds,
             "risk_pcts": rps,
+            "neutral_short_budgets": nbs,
             "train_months": args.train_months,
             "test_months": args.test_months,
             "num_combos": len(combos),
@@ -215,4 +225,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
