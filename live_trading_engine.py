@@ -1224,8 +1224,11 @@ class LiveTradingEngine:
             self.total_bars = state.get("total_bars", 0)
             self._cumulative_funding = state.get("cumulative_funding", 0)
 
-            # 恢复持仓
-            for side, pos_data in state.get("positions", {}).items():
+            # 恢复持仓 (兼容 dict 和 list 格式)
+            raw_positions = state.get("positions", {})
+            if isinstance(raw_positions, list):
+                raw_positions = {}  # 空列表或异常格式 → 视为无持仓
+            for side, pos_data in raw_positions.items():
                 self.positions[side] = Position(
                     side=pos_data["side"],
                     entry_price=pos_data["entry_price"],

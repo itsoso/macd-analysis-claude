@@ -1677,7 +1677,7 @@ def api_live_reset_stats():
             eng['realized_pnl'] = 0
             eng['unrealized_pnl'] = 0
             eng['frozen_margin'] = 0
-            eng['positions'] = []
+            eng['positions'] = {}
             eng['total_trades'] = 0
             with open(engine_file, 'w') as f:
                 json.dump(eng, f, indent=2, ensure_ascii=False)
