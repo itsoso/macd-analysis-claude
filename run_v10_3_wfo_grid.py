@@ -20,7 +20,9 @@ from typing import Dict, List
 import pandas as pd
 
 from backtest_multi_tf_daily import _build_default_config, _scale_runtime_config
+from optimize_six_book import _build_tf_score_index
 from run_v10_3_validation import (
+    NEEDED_TFS,
     PRIMARY_TF,
     _extract_metrics,
     _parse_overrides,
@@ -131,12 +133,13 @@ def main():
         cfg = _apply_combo(base_cfg, lt, nst, cd, rp)
         cfg["risk_budget_neutral_short"] = float(nb)
         cfg["use_leg_risk_budget"] = True
-        full_res = run_once(all_data, all_signals, cfg, start_ts, end_ts)
+        tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, cfg)
+        full_res = run_once(all_data, all_signals, cfg, start_ts, end_ts, tf_score_map=tf_score_map)
         full_m = _extract_metrics(full_res, start_ts, end_ts)
 
         wfo_rows = []
         for tr_s, tr_e, te_s, te_e in windows:
-            te_res = run_once(all_data, all_signals, cfg, te_s, te_e)
+            te_res = run_once(all_data, all_signals, cfg, te_s, te_e, tf_score_map=tf_score_map)
             te_m = _extract_metrics(te_res, te_s, te_e)
             wfo_rows.append(
                 {

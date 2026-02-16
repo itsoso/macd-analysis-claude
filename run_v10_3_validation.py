@@ -228,9 +228,11 @@ def run_once(
     end: pd.Timestamp,
     fee_mult: float = 1.0,
     slippage_abs: float | None = None,
+    tf_score_map: dict | None = None,
 ) -> dict:
     cfg = dict(base_config)
-    tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, cfg)
+    if tf_score_map is None:
+        tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, cfg)
     with cost_scenario(fee_mult=fee_mult, slippage_abs=slippage_abs):
         result = run_strategy_multi_tf(
             primary_df=all_data[PRIMARY_TF],
@@ -343,10 +345,14 @@ def main():
     variant_cfg = dict(base_cfg)
     variant_cfg.update(_parse_overrides(args.variant_override))
 
+    # tf_score_index 构建代价高（searchsorted on timestamps），按配置预构建并复用。
+    base_tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, base_cfg)
+    var_tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, variant_cfg)
+
     # C1: 扩样基线重测
     print("\n[1/4] 扩样基线重测...")
-    base_res = run_once(all_data, all_signals, base_cfg, start_ts, end_ts)
-    var_res = run_once(all_data, all_signals, variant_cfg, start_ts, end_ts)
+    base_res = run_once(all_data, all_signals, base_cfg, start_ts, end_ts, tf_score_map=base_tf_score_map)
+    var_res = run_once(all_data, all_signals, variant_cfg, start_ts, end_ts, tf_score_map=var_tf_score_map)
     base_m = _extract_metrics(base_res, start_ts, end_ts)
     var_m = _extract_metrics(var_res, start_ts, end_ts)
     print(f"  baseline: Ret={base_m['return_pct']:+.2f}% pPF={base_m['portfolio_pf']:.3f} "
@@ -359,7 +365,7 @@ def main():
     windows = build_monthly_windows(args.start, args.end, args.train_months, args.test_months)
     wfo_rows = []
     for i, (tr_s, tr_e, te_s, te_e) in enumerate(windows, 1):
-        te_res = run_once(all_data, all_signals, variant_cfg, te_s, te_e)
+        te_res = run_once(all_data, all_signals, variant_cfg, te_s, te_e, tf_score_map=var_tf_score_map)
         te_m = _extract_metrics(te_res, te_s, te_e)
         wfo_rows.append(
             {
@@ -400,7 +406,16 @@ def main():
     ]
     stress_rows = []
     for name, fee_mult, slip in stress_cases:
-        rs = run_once(all_data, all_signals, variant_cfg, start_ts, end_ts, fee_mult=fee_mult, slippage_abs=slip)
+        rs = run_once(
+            all_data,
+            all_signals,
+            variant_cfg,
+            start_ts,
+            end_ts,
+            fee_mult=fee_mult,
+            slippage_abs=slip,
+            tf_score_map=var_tf_score_map,
+        )
         m = _extract_metrics(rs, start_ts, end_ts)
         stress_rows.append(
             {
@@ -468,4 +483,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -447,10 +447,10 @@ class StrategyConfig:
     use_partial_tp_2: bool = field(default_factory=lambda: _resolve_param("use_partial_tp_2", True))
     partial_tp_2: float = 0.50
     partial_tp_2_pct: float = 0.30
-    use_atr_sl: bool = False            # ATR自适应止损(A/B证明对ETH无效,保留代码供其他币种)
-    atr_sl_mult: float = 2.5            # ATR倍数: 2.5倍ATR作为止损距离
-    atr_sl_floor: float = -0.25         # ATR止损下限(最宽, 高波动时)
-    atr_sl_ceil: float = -0.15          # ATR止损上限(最窄, 低波动时)
+    use_atr_sl: bool = field(default_factory=lambda: _resolve_param("use_atr_sl", False))
+    atr_sl_mult: float = field(default_factory=lambda: _resolve_param("atr_sl_mult", 2.5))
+    atr_sl_floor: float = field(default_factory=lambda: _resolve_param("atr_sl_floor", -0.25))
+    atr_sl_ceil: float = field(default_factory=lambda: _resolve_param("atr_sl_ceil", -0.15))
     # [已移除] use_short_suppress: A/B+param_sweep双重验证完全零效果(SS>=42已覆盖)
     # Regime-aware 做空抑制: 在 trend/low_vol_trend regime 中提高做空门槛
     # 数据支持: run#32 regime分析显示 73% 止损亏损来自这两个 regime
@@ -571,13 +571,13 @@ class StrategyConfig:
     anti_squeeze_taker_imb_threshold: float = 0.12   # taker imbalance 阈值
     micro_mode_override: bool = True
     # V11 Soft Anti-Squeeze: 将硬门控改为连续 sigmoid 惩罚
-    use_soft_antisqueeze: bool = True                 # v11: 默认启用 (替代硬门控)
-    soft_antisqueeze_w_fz: float = 0.5               # funding z 权重
-    soft_antisqueeze_w_oi: float = 0.3               # OI z 权重
-    soft_antisqueeze_w_imb: float = 0.2              # taker imbalance 权重
-    soft_antisqueeze_midpoint: float = 1.5           # sigmoid 中点
-    soft_antisqueeze_steepness: float = 2.0          # sigmoid 陡度
-    soft_antisqueeze_max_discount: float = 0.50      # 最大折扣
+    use_soft_antisqueeze: bool = field(default_factory=lambda: _resolve_param("use_soft_antisqueeze", True))
+    soft_antisqueeze_w_fz: float = field(default_factory=lambda: _resolve_param("soft_antisqueeze_w_fz", 0.5))
+    soft_antisqueeze_w_oi: float = field(default_factory=lambda: _resolve_param("soft_antisqueeze_w_oi", 0.3))
+    soft_antisqueeze_w_imb: float = field(default_factory=lambda: _resolve_param("soft_antisqueeze_w_imb", 0.2))
+    soft_antisqueeze_midpoint: float = field(default_factory=lambda: _resolve_param("soft_antisqueeze_midpoint", 1.5))
+    soft_antisqueeze_steepness: float = field(default_factory=lambda: _resolve_param("soft_antisqueeze_steepness", 2.0))
+    soft_antisqueeze_max_discount: float = field(default_factory=lambda: _resolve_param("soft_antisqueeze_max_discount", 0.50))
 
     # ── 双引擎(趋势/反转) ──
     use_dual_engine: bool = True
@@ -738,10 +738,10 @@ class StrategyConfig:
 
     # ── P12: 动态 Regime 阈值 ──
     # 替代固定 vol/trend 阈值, 使用滚动窗口百分位数
-    use_dynamic_regime_thresholds: bool = False
-    dynamic_regime_lookback_bars: int = 2160    # 90天 * 24h = 2160 bars
-    dynamic_regime_vol_quantile: float = 0.80   # 波动率 80th percentile
-    dynamic_regime_trend_quantile: float = 0.80 # 趋势强度 80th percentile
+    use_dynamic_regime_thresholds: bool = field(default_factory=lambda: _resolve_param("use_dynamic_regime_thresholds", False))
+    dynamic_regime_lookback_bars: int = field(default_factory=lambda: _resolve_param("dynamic_regime_lookback_bars", 2160))
+    dynamic_regime_vol_quantile: float = field(default_factory=lambda: _resolve_param("dynamic_regime_vol_quantile", 0.80))
+    dynamic_regime_trend_quantile: float = field(default_factory=lambda: _resolve_param("dynamic_regime_trend_quantile", 0.80))
 
     # ── P13: 追踪止盈连续化 ──
     # 替代离散门槛触发, 改为连续动态回撤容忍
@@ -815,36 +815,36 @@ class StrategyConfig:
     # ── V9: Leg 级风险预算（regime × direction） ──
     # 默认关闭；开启后只影响开仓保证金分配，不改变信号本身
     use_leg_risk_budget: bool = field(default_factory=lambda: _resolve_param("use_leg_risk_budget", False))
-    risk_budget_neutral_long: float = 1.00
+    risk_budget_neutral_long: float = field(default_factory=lambda: _resolve_param("risk_budget_neutral_long", 1.00))
     risk_budget_neutral_short: float = field(default_factory=lambda: _resolve_param("risk_budget_neutral_short", 1.00))
-    risk_budget_trend_long: float = 1.00
-    risk_budget_trend_short: float = 1.00
-    risk_budget_low_vol_trend_long: float = 1.00
-    risk_budget_low_vol_trend_short: float = 1.00
-    risk_budget_high_vol_long: float = 1.00
-    risk_budget_high_vol_short: float = 1.00
-    risk_budget_high_vol_choppy_long: float = 1.00
-    risk_budget_high_vol_choppy_short: float = 1.00
+    risk_budget_trend_long: float = field(default_factory=lambda: _resolve_param("risk_budget_trend_long", 1.00))
+    risk_budget_trend_short: float = field(default_factory=lambda: _resolve_param("risk_budget_trend_short", 1.00))
+    risk_budget_low_vol_trend_long: float = field(default_factory=lambda: _resolve_param("risk_budget_low_vol_trend_long", 1.00))
+    risk_budget_low_vol_trend_short: float = field(default_factory=lambda: _resolve_param("risk_budget_low_vol_trend_short", 1.00))
+    risk_budget_high_vol_long: float = field(default_factory=lambda: _resolve_param("risk_budget_high_vol_long", 1.00))
+    risk_budget_high_vol_short: float = field(default_factory=lambda: _resolve_param("risk_budget_high_vol_short", 1.00))
+    risk_budget_high_vol_choppy_long: float = field(default_factory=lambda: _resolve_param("risk_budget_high_vol_choppy_long", 1.00))
+    risk_budget_high_vol_choppy_short: float = field(default_factory=lambda: _resolve_param("risk_budget_high_vol_choppy_short", 1.00))
 
     # ── P25: MAE-driven 自适应止损 ──
     # 用历史 MAE (Maximum Adverse Excursion) 分布校准止损距离
     # stop_pnl_r = -MAE_P{quantile}(wins, regime, direction)
     # 优先级: structure_anchor > MAE > ATR-SL > regime_adaptive > fixed
-    use_mae_driven_sl: bool = False
-    mae_sl_quantile: str = 'p90'     # 使用赢单 MAE 的哪个分位数 (p50/p75/p90/p95)
-    mae_sl_floor: float = -0.35      # MAE 止损最宽限制
-    mae_sl_ceil: float = -0.04       # MAE 止损最窄限制
-    mae_sl_long_tighten: float = 0.85  # 多头止损收紧系数 (做多通常需要更紧止损)
+    use_mae_driven_sl: bool = field(default_factory=lambda: _resolve_param("use_mae_driven_sl", False))
+    mae_sl_quantile: str = field(default_factory=lambda: _resolve_param("mae_sl_quantile", 'p90'))
+    mae_sl_floor: float = field(default_factory=lambda: _resolve_param("mae_sl_floor", -0.35))
+    mae_sl_ceil: float = field(default_factory=lambda: _resolve_param("mae_sl_ceil", -0.04))
+    mae_sl_long_tighten: float = field(default_factory=lambda: _resolve_param("mae_sl_long_tighten", 0.85))
     # per-regime 止损 (pnl_r 单位, 负值, 由 mae_calibrator.py 校准)
     # 未设置的 regime 回退到 ATR-SL 或 fixed SL
-    mae_sl_neutral_short: float = 0.0     # 0=不启用, 非0=直接用此值
-    mae_sl_neutral_long: float = 0.0
-    mae_sl_trend_short: float = 0.0
-    mae_sl_trend_long: float = 0.0
-    mae_sl_low_vol_trend_short: float = 0.0
-    mae_sl_low_vol_trend_long: float = 0.0
-    mae_sl_high_vol_short: float = 0.0
-    mae_sl_high_vol_long: float = 0.0
+    mae_sl_neutral_short: float = field(default_factory=lambda: _resolve_param("mae_sl_neutral_short", 0.0))
+    mae_sl_neutral_long: float = field(default_factory=lambda: _resolve_param("mae_sl_neutral_long", 0.0))
+    mae_sl_trend_short: float = field(default_factory=lambda: _resolve_param("mae_sl_trend_short", 0.0))
+    mae_sl_trend_long: float = field(default_factory=lambda: _resolve_param("mae_sl_trend_long", 0.0))
+    mae_sl_low_vol_trend_short: float = field(default_factory=lambda: _resolve_param("mae_sl_low_vol_trend_short", 0.0))
+    mae_sl_low_vol_trend_long: float = field(default_factory=lambda: _resolve_param("mae_sl_low_vol_trend_long", 0.0))
+    mae_sl_high_vol_short: float = field(default_factory=lambda: _resolve_param("mae_sl_high_vol_short", 0.0))
+    mae_sl_high_vol_long: float = field(default_factory=lambda: _resolve_param("mae_sl_high_vol_long", 0.0))
     mae_sl_high_vol_choppy_short: float = 0.0
     mae_sl_high_vol_choppy_long: float = 0.0
 
@@ -882,13 +882,13 @@ class StrategyConfig:
     # 优势: 尾部可控, 几何增长对大亏极敏感, 控制单笔尾部后可安全加大风险预算
     use_risk_per_trade: bool = field(default_factory=lambda: _resolve_param("use_risk_per_trade", False))
     risk_per_trade_pct: float = field(default_factory=lambda: _resolve_param("risk_per_trade_pct", 0.015))    # 每笔最大风险占 equity 的 1.5%
-    risk_stop_mode: str = 'atr'          # 止损距离计算方式: 'atr' 或 'fixed'
-    risk_atr_mult_short: float = 2.5     # 空单: 止损 = entry ± ATR × 倍数
-    risk_atr_mult_long: float = 2.0      # 多单: 止损 = entry ± ATR × 倍数
+    risk_stop_mode: str = field(default_factory=lambda: _resolve_param("risk_stop_mode", 'atr'))
+    risk_atr_mult_short: float = field(default_factory=lambda: _resolve_param("risk_atr_mult_short", 2.5))
+    risk_atr_mult_long: float = field(default_factory=lambda: _resolve_param("risk_atr_mult_long", 2.0))
     risk_fixed_stop_short: float = 0.04  # 空单固定止损距离 4% (当 mode='fixed')
     risk_fixed_stop_long: float = 0.03   # 多单固定止损距离 3% (当 mode='fixed')
-    risk_max_margin_pct: float = 0.50    # 仓位上限 = equity × 50% (防极端)
-    risk_min_margin_pct: float = 0.05    # 仓位下限 = equity × 5% (避免过小)
+    risk_max_margin_pct: float = field(default_factory=lambda: _resolve_param("risk_max_margin_pct", 0.50))
+    risk_min_margin_pct: float = field(default_factory=lambda: _resolve_param("risk_min_margin_pct", 0.05))
     # ── v10.3 D1: 结构锚定 + ATR 包络止损 ──
     use_structure_anchor_sl: bool = field(default_factory=lambda: _resolve_param("use_structure_anchor_sl", False))
     structure_anchor_lookback: int = field(default_factory=lambda: _resolve_param("structure_anchor_lookback", 48))
