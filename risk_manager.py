@@ -422,6 +422,37 @@ class RiskManager:
                 pass
         return RiskState()
 
+    def reset_stats(self, new_capital: float = 0):
+        """重置累计统计 (资金变更或重新开始时调用)
+
+        Parameters
+        ----------
+        new_capital : float
+            新的初始资金。如果为 0, 使用 self.initial_capital。
+        """
+        cap = new_capital if new_capital > 0 else self.initial_capital
+        self.state.peak_equity = cap
+        self.state.daily_pnl = 0
+        self.state.daily_date = ""
+        self.state.weekly_pnl = 0
+        self.state.weekly_start = ""
+        self.state.consecutive_losses = 0
+        self.state.is_paused = False
+        self.state.pause_reason = ""
+        self.state.pause_time = ""
+        self.state.kill_switch_active = False
+        self.state.recent_trades = []
+        self.state.total_trades = 0
+        self.state.total_wins = 0
+        self.state.total_losses = 0
+        self.state.total_pnl = 0
+        self.state.total_fees = 0
+        self.state.max_drawdown = 0
+        self.initial_capital = cap
+        self._save_state()
+        if self.logger:
+            self.logger.info(f"风控统计已重置, 新初始资金: ${cap:,.2f}")
+
     def get_status_report(self) -> dict:
         """获取风控状态报告"""
         return {

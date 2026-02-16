@@ -1639,6 +1639,59 @@ def api_live_history():
     return jsonify({"success": True, **payload})
 
 
+@app.route('/api/live/reset-stats', methods=['POST'])
+def api_live_reset_stats():
+    """重置风控/绩效统计 (资金变更或重新开始时调用)"""
+    data_dir = os.path.join(BASE_DIR, 'data', 'live')
+
+    # 可选: 传入新初始资金
+    body = request.get_json(silent=True) or {}
+    new_capital = float(body.get('new_capital', 0))
+
+    reset_items = []
+
+    # 1. 重置 risk_state.json
+    risk_file = os.path.join(data_dir, 'risk_state.json')
+    if os.path.exists(risk_file):
+        os.remove(risk_file)
+        reset_items.append('risk_state.json')
+
+    # 2. 重置 performance.json
+    perf_file = os.path.join(data_dir, 'performance.json')
+    if os.path.exists(perf_file):
+        os.remove(perf_file)
+        reset_items.append('performance.json')
+
+    # 3. 重置 engine_state.json 中的累计字段 (保留引擎运行状态)
+    engine_file = os.path.join(data_dir, 'engine_state.json')
+    if os.path.exists(engine_file):
+        try:
+            with open(engine_file, 'r') as f:
+                eng = json.load(f)
+            # 清理累计统计, 保留当前余额和运行状态
+            if new_capital > 0:
+                eng['usdt'] = new_capital
+                eng['equity'] = new_capital
+                eng['initial_capital'] = new_capital
+            eng['total_pnl'] = 0
+            eng['realized_pnl'] = 0
+            eng['unrealized_pnl'] = 0
+            eng['frozen_margin'] = 0
+            eng['positions'] = []
+            eng['total_trades'] = 0
+            with open(engine_file, 'w') as f:
+                json.dump(eng, f, indent=2, ensure_ascii=False)
+            reset_items.append('engine_state.json (统计已清零)')
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    msg = f"已重置: {', '.join(reset_items)}" if reset_items else "无文件需要重置"
+    if new_capital > 0:
+        msg += f" (新初始资金: ${new_capital:,.2f})"
+
+    return jsonify({"success": True, "message": msg, "reset_items": reset_items})
+
+
 @app.route('/api/live/monitor_rules')
 def api_live_monitor_rules_get():
     """读取实盘监控规则阈值。"""

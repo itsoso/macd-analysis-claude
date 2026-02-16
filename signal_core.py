@@ -400,17 +400,50 @@ def _fuse_scores(mode, config,
         veto_dampen = config.get("veto_dampen", 0.30)
         use_soft_veto = config.get("use_soft_veto", False)
 
+        # ── GPT-4.3: CS-KDJ 去相关 ──
+        # 模式: none(默认)/max_of_two/redundancy_discount/cs_only/kdj_only
+        _decorr = config.get("cs_kdj_decorr", "none")
+        _decorr_discount = config.get("cs_kdj_redundancy_discount", 0.6)
+
         # 四书加成 (始终计算)
         sb = 0
         if bb_sell >= 15: sb += bb_bonus
         if vp_sell >= 15: sb += vp_bonus
-        if cs_sell >= 25: sb += cs_bonus
-        if kdj_sell >= 15: sb += kdj_bonus
         bb_ = 0
         if bb_buy >= 15: bb_ += bb_bonus
         if vp_buy >= 15: bb_ += vp_bonus
-        if cs_buy >= 25: bb_ += cs_bonus
-        if kdj_buy >= 15: bb_ += kdj_bonus
+
+        # CS + KDJ 加成 (带去相关)
+        _cs_sell_fire = cs_sell >= 25
+        _kdj_sell_fire = kdj_sell >= 15
+        _cs_buy_fire = cs_buy >= 25
+        _kdj_buy_fire = kdj_buy >= 15
+
+        if _decorr == "max_of_two":
+            if _cs_sell_fire or _kdj_sell_fire:
+                sb += max(cs_bonus if _cs_sell_fire else 0, kdj_bonus if _kdj_sell_fire else 0)
+            if _cs_buy_fire or _kdj_buy_fire:
+                bb_ += max(cs_bonus if _cs_buy_fire else 0, kdj_bonus if _kdj_buy_fire else 0)
+        elif _decorr == "redundancy_discount":
+            _cs_s = cs_bonus if _cs_sell_fire else 0
+            _kdj_s = kdj_bonus if _kdj_sell_fire else 0
+            _raw_s = _cs_s + _kdj_s
+            sb += _raw_s * _decorr_discount if (_cs_sell_fire and _kdj_sell_fire) else _raw_s
+            _cs_b = cs_bonus if _cs_buy_fire else 0
+            _kdj_b = kdj_bonus if _kdj_buy_fire else 0
+            _raw_b = _cs_b + _kdj_b
+            bb_ += _raw_b * _decorr_discount if (_cs_buy_fire and _kdj_buy_fire) else _raw_b
+        elif _decorr == "cs_only":
+            if _cs_sell_fire: sb += cs_bonus
+            if _cs_buy_fire: bb_ += cs_bonus
+        elif _decorr == "kdj_only":
+            if _kdj_sell_fire: sb += kdj_bonus
+            if _kdj_buy_fire: bb_ += kdj_bonus
+        else:
+            if _cs_sell_fire: sb += cs_bonus
+            if _kdj_sell_fire: sb += kdj_bonus
+            if _cs_buy_fire: bb_ += cs_bonus
+            if _kdj_buy_fire: bb_ += kdj_bonus
 
         if use_soft_veto:
             import math
@@ -728,15 +761,41 @@ def _vectorized_fuse_scores(mode, config, n,
         veto_dampen = config.get("veto_dampen", 0.30)
         use_soft_veto = config.get("use_soft_veto", False)
 
-        # 加成 (向量化, 始终计算)
+        # ── GPT-4.3: CS-KDJ 去相关 (向量化) ──
+        _decorr = config.get("cs_kdj_decorr", "none")
+        _decorr_discount = config.get("cs_kdj_redundancy_discount", 0.6)
+
+        # BB + VP bonus (不受去相关影响)
         sell_bonus = ((bb_sell >= 15).astype(np.float64) * bb_b +
-                      (vp_sell >= 15).astype(np.float64) * vp_b +
-                      (cs_sell >= 25).astype(np.float64) * cs_b +
-                      (kdj_sell >= 15).astype(np.float64) * kdj_b)
+                      (vp_sell >= 15).astype(np.float64) * vp_b)
         buy_bonus = ((bb_buy >= 15).astype(np.float64) * bb_b +
-                     (vp_buy >= 15).astype(np.float64) * vp_b +
-                     (cs_buy >= 25).astype(np.float64) * cs_b +
-                     (kdj_buy >= 15).astype(np.float64) * kdj_b)
+                     (vp_buy >= 15).astype(np.float64) * vp_b)
+
+        # CS + KDJ bonus (带去相关)
+        _cs_sell_fire = (cs_sell >= 25).astype(np.float64)
+        _kdj_sell_fire = (kdj_sell >= 15).astype(np.float64)
+        _cs_buy_fire = (cs_buy >= 25).astype(np.float64)
+        _kdj_buy_fire = (kdj_buy >= 15).astype(np.float64)
+
+        if _decorr == "max_of_two":
+            sell_bonus += np.maximum(_cs_sell_fire * cs_b, _kdj_sell_fire * kdj_b)
+            buy_bonus += np.maximum(_cs_buy_fire * cs_b, _kdj_buy_fire * kdj_b)
+        elif _decorr == "redundancy_discount":
+            _both_sell = _cs_sell_fire * _kdj_sell_fire
+            _raw_sell = _cs_sell_fire * cs_b + _kdj_sell_fire * kdj_b
+            sell_bonus += np.where(_both_sell > 0, _raw_sell * _decorr_discount, _raw_sell)
+            _both_buy = _cs_buy_fire * _kdj_buy_fire
+            _raw_buy = _cs_buy_fire * cs_b + _kdj_buy_fire * kdj_b
+            buy_bonus += np.where(_both_buy > 0, _raw_buy * _decorr_discount, _raw_buy)
+        elif _decorr == "cs_only":
+            sell_bonus += _cs_sell_fire * cs_b
+            buy_bonus += _cs_buy_fire * cs_b
+        elif _decorr == "kdj_only":
+            sell_bonus += _kdj_sell_fire * kdj_b
+            buy_bonus += _kdj_buy_fire * kdj_b
+        else:
+            sell_bonus += _cs_sell_fire * cs_b + _kdj_sell_fire * kdj_b
+            buy_bonus += _cs_buy_fire * cs_b + _kdj_buy_fire * kdj_b
 
         if use_soft_veto:
             _sv_k = config.get("soft_veto_steepness", 3.0)

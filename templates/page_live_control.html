@@ -470,6 +470,20 @@
         </button>
         <div class="output-box" id="killOutput"></div>
     </div>
+
+    <!-- 重置统计 -->
+    <div class="ctrl-card" style="border-color: rgba(255,170,0,0.3);">
+        <h3 style="color: #ffaa00;">🔄 重置统计数据</h3>
+        <p class="desc">清除累计盈亏、峰值权益、交易记录等统计数据。用于资金变更或重新开始时。</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input type="number" id="resetCapital" placeholder="新初始资金 (可选)" step="100" min="0"
+                   style="width:200px;padding:8px 12px;border-radius:6px;border:1px solid var(--border);background:var(--card-bg);color:var(--text-primary);font-size:13px;">
+            <button class="btn btn-outline" style="border-color:#ffaa00;color:#ffaa00;" onclick="resetStats()">
+                重置统计
+            </button>
+        </div>
+        <div class="output-box" id="resetOutput"></div>
+    </div>
 </div>
 
 <!-- Tab: 配置 -->
@@ -1295,6 +1309,30 @@ async function killSwitch() {
         showOutput('killOutput', '请求失败: ' + e.message);
     }
     document.getElementById('killBtn').disabled = false;
+}
+
+async function resetStats() {
+    const capitalInput = document.getElementById('resetCapital');
+    const newCapital = parseFloat(capitalInput.value) || 0;
+    const msg = newCapital > 0
+        ? `确认重置所有统计数据并设置初始资金为 $${newCapital.toLocaleString()}？`
+        : '确认重置所有统计数据？(峰值权益、累计盈亏、交易记录等将被清零)';
+    if (!confirm(msg)) return;
+    try {
+        const body = newCapital > 0 ? { new_capital: newCapital } : {};
+        const data = await apiCall('/api/live/reset-stats', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        showOutput('resetOutput', data.success ? '✅ ' + data.message : '❌ ' + (data.message || '重置失败'));
+        if (data.success) {
+            capitalInput.value = '';
+            setTimeout(() => refreshStatus(), 1000);
+        }
+    } catch(e) {
+        showOutput('resetOutput', '请求失败: ' + e.message);
+    }
 }
 
 // ============================================================

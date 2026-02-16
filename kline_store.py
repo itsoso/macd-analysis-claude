@@ -258,8 +258,10 @@ def download_klines(symbol='ETHUSDT', intervals=None,
             combined = new_df
 
         # 裁剪到目标范围
+        if not isinstance(combined.index, pd.DatetimeIndex):
+            combined.index = pd.to_datetime(combined.index)
         combined = combined[combined.index >= start_dt]
-        if combined.index.max() > end_dt:
+        if len(combined) > 0 and combined.index.max() > end_dt:
             combined = combined[combined.index <= end_dt]
 
         # 保存

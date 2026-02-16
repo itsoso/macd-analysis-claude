@@ -54,15 +54,15 @@ from multi_tf_consensus import fuse_tf_scores
 # ======================================================
 ALL_TIMEFRAMES = ['10m', '15m', '30m', '1h', '2h', '3h', '4h', '6h', '8h', '12h', '16h', '24h']
 
-def fetch_multi_tf_data(timeframes=None, days=60):
+def fetch_multi_tf_data(timeframes=None, days=60, symbol="ETHUSDT"):
     """获取多时间周期数据"""
     if timeframes is None:
         timeframes = ALL_TIMEFRAMES
     data = {}
     for tf in timeframes:
-        print(f"\n--- 获取 {tf} 数据 ---")
+        print(f"\n--- 获取 {symbol} {tf} 数据 ---")
         try:
-            df = fetch_binance_klines("ETHUSDT", interval=tf, days=days)
+            df = fetch_binance_klines(symbol, interval=tf, days=days)
             if df is not None and len(df) > 50:
                 df = add_all_indicators(df)
                 add_moving_averages(df, timeframe=tf)
@@ -847,6 +847,47 @@ def _run_strategy_core(
     atr_sl_ceil = config.get('atr_sl_ceil', -0.08)      # ATR止损最窄
     # v10.2: Regime 连续化 — SL/杠杆/阈值 sigmoid 平滑过渡
     use_regime_sigmoid = bool(config.get('use_regime_sigmoid', False))
+
+    # ── P25: MAE-driven 自适应止损 ──
+    # 用历史 MAE (Maximum Adverse Excursion) 分布校准止损距离:
+    #   stop_pnl_r = -MAE_P{quantile}(wins, regime, direction)
+    # 含义: 止损设在赢单最大回撤的 P75/P90, 避免被震出有利仓位
+    # 优先级: MAE > ATR-SL > regime_adaptive_sl > fixed_sl
+    use_mae_driven_sl = bool(config.get('use_mae_driven_sl', False))
+    mae_sl_quantile = str(config.get('mae_sl_quantile', 'p90'))  # p50/p75/p90/p95
+    mae_sl_floor = float(config.get('mae_sl_floor', -0.35))  # MAE止损最宽
+    mae_sl_ceil = float(config.get('mae_sl_ceil', -0.04))    # MAE止损最窄
+    mae_sl_long_tighten = float(config.get('mae_sl_long_tighten', 0.85))  # 多头止损收紧系数
+
+    # 构建 MAE 止损表: (regime, direction) → pnl_r
+    # 来源: mae_calibration_result.json 或 config 直接传入
+    _mae_sl_table = {}
+    _mae_sl_raw = config.get('mae_sl_table')
+    if use_mae_driven_sl and isinstance(_mae_sl_raw, dict):
+        # 格式: {'neutral_short': {'p75': -0.08, 'p90': -0.12, ...}, ...}
+        for bucket_key, quantiles in _mae_sl_raw.items():
+            if isinstance(quantiles, dict):
+                parts = bucket_key.rsplit('_', 1)
+                if len(parts) == 2:
+                    regime, direction = parts[0], parts[1]
+                    q_key = f'mae_{mae_sl_quantile}'
+                    q_val = quantiles.get(q_key, quantiles.get(mae_sl_quantile))
+                    if q_val is not None:
+                        sl_r = -abs(float(q_val))  # 确保为负值
+                        sl_r = max(mae_sl_floor, min(mae_sl_ceil, sl_r))
+                        _mae_sl_table[(regime, direction)] = sl_r
+    elif use_mae_driven_sl:
+        # 简化格式: config 直接传 mae_sl_{regime}_{direction} = pnl_r
+        _mae_regimes = ('neutral', 'trend', 'low_vol_trend', 'high_vol', 'high_vol_choppy')
+        _mae_directions = ('short', 'long')
+        for _mr in _mae_regimes:
+            for _md in _mae_directions:
+                _mk = f'mae_sl_{_mr}_{_md}'
+                _mv = config.get(_mk)
+                if _mv is not None:
+                    sl_r = -abs(float(_mv))
+                    sl_r = max(mae_sl_floor, min(mae_sl_ceil, sl_r))
+                    _mae_sl_table[(_mr, _md)] = sl_r
 
     # [已移除] use_short_suppress: A/B+param_sweep双重验证完全零效果
 
@@ -2225,6 +2266,8 @@ def _run_strategy_core(
         eng._stop_anchor_type = str(config.get('_stop_anchor_type'))
     elif use_structure_anchor_sl:
         eng._stop_anchor_type = "structure_atr"
+    elif use_mae_driven_sl and _mae_sl_table:
+        eng._stop_anchor_type = f"mae_{mae_sl_quantile}"
     elif use_risk_per_trade:
         eng._stop_anchor_type = f"risk_{risk_stop_mode}"
     elif use_atr_sl:
@@ -2461,6 +2504,17 @@ def _run_strategy_core(
         elif use_regime_adaptive_sl:
             # P24 fallback: 固定百分比 (仅当 ATR-SL 未启用时)
             actual_short_sl = regime_short_sl_map.get(_regime_label, short_sl)
+
+        # ── P25: MAE-driven 自适应止损 (覆盖 ATR-SL / regime_adaptive_sl) ──
+        # 直接用赢单 MAE 分位数作为止损, 比 ATR×mult 更精确
+        if use_mae_driven_sl and _mae_sl_table:
+            _mae_short_sl = _mae_sl_table.get((_regime_label, 'short'))
+            if _mae_short_sl is not None:
+                actual_short_sl = float(_mae_short_sl)
+            _mae_long_sl = _mae_sl_table.get((_regime_label, 'long'))
+            if _mae_long_sl is not None:
+                actual_long_sl = float(_mae_long_sl) * mae_sl_long_tighten
+
         # ── P18: Regime-Adaptive 六维融合权重 (从 book_features 重新融合) ──
         # v11 Phase 2b: Shrinkage mixture — w = (1-λ)*w_base + λ*w_regime
         #   λ = min(shrinkage_max_lambda, n_regime_trades / shrinkage_n_scale)
@@ -4718,16 +4772,23 @@ def get_all_variants():
 #   主函数
 # ======================================================
 def main():
-    trade_days = 30
+    import argparse
+    parser = argparse.ArgumentParser(description="六书融合多时间框架优化器")
+    parser.add_argument("--symbol", default="ETHUSDT", help="交易对 (默认 ETHUSDT)")
+    parser.add_argument("--days", type=int, default=60, help="回测天数 (默认 60)")
+    args = parser.parse_args()
+
+    symbol = args.symbol.upper()
+    trade_days = args.days
     print("=" * 120)
-    print("  六书融合多时间框架止盈止损优化器")
+    print(f"  六书融合多时间框架止盈止损优化器 | {symbol}")
     print("  基于六书(含KDJ)信号 · 12个时间周期 · 系统性参数搜索")
     print(f"  目标: 超越五书最优 α=+86.69%")
     print("=" * 120)
 
     # 获取所有时间框架数据
-    print("\n[1/5] 获取多时间框架数据...")
-    all_data = fetch_multi_tf_data(ALL_TIMEFRAMES, days=60)
+    print(f"\n[1/5] 获取 {symbol} 多时间框架数据...")
+    all_data = fetch_multi_tf_data(ALL_TIMEFRAMES, days=trade_days, symbol=symbol)
     available_tfs = sorted(all_data.keys(), key=lambda x: ALL_TIMEFRAMES.index(x) if x in ALL_TIMEFRAMES else 99)
     print(f"\n可用时间框架: {', '.join(available_tfs)}")
 
@@ -5278,8 +5339,8 @@ def main():
 
     output_clean = clean_for_json(output)
 
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'optimize_six_book_result.json')
+    result_name = f'optimize_six_book_result_{symbol}.json' if symbol != 'ETHUSDT' else 'optimize_six_book_result.json'
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), result_name)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(output_clean, f, ensure_ascii=False, default=str, indent=2)
     print(f"\n结果已保存: {path}")
