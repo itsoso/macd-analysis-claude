@@ -195,7 +195,7 @@ STRATEGY_PARAM_VERSIONS = {
     "v4": {  # v8.0 (B3+P13): v7.0 + 连续追踪止盈
         # ── 基础参数 (继承 v6.0) ──
         "short_threshold": 40,
-        "long_threshold": 25,
+        "long_threshold": 30,
         "short_sl": -0.20,
         "short_tp": 0.60,
         "long_sl": -0.10,
@@ -234,7 +234,7 @@ STRATEGY_PARAM_VERSIONS = {
         #
         # ── 基础参数 ──
         "short_threshold": 40,
-        "long_threshold": 25,
+        "long_threshold": 30,
         "short_sl": -0.20,          # 全局默认 (被 P24 regime SL 覆盖)
         "short_tp": 0.60,
         "long_sl": -0.10,
@@ -245,7 +245,7 @@ STRATEGY_PARAM_VERSIONS = {
         "short_trail": 0.19,
         "long_trail": 0.12,
         "trail_pullback": 0.50,
-        "cooldown": 6,
+        "cooldown": 4,
         #
         # ── v10: B1b 软化 — 恢复 B3 门槛 + leg budget 降权 ──
         # v9 B1b (neutral:999) 回测: IS PF=0.90 (<1.0), 误杀盈利信号
@@ -285,8 +285,26 @@ STRATEGY_PARAM_VERSIONS = {
         "atr_sl_mult_high_vol": 2.5,       # high_vol: 中等 (挤压风险)
         "atr_sl_mult_high_vol_choppy": 2.0,# high_vol_choppy: 紧 (震荡)
         #
-        # ── P24: 固定百分比止损 (ATR-SL 的 fallback) ──
-        "use_regime_adaptive_sl": True,    # ATR-SL 优先, P24 仅在 ATR 不可用时生效
+        # ── P25: MAE-driven 自适应止损 (覆盖 ATR-SL) ──
+        # A/B 实验 M4 P95 最优: OOS PF=2.27 (+0.24 vs 基线), Ret=+6.0% (+0.4pp)
+        # 含义: 止损设在赢单最大回撤 P95, 95% 赢单不被震出
+        "use_mae_driven_sl": True,
+        "mae_sl_quantile": "p95",
+        "mae_sl_floor": -0.35,
+        "mae_sl_ceil": -0.04,
+        "mae_sl_long_tighten": 0.85,
+        # per-regime 校准值 (mae_calibrator.py 输出, IS 2025-01~2026-01)
+        "mae_sl_neutral_short": 0.0951,    # neutral 空: ~9.5% 止损
+        "mae_sl_neutral_long": 0.0843,     # neutral 多: ~8.4% (×0.85=7.2%)
+        "mae_sl_trend_short": 0.0580,      # trend 空: ~5.8%
+        "mae_sl_trend_long": 0.0397,       # trend 多: ~4.0% (×0.85=3.4%)
+        "mae_sl_high_vol_short": 0.0756,   # high_vol 空: ~7.6%
+        "mae_sl_high_vol_long": 0.0993,    # high_vol 多: ~10.0% (×0.85=8.5%)
+        "mae_sl_low_vol_trend_short": 0.2232,  # low_vol_trend 空: ~22.3%
+        "mae_sl_low_vol_trend_long": 0.1071,   # low_vol_trend 多: ~10.7% (×0.85=9.1%)
+        #
+        # ── P24: 固定百分比止损 (ATR-SL/MAE 的 fallback) ──
+        "use_regime_adaptive_sl": True,    # ATR-SL/MAE 优先, P24 仅在两者不可用时生效
         "regime_neutral_short_sl": -0.12,
         "regime_trend_short_sl": -0.15,
         "regime_low_vol_trend_short_sl": -0.18,
@@ -296,7 +314,7 @@ STRATEGY_PARAM_VERSIONS = {
         # ── v10.1: P21 Risk-Per-Trade (仓位与止损绑定) ──
         # size = risk_budget / stop_distance → 止损放宽不增加单笔亏损
         "use_risk_per_trade": True,
-        "risk_per_trade_pct": 0.025,       # 每笔最大风险 2.5% 权益 (原 1.5% 太保守)
+        "risk_per_trade_pct": 0.018,       # v10.3 全区间复验: 降低风险以同时通过WFO与压力测试
         "risk_stop_mode": "atr",           # 使用 ATR 计算止损距离
         "risk_atr_mult_short": 3.0,        # P21 内部 fallback (正常由 actual_sl 绑定覆盖)
         "risk_atr_mult_long": 2.0,
@@ -324,6 +342,11 @@ STRATEGY_PARAM_VERSIONS = {
         "soft_veto_steepness": 3.0,
         "soft_veto_midpoint": 1.0,
         #
+        # ── GPT-4.3: CS-KDJ 去相关 ──
+        # A/B 实验 D4 最优: OOS PF=2.17 (+0.09), Ret=+6.8% (+0.2pp)
+        # 去掉 CS bonus, 仅保留 KDJ bonus → 消除 neutral 中两书冗余信号
+        "cs_kdj_decorr": "kdj_only",
+        #
         # ── v10: Soft Struct (confirms=0 → 2% 仓位, 非硬禁止) ──
         "soft_struct_min_mult": 0.02,
         #
@@ -333,18 +356,23 @@ STRATEGY_PARAM_VERSIONS = {
         "tp_disabled_regimes": ["trend", "low_vol_trend"],
         #
         # ── v10.1: Leg Risk Budget 5×2 矩阵 (regime × direction) ──
-        # 控制不同市况/方向的仓位缩放, 1.0=全仓, 0.10=10%仓位
+        # 控制不同市况/方向的仓位缩放, 1.0=全仓, 0.00=禁止
+        # A/B 实验结论 (run_leg_risk_budget_ab.py):
+        #   - 旧配置过度收紧做多侧 (neutral_long=0.30), IS Ret -36pp
+        #   - neutral_short 无 alpha (L3 vs L0 差异 <0.1pp), 可安全禁止
+        #   - 做多侧不宜缩仓, 是主要利润来源
+        #   - L2 保守方案 OOS PF=2.05 / Ret=+5.7%, 唯一双指标超基线
         "use_leg_risk_budget": True,
-        "risk_budget_neutral_short": 0.10,     # neutral 做空: 极小仓位 (替代 B1b 硬禁止)
-        "risk_budget_neutral_long": 0.30,      # neutral 做多: 谨慎
-        "risk_budget_high_vol_short": 0.50,    # 高波动做空: 半仓
-        "risk_budget_high_vol_long": 0.50,     # 高波动做多: 半仓
-        "risk_budget_high_vol_choppy_short": 0.20,  # 高波动震荡做空: 微仓
-        "risk_budget_high_vol_choppy_long": 0.20,   # 高波动震荡做多: 微仓
-        "risk_budget_trend_short": 0.60,       # 趋势中做空(逆势): 减仓
-        "risk_budget_trend_long": 1.20,        # 趋势中做多(顺势): 适度加仓
-        "risk_budget_low_vol_trend_short": 0.50,  # 低波动趋势做空: 半仓
-        "risk_budget_low_vol_trend_long": 1.20,   # 低波动趋势做多: 适度加仓
+        "risk_budget_neutral_short": 0.10,     # neutral 做空: 小仓 (v10.3: 0.10 比 0.05 更稳健)
+        "risk_budget_neutral_long": 1.00,      # neutral 做多: 全仓 (A/B: 做多不宜缩)
+        "risk_budget_high_vol_short": 0.60,    # 高波动做空: 减仓
+        "risk_budget_high_vol_long": 1.00,     # 高波动做多: 全仓
+        "risk_budget_high_vol_choppy_short": 0.30,  # 高波动震荡做空: 小仓
+        "risk_budget_high_vol_choppy_long": 1.00,   # 高波动震荡做多: 全仓
+        "risk_budget_trend_short": 0.80,       # 趋势中做空(逆势): 轻度减仓
+        "risk_budget_trend_long": 1.00,        # 趋势中做多(顺势): 全仓
+        "risk_budget_low_vol_trend_short": 0.70,  # 低波动趋势做空: 减仓
+        "risk_budget_low_vol_trend_long": 1.00,   # 低波动趋势做多: 全仓
         # ── v11: Soft Anti-Squeeze (sigmoid 连续惩罚替代硬门控) ──
         "use_soft_antisqueeze": True,
         "soft_antisqueeze_w_fz": 0.5,
@@ -756,6 +784,9 @@ class StrategyConfig:
     use_soft_veto: bool = field(default_factory=lambda: _resolve_param("use_soft_veto", False))
     soft_veto_steepness: float = field(default_factory=lambda: _resolve_param("soft_veto_steepness", 3.0))       # sigmoid 陡度 (越大越接近硬开关)
     soft_veto_midpoint: float = field(default_factory=lambda: _resolve_param("soft_veto_midpoint", 1.0))        # 惩罚中点 (1.0 ≈ 原2本书@阈值水平)
+    # GPT-4.3: CS-KDJ 去相关 (none/max_of_two/redundancy_discount/cs_only/kdj_only)
+    cs_kdj_decorr: str = field(default_factory=lambda: _resolve_param("cs_kdj_decorr", "none"))
+    cs_kdj_redundancy_discount: float = field(default_factory=lambda: _resolve_param("cs_kdj_redundancy_discount", 0.6))
     # v10: 结构折扣最小乘数 (替代 confirms=0 → margin×0.0 的硬禁止)
     soft_struct_min_mult: float = field(default_factory=lambda: _resolve_param("soft_struct_min_mult", 0.0))      # 0.0=硬禁止(原行为), 0.02=2%仓位(soft)
 
@@ -794,6 +825,29 @@ class StrategyConfig:
     risk_budget_high_vol_short: float = 1.00
     risk_budget_high_vol_choppy_long: float = 1.00
     risk_budget_high_vol_choppy_short: float = 1.00
+
+    # ── P25: MAE-driven 自适应止损 ──
+    # 用历史 MAE (Maximum Adverse Excursion) 分布校准止损距离
+    # stop_pnl_r = -MAE_P{quantile}(wins, regime, direction)
+    # 优先级: structure_anchor > MAE > ATR-SL > regime_adaptive > fixed
+    use_mae_driven_sl: bool = False
+    mae_sl_quantile: str = 'p90'     # 使用赢单 MAE 的哪个分位数 (p50/p75/p90/p95)
+    mae_sl_floor: float = -0.35      # MAE 止损最宽限制
+    mae_sl_ceil: float = -0.04       # MAE 止损最窄限制
+    mae_sl_long_tighten: float = 0.85  # 多头止损收紧系数 (做多通常需要更紧止损)
+    # per-regime 止损 (pnl_r 单位, 负值, 由 mae_calibrator.py 校准)
+    # 未设置的 regime 回退到 ATR-SL 或 fixed SL
+    mae_sl_neutral_short: float = 0.0     # 0=不启用, 非0=直接用此值
+    mae_sl_neutral_long: float = 0.0
+    mae_sl_trend_short: float = 0.0
+    mae_sl_trend_long: float = 0.0
+    mae_sl_low_vol_trend_short: float = 0.0
+    mae_sl_low_vol_trend_long: float = 0.0
+    mae_sl_high_vol_short: float = 0.0
+    mae_sl_high_vol_long: float = 0.0
+    mae_sl_high_vol_choppy_short: float = 0.0
+    mae_sl_high_vol_choppy_long: float = 0.0
+
     # ── v10.3 D2: neutral short 动态小仓预算（低质量/拥挤时进一步降仓） ──
     use_neutral_short_dynamic_budget: bool = field(
         default_factory=lambda: _resolve_param("use_neutral_short_dynamic_budget", False)
