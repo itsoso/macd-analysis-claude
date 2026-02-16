@@ -101,6 +101,12 @@ def main():
         default=False,
         help="关闭自动重建 (默认开启自动重建)",
     )
+    p.add_argument(
+        "--verify-only",
+        action="store_true",
+        default=False,
+        help="仅核查本地覆盖率，不触发任何下载/API回补",
+    )
     args = p.parse_args()
 
     symbol = args.symbol.upper()
@@ -112,13 +118,16 @@ def main():
 
     print("=" * 90)
     print(f"v10.3 数据回补 | {symbol} | {args.start} ~ {args.end}")
+    if args.verify_only:
+        print("模式: verify-only (仅本地核查)")
     print("=" * 90)
 
     # A1: K线
-    print("\n[1/4] 回补本地K线...")
-    if not args.no_force_rebuild_on_gap:
+    print("\n[1/4] 本地K线处理...")
+    if (not args.verify_only) and (not args.no_force_rebuild_on_gap):
         _prepare_rebuild_if_needed(symbol, intervals, start)
-    download_klines(symbol=symbol, intervals=intervals, start_date=args.start, end_date=args.end)
+    if not args.verify_only:
+        download_klines(symbol=symbol, intervals=intervals, start_date=args.start, end_date=args.end)
     verify_ok = verify_completeness(symbol=symbol, start_date=args.start, end_date=args.end)
 
     kline_cov = {}
@@ -134,37 +143,37 @@ def main():
         kline_cov[tf] = _coverage(df, f"kline_{tf}")
 
     # A2: Mark/Funding
-    print("\n[2/4] 回补 Mark K线...")
+    print("\n[2/4] Mark K线处理...")
     mark_cov = {}
     for tf in ["15m", "1h", "4h"]:
         df_mark = fetch_mark_price_klines(
             symbol=symbol,
             interval=tf,
             days=days_full,
-            force_api=True,
-            allow_api_fallback=True,
+            force_api=not args.verify_only,
+            allow_api_fallback=not args.verify_only,
         )
         mark_cov[tf] = _coverage(df_mark, f"mark_{tf}")
 
-    print("\n[3/4] 回补 Funding...")
+    print("\n[3/4] Funding 处理...")
     df_funding = fetch_funding_rate_history(
         symbol=symbol,
         days=days_full,
-        force_api=True,
-        allow_api_fallback=True,
+        force_api=not args.verify_only,
+        allow_api_fallback=not args.verify_only,
     )
     funding_cov = _coverage(df_funding, "funding")
 
     # A3: OI only recent 30d (真实窗口)
-    print("\n[4/4] 刷新 OI (仅最近30天真实窗口)...")
+    print("\n[4/4] OI 处理 (仅最近30天真实窗口)...")
     oi_cov = {}
     for tf in ["15m", "1h", "4h"]:
         df_oi = fetch_open_interest_history(
             symbol=symbol,
             interval=tf,
             days=30,
-            force_api=True,
-            allow_api_fallback=True,
+            force_api=not args.verify_only,
+            allow_api_fallback=not args.verify_only,
         )
         one = _coverage(df_oi, f"oi_{tf}")
         one["binance_limit_note"] = "openInterestHist 仅支持最近30天；不做伪全历史补齐"
