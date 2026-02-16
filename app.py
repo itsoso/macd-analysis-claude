@@ -22,6 +22,32 @@ from web_routes import register_page_routes, register_result_api_routes
 import config_store
 
 app = Flask(__name__)
+
+# JSON 安全编码: 将 Infinity/NaN 替换为合法 JSON 值
+import math as _math
+
+def _sanitize_for_json(obj):
+    """递归替换 float inf/nan 为 JSON 安全值"""
+    if isinstance(obj, float):
+        if _math.isinf(obj):
+            return 999.99 if obj > 0 else -999.99
+        if _math.isnan(obj):
+            return 0.0
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_sanitize_for_json(item) for item in obj)
+    return obj
+
+class _SafeJSONProvider(app.json_provider_class):
+    """在序列化前清理 Infinity/NaN"""
+    def dumps(self, obj, **kwargs):
+        return super().dumps(_sanitize_for_json(obj), **kwargs)
+
+app.json_provider_class = _SafeJSONProvider
+app.json = _SafeJSONProvider(app)
+
 # 生产环境应设置 SECRET_KEY，否则会话可被伪造；未设置时使用临时密钥并告警
 _secret = os.environ.get('SECRET_KEY')
 app.secret_key = _secret or os.urandom(24).hex()

@@ -122,7 +122,7 @@ class PerformanceTracker:
         avg_win = total_win_pnl / len(wins) if wins else 0
         avg_loss = total_loss_pnl / len(losses) if losses else 0
         profit_factor = (total_win_pnl / abs(total_loss_pnl)
-                        if total_loss_pnl != 0 else float('inf'))
+                        if total_loss_pnl != 0 else 999.99)
 
         # 最大连续亏损
         max_consec_loss = 0
