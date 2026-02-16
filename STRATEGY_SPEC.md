@@ -2,7 +2,7 @@
 
 > 版本: v9.0.1 (B1b + P13 + P20 + P24 + Anti-Squeeze)
 > 编写时间: 2026-02-15 18:47:20 CST (北京时间)
-> 最后更新: 2026-02-15 v9.0.1 回测验证 (含 v5 完整回测、IS PF<1.0 发现) + 附录F GPT Pro 外部审计
+> 最后更新: 2026-02-15 v9.0.1 回测验证 (含 v5 完整回测、IS PF<1.0 发现) + 附录F GPT Pro 外部审计 + 附录G 多模型共识审计 + 附录H 未完成工作盘点
 > 生产配置: live_config.py v5 (`STRATEGY_VERSION=v5`)
 > 标的: ETH/USDT 永续合约 + 现货
 > 主周期: 1h | 决策周期: 15m + 1h + 4h + 24h
@@ -1731,3 +1731,419 @@ GPT Pro 审计基于 v10.2 规格书, 以下建议已被 v10.x 迭代解决:
 ### F.6 版本差距说明
 
 本 STRATEGY_SPEC.md 主体内容停留在 v9.0.1, 而代码已演进至 v10.2 + v11 实验。详细的 v10.x 规格请参阅 `docs/strategy_tech_doc.md`。本附录 F 的代码行号引用基于 2026-02-15 的代码快照。
+
+---
+
+## 附录 G: 多模型共识审计分析 (2026-02)
+
+### G.1 审计背景
+
+继附录 F (GPT Pro 单模型深度代码审计) 之后，多模型共识 (GPT-4o / Claude Opus / Gemini 2.5 Pro / Grok 3) 对 v10.2 规格书提出 7 项改造建议，按"统计基础→资金效率→退出逻辑→Regime稳健→元过滤→Funding Alpha→操作细节"的优先级排序。
+
+**本附录将每条建议与实际代码逐行交叉验证。**
+
+**核心发现**: 7 项建议中，**4 项已被 v10.0-v10.2 实质解决**，1 项已在 v10.3/v11 路线图中，仅 **2 项是真正新增工作** (P37 结构性追踪止损, P38 Funding Alpha 信号)。这印证了现有优化路线图与业界共识高度对齐。
+
+### G.2 审计结论总表
+
+| # | 多模型建议 | 优先级 | 准确性判定 | v10.x 状态 |
+|---|-----------|-------|-----------|-----------|
+| S1 | 扩展回测至 2021-01 + CPCV | 最高 | **已计划** | `run_v10_3_validation.py` 支持 `--start 2021-01-01`; bootstrap 已实现; CPCV 未实现 |
+| S2 | MAE 驱动 SL + 风险仓位 | 高 | **已完成** | v10.1 ATR-SL 启用; P21 risk_per_trade 启用; 公式完全匹配; MAE P90 校准 = v11 |
+| S3 | Trend 结构性追踪 (Chandelier/Donchian) | 高 | **关键缺口** | P13 仅 PnL% 追踪; 主引擎无 Chandelier; Donchian 仅在 turtle_strategy.py |
+| S4 | Regime percentile + 概率向量 | 中 | **基本完成** | 动态 percentile (80th, 2160 bars) + sigmoid (w∈[0,1]) 已启用 |
+| S5 | Meta-labeling 元过滤 | 中 | **部分解决** | 规则质量门控已有; Score 校准 = v11 Phase 2; 无 ML meta-label |
+| S6 | Funding Rate 主动化 | 中低 | **新增未解决** | Funding 仅 Anti-Squeeze 防御; 未入融合得分; 无 carry 管理 |
+| S7 | 操作 (冷却/滑点/TF权重) | 混合 | **混合** | 冷却 ✅; 滑点固定 ❌; TF 权重手工 ❌ |
+
+### G.3 逐条详细分析
+
+#### G.3.1 S1: 扩展回测至 2021-01 — 已计划
+
+**多模型建议**: 当前 OOS 仅 72-77 笔, 置信区间太宽。扩展至 300+ 笔后用 bootstrap 或 CPCV 筛选结论。
+
+**代码实际**:
+
+| 组件 | 位置 | 状态 | 说明 |
+|------|------|------|------|
+| 数据可用性 | `data/klines/ETHUSDT/1h.parquet` | ✅ | 44,904 bars, 2021-01-01 ~ 2026-02-15 |
+| 扩展回测入口 | `run_v10_3_validation.py` L96 | ✅ | 支持 `--start 2021-01-01` 参数 |
+| Bootstrap 显著性 | `run_v10_3_validation.py` L267-306 | ✅ | 1000 resamples, p-value, 95% CI |
+| Calmar 比率检验 | `run_v10_3_validation.py` L291-310 | ✅ | 日收益率 bootstrap |
+| 压力测试 | `run_v10_3_validation.py` L393-426 | ✅ | fee×2, slippage 0.03%/0.05% |
+| CPCV | 全局 | ❌ | 未实现; 91 笔/年规模下边际收益低 |
+
+**结论**: 已计划, 执行 `run_v10_3_validation.py --start 2021-01-01` 即可。CPCV 为研究方向, 非紧急。
+
+---
+
+#### G.3.2 S2: MAE 驱动止损 + 风险仓位 — 已完成
+
+**多模型建议**: SL 锚定在 swing low + 0.5 ATR, 以 MAE₉₀ × 1.2~1.5 为地板; 仓位 = RiskBudget / (SL距离 × SafetyFactor)。
+
+**代码实际**:
+
+| 组件 | 位置 | 状态 | 说明 |
+|------|------|------|------|
+| ATR-SL | `optimize_six_book.py` L844, L2336-2400 | ✅ | `SL = -(ATR% × mult)`, clip [floor, ceil] |
+| Regime-specific mult | `optimize_six_book.py` L2375-2400 | ✅ | trend=3.5x, neutral=2.0x, high_vol=2.5x |
+| SL 范围限制 | `optimize_six_book.py` L846-847 | ✅ | floor=-0.25, ceil=-0.08 |
+| P21 风险仓位 | `optimize_six_book.py` L2031-2088 | ✅ | `margin = risk_amount / (stop_dist × lev)` |
+| risk_per_trade_pct | `optimize_six_book.py` L2035 | ✅ | 2.5% equity at risk |
+| MAE P90 校准 | `run_v11_phase1.py` E1 | 🔬 计划中 | 用盈利单 MAE₉₀ 校准 ATR mult |
+| 结构锚定 SL | `optimize_six_book.py` | ⬜ 框架存在 | `use_structure_anchor_sl=False` |
+
+**结论**: 核心建议 (ATR-SL + 风险仓位) **已在 v10.1 完整实现并启用**。公式 `PositionSize = RiskBudget / (SL距离 × Leverage)` 完全匹配多模型建议。MAE P90 校准是 v11 Phase 1 的自然演进。
+
+---
+
+#### G.3.3 S3: 趋势结构性追踪 — ⚠️ 关键缺口
+
+**多模型建议**: Trend 下用 Chandelier Exit (`Trail = Highest(High, N) - k×ATR`, k=3.5~4.0) 或 Donchian (`Lowest(Low, 20~48)`), 允许大幅回撤但不破结构。Neutral/High_Vol 保留 P13。
+
+**代码实际**:
+
+| 组件 | 位置 | 状态 | 说明 |
+|------|------|------|------|
+| P13 连续追踪 | `optimize_six_book.py` L3196-3207 | ✅ 但仅 PnL% | `pnl_r < max_pnl × eff_pb` (start=5%, pb 60%→30%) |
+| 趋势禁 TP | v10.2 配置 | ✅ 部分缓解 | trend regime 禁 TP1/TP2, 让利润跑 |
+| Donchian | `turtle_strategy.py` L78-128 | ⬜ 独立模块 | `compute_donchian_channels()` 存在但未集成主引擎 |
+| Chandelier Exit | 全局 | ❌ 不存在 | 主引擎无 ATR-channel 追踪止损 |
+| 价格结构追踪 | 全局 | ❌ 不存在 | 无 highest_high/lowest_low 追踪 |
+
+**问题分析**: P13 的 PnL% 回撤追踪在趋势中被正常波动震出。ETH 1h 级别正常噪声 3-5%, 而 P13 在利润 5% 时允许回撤 60%×5%=3%, 极易被扫。趋势禁 TP 虽有帮助, 但追踪本身仍基于 PnL 回撤, 非价格结构。
+
+**建议 P37 — Chandelier Exit 混合追踪**:
+
+```python
+# 仅 trend regime 生效:
+if regime == 'trend':
+    chandelier_long  = highest_high(N=20) - k * ATR(14)  # k=3.5~4.0
+    chandelier_short = lowest_low(N=20)   + k * ATR(14)
+    trail_stop = max(p13_pnl_trail, chandelier_stop)  # 取更宽松的
+else:
+    trail_stop = p13_pnl_trail  # neutral/high_vol 保留 P13
+```
+
+**工作量**: 中等。需在主循环中维护 rolling highest_high/lowest_low 数组, 并在 trend regime 分支中增加 chandelier 逻辑。`turtle_strategy.py` 的 Donchian 计算可复用。
+
+---
+
+#### G.3.4 S4: Regime 相对化 — 基本完成
+
+**多模型建议**: 绝对阈值 (`vol >= 0.020`) 在长期低/高波环境系统误判。改为 rolling percentile 动态阈值 + 概率向量。
+
+**代码实际**:
+
+| 组件 | 位置 | 状态 | 说明 |
+|------|------|------|------|
+| 动态 percentile | `optimize_six_book.py` L358-377 | ✅ | 80th percentile, 2160 bars (≈90天) |
+| Sigmoid 平滑 | `optimize_six_book.py` L268-274, L434-438 | ✅ | w_high_vol, w_trend, w_low_vol ∈ [0,1] |
+| 下游参数插值 | L2375-2400 | ✅ | SL/leverage/threshold 用 sigmoid 权重混合 |
+| 全概率向量 (softmax) | 全局 | ❌ | 仍是离散标签 + 连续权重修正器 |
+
+**结论**: sigmoid 权重在数学上等价于 logistic 概率。5 类 softmax 在 91 笔/年规模下增加参数空间但无法充分训练。**当前实现已足够**。
+
+---
+
+#### G.3.5 S5: Meta-labeling 元过滤 — 部分解决
+
+**多模型建议**: 用过去 100 笔交易特征向量训练滚动 logistic regression, 预测 p(win)>55% 才开仓。
+
+**代码实际**:
+
+| 组件 | 位置 | 状态 | 说明 |
+|------|------|------|------|
+| Neutral 质量门控 | `optimize_six_book.py` L1364-1463 | ✅ | 决策冲突、大TF冲突、score gap、结构投票 |
+| struct_discount 梯度 | 配置 | ✅ | 0确认→禁止, 1→0.05x, 2→0.15x, 3→0.50x, 4+→1.0x |
+| Score 校准 (isotonic) | `run_v11_phase2.py` | 🔬 计划中 | SS → p(win), E[return] 映射 |
+| sklearn ML meta-label | 全局 | ❌ | 未实现; 91笔/年训练集过小, 过拟合风险高 |
+
+**结论**: 规则层已生产可用且效果可控。ML meta-label 在小样本下风险大于收益, 以 v11 Phase 2 的 isotonic regression 为稳妥路径。
+
+---
+
+#### G.3.6 S6: Funding Rate 主动化 — 新增建议 ⭐
+
+**多模型建议**: Funding 从被动记账升级为主动信号。持 short 时正 funding 放宽追踪; neutral 震荡 + funding>0.1% = 强 short 信号。
+
+**代码实际**:
+
+| 组件 | 位置 | 状态 | 说明 |
+|------|------|------|------|
+| Anti-Squeeze 门控 | `optimize_six_book.py` L679-681 | ✅ 防御 | funding_z + oi_z + taker_imb 三条件阻止进场 |
+| 六书融合得分 | `signal_core.py` | ❌ 不参与 | funding 不在 6 维融合的任何一维中 |
+| Carry 管理 | 全局 | ❌ 不存在 | 持仓侧 funding 正值不影响追踪/止盈决策 |
+| Funding 作为入场奖励 | 全局 | ❌ 不存在 | funding 极端值不加减 SS/BS |
+
+**建议 P38 — Funding Alpha 信号**:
+
+```python
+# 在 calc_fusion_score_six() 或微结构叠加层中:
+funding_bonus = 0
+if funding_z > 2.0:    # 极度正 funding = 市场过度做多
+    sell_score += funding_alpha_bonus   # 默认 +5~10 分
+if funding_z < -2.0:   # 极度负 funding = 市场过度做空
+    buy_score  += funding_alpha_bonus
+
+# 持仓侧 carry 优化:
+if has_short and funding_z > 1.5:
+    # 正 funding = short 赚 carry, 放宽追踪
+    eff_trail_pb *= 1.1  # 允许多 10% 回撤空间
+```
+
+**工作量**: 小。在微结构叠加层增加 bonus 逻辑, 不需要改动核心六书融合。
+
+---
+
+#### G.3.7 S7: 操作细节 — 混合状态
+
+**多模型建议**: 冷却方向感知; 滑点自适应; TF 权重用 SHAP 校准。
+
+| 子项 | 代码位置 | 状态 | 说明 |
+|------|---------|------|------|
+| 冷却方向感知 | `optimize_six_book.py` L2300-2306 | ✅ 已完成 | 同向 SL 后 6×cooldown, 反向 3×cooldown |
+| 滑点 | `strategy_futures.py` L99 | ❌ 固定 0.1% | 无 vol-regime 自适应; v10.3 压力测试覆盖 0.03%/0.05% |
+| TF 权重 | `multi_tf_consensus.py` L33-38 | ❌ 手工固定 | 24h=28, 15m=3, 无 SHAP/lead-lag 校准 |
+
+**自适应滑点建议** (低优先级):
+
+```python
+# strategy_futures.py 中:
+if regime == 'high_vol': SLIPPAGE = 0.0015   # 0.15%
+elif regime == 'neutral': SLIPPAGE = 0.0005  # 0.05%
+else: SLIPPAGE = 0.001                        # 0.10% default
+```
+
+**TF 权重**: 需要构建 lead-lag 分析基础设施 (rolling cross-TF correlation matrix), 工作量大且有过拟合风险。建议作为 v12+ 研究方向。
+
+**多模型还建议**: 将 `continuous_trail_start_pnl` 从 5% 提高到 8-10%, 或 `max_pb` 从 0.60 提高到 0.75, 因为 ETH 1h 正常噪声 3-5%。此建议有道理, 应在 v10.3 验证中测试不同参数。
+
+### G.4 优先行动清单
+
+#### P0 — 立即执行
+
+| # | 行动 | 工作量 | 预期影响 |
+|---|------|-------|---------|
+| 1 | 执行 `run_v10_3_validation.py --start 2021-01-01` 5年扩展验证 | 小 | 决策可靠性质变, 300+ OOS trades |
+
+#### P1 — 下个迭代
+
+| # | 行动 | 工作量 | 预期影响 |
+|---|------|-------|---------|
+| 2 | **P37: Chandelier Exit 混合追踪** — trend regime 下集成 ATR channel 追踪 | 中 | 解决趋势拿不住; 预期趋势 PnL +15-30% |
+| 3 | **P38: Funding Alpha 信号** — funding_z 极值作为 score bonus | 小 | 新 alpha 来源; 低风险实验 |
+| 4 | P13 参数放宽测试 — `start_pnl` 5%→8%, `max_pb` 0.60→0.75 | 小 | 减少正常波动被扫 |
+
+#### P2 — 研究方向
+
+| # | 行动 | 工作量 | 预期影响 |
+|---|------|-------|---------|
+| 5 | 自适应滑点 (vol-regime 驱动) | 小 | 更真实回测; 对交易决策影响小 |
+| 6 | TF 权重 lead-lag 校准 | 大 | 潜在信号改善; 高过拟合风险 |
+| 7 | CPCV 交叉验证 | 大 | 学术严谨; 91笔/年规模实际边际收益低 |
+
+### G.5 v10.x/v11 已解决的项
+
+| 多模型建议 | v10.x 实现 | 状态 |
+|-----------|-----------|------|
+| 扩展回测 + bootstrap | `run_v10_3_validation.py` (5年数据 + 1000次 bootstrap) | ✅ 已实现 |
+| MAE 驱动止损 | v10.1 ATR-SL (regime-specific mults: 2.0x~3.5x) | ✅ 已启用 |
+| 风险仓位 (P21) | v10.1 `risk_per_trade_pct=0.025`, `margin = risk / (sl × lev)` | ✅ 已启用 |
+| MAE P90 校准 | v11 Phase 1 E1 (`run_v11_phase1.py`) | 🔬 计划中 |
+| Regime percentile 阈值 | `use_dynamic_regime_thresholds`, 80th percentile, 2160 bars | ✅ 已实现 |
+| Regime sigmoid 平滑 | `use_regime_sigmoid`, w_high_vol/w_trend/w_low_vol ∈ [0,1] | ✅ 已启用 |
+| 规则质量门控 | `neutral_struct_discount_0/1/2/3/4+`, 大TF冲突检测 | ✅ 已启用 |
+| Score 校准 (isotonic) | v11 Phase 2 (`run_v11_phase2.py`) | 🔬 计划中 |
+| P18 shrinkage | v11 Phase 2 (λ×w_global + (1-λ)×w_regime) | 🔬 计划中 |
+| 冷却方向感知 | 6x 同向, 3x 反向 after SL | ✅ 已完成 |
+| Fee/slippage 压力测试 | `run_v10_3_validation.py` L393-426 | ✅ 已实现 |
+| 趋势禁 TP | v10.2 trend regime 禁 TP1/TP2 | ✅ 已启用 |
+
+### G.6 路线图对齐
+
+| 建议 | 对应路线图 | 版本 | 备注 |
+|------|-----------|------|------|
+| S1 扩展回测 | v10.3 Phase C (验证框架) | v10.3 | `run_v10_3_validation.py` 就绪 |
+| S2 MAE-SL + P21 | v10.1 (已完成) + v11 Phase 1 E1 | v10.1 / v11 | 核心已完成; 校准是 v11 |
+| S3 结构追踪 | **不在现有路线图 — 新增 P37** | v11+ | 最大新增工作项 |
+| S4 Regime 概率化 | v10.2 (已完成) | v10.2 | sigmoid 功能等价 |
+| S5 Meta-labeling | v10.0 (规则层) + v11 Phase 2 (ML) | v10.0 / v11 | 渐进式路径 |
+| S6 Funding Alpha | **不在现有路线图 — 新增 P38** | v11+ | 低成本新实验 |
+| S7 操作细节 | v10.3 (压力测试) + backlog | 混合 | 滑点/TF权重为低优先级 |
+
+**总结**: 7 项多模型建议中, 4 项已被 v10.0-v10.2 实质解决, 1 项已在 v10.3/v11 路线图, 2 项 (P37 结构追踪、P38 Funding Alpha) 是真正新增。这印证了现有优化路线图与业界共识高度对齐。多模型一致的"一句话"建议——*"v10.2 已解决少亏, v10.3 的核心是敢赢且赢得稳"*——与 v11 Phase 1-3 路线图的方向完全一致。
+
+### G.7 版本说明
+
+本附录代码行号引用基于 2026-02-15 的代码快照。v10.x 具体实现详见 `docs/strategy_tech_doc.md`。
+
+---
+
+## 附录 H: 未完成工作盘点与执行计划 (2026-02)
+
+> 本附录基于全面代码审查 + 历史实验结果分析，交叉参照 STRATEGY_SPEC.md 各章节及附录 F/G 审计产出，梳理截至 2026-02-15 的所有未完成工作，并制定分阶段执行计划。
+
+### H.1 盘点背景
+
+经过附录 F (GPT Pro 外部审计) 和附录 G (多模型共识审计) 的代码交叉验证，结合 v10.3 验证框架实际运行结果和 v11 实验脚本状态，进行了全量代码扫描。
+
+**关键发现**:
+- v5 生产配置 IS PF=0.90 (<1.0)，源于 B1b 杀 neutral short + P24 trend SL 过紧
+- v10.3 验证 WFO 55.4% (目标 ≥60%), Bootstrap p=0.45/0.47 (不显著)
+- v11 Phase 1-2 共 11 个实验脚本就绪但**从未执行**
+- P37 (Chandelier Exit) 和 P38 (Funding Alpha) 是审计后唯二新增代码工作
+- OI 历史数据覆盖仅 1.1% (Binance API 限 30 天)
+
+### H.2 完整未完成工作清单
+
+#### H.2.1 第一类: 紧急修复 (v5 IS PF<1.0 危机)
+
+| P# | 工作 | 文件 | 状态 | 预期影响 |
+|----|------|------|------|---------|
+| P33 | B1b 软化 (neutral:999→70-80) | `optimize_six_book.py` | 待执行 | 恢复 IS +$985 neutral short 利润 |
+| P34 | P24 止损放宽 (trend SL -15%→-18%) | `optimize_six_book.py` | 待执行 | 恢复 trend short 利润 ($374→$9,121) |
+| P35 | OOS 窗口扩展 (寻找含 short 交易时段) | 回测脚本 | 待执行 | 获得 B1b/P24 的 OOS 验证证据 |
+
+#### H.2.2 第二类: 验证框架完善 (v10.3)
+
+| 工作 | 脚本 | 当前状态 | 目标 |
+|------|------|---------|------|
+| 参数矩阵扫描 (long_thresh × short_sl) | `run_v10_3_matrix.py` | 仅 1 组合冒烟测试 | 完整 3×3 网格 |
+| 统计验证 (WFO + Bootstrap) | `run_v10_3_validation.py` | 仅 baseline | 各最优变体全量验证 |
+| WFO 胜率改善 | 需诊断 | 55.4% (不达标) | ≥65% |
+| 数据回补 | `run_v10_3_data_backfill.py` | ✅ 已完成 | 44,904 bars (2021-2026) |
+
+**v10.3 验证现有结果** (2026-02-15 运行):
+- Baseline: 收益 +52.1%, pPF 1.94, Calmar 0.47, 102 笔交易
+- WFO: 56 窗口, 55.4% 盈利 (**未达 60% 目标**)
+- Bootstrap: p=0.45 (pPF), p=0.47 (Calmar) — **不显著**
+- 压力测试: ✅ 全场景 pPF>1.0
+
+#### H.2.3 第三类: v11 Phase 1 (MAE 校准 + Anti-Squeeze Soft + 反手)
+
+脚本: `run_v11_phase1.py` — **从未执行**
+
+| 实验 | 描述 | 关联 P# | 配置差异 |
+|------|------|--------|---------|
+| E0 | v10.2 生产基线 | — | 当前 prod 配置 |
+| E1 | MAE-calibrated ATR mults | P32, P1-4 | 用盈利单 MAE₉₀ 校准 regime-specific ATR mult |
+| E2 | Anti-Squeeze soft penalty | P0-1 | 连续 sigmoid 替代硬门控 |
+| E3 | open_dominance 1.5→1.3 | — | 放宽开仓比率, 验证反手逻辑 |
+| E4 | Phase 1 组合 (E1+E2+E3) | — | 完整 Phase 1 |
+
+#### H.2.4 第四类: v11 Phase 2 (Score 校准 + P18 Shrinkage + Rolling Regime)
+
+脚本: `run_v11_phase2.py` — **从未执行**
+
+| 实验 | 描述 | 关联 P# | 配置差异 |
+|------|------|--------|---------|
+| E0 | Baseline (v10.2 + Phase1 soft) | — | 含 soft anti-squeeze |
+| E1 | Score Calibration (isotonic regression SS→p(win), E[R]) | P1-1 | `use_score_calibration=True` |
+| E2 | P18 Shrinkage (w = (1-λ)×w_base + λ×w_regime, λ=0.3) | P1-2 | `use_regime_adaptive_fusion=True`, shrinkage |
+| E3 | Rolling Percentile Regime (动态阈值) | P31 | `use_rolling_percentile_regime=True` |
+| E4 | Phase 2 full (E1+E2+E3) | — | 完整 Phase 2 |
+| E5 | Phase 2 conservative (E2+E3) | — | 无 score calibration |
+
+#### H.2.5 第五类: 新增代码工作 (附录 F/G 审计产出)
+
+| P# | 工作 | 涉及文件 | 工作量 | 来源 |
+|----|------|---------|--------|------|
+| P36 | MAE+时间联合早退规则 | `strategy_futures.py` | 中 | 附录 F P1-4 延伸 |
+| P37 | Chandelier Exit 混合追踪 (trend regime) | `optimize_six_book.py`, `strategy_futures.py` | 中 | 附录 G S3 关键缺口 |
+| P38 | Funding Alpha 信号 (funding_z 极值→score bonus) | `signal_core.py` → `calc_fusion_score_six()` | 小 | 附录 G S6 新增 |
+
+**P37 设计方案**: trend regime 下 `trail_stop = max(P13_pnl_trail, highest_high_N − k×ATR)`，仅 trend 生效, neutral/high_vol 保留 P13 PnL% 追踪。Donchian channel 已在 `turtle_strategy.py` L78-128 有实现可复用。
+
+**P38 设计方案**: `calc_fusion_score_six()` 中增加 bonus 层 — funding_z > 2.0 加 sell_score 奖励, funding_z < -2.0 加 buy_score 奖励。
+
+#### H.2.6 第六类: 待验证/研究项
+
+| P# | 工作 | 状态 | 优先级 | 阻塞因素 |
+|----|------|------|--------|---------|
+| P25 | P18+P23 Walk-Forward 验证 | 待执行 | P1 | 无 |
+| P26 | P21 R% 调参 (2.5-3.5%) | 待执行 | P1 | 无 |
+| P27 | Funding 现金流纳入回测 PnL | 待设计 | P1 | 需估算 carry 影响 |
+| P28 | Anti-Squeeze 真实 OI 回测 | 阻塞 | P2 | OI 历史数据不可用 |
+| P29 | CS-KDJ 去相关 (r=0.474) | 待设计 | P2 | 需信号架构改造 |
+| P30 | Leg 风险预算 (regime×direction) | 待设计 | P2 | 需更多 trade 样本 |
+| P15 | Walk-Forward 验证 | 待执行 | P2 | `run_p15_walk_forward.py` 存在 |
+
+#### H.2.7 第七类: 基础设施/数据
+
+| 工作 | 状态 | 优先级 | 备注 |
+|------|------|--------|------|
+| OI 数据定时抓取管道 (P0-2) | 未实现 | P1 | Binance API 限 30 天; 需 cron 每日抓取积累 |
+| 自适应滑点 (vol-regime 驱动) | 未实现 | P3 | 影响小 (固定 0.1% 已有压力测试覆盖) |
+| TF 权重 lead-lag 校准 | 未实现 | P3 | 大型研究项目; 高过拟合风险 |
+
+### H.3 四阶段执行计划
+
+#### 阶段 1: 紧急修复 + 基线验证
+
+**目标**: 解决 v5 IS PF<1.0 危机, 建立可靠验证基线
+
+| # | 行动 | 脚本/文件 | 工作量 | 完成标准 |
+|---|------|----------|--------|---------|
+| 1 | P33 B1b 软化 → 回测 | `optimize_six_book.py` | 小 | IS PF>1.0 |
+| 2 | P34 P24 SL 放宽 → 回测 | `optimize_six_book.py` | 小 | trend short 利润恢复 |
+| 3 | `run_v10_3_matrix.py` 完整 3×3 网格 | matrix 脚本 | 小 (运行即可) | 找出最优参数组合 |
+| 4 | `run_v10_3_validation.py` 最优变体验证 | validation 脚本 | 小 (运行即可) | WFO ≥65%, Bootstrap p<0.05 |
+
+#### 阶段 2: v11 Phase 1 实验
+
+**目标**: 数据驱动止损校准, Anti-Squeeze 连续化
+
+| # | 行动 | 脚本 | 工作量 | 完成标准 |
+|---|------|------|--------|---------|
+| 5 | 运行 `run_v11_phase1.py` (E0-E4) | phase1 脚本 | 中 (运行 + 分析) | 找出最优 Phase 1 配置 |
+| 6 | 分析 MAE 分布 → 校准 ATR mult | E1 结果 | 分析 | regime-specific mult 数据驱动 |
+| 7 | E4 结果 → 更新阶段 1 最优基线 | 决策 | 小 | 确认 Phase 1 是否优于 v10.2 |
+
+#### 阶段 3: 新增代码 + v11 Phase 2
+
+**目标**: 实现 P37/P38, 完成 score 校准实验
+
+| # | 行动 | 文件 | 工作量 | 完成标准 |
+|---|------|------|--------|---------|
+| 8 | P38 Funding Alpha 实现 | `signal_core.py` | 小 | funding_z bonus 生效, 回测对比 |
+| 9 | P37 Chandelier Exit 实现 | `strategy_futures.py`, `optimize_six_book.py` | 中 | trend regime 下 ATR channel 追踪生效 |
+| 10 | 运行 `run_v11_phase2.py` (E0-E5) | phase2 脚本 | 中 (运行 + 分析) | score 校准是否提升 |
+| 11 | P37+P38 回测验证 | 回测 | 中 | 趋势 PnL 改善, funding 信号有效 |
+
+#### 阶段 4: 验证收尾 + 生产升级
+
+**目标**: 综合最优配置, 升级生产版本
+
+| # | 行动 | 工作量 | 完成标准 |
+|---|------|--------|---------|
+| 12 | P25: P18+P23 Walk-Forward 验证 | 中 | 确认 E4 OOS+28.9% 泛化稳定性 |
+| 13 | P26: R% 调参 (2.5-3.5%) | 中 | 消除"少数大亏单主导" |
+| 14 | 综合最优配置 → `live_config.py` v6 | 小 | 全量验证通过 |
+| 15 | OI 定时抓取管道上线 | 中 | 每日增量积累 OI 数据 |
+
+### H.4 完成标准 (全量验证门槛)
+
+| 指标 | 目标值 | 当前值 | 差距 |
+|------|--------|--------|------|
+| IS PF (Profit Factor) | > 1.2 | 0.90 (v5) | 严重不达标 |
+| WFO 胜率 | ≥ 65% | 55.4% | -9.6pp |
+| Bootstrap p-value | < 0.05 | 0.45 / 0.47 | 远不显著 |
+| 压力测试 (fee×2) | pPF > 1.0 | ✅ 通过 | 达标 |
+| OOS PF | > 1.0 | 无 short 交易, 无法验证 | 需 P35 扩展 |
+
+### H.5 已完成项目汇总 (v10.0-v10.2)
+
+| 版本 | 已完成 P# | 关键特性 |
+|------|----------|---------|
+| v10.0 | P13 连续追踪基础 | Soft Veto + Leg Budget 5×2 + Funding-in-PnL |
+| v10.1 | P21 (放开) + ATR-SL | ATR-SL regime-specific mults; risk_per_trade 2.5% |
+| v10.2 | Regime Sigmoid + MAE + TP禁 | Regime 连续化; MAE 追踪; 趋势禁 TP; 5×2 Leg Budget |
+
+**已完成的实验/验证任务**: P0 (OOS 验证), P1/P2 (敏感度), P3 (退出消融), P4 (六书判别力), P16 (Cohen's d 分析)
+
+**已关闭/拒绝的特性**: P6 (Ghost Cooldown), P7 (24h 方向门控), P8 (结构确认硬门槛), P9 (Regime 调权), P10 (Fast-fail), P12 (动态 Regime 阈值), P14 (多头折扣)
+
+### H.6 版本说明
+
+本附录基于 2026-02-15 代码快照。所有脚本路径和行号引用在该日期有效。随着阶段 1-4 逐步执行, 本附录将持续更新进度状态。

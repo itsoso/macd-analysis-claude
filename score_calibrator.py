@@ -1,381 +1,517 @@
-"""Score Calibrator — 将 SS/BS 工程分数校准为概率和期望收益
+"""
+Phase 2a: Score Calibration — SS/BS → 校准概率
 
-Phase 2a: 用历史交易数据建立 SS → p(win) 和 SS → E[R] 的映射
-入场条件从 `ss >= threshold` 变为 `E[R|ss,regime] > cost_estimate`
+将原始 sell_score/buy_score 映射为校准后的概率 p(win) 和期望收益 E[R],
+替代硬阈值入场条件。
 
-用法:
-  1. calibrator = ScoreCalibrator()
-  2. calibrator.fit(trades)        # 用历史交易 fit isotonic regression
-  3. p_win = calibrator.p_win('short', 'neutral', ss=45)
-  4. e_r = calibrator.expected_r('short', 'neutral', ss=45)
-  5. should_open = calibrator.should_enter('short', 'neutral', ss=45, cost=0.002)
+核心思路:
+1. 对每个 (direction, regime) 桶, 按 SS/BS 分档 (每 5 分一档)
+2. 计算每档的: 胜率, 平均 R, 净 funding cost
+3. 用 isotonic regression 映射 SS → p(win)
+4. 入场条件: E[R|ss, regime] > cost_estimate
+
+使用方式:
+    # 1. 从回测交易训练校准模型
+    calibrator = ScoreCalibrator()
+    calibrator.fit_from_trades(trades)
+
+    # 2. 查询入场决策
+    ok, info = calibrator.should_enter('short', 'neutral', ss=65, cost=0.002)
+
+    # 3. 保存/加载模型
+    calibrator.save('score_calibration_model.json')
+    calibrator = ScoreCalibrator.load('score_calibration_model.json')
 """
 
 import json
 import os
-from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
-
+import sys
+import math
 import numpy as np
+from collections import defaultdict
+from datetime import datetime
 
-try:
-    from sklearn.isotonic import IsotonicRegression
-    HAS_SKLEARN = True
-except ImportError:
-    HAS_SKLEARN = False
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+class IsotonicRegression:
+    """
+    简易 isotonic regression 实现 (Pool Adjacent Violators Algorithm)。
+    不依赖 sklearn, 适合嵌入式使用。
+
+    将单调递增约束拟合 x → y:
+        对任意 x1 < x2, 保证 f(x1) <= f(x2)
+    """
+
+    def __init__(self):
+        self.x_thresholds = []
+        self.y_values = []
+
+    def fit(self, x, y, sample_weight=None):
+        """
+        拟合 isotonic regression。
+
+        Parameters
+        ----------
+        x : array-like, shape (n,)
+            输入特征 (score)
+        y : array-like, shape (n,)
+            目标值 (win=1, loss=0 或 pnl_r)
+        sample_weight : array-like, optional
+            样本权重
+        """
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        n = len(x)
+        if n == 0:
+            self.x_thresholds = []
+            self.y_values = []
+            return self
+
+        if sample_weight is None:
+            sample_weight = np.ones(n)
+        else:
+            sample_weight = np.asarray(sample_weight, dtype=float)
+
+        order = np.argsort(x)
+        x_sorted = x[order]
+        y_sorted = y[order]
+        w_sorted = sample_weight[order]
+
+        # Pool Adjacent Violators (PAV)
+        blocks = []
+        for i in range(n):
+            blocks.append({
+                'sum_wy': y_sorted[i] * w_sorted[i],
+                'sum_w': w_sorted[i],
+                'x_min': x_sorted[i],
+                'x_max': x_sorted[i],
+            })
+            # 合并违反单调性的相邻块
+            while len(blocks) >= 2:
+                last = blocks[-1]
+                prev = blocks[-2]
+                val_last = last['sum_wy'] / max(last['sum_w'], 1e-10)
+                val_prev = prev['sum_wy'] / max(prev['sum_w'], 1e-10)
+                if val_prev > val_last:
+                    # 违反单调递增, 合并
+                    merged = {
+                        'sum_wy': last['sum_wy'] + prev['sum_wy'],
+                        'sum_w': last['sum_w'] + prev['sum_w'],
+                        'x_min': prev['x_min'],
+                        'x_max': last['x_max'],
+                    }
+                    blocks.pop()
+                    blocks.pop()
+                    blocks.append(merged)
+                else:
+                    break
+
+        # 提取分段函数
+        self.x_thresholds = []
+        self.y_values = []
+        for b in blocks:
+            val = b['sum_wy'] / max(b['sum_w'], 1e-10)
+            mid = (b['x_min'] + b['x_max']) / 2
+            self.x_thresholds.append(mid)
+            self.y_values.append(float(np.clip(val, 0.0, 1.0)))
+
+        return self
+
+    def predict(self, x):
+        """用拟合的分段函数预测。"""
+        x = np.asarray(x, dtype=float)
+        if len(self.x_thresholds) == 0:
+            return np.full_like(x, 0.5)
+
+        result = np.empty_like(x)
+        for i, xi in enumerate(x.flat):
+            if xi <= self.x_thresholds[0]:
+                result.flat[i] = self.y_values[0]
+            elif xi >= self.x_thresholds[-1]:
+                result.flat[i] = self.y_values[-1]
+            else:
+                # 线性插值
+                idx = np.searchsorted(self.x_thresholds, xi) - 1
+                idx = max(0, min(idx, len(self.x_thresholds) - 2))
+                x0, x1 = self.x_thresholds[idx], self.x_thresholds[idx + 1]
+                y0, y1 = self.y_values[idx], self.y_values[idx + 1]
+                t = (xi - x0) / max(x1 - x0, 1e-10)
+                result.flat[i] = y0 + t * (y1 - y0)
+        return result
+
+    def to_dict(self):
+        return {
+            'x_thresholds': [round(x, 4) for x in self.x_thresholds],
+            'y_values': [round(y, 6) for y in self.y_values],
+        }
+
+    @classmethod
+    def from_dict(cls, d):
+        obj = cls()
+        obj.x_thresholds = list(d.get('x_thresholds', []))
+        obj.y_values = list(d.get('y_values', []))
+        return obj
 
 
 class ScoreCalibrator:
-    """Score 校准器 — isotonic regression 将 SS/BS → p(win) 和 E[R]"""
+    """
+    分数校准器: 将 SS/BS 映射为校准概率 p(win) 和期望收益 E[R]。
 
-    def __init__(self, min_samples: int = 10, score_key: str = 'ss'):
+    内部维护:
+    - p_win_model: {(direction, regime): IsotonicRegression}  score → p(win)
+    - er_model: {(direction, regime): IsotonicRegression}      score → E[R]
+    - bin_stats: {(direction, regime): {score_bin: {n, wins, losses, avg_r, avg_mae}}}
+    """
+
+    def __init__(self, bin_size=5):
         """
-        Args:
-            min_samples: 每个 (direction, regime) 至少需要的样本数
-            score_key: 'ss' 表示用 sell_score 做空, buy_score 做多;
-                       或 'dominant' 表示取 max(ss, bs)
+        Parameters
+        ----------
+        bin_size : int
+            分档宽度 (默认每 5 分一档)
         """
-        self.min_samples = min_samples
-        self.score_key = score_key
-        # 校准模型: {(direction, regime): {'p_win': IsotonicRegression, 'e_r': IsotonicRegression}}
-        self._models: Dict[Tuple[str, str], dict] = {}
-        # 原始统计: {(direction, regime): {'scores': [], 'wins': [], 'pnl_r': []}}
-        self._raw: Dict[Tuple[str, str], dict] = {}
-        # 分桶统计 (用于 reliability diagram)
-        self._bucket_stats: Dict[Tuple[str, str], list] = {}
-        self._fitted = False
+        self.bin_size = bin_size
+        self.p_win_models = {}
+        self.er_models = {}
+        self.bin_stats = {}
+        self.fit_time = None
+        self.total_samples = 0
+        self.min_samples_per_bucket = 5
 
-    def fit(self, trades: List[dict], verbose: bool = True) -> 'ScoreCalibrator':
-        """用历史交易数据 fit 校准模型
-
-        Args:
-            trades: 交易记录列表, 每条包含:
-                - action: OPEN_SHORT/OPEN_LONG/CLOSE_SHORT/CLOSE_LONG
-                - direction: short/long
-                - regime_label: neutral/trend/high_vol/...
-                - ss: sell_score at entry
-                - bs: buy_score at entry
-                - pnl: realized PnL ($)
-                - min_pnl_r: MAE (ratio to margin)
-                - max_pnl_r: MFE (ratio to margin)
+    def fit_from_trades(self, trades, verbose=True):
         """
-        if not HAS_SKLEARN:
-            if verbose:
-                print("  [ScoreCalibrator] sklearn 未安装, 使用分桶回退模式")
-            return self._fit_bucket_fallback(trades, verbose)
+        从完整的交易记录中训练校准模型。
 
-        # 配对 open-close
-        paired = self._pair_trades(trades)
-        if verbose:
-            print(f"  [ScoreCalibrator] 配对交易: {len(paired)} 笔")
+        Parameters
+        ----------
+        trades : list[dict]
+            交易记录, 每条需包含:
+            - action: 平仓动作 (CLOSE_SHORT, CLOSE_LONG, etc.)
+            - direction: short / long
+            - regime_label: regime 标签
+            - ss / bs: 入场时的信号分数
+            - pnl: 已实现盈亏
+            - margin: 保证金 (用于计算 pnl_r)
+        """
+        close_keywords = {'CLOSE_SHORT', 'CLOSE_LONG', 'LIQUIDATED'}
+        close_cn_keywords = ['平', '止损', '止盈']
 
-        # 按 (direction, regime) 分组
-        groups = defaultdict(lambda: {'scores': [], 'wins': [], 'pnl_r': []})
-        for p in paired:
-            key = (p['direction'], p['regime'])
-            score = p['entry_score']
-            win = 1.0 if p['pnl'] > 0 else 0.0
-            pnl_r = p.get('pnl_r', p['pnl'] / max(p.get('margin', 1), 1))
-            groups[key]['scores'].append(score)
-            groups[key]['wins'].append(win)
-            groups[key]['pnl_r'].append(pnl_r)
-
-        # 也按 direction-only 分组 (fallback for small regime samples)
-        dir_groups = defaultdict(lambda: {'scores': [], 'wins': [], 'pnl_r': []})
-        for p in paired:
-            key = p['direction']
-            score = p['entry_score']
-            win = 1.0 if p['pnl'] > 0 else 0.0
-            pnl_r = p.get('pnl_r', p['pnl'] / max(p.get('margin', 1), 1))
-            dir_groups[key]['scores'].append(score)
-            dir_groups[key]['wins'].append(win)
-            dir_groups[key]['pnl_r'].append(pnl_r)
-
-        self._raw = dict(groups)
-
-        # Fit isotonic regression per group
-        for key, data in groups.items():
-            n = len(data['scores'])
-            direction, regime = key
-            if n < self.min_samples:
-                # 样本不足, 尝试 direction-only fallback
-                fallback = dir_groups.get(direction)
-                if fallback and len(fallback['scores']) >= self.min_samples:
-                    if verbose:
-                        print(f"    {direction}|{regime}: n={n} < {self.min_samples}, "
-                              f"回退到 {direction}-all (n={len(fallback['scores'])})")
-                    self._models[key] = self._fit_single(
-                        fallback['scores'], fallback['wins'], fallback['pnl_r'],
-                        f"{direction}|{regime}(fallback)", verbose
-                    )
-                else:
-                    if verbose:
-                        print(f"    {direction}|{regime}: n={n} < {self.min_samples}, 跳过")
+        # 收集有效样本
+        samples = defaultdict(list)
+        for t in trades:
+            action = str(t.get('action', ''))
+            is_close = action in close_keywords or any(k in action for k in close_cn_keywords)
+            if not is_close:
                 continue
 
-            self._models[key] = self._fit_single(
-                data['scores'], data['wins'], data['pnl_r'],
-                f"{direction}|{regime}", verbose
-            )
+            direction = str(t.get('direction', 'unknown'))
+            regime = str(t.get('regime_label', 'unknown'))
+            pnl = float(t.get('pnl', 0))
+            margin = float(t.get('margin', 0))
 
-        self._fitted = True
-        return self
+            # 获取入场时的分数
+            # 对于 short: 用 ss; 对于 long: 用 bs
+            extra = t.get('extra', t)
+            if direction == 'short':
+                score = float(extra.get('ss', extra.get('sig_entry_score', 0)))
+            else:
+                score = float(extra.get('bs', extra.get('sig_entry_score', 0)))
 
-    def _fit_single(self, scores, wins, pnl_r, label, verbose):
-        """为单个 (direction, regime) fit isotonic regression"""
-        X = np.array(scores, dtype=float)
-        y_win = np.array(wins, dtype=float)
-        y_r = np.array(pnl_r, dtype=float)
+            if score <= 0:
+                continue
 
-        # p(win) calibration
-        ir_win = IsotonicRegression(y_min=0.0, y_max=1.0, out_of_bounds='clip')
-        ir_win.fit(X, y_win)
+            pnl_r = pnl / max(margin, 1.0) if margin > 0 else 0
+            win = 1 if pnl > 0 else 0
 
-        # E[R] calibration — 需要对 outlier 做 winsorize
-        y_r_clipped = np.clip(y_r, np.percentile(y_r, 5), np.percentile(y_r, 95))
-        ir_r = IsotonicRegression(out_of_bounds='clip')
-        ir_r.fit(X, y_r_clipped)
-
-        # 分桶统计
-        buckets = self._compute_buckets(X, y_win, y_r)
+            key = (direction, regime)
+            samples[key].append({
+                'score': score,
+                'win': win,
+                'pnl_r': pnl_r,
+                'mae': abs(float(t.get('min_pnl_r', 0) or 0)),
+                'mfe': abs(float(t.get('max_pnl_r', 0) or 0)),
+            })
 
         if verbose:
-            n = len(X)
-            wr = np.mean(y_win) * 100
-            avg_r = np.mean(y_r) * 100
-            print(f"    {label}: n={n} WR={wr:.0f}% avgR={avg_r:+.1f}% "
-                  f"score_range=[{X.min():.0f}, {X.max():.0f}]")
+            print(f"\n{'='*70}")
+            print(f"Score Calibration 训练")
+            print(f"{'='*70}")
 
-        return {
-            'p_win': ir_win,
-            'e_r': ir_r,
-            'n': len(X),
-            'buckets': buckets,
-        }
+        self.total_samples = sum(len(v) for v in samples.values())
 
-    def _compute_buckets(self, scores, wins, pnl_r, bucket_size=5):
-        """分桶统计 (供 reliability diagram 和人工审查)"""
-        buckets = []
-        score_min = int(np.floor(scores.min() / bucket_size) * bucket_size)
-        score_max = int(np.ceil(scores.max() / bucket_size) * bucket_size)
-        for lo in range(score_min, score_max + 1, bucket_size):
-            hi = lo + bucket_size
-            mask = (scores >= lo) & (scores < hi)
-            n = mask.sum()
-            if n > 0:
-                buckets.append({
-                    'range': f"[{lo},{hi})",
-                    'n': int(n),
-                    'win_rate': float(np.mean(wins[mask])),
-                    'avg_r': float(np.mean(pnl_r[mask])),
-                    'median_r': float(np.median(pnl_r[mask])),
-                })
-        return buckets
+        # 也对纯 direction (跨 regime) 训练一个 fallback 模型
+        direction_samples = defaultdict(list)
+        for (d, r), s_list in samples.items():
+            direction_samples[d].extend(s_list)
 
-    def _fit_bucket_fallback(self, trades, verbose):
-        """无 sklearn 时的分桶回退"""
-        paired = self._pair_trades(trades)
-        groups = defaultdict(lambda: {'scores': [], 'wins': [], 'pnl_r': []})
-        for p in paired:
-            key = (p['direction'], p['regime'])
-            groups[key]['scores'].append(p['entry_score'])
-            groups[key]['wins'].append(1.0 if p['pnl'] > 0 else 0.0)
-            pnl_r = p.get('pnl_r', p['pnl'] / max(p.get('margin', 1), 1))
-            groups[key]['pnl_r'].append(pnl_r)
+        # 训练每个桶的模型
+        all_keys = list(samples.keys()) + [(d, '_all') for d in direction_samples.keys()]
 
-        for key, data in groups.items():
-            X = np.array(data['scores'])
-            y_win = np.array(data['wins'])
-            y_r = np.array(data['pnl_r'])
-            buckets = self._compute_buckets(X, y_win, y_r)
-            self._models[key] = {'p_win': None, 'e_r': None, 'n': len(X), 'buckets': buckets}
-
-        self._fitted = True
-        return self
-
-    def _pair_trades(self, trades: List[dict]) -> List[dict]:
-        """配对 open-close 交易"""
-        opens_by_dir = defaultdict(list)
-        closes_by_dir = defaultdict(list)
-
-        for t in trades:
-            action = t.get('action', '')
-            d = t.get('direction', 'unknown')
-            if action.startswith('OPEN_'):
-                opens_by_dir[d].append(t)
-            elif action.startswith('CLOSE_'):
-                closes_by_dir[d].append(t)
-
-        paired = []
-        for d in opens_by_dir:
-            ops = opens_by_dir[d]
-            cls = closes_by_dir.get(d, [])
-            for i, o in enumerate(ops):
-                if i >= len(cls):
-                    break
-                c = cls[i]
-                # entry score = SS for short, BS for long
-                if d == 'short':
-                    entry_score = float(o.get('ss', 0) or 0)
-                else:
-                    entry_score = float(o.get('bs', 0) or 0)
-
-                paired.append({
-                    'direction': d,
-                    'regime': o.get('regime_label', 'unknown'),
-                    'entry_score': entry_score,
-                    'pnl': float(c.get('pnl', 0) or 0),
-                    'pnl_r': float(c.get('min_pnl_r', 0) or 0),  # fallback
-                    'margin': float(o.get('margin', 0) or 0),
-                    'min_pnl_r': float(c.get('min_pnl_r', 0) or 0),
-                    'max_pnl_r': float(c.get('max_pnl_r', 0) or 0),
-                })
-                # 计算更准确的 pnl_r
-                margin = paired[-1]['margin']
-                if margin > 0:
-                    paired[-1]['pnl_r'] = paired[-1]['pnl'] / margin
-        return paired
-
-    def p_win(self, direction: str, regime: str, score: float) -> float:
-        """返回校准后的 P(win)
-
-        Args:
-            direction: 'short' or 'long'
-            regime: regime label
-            score: SS (for short) or BS (for long)
-
-        Returns:
-            P(win) in [0, 1], 未校准返回 -1
-        """
-        model = self._get_model(direction, regime)
-        if model is None or model.get('p_win') is None:
-            return -1.0
-        return float(model['p_win'].predict(np.array([[score]]))[0])
-
-    def expected_r(self, direction: str, regime: str, score: float) -> float:
-        """返回校准后的 E[R] (期望收益率, ratio to margin)
-
-        Returns:
-            E[R], 未校准返回 NaN
-        """
-        model = self._get_model(direction, regime)
-        if model is None or model.get('e_r') is None:
-            return float('nan')
-        return float(model['e_r'].predict(np.array([[score]]))[0])
-
-    def should_enter(self, direction: str, regime: str, score: float,
-                     cost_estimate: float = 0.002,
-                     min_p_win: float = 0.40) -> Tuple[bool, dict]:
-        """基于校准结果判断是否应该入场
-
-        Args:
-            direction: 'short' or 'long'
-            regime: regime label
-            score: SS or BS
-            cost_estimate: 估算单次交易成本 (fee + slippage + avg funding)
-            min_p_win: 最低胜率要求
-
-        Returns:
-            (should_enter: bool, info: dict)
-        """
-        p = self.p_win(direction, regime, score)
-        er = self.expected_r(direction, regime, score)
-
-        info = {
-            'calibrated_p_win': p,
-            'calibrated_e_r': er,
-            'cost_estimate': cost_estimate,
-            'calibrated': p >= 0,
-        }
-
-        if p < 0:
-            # 未校准, 回退到默认行为 (允许入场)
-            info['reason'] = 'uncalibrated'
-            return True, info
-
-        # 入场条件: E[R] > cost AND p(win) > min_p_win
-        if np.isfinite(er) and er > cost_estimate and p >= min_p_win:
-            info['reason'] = f'e_r={er:.3f}>cost={cost_estimate:.3f}, p={p:.2f}>={min_p_win:.2f}'
-            return True, info
-        elif np.isfinite(er) and er > cost_estimate:
-            info['reason'] = f'e_r_ok but p_win={p:.2f}<{min_p_win:.2f}'
-            return False, info
-        else:
-            info['reason'] = f'e_r={er:.3f}<=cost={cost_estimate:.3f}'
-            return False, info
-
-    def _get_model(self, direction, regime):
-        """获取模型, 支持 fallback"""
-        key = (direction, regime)
-        if key in self._models:
-            return self._models[key]
-        # Fallback: 同方向的聚合模型
-        for k, m in self._models.items():
-            if k[0] == direction and k[1] == '_all':
-                return m
-        return None
-
-    def get_bucket_stats(self, direction: str, regime: str) -> list:
-        """获取分桶统计 (供可视化)"""
-        model = self._get_model(direction, regime)
-        if model is None:
-            return []
-        return model.get('buckets', [])
-
-    def summary(self) -> str:
-        """打印校准摘要"""
-        lines = ["\n  Score Calibration Summary:"]
-        lines.append(f"  {'Leg':<25s} {'N':>5s} {'校准WR':>8s} {'bucket范围':>15s}")
-        lines.append(f"  {'-'*60}")
-        for key, model in sorted(self._models.items()):
-            d, r = key
-            leg = f"{d}|{r}"
-            n = model['n']
-            buckets = model.get('buckets', [])
-            if buckets:
-                wr_range = f"{buckets[0]['win_rate']*100:.0f}-{buckets[-1]['win_rate']*100:.0f}%"
-                score_range = f"{buckets[0]['range']}-{buckets[-1]['range']}"
+        for key in sorted(set(all_keys)):
+            direction, regime = key
+            if regime == '_all':
+                s_list = direction_samples[direction]
             else:
-                wr_range = 'N/A'
-                score_range = 'N/A'
-            lines.append(f"  {leg:<25s} {n:5d} {wr_range:>8s} {score_range:>15s}")
+                s_list = samples[key]
 
-        # 分桶详情
-        for key, model in sorted(self._models.items()):
-            d, r = key
-            leg = f"{d}|{r}"
-            buckets = model.get('buckets', [])
-            if buckets:
-                lines.append(f"\n  [{leg}] 分桶详情:")
-                lines.append(f"  {'Score':>10s} {'N':>5s} {'WR':>7s} {'avgR':>8s} {'medR':>8s}")
-                for b in buckets:
-                    lines.append(f"  {b['range']:>10s} {b['n']:5d} {b['win_rate']*100:6.0f}% "
-                                 f"{b['avg_r']*100:+7.1f}% {b['median_r']*100:+7.1f}%")
-        return '\n'.join(lines)
+            if len(s_list) < self.min_samples_per_bucket:
+                if verbose and regime != '_all':
+                    print(f"  {direction:>6}/{regime:<18}: 样本不足 ({len(s_list)}), 跳过")
+                continue
 
-    def save(self, path: str):
-        """保存校准结果 (分桶统计, 可 JSON 序列化)"""
-        data = {}
-        for key, model in self._models.items():
-            d, r = key
-            data[f"{d}|{r}"] = {
-                'n': model['n'],
-                'buckets': model.get('buckets', []),
-            }
+            scores = np.array([s['score'] for s in s_list])
+            wins = np.array([s['win'] for s in s_list])
+            pnl_rs = np.array([s['pnl_r'] for s in s_list])
+
+            # Isotonic regression: score → p(win)
+            p_model = IsotonicRegression().fit(scores, wins)
+            self.p_win_models[key] = p_model
+
+            # Isotonic regression: score → E[R]
+            er_model = IsotonicRegression().fit(scores, pnl_rs)
+            self.er_models[key] = er_model
+
+            # 分档统计
+            bins = {}
+            for s in s_list:
+                b = int(s['score'] // self.bin_size) * self.bin_size
+                if b not in bins:
+                    bins[b] = {'n': 0, 'wins': 0, 'losses': 0, 'sum_r': 0, 'sum_mae': 0}
+                bins[b]['n'] += 1
+                bins[b]['wins'] += s['win']
+                bins[b]['losses'] += 1 - s['win']
+                bins[b]['sum_r'] += s['pnl_r']
+                bins[b]['sum_mae'] += s['mae']
+            for b, bv in bins.items():
+                bv['avg_r'] = round(bv['sum_r'] / max(bv['n'], 1), 6)
+                bv['avg_mae'] = round(bv['sum_mae'] / max(bv['n'], 1), 6)
+                bv['win_rate'] = round(bv['wins'] / max(bv['n'], 1), 4)
+                del bv['sum_r']
+                del bv['sum_mae']
+            self.bin_stats[key] = bins
+
+            if verbose:
+                n = len(s_list)
+                wr = np.mean(wins)
+                avg_r = np.mean(pnl_rs)
+                p_at_50 = float(p_model.predict(np.array([50.0]))[0]) if len(p_model.x_thresholds) > 0 else 0.5
+                er_at_50 = float(er_model.predict(np.array([50.0]))[0]) if len(er_model.x_thresholds) > 0 else 0.0
+                print(f"  {direction:>6}/{regime:<18}: n={n:>4}, "
+                      f"WR={wr:.2%}, avgR={avg_r:+.4f}, "
+                      f"P(win|50)={p_at_50:.3f}, E[R|50]={er_at_50:+.4f}")
+
+        self.fit_time = datetime.now().isoformat()
+
+        if verbose:
+            print(f"\n  总样本: {self.total_samples}, 桶数: {len(self.p_win_models)}")
+            self._print_reliability_diagram()
+
+    def _print_reliability_diagram(self):
+        """打印校准可靠性图 (文本版)。"""
+        print(f"\n  Reliability Diagram (校准准确度):")
+        print(f"  {'Bucket':>8} {'Pred.P':>8} {'Actual':>8} {'N':>5} {'Gap':>8}")
+        for key, bins in sorted(self.bin_stats.items()):
+            model = self.p_win_models.get(key)
+            if model is None:
+                continue
+            direction, regime = key
+            if regime == '_all':
+                continue
+            print(f"\n  --- {direction}/{regime} ---")
+            for b in sorted(bins.keys()):
+                bv = bins[b]
+                mid = b + self.bin_size / 2
+                pred = float(model.predict(np.array([mid]))[0])
+                actual = bv['win_rate']
+                gap = pred - actual
+                bar = '█' * int(abs(gap) * 50)
+                sign = '+' if gap >= 0 else '-'
+                print(f"  {b:>3}-{b+self.bin_size:<3} {pred:>7.3f} {actual:>7.3f} {bv['n']:>5} "
+                      f"{sign}{abs(gap):.3f} {bar}")
+
+    def should_enter(self, direction, regime, score, cost_estimate=0.002, min_p_win=0.40):
+        """
+        判断是否应该入场。
+
+        Parameters
+        ----------
+        direction : str
+            'short' or 'long'
+        regime : str
+            regime 标签
+        score : float
+            入场信号分数 (SS for short, BS for long)
+        cost_estimate : float
+            估计的交易成本 (手续费 + 滑点 + funding 作为 R 的比例)
+        min_p_win : float
+            最低胜率要求
+
+        Returns
+        -------
+        tuple (bool, dict)
+            (是否入场, 诊断信息)
+        """
+        info = {
+            'direction': direction,
+            'regime': regime,
+            'score': score,
+            'cost_estimate': cost_estimate,
+        }
+
+        # 查找最佳匹配的模型
+        key = (direction, regime)
+        fallback_key = (direction, '_all')
+
+        p_model = self.p_win_models.get(key) or self.p_win_models.get(fallback_key)
+        er_model = self.er_models.get(key) or self.er_models.get(fallback_key)
+
+        if p_model is None:
+            # 没有校准模型, 默认允许
+            info['reason'] = 'no_model'
+            info['model_key'] = 'none'
+            return True, info
+
+        score_arr = np.array([score])
+        p_win = float(p_model.predict(score_arr)[0])
+        e_r = float(er_model.predict(score_arr)[0]) if er_model else 0.0
+
+        info['p_win'] = round(p_win, 4)
+        info['e_r'] = round(e_r, 6)
+        info['model_key'] = f"{key[0]}/{key[1]}"
+
+        # 决策: E[R] > cost 且 p(win) > min_p_win
+        e_r_net = e_r - cost_estimate
+        info['e_r_net'] = round(e_r_net, 6)
+
+        if p_win < min_p_win:
+            info['reason'] = f'low_p_win ({p_win:.3f} < {min_p_win})'
+            return False, info
+        if e_r_net < 0:
+            info['reason'] = f'negative_e_r ({e_r_net:+.4f})'
+            return False, info
+
+        info['reason'] = 'pass'
+        return True, info
+
+    def get_calibrated_score(self, direction, regime, score):
+        """
+        获取校准后的得分 (p(win) * 100)。
+
+        可用于替代原始 SS/BS 进行阈值比较。
+        """
+        key = (direction, regime)
+        fallback_key = (direction, '_all')
+        model = self.p_win_models.get(key) or self.p_win_models.get(fallback_key)
+        if model is None:
+            return score
+        return float(model.predict(np.array([score]))[0]) * 100
+
+    def save(self, path):
+        """保存校准模型到 JSON 文件。"""
+        data = {
+            'version': 1,
+            'bin_size': self.bin_size,
+            'fit_time': self.fit_time,
+            'total_samples': self.total_samples,
+            'p_win_models': {},
+            'er_models': {},
+            'bin_stats': {},
+        }
+        for key, model in self.p_win_models.items():
+            k_str = f"{key[0]}_{key[1]}"
+            data['p_win_models'][k_str] = model.to_dict()
+        for key, model in self.er_models.items():
+            k_str = f"{key[0]}_{key[1]}"
+            data['er_models'][k_str] = model.to_dict()
+        for key, bins in self.bin_stats.items():
+            k_str = f"{key[0]}_{key[1]}"
+            data['bin_stats'][k_str] = {str(b): v for b, v in bins.items()}
+
         with open(path, 'w') as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, ensure_ascii=False)
 
-    def load(self, path: str) -> 'ScoreCalibrator':
-        """从文件加载校准结果 (分桶模式, 无需 sklearn)"""
+    @classmethod
+    def load(cls, path):
+        """从 JSON 文件加载校准模型。"""
         with open(path) as f:
             data = json.load(f)
-        for leg, info in data.items():
-            d, r = leg.split('|')
-            self._models[(d, r)] = {
-                'p_win': None,
-                'e_r': None,
-                'n': info['n'],
-                'buckets': info['buckets'],
-            }
-        self._fitted = True
-        return self
+
+        obj = cls(bin_size=data.get('bin_size', 5))
+        obj.fit_time = data.get('fit_time')
+        obj.total_samples = data.get('total_samples', 0)
+
+        for k_str, model_dict in data.get('p_win_models', {}).items():
+            parts = k_str.split('_', 1)
+            if len(parts) == 2:
+                key = (parts[0], parts[1])
+                obj.p_win_models[key] = IsotonicRegression.from_dict(model_dict)
+
+        for k_str, model_dict in data.get('er_models', {}).items():
+            parts = k_str.split('_', 1)
+            if len(parts) == 2:
+                key = (parts[0], parts[1])
+                obj.er_models[key] = IsotonicRegression.from_dict(model_dict)
+
+        for k_str, bins_dict in data.get('bin_stats', {}).items():
+            parts = k_str.split('_', 1)
+            if len(parts) == 2:
+                key = (parts[0], parts[1])
+                obj.bin_stats[key] = {int(b): v for b, v in bins_dict.items()}
+
+        return obj
+
+
+def main():
+    """从回测数据训练校准模型的命令行入口。"""
+    import argparse
+    parser = argparse.ArgumentParser(description='Score Calibration: SS/BS → 校准概率')
+    parser.add_argument('--trades-file', type=str, default=None,
+                        help='交易记录 JSON 文件')
+    parser.add_argument('--tf', default='1h', help='时间框架')
+    parser.add_argument('--days', type=int, default=90, help='回测天数')
+    parser.add_argument('--output', type=str, default='score_calibration_model.json',
+                        help='输出模型文件')
+    parser.add_argument('--bin-size', type=int, default=5, help='分档宽度')
+    args = parser.parse_args()
+
+    if args.trades_file:
+        with open(args.trades_file) as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            trades = data
+        elif isinstance(data, dict):
+            trades = data.get('trades', data.get('global_best_trades', []))
+        else:
+            print("无法识别的文件格式")
+            return
+    else:
+        from mae_calibrator import run_backtest_for_mae
+        trades, result = run_backtest_for_mae(tf=args.tf, days=args.days)
+        if not trades:
+            print("回测未产生交易, 无法训练")
+            return
+
+    calibrator = ScoreCalibrator(bin_size=args.bin_size)
+    calibrator.fit_from_trades(trades)
+
+    output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.output)
+    calibrator.save(output_path)
+    print(f"\n校准模型已保存到: {output_path}")
+
+    # 展示几个典型分数的校准结果
+    print(f"\n{'='*60}")
+    print(f"校准结果示例:")
+    print(f"{'Score':>7} {'Direction':>10} {'p(win)':>8} {'E[R]':>8}")
+    print(f"{'─'*60}")
+    for score in [30, 40, 50, 60, 70, 80]:
+        for d in ['short', 'long']:
+            ok, info = calibrator.should_enter(d, 'neutral', score)
+            p = info.get('p_win', '?')
+            er = info.get('e_r', '?')
+            if isinstance(p, float):
+                print(f"  {score:>5} {d:>10} {p:>7.3f} {er:>+7.4f}  {'✓' if ok else '✗'}")
+
+
+if __name__ == '__main__':
+    main()

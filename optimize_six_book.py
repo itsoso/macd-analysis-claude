@@ -1308,6 +1308,15 @@ def _run_strategy_core(
         'blocked_b': 0,
         'reason_counts': {},
     }
+    # v11 Phase 1c: 反手逻辑追踪
+    reverse_hand_stats = {
+        'reverse_close_short': 0,   # 反向平空次数
+        'reverse_close_long': 0,    # 反向平多次数
+        'reverse_reopen_short': 0,  # 平多后同bar开空
+        'reverse_reopen_long': 0,   # 平空后同bar开多
+    }
+    _just_reverse_closed_short = False  # 当前 bar 刚反向平空
+    _just_reverse_closed_long = False   # 当前 bar 刚反向平多
     book_consensus_stats = {
         'enabled': use_neutral_book_consensus,
         'evaluated': 0,
@@ -2820,16 +2829,22 @@ def _run_strategy_core(
 
         # 先执行“反向平仓”再判断开仓：
         # 避免因开仓逻辑先执行而错过同bar反手，且保证不会同时持有多空仓。
+        _just_reverse_closed_short = False
+        _just_reverse_closed_long = False
         if eng.futures_short and short_bars >= reverse_min_hold_short and bs >= cur_close_short_bs:
             bs_dom = (ss < bs * 0.7) if bs > 0 else True
             if bs_dom:
                 eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}", bar_low=_bar_low, bar_high=_bar_high)
+                reverse_hand_stats['reverse_close_short'] += 1
+                _just_reverse_closed_short = True
                 short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown * 3; short_bars = 0
                 short_partial_done = False; short_partial2_done = False
         if eng.futures_long and long_bars >= reverse_min_hold_long and ss >= cur_close_long_ss:
             ss_dom = (bs < ss * 0.7) if bs > 0 else True
             if ss_dom:
                 eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}", bar_low=_bar_low, bar_high=_bar_high)
+                reverse_hand_stats['reverse_close_long'] += 1
+                _just_reverse_closed_long = True
                 long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown * 3; long_bars = 0
                 long_partial_done = False; long_partial2_done = False
 
@@ -4091,6 +4106,8 @@ def _run_strategy_core(
         _dv = _build_extreme_div_short_veto_result()
         if _dv:
             result['extreme_div_short_veto'] = _dv
+        # v11 Phase 1c: 反手逻辑统计
+        result['reverse_hand'] = dict(reverse_hand_stats)
         if _perp_data_quality:
             result['perp_data_quality'] = _perp_data_quality
         if data_quality_flags:

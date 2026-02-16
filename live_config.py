@@ -345,7 +345,23 @@ STRATEGY_PARAM_VERSIONS = {
         "risk_budget_trend_long": 1.20,        # 趋势中做多(顺势): 适度加仓
         "risk_budget_low_vol_trend_short": 0.50,  # 低波动趋势做空: 半仓
         "risk_budget_low_vol_trend_long": 1.20,   # 低波动趋势做多: 适度加仓
+        # ── v11: Soft Anti-Squeeze (sigmoid 连续惩罚替代硬门控) ──
+        "use_soft_antisqueeze": True,
+        "soft_antisqueeze_w_fz": 0.5,
+        "soft_antisqueeze_w_oi": 0.3,
+        "soft_antisqueeze_w_imb": 0.2,
+        "soft_antisqueeze_midpoint": 1.5,
+        "soft_antisqueeze_steepness": 2.0,
+        "soft_antisqueeze_max_discount": 0.50,
+        #
         # ── v10.3 D2: neutral short 动态小仓预算 ──
+        #
+        # -- v11 Phase 2c: Rolling Percentile Regime thresholds --
+        "use_dynamic_regime_thresholds": True,
+        "dynamic_regime_lookback_bars": 2160,     # ~90 days at 1h
+        "dynamic_regime_vol_quantile": 0.80,      # vol_high = P80
+        "dynamic_regime_trend_quantile": 0.80,    # trend_strong = P80
+        #
         "use_neutral_short_dynamic_budget": False,
         "neutral_short_low_quality_floor": 0.02,
         "neutral_short_crowding_floor": 0.02,
@@ -527,7 +543,7 @@ class StrategyConfig:
     anti_squeeze_taker_imb_threshold: float = 0.12   # taker imbalance 阈值
     micro_mode_override: bool = True
     # V11 Soft Anti-Squeeze: 将硬门控改为连续 sigmoid 惩罚
-    use_soft_antisqueeze: bool = False                # 默认关闭, Web 页面可开启
+    use_soft_antisqueeze: bool = True                 # v11: 默认启用 (替代硬门控)
     soft_antisqueeze_w_fz: float = 0.5               # funding z 权重
     soft_antisqueeze_w_oi: float = 0.3               # OI z 权重
     soft_antisqueeze_w_imb: float = 0.2              # taker imbalance 权重
@@ -719,6 +735,9 @@ class StrategyConfig:
     # trend: DIV 保留高权重(60%), 背离在趋势末端有效
     # high_vol: VP 升权(12%), 量价在高波中更有效
     use_regime_adaptive_fusion: bool = False
+    # v11 Phase 2b: Shrinkage mixture
+    p18_shrinkage_max_lambda: float = 0.40
+    p18_shrinkage_n_scale: float = 100.0
     # 说明: 信号层会将 div_w/ma_w 归一化后用于基数融合，因此这里直接填“目标占比”
     regime_trend_div_w: float = 0.60
     regime_trend_ma_w: float = 0.40
