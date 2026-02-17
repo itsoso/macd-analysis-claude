@@ -159,8 +159,8 @@ PHASE_CONFIGS = {
 
 
 # ── 策略参数版本 ──
-# 通过环境变量 STRATEGY_VERSION=v1/v2/v3/v4/v5 可切换
-# 默认使用 v5
+# 通过环境变量 STRATEGY_VERSION=v1/v2/v3/v4/v5/v6 可切换
+# 默认使用 v5 (v6 待生产验证后切换)
 STRATEGY_PARAM_VERSIONS = {
     "v1": {  # run28 基线参数 (趋势v3 + LiveGate + Regime)
         "short_threshold": 25,
@@ -235,6 +235,7 @@ STRATEGY_PARAM_VERSIONS = {
         # ── 基础参数 ──
         "short_threshold": 40,
         "long_threshold": 30,
+        "close_long_ss": 65,       # v10.3 候选: 更保守的反向平多门槛
         "short_sl": -0.20,          # 全局默认 (被 P24 regime SL 覆盖)
         "short_tp": 0.60,
         "long_sl": -0.10,
@@ -314,7 +315,7 @@ STRATEGY_PARAM_VERSIONS = {
         # ── v10.1: P21 Risk-Per-Trade (仓位与止损绑定) ──
         # size = risk_budget / stop_distance → 止损放宽不增加单笔亏损
         "use_risk_per_trade": True,
-        "risk_per_trade_pct": 0.018,       # v10.3 全区间复验: 降低风险以同时通过WFO与压力测试
+        "risk_per_trade_pct": 0.018,       # v10.3 候选: rp18 (收益/效率平衡最优)
         "risk_stop_mode": "atr",           # 使用 ATR 计算止损距离
         "risk_atr_mult_short": 3.0,        # P21 内部 fallback (正常由 actual_sl 绑定覆盖)
         "risk_atr_mult_long": 2.0,
@@ -400,6 +401,27 @@ STRATEGY_PARAM_VERSIONS = {
         "neutral_short_crowding_taker_imb": 0.12,
     },
 }
+
+# ── v6: P42 Soft Veto 校准 + 反向平仓门槛优化 ──
+# 基于: 4 币种 (ETH/BTC/SOL/BNB) × 3 时段 (IS/OOS/5yr) 验证
+# P42 SV20+CLS45: IS +0.009, OOS +0.014, 5yr +0.007 (all positive)
+# 变更:
+#   1. soft_veto_midpoint: 1.0→2.0 (P42 SV20, sigmoid 惩罚校准)
+#   2. soft_veto_steepness: 3.0→5.0 (与 P42 回测验证一致)
+#   3. close_short_bs: 60→45 (P42 CLS45, 更积极反向平空)
+#   4. close_long_ss: 60→45 (P42 CLS45, 更积极反向平多)
+# 注意: close_short_bs/close_long_ss 在 v5 中未显式设置 (默认60),
+#       回测框架默认40, P42 验证45优于40。45对于实盘是降低门槛。
+STRATEGY_PARAM_VERSIONS["v6"] = {
+    **STRATEGY_PARAM_VERSIONS["v5"],
+    # P42: Soft Veto 校准
+    "soft_veto_steepness": 5.0,        # P42: 3.0→5.0 (回测验证口径)
+    "soft_veto_midpoint": 2.0,         # P42 SV20: 1.0→2.0 (all 3 periods positive)
+    # P42: 反向平仓门槛优化
+    "close_short_bs": 45,              # P42 CLS45: 60→45 (回测验证 all 3 positive)
+    "close_long_ss": 45,               # P42 CLS45: 60→45 (匹配 close_short_bs)
+}
+
 _ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v5")
 
 
@@ -419,8 +441,8 @@ def _resolve_param(field_name: str, v2_default):
 class StrategyConfig:
     """策略参数配置 - 从优化结果加载
 
-    版本切换: 设置环境变量 STRATEGY_VERSION=v1/v2/v3/v4/v5
-    默认: v5
+    版本切换: 设置环境变量 STRATEGY_VERSION=v1/v2/v3/v4/v5/v6
+    默认: v5 (v6=P42 优化版, 待验证)
     """
     symbol: str = "ETHUSDT"
     timeframe: str = "1h"
@@ -429,8 +451,9 @@ class StrategyConfig:
     buy_threshold: float = 25
     short_threshold: float = field(default_factory=lambda: _resolve_param("short_threshold", 35))
     long_threshold: float = field(default_factory=lambda: _resolve_param("long_threshold", 30))
-    close_short_bs: float = 40
-    close_long_ss: float = 40
+    close_short_bs: float = field(default_factory=lambda: _resolve_param("close_short_bs", 60))
+    close_long_ss: float = field(default_factory=lambda: _resolve_param("close_long_ss", 60))
+    close_signal_margin: float = 20  # 反向平仓净差额要求 (SS-BS or BS-SS >= margin)
     sell_pct: float = 0.55
     # 止损止盈
     short_sl: float = field(default_factory=lambda: _resolve_param("short_sl", -0.18))
@@ -519,6 +542,16 @@ class StrategyConfig:
     # 2025-01~2026-01 A/B: 8 bars 在收益/组合PF上优于0/2/6/12。
     reverse_min_hold_short: int = 8
     reverse_min_hold_long: int = 8
+    # 强信号覆盖阈值: HOLD 状态下 BS/SS >= 此值且无持仓时, 触发多周期共识检查
+    strong_signal_override_threshold: float = 85
+    # 波动率过滤: ATR 占价格比 < 此值时拒绝开仓, 避免低波动环境费率磨损
+    min_atr_pct_to_open: float = 0.003  # 0.3%
+    # 反向信号平仓后是否立即反手开仓 (默认关闭, 等下一 bar 冷静确认)
+    reverse_immediate: bool = False
+    # ML 增强: 使用 LightGBM 预测模型作为第七维度融入信号
+    # 需要先训练模型: python3.10 ml_live_integration.py --train
+    use_ml_enhancement: bool = False
+    ml_enhancement_shadow_mode: bool = True       # shadow 模式: 只记录不实际修改分数
     # 融合模式
     fusion_mode: str = "c6_veto_4"
     veto_threshold: float = 25
@@ -533,6 +566,14 @@ class StrategyConfig:
     bb_bonus: float = 0.10
     vp_bonus: float = 0.08
     cs_bonus: float = 0.06
+    # 底部背离子项加分（默认保持当前生产行为）
+    div_bottom_single_bonus: float = 15.0
+    div_bottom_area_bonus: float = 10.0
+    div_bottom_dif_bonus: float = 0.0
+    div_bottom_exhaust_bonus: float = 18.0
+    div_bottom_zero_ret_bonus: float = 0.0
+    div_bottom_top_mult: float = 0.15
+    div_bottom_trend_mult: float = 1.20
     # 数据参数
     lookback_days: int = 60
     # 最大持仓K线数

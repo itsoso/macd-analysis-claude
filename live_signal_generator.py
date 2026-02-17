@@ -55,6 +55,7 @@ class SignalResult:
         self.conflict: bool = False
         self.bar_index: int = 0
         self.regime_label: str = "neutral"
+        self.atr_pct: float = 0.0  # ATR 占价格比, 用于波动率过滤
 
     def to_dict(self) -> dict:
         return {
@@ -111,6 +112,9 @@ class LiveSignalGenerator:
 
         # 信号历史
         self._signal_history: list = []
+
+        # ML 增强器 (懒加载)
+        self._ml_enhancer = None
 
     def _calc_refresh_interval(self) -> float:
         """根据时间框架计算数据刷新间隔(秒)"""
@@ -313,11 +317,40 @@ class LiveSignalGenerator:
                     df, idx, sell_score, buy_score
                 )
 
+            # ── ML 增强 (第七维度, 可选) ──
+            _ml_info = {}
+            if getattr(self.config, 'use_ml_enhancement', False):
+                try:
+                    if self._ml_enhancer is None:
+                        from ml_live_integration import MLSignalEnhancer
+                        self._ml_enhancer = MLSignalEnhancer()
+                    _ml_ss, _ml_bs, _ml_info = self._ml_enhancer.enhance_signal(
+                        sell_score, buy_score, df
+                    )
+                    _ml_shadow = getattr(self.config, 'ml_enhancement_shadow_mode', True)
+                    _ml_info['shadow_mode'] = _ml_shadow
+                    if _ml_shadow:
+                        if self.logger:
+                            self.logger.info(
+                                f"[ML shadow] regime={_ml_info.get('regime','?')} "
+                                f"conf={_ml_info.get('trade_confidence',0):.3f} "
+                                f"SS {sell_score:.1f}→{_ml_ss:.1f} "
+                                f"BS {buy_score:.1f}→{_ml_bs:.1f}"
+                            )
+                    else:
+                        sell_score, buy_score = _ml_ss, _ml_bs
+                except Exception as _ml_err:
+                    if self.logger:
+                        self.logger.warning(f"ML 增强失败: {_ml_err}")
+
             # 提取各维度分数
             components = self._extract_components(signals, idx, dt)
             if _antisq_info:
                 components['antisq_long_penalty'] = _antisq_info.get('long_penalty', 0)
                 components['antisq_short_penalty'] = _antisq_info.get('short_penalty', 0)
+            if _ml_info:
+                components['ml_bull_prob'] = _ml_info.get('bull_prob', 0.5)
+                components['ml_action'] = _ml_info.get('action', 'neutral')
 
             # 构建结果
             result = SignalResult()
@@ -330,6 +363,22 @@ class LiveSignalGenerator:
             result.bar_index = idx
             result.conflict = (sell_score > 15 and buy_score > 15 and
                               abs(sell_score - buy_score) < 10)
+
+            # 计算 ATR 百分比 (14 bar ATR / 当前价格)
+            atr_period = 14
+            if idx >= atr_period:
+                high = df['high'].iloc[idx - atr_period + 1:idx + 1]
+                low = df['low'].iloc[idx - atr_period + 1:idx + 1]
+                prev_close = df['close'].iloc[idx - atr_period:idx]
+                tr = pd.concat([
+                    high - low,
+                    (high - prev_close.values).abs(),
+                    (low - prev_close.values).abs(),
+                ], axis=1).max(axis=1)
+                atr_val = tr.mean()
+                result.atr_pct = float(atr_val / result.price) if result.price > 0 else 0.0
+            else:
+                result.atr_pct = 0.0
 
             # 记录历史
             self._signal_history.append(result.to_dict())
@@ -529,10 +578,14 @@ class LiveSignalGenerator:
                 signal.reason = (f"追踪止盈 max={short_max_pnl:.1%} "
                                 f"cur={short_pnl_ratio:.1%}")
                 return signal
-            # 反向信号
-            if bs >= cfg.close_short_bs and bs > ss * 0.7:
+            # 反向信号 (需满足最小持仓时间 + 净差额要求, 与回测对齐)
+            _close_margin = getattr(cfg, 'close_signal_margin', 20)
+            if (bs >= cfg.close_short_bs and bs > ss * 0.7
+                    and (bs - ss) >= _close_margin
+                    and short_bars >= cfg.reverse_min_hold_short):
                 signal.action = "CLOSE_SHORT"
-                signal.reason = f"反向信号 BS={bs:.1f} >= {cfg.close_short_bs}"
+                signal.reason = (f"反向信号 BS={bs:.1f} >= {cfg.close_short_bs} "
+                                 f"margin={bs - ss:.1f} bars={short_bars}")
                 return signal
             # 止损
             if short_pnl_ratio < cfg.short_sl:
@@ -557,9 +610,14 @@ class LiveSignalGenerator:
                 signal.reason = (f"追踪止盈 max={long_max_pnl:.1%} "
                                 f"cur={long_pnl_ratio:.1%}")
                 return signal
-            if ss >= cfg.close_long_ss and ss > bs * 0.7:
+            # 反向信号 (需满足最小持仓时间 + 净差额要求, 与回测对齐)
+            _close_margin = getattr(cfg, 'close_signal_margin', 20)
+            if (ss >= cfg.close_long_ss and ss > bs * 0.7
+                    and (ss - bs) >= _close_margin
+                    and long_bars >= cfg.reverse_min_hold_long):
                 signal.action = "CLOSE_LONG"
-                signal.reason = f"反向信号 SS={ss:.1f} >= {cfg.close_long_ss}"
+                signal.reason = (f"反向信号 SS={ss:.1f} >= {cfg.close_long_ss} "
+                                 f"margin={ss - bs:.1f} bars={long_bars}")
                 return signal
             if long_pnl_ratio < cfg.long_sl:
                 signal.action = "CLOSE_LONG"
@@ -571,6 +629,14 @@ class LiveSignalGenerator:
                 return signal
 
         # --- 开仓检查 ---
+
+        # 波动率过滤: ATR 不足以覆盖开平费用时拒绝开仓
+        min_atr_pct = getattr(cfg, 'min_atr_pct_to_open', 0.003)
+        if hasattr(signal, 'atr_pct') and signal.atr_pct > 0 and signal.atr_pct < min_atr_pct:
+            signal.action = "HOLD"
+            signal.reason = (f"波动率不足 ATR={signal.atr_pct:.4f} "
+                             f"< {min_atr_pct} SS={ss:.1f} BS={bs:.1f}")
+            return signal
 
         # 开仓比率阈值 (可配置, 默认 1.3; 原硬编码 1.5 过于严格)
         open_dominance = getattr(cfg, 'open_dominance_ratio', 1.3)

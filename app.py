@@ -1031,6 +1031,35 @@ def api_live_load_config():
     return jsonify({"success": False, "message": "配置不存在，请先生成"})
 
 
+@app.route('/api/ml/status')
+def api_ml_status():
+    """检查 ML 模型状态"""
+    try:
+        model_dir = os.path.join(BASE_DIR, 'data', 'ml_models')
+        status = {
+            'regime_model': False,
+            'quantile_model': False,
+            'regime_trained_at': None,
+            'quantile_trained_at': None,
+        }
+        vol_path = os.path.join(model_dir, 'vol_regime_model.txt')
+        if os.path.exists(vol_path):
+            status['regime_model'] = True
+            status['regime_trained_at'] = datetime.fromtimestamp(
+                os.path.getmtime(vol_path)
+            ).strftime('%Y-%m-%d %H:%M')
+        q_path = os.path.join(model_dir, 'quantile_config.json')
+        if os.path.exists(q_path):
+            status['quantile_model'] = True
+            status['quantile_trained_at'] = datetime.fromtimestamp(
+                os.path.getmtime(q_path)
+            ).strftime('%Y-%m-%d %H:%M')
+        status['any_model'] = status['regime_model'] or status['quantile_model']
+        return jsonify({"success": True, "status": status})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 @app.route('/api/live/test_signal', methods=['POST'])
 def api_live_test_signal():
     """测试信号计算"""

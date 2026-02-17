@@ -541,6 +541,37 @@
             </div>
         </div>
 
+        <!-- ML Enhancement -->
+        <div style="display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 16px;">
+            <div style="background: var(--bg-secondary); border-radius: 10px; padding: 16px; border: 1px solid rgba(139,92,246,0.25);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-weight: 600; font-size: 14px;">🧠 ML Enhancement (第七维度)</span>
+                    <label style="position:relative;display:inline-block;width:44px;height:24px;cursor:pointer;">
+                        <input type="checkbox" id="toggle_ml_enhancement" onchange="onV11ToggleChange()"
+                               style="opacity:0;width:0;height:0;">
+                        <span style="position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.1);border-radius:12px;transition:0.3s;"></span>
+                        <span id="toggle_ml_enhancement_dot" style="position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;transition:0.3s;"></span>
+                    </label>
+                </div>
+                <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.6;">
+                    LightGBM 预测模型融入六书信号，三层架构：<br>
+                    <span style="color: #a78bfa;">① Regime 过滤</span> — 识别趋势/震荡市场 (OOS AUC 0.60)，趋势行情增强信号、震荡行情抑制信号<br>
+                    <span style="color: #a78bfa;">② 分位数风控</span> — 预测收益分布 (q05~q95)，尾部风险过大时自动降权<br>
+                    <span style="color: #a78bfa;">③ 信号增强</span> — 高置信度 +20% boost, 低置信度 -12% dampen
+                </div>
+                <div id="mlModelStatus" style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
+                    模型状态: 检查中...
+                </div>
+                <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
+                    <label style="cursor:pointer;">
+                        <input type="checkbox" id="toggle_ml_shadow" checked onchange="onV11ToggleChange()"
+                               style="margin-right:4px;">
+                        Shadow 模式 (只记录 ML 输出，不实际修改信号分数)
+                    </label>
+                </div>
+            </div>
+        </div>
+
         <div class="btn-group" style="margin-top: 16px;">
             <button class="btn btn-primary btn-sm" onclick="saveV11Toggles()">
                 <span id="v11SaveBtnText">💾 保存并应用</span>
@@ -2045,6 +2076,7 @@ function _updateToggleStyle(checkboxId, dotId) {
 function onV11ToggleChange() {
     _updateToggleStyle('toggle_soft_antisqueeze', 'toggle_soft_antisqueeze_dot');
     _updateToggleStyle('toggle_score_calibration', 'toggle_score_calibration_dot');
+    _updateToggleStyle('toggle_ml_enhancement', 'toggle_ml_enhancement_dot');
 }
 
 async function loadV11Toggles() {
@@ -2058,6 +2090,10 @@ async function loadV11Toggles() {
                 !!strategy.use_score_calibration;
             document.getElementById('toggle_score_cal_shadow').checked =
                 strategy.score_calibration_shadow_mode !== false;
+            document.getElementById('toggle_ml_enhancement').checked =
+                !!strategy.use_ml_enhancement;
+            document.getElementById('toggle_ml_shadow').checked =
+                strategy.ml_enhancement_shadow_mode !== false;
             onV11ToggleChange();
             document.getElementById('v11ToggleResult').innerHTML =
                 '<span class="result-badge success">✓ 状态已刷新</span>';
@@ -2065,6 +2101,34 @@ async function loadV11Toggles() {
     } catch(e) {
         document.getElementById('v11ToggleResult').innerHTML =
             '<span class="result-badge error">加载失败: ' + e.message + '</span>';
+    }
+    loadMLModelStatus();
+}
+
+async function loadMLModelStatus() {
+    const el = document.getElementById('mlModelStatus');
+    try {
+        const data = await apiCall('/api/ml/status');
+        if (data.success && data.status) {
+            const s = data.status;
+            let parts = [];
+            if (s.regime_model) {
+                parts.push('<span style="color: var(--accent-green);">✓ Regime 模型</span> (' + s.regime_trained_at + ')');
+            } else {
+                parts.push('<span style="color: var(--accent-red);">✗ Regime 模型未训练</span>');
+            }
+            if (s.quantile_model) {
+                parts.push('<span style="color: var(--accent-green);">✓ 分位数模型</span> (' + s.quantile_trained_at + ')');
+            } else {
+                parts.push('<span style="color: var(--accent-red);">✗ 分位数模型未训练</span>');
+            }
+            el.innerHTML = '模型状态: ' + parts.join(' · ');
+            if (!s.any_model) {
+                el.innerHTML += '<br><span style="color: var(--accent-yellow);">⚠ 需先训练模型: python3.10 ml_live_integration.py --train</span>';
+            }
+        }
+    } catch(e) {
+        el.innerHTML = '模型状态: <span style="color: var(--accent-red);">查询失败</span>';
     }
 }
 
@@ -2086,6 +2150,10 @@ async function saveV11Toggles() {
             document.getElementById('toggle_score_calibration').checked;
         config.strategy.score_calibration_shadow_mode =
             document.getElementById('toggle_score_cal_shadow').checked;
+        config.strategy.use_ml_enhancement =
+            document.getElementById('toggle_ml_enhancement').checked;
+        config.strategy.ml_enhancement_shadow_mode =
+            document.getElementById('toggle_ml_shadow').checked;
 
         // 保存
         const saveData = await apiCall('/api/live/save_config', {
