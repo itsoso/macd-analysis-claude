@@ -317,7 +317,24 @@ class LiveTradingEngine:
                 )
 
                 # 7b. 多周期共识门控 —— 开仓决策需要共识确认
-                if self._use_multi_tf and sig.action in ("OPEN_LONG", "OPEN_SHORT"):
+                #     强信号覆盖: HOLD 状态但 BS/SS >= 阈值 且无持仓时, 允许触发共识检查
+                _strong_thresh = getattr(self.config.strategy, 'strong_signal_override_threshold', 85)
+                _strong_hold = (
+                    sig.action == "HOLD"
+                    and (sig.buy_score >= _strong_thresh or sig.sell_score >= _strong_thresh)
+                    and "LONG" not in self.positions
+                    and "SHORT" not in self.positions
+                )
+                if self._use_multi_tf and (
+                    sig.action in ("OPEN_LONG", "OPEN_SHORT") or _strong_hold
+                ):
+                    if _strong_hold:
+                        if sig.buy_score >= _strong_thresh and sig.buy_score > sig.sell_score:
+                            sig.action = "OPEN_LONG"
+                            sig.reason = f"强信号覆盖 BS={sig.buy_score:.1f} >= {_strong_thresh}"
+                        elif sig.sell_score >= _strong_thresh and sig.sell_score > sig.buy_score:
+                            sig.action = "OPEN_SHORT"
+                            sig.reason = f"强信号覆盖 SS={sig.sell_score:.1f} >= {_strong_thresh}"
                     sig = self._apply_multi_tf_gate(sig)
 
                 # 7c. v11 Score Calibration 门控
@@ -356,11 +373,16 @@ class LiveTradingEngine:
                 # 9b. 反手逻辑 — 平仓后立即检查反方向开仓
                 #     当 CLOSE_LONG 由"反向信号"触发时，检查 OPEN_SHORT
                 #     当 CLOSE_SHORT 由"反向信号"触发时，检查 OPEN_LONG
-                if sig.action in ("CLOSE_LONG", "CLOSE_SHORT") and "反向信号" in sig.reason:
+                #     默认关闭即时反手 (reverse_immediate=False)，等待下一 bar 冷静确认
+                _reverse_immediate = getattr(
+                    self.config.strategy, 'reverse_immediate', False
+                )
+                if (sig.action in ("CLOSE_LONG", "CLOSE_SHORT")
+                        and "反向信号" in sig.reason
+                        and _reverse_immediate):
                     reverse_sig = self._try_reverse_open(sig, current_price)
                     if reverse_sig and reverse_sig.action != "HOLD":
                         self._execute_action(reverse_sig, current_price)
-                        # 更新信号记录用于通知
                         self.logger.log_signal(
                             sell_score=reverse_sig.sell_score,
                             buy_score=reverse_sig.buy_score,
