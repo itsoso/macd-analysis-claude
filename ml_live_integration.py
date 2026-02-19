@@ -377,25 +377,35 @@ class MLSignalEnhancer:
                 class EfficientTFT(nn.Module):
                     def __init__(self, in_dim, dm, nh, dff, nl, dropout=0.15):
                         super().__init__()
-                        self.input_proj = nn.Linear(in_dim, dm)
-                        self.pos_enc = nn.Parameter(torch.randn(1, 512, dm) * 0.02)
+                        self.input_proj = nn.Sequential(
+                            nn.Linear(in_dim, dm), nn.LayerNorm(dm),
+                            nn.GELU(), nn.Dropout(dropout))
+                        self.lstm = nn.LSTM(dm, dm, nl, batch_first=True,
+                                            dropout=dropout if nl > 1 else 0)
+                        self.lstm_norm = nn.LayerNorm(dm)
                         enc_layer = nn.TransformerEncoderLayer(
                             d_model=dm, nhead=nh, dim_feedforward=dff,
-                            dropout=dropout, batch_first=True)
-                        self.encoder = nn.TransformerEncoder(enc_layer, nl)
-                        self.head = nn.Sequential(nn.LayerNorm(dm), nn.Linear(dm, 1))
+                            dropout=dropout, activation='gelu', batch_first=True)
+                        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=2)
+                        self.transformer_norm = nn.LayerNorm(dm)
+                        self.attn_pool = nn.Linear(dm, 1)
+                        self.classifier = nn.Sequential(
+                            nn.Linear(dm, dff), nn.GELU(),
+                            nn.Dropout(dropout), nn.Linear(dff, 1))
 
                     def forward(self, x):
-                        h = self.input_proj(x) + self.pos_enc[:, :x.size(1)]
-                        h = self.encoder(h)
-                        return self.head(h.mean(dim=1)).squeeze(-1)
+                        h = self.input_proj(x)
+                        lstm_out, _ = self.lstm(h)
+                        h = self.lstm_norm(lstm_out + h)
+                        h = self.transformer(h)
+                        h = self.transformer_norm(h)
+                        attn_w = torch.softmax(self.attn_pool(h), dim=1)
+                        context = (attn_w * h).sum(dim=1)
+                        return self.classifier(context).squeeze(-1)
 
                 self._tft_model = EfficientTFT(input_dim, d_model, n_heads, d_ff, n_layers)
                 state = torch.load(model_path, map_location='cpu', weights_only=False)
-                if isinstance(state, dict) and 'state_dict' in state:
-                    self._tft_model.load_state_dict(state['state_dict'])
-                else:
-                    self._tft_model.load_state_dict(state)
+                self._tft_model.load_state_dict(state)
                 self._tft_model.eval()
                 logger.info(f"TFT 模型加载完成 (input_dim={input_dim}, d_model={d_model})")
 
