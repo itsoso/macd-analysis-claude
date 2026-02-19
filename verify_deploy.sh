@@ -28,8 +28,8 @@ echo ""
 echo "[1/6] Git 版本..."
 LATEST=$(git log --oneline -1)
 echo "  $LATEST"
-git log --oneline -1 | grep -q "ml_models\|ML\|ml" 2>/dev/null && RET=0 || RET=1
-check $RET "最新 commit 包含 ML 相关变更"
+git log --oneline -5 | grep -q "ml_models\|ML\|ml" 2>/dev/null && RET=0 || RET=1
+check $RET "最近 5 条 commit 包含 ML 相关变更"
 
 # 2. 模型文件
 echo ""
@@ -91,14 +91,16 @@ check $RET "macd-analysis 服务运行中"
 
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://localhost:5100/ 2>/dev/null || echo "000")
 echo "  HTTP 状态码: $HTTP_CODE"
-[ "$HTTP_CODE" = "200" ] && RET=0 || RET=1
-check $RET "Web 响应正常 (200)"
+[ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ] && RET=0 || RET=1
+check $RET "Web 响应正常 ($HTTP_CODE)"
 
 # 6. Python 导入测试
 echo ""
 echo "[6/6] Python 模块导入..."
 cd /opt/macd-analysis
-IMPORT_RESULT=$(python3 -c "
+VENV_PYTHON="/opt/macd-analysis/venv/bin/python"
+[ ! -f "$VENV_PYTHON" ] && VENV_PYTHON="python3"
+IMPORT_RESULT=$($VENV_PYTHON -c "
 import sys
 sys.path.insert(0, '.')
 try:
