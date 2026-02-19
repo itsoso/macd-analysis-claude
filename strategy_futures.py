@@ -96,7 +96,7 @@ class FuturesEngine:
     TAKER_FEE = 0.0005   # 0.05% taker (币安标准)
     MAKER_FEE = 0.0002   # 0.02% maker
     FUNDING_RATE = 0.0001  # 0.01% per 8h (基准, 实际可正可负)
-    SLIPPAGE = 0.001      # 0.1% 滑点(含市场冲击)
+    SLIPPAGE = 0.0015     # 0.15% 滑点(含市场冲击, 加密市场实际水平)
     LIQUIDATION_FEE = 0.005  # 0.5% 强平清算手续费
 
     def __init__(self, name, initial_usdt=100000, initial_eth_value=0,

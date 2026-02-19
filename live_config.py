@@ -391,6 +391,7 @@ STRATEGY_PARAM_VERSIONS = {
         "dynamic_regime_vol_quantile": 0.80,      # vol_high = P80
         "dynamic_regime_trend_quantile": 0.80,    # trend_strong = P80
         #
+        "use_regime_adaptive_fusion": True,
         "use_neutral_short_dynamic_budget": False,
         "neutral_short_low_quality_floor": 0.02,
         "neutral_short_crowding_floor": 0.02,
@@ -422,7 +423,7 @@ STRATEGY_PARAM_VERSIONS["v6"] = {
     "close_long_ss": 45,               # P42 CLS45: 60→45 (匹配 close_short_bs)
 }
 
-_ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v5")
+_ACTIVE_VERSION = os.environ.get("STRATEGY_VERSION", "v6")
 
 
 def get_strategy_version() -> str:
