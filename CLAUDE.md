@@ -107,10 +107,11 @@ ml_features.py (94 维特征: 73基础 + 21跨资产 BTC/SOL/BNB)
 ├─ MTF 融合 MLP (mtf_fusion_mlp.pt + ONNX, 多周期分数融合, AUC 0.56)
 ├─ Regime 分类 (vol_regime + trend, vol AUC 0.59)
 ├─ 分位数回归 (h5+h12, q05~q95, Kelly 仓位 + 动态止损)
-└─ PPO 仓位 (ppo_position_agent.zip, 实验性)
+├─ PPO 仓位 (ppo_position_agent.zip, 实验性)
+└─ **Stacking Ensemble** (stacking_meta.pkl, 4基模型OOF → LogisticRegression 元学习器)
     ↓
 ml_live_integration.py → MLSignalEnhancer (五层: 方向→融合→Regime→分位数→执行)
-    实盘集成: LGB+LSTM 加权 → bull_prob → Kelly 仓位 + 动态止损
+    方向预测优先级: Stacking(优先) → LGB+LSTM+TFT+跨资产LGB加权(fallback)
     当前状态: **shadow 模式** (只记录不修改信号)
 ```
 
@@ -181,7 +182,7 @@ H800 位于办公内网，需要跳板机访问，**无法直接连接 Binance A
 
 ### GPU 训练模式
 
-`train_gpu.py` 提供 11 种训练模式，全部离线运行不依赖 Binance API：
+`train_gpu.py` 提供 12 种训练模式，全部离线运行不依赖 Binance API：
 
 ```bash
 # 基础模型
@@ -199,10 +200,14 @@ python3 train_gpu.py --mode onnx                  # ONNX 导出 (加速推理)
 python3 train_gpu.py --mode incr_wf               # 增量 Walk-Forward
 python3 train_gpu.py --mode retrain               # 定时重训
 
+# Stacking Ensemble (v4)
+python3 train_gpu.py --mode stacking --tf 1h      # 4基模型OOF → LogisticRegression 元学习器
+
 # 批量
 python3 train_gpu.py --mode all      # 基础全流程
 python3 train_gpu.py --mode all_v2   # 基础 + TFT + 跨资产
 python3 train_gpu.py --mode all_v3   # v2 + MTF融合 + PPO
+python3 train_gpu.py --mode all_v4   # v3 + Stacking Ensemble
 ```
 
 数据加载管线 (纯本地):
@@ -215,7 +220,7 @@ ml_features.py → compute_ml_features()  → 70+ 维特征
     ↓
 标签生成: 多尺度利润化标签 (3h/5h/12h/24h)
     ↓
-训练: LightGBM GPU / LSTM+Attention / Optuna TPE
+训练: LightGBM GPU / LSTM+Attention / Optuna TPE / Stacking Ensemble
     ↓
 输出: data/ml_models/*.pt, data/gpu_results/*.json
 ```
@@ -252,7 +257,7 @@ scp -J jumphost macd_models.tar.gz user@dev:~/macd-analysis/
 | `setup_h800.sh` | H800 一键环境搭建 (GPU 检测, conda, 依赖安装) |
 | `requirements-gpu.txt` | GPU 训练依赖 (PyTorch CUDA, Optuna, TensorBoard) |
 | `verify_data.py` | 训练数据完整性验证 (必需/可选数据检查) |
-| `train_gpu.py` | **GPU 离线训练入口** (11 种模式, 不依赖 Binance API) |
+| `train_gpu.py` | **GPU 离线训练入口** (12 种模式, 不依赖 Binance API) |
 
 ## 关键文件
 
@@ -272,7 +277,7 @@ scp -J jumphost macd_models.tar.gz user@dev:~/macd-analysis/
 | `ml_predictor.py` | LightGBM 方向预测 + Walk-Forward + 多尺度集成 + Stacking |
 | `ml_regime.py` | 市场 Regime 预测 (波动率聚类 + 趋势质量) |
 | `ml_quantile.py` | 分位数回归 (收益分布预测) |
-| `ml_live_integration.py` | ML 实盘集成 (五层: 方向→融合→Regime→分位数→执行, shadow模式) |
+| `ml_live_integration.py` | ML 实盘集成 (五层: 方向→融合→Regime→分位数→执行, Stacking优先, shadow模式) |
 | `ml_strategy.py` | ML 独立策略回测 / 融合模式 |
 | `walk_forward_pipeline.py` | Walk-Forward 月度滚动验证管道 |
 | `train_gpu.py` | **H800 GPU 离线训练入口** (11种模式: LGB/LSTM/TFT/跨资产/MTF/PPO/ONNX等) |
@@ -359,7 +364,7 @@ data/
 ```
 
 - **回测结果**: `optimize_six_book_result.json` (最佳参数 + 交易记录)
-- **训练产出**: `data/ml_models/` (LightGBM .txt + PyTorch .pt + 元数据 .meta.json)
+- **训练产出**: `data/ml_models/` (LightGBM .txt + PyTorch .pt + Stacking .pkl + 元数据 .meta.json)
 
 ## 注意事项
 
