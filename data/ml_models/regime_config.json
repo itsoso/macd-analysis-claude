@@ -1,0 +1,14 @@
+{
+  "feature_names": [
+    "atr_pct",
+    "vol_ratio",
+    "bb_width",
+    "bb_width_rank",
+    "momentum_5",
+    "trend_r2",
+    "vol_ma_ratio",
+    "range_ratio",
+    "funding_rate",
+    "ma60_slope"
+  ]
+}

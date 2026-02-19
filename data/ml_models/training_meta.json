@@ -1,0 +1,17 @@
+{
+  "version": "v5_gpu_ensemble",
+  "trained_at": "2026-02-19T06:10:45",
+  "data_range": "2021-01-01 ~ 2026-02-17",
+  "components": [
+    "lgb_direction",
+    "lstm_attention",
+    "regime",
+    "quantile"
+  ],
+  "regime_vol_auc": 0.5852,
+  "lgb_direction_test_auc": 0.5537,
+  "lstm_test_auc": 0.5366,
+  "optuna_best_val_auc": 0.6044,
+  "training_data": "ETHUSDT 1h, 43739 samples (5 years)",
+  "gpu": "NVIDIA H800"
+}
