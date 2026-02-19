@@ -548,10 +548,10 @@ class StrategyConfig:
     min_atr_pct_to_open: float = 0.003  # 0.3%
     # 反向信号平仓后是否立即反手开仓 (默认关闭, 等下一 bar 冷静确认)
     reverse_immediate: bool = False
-    # ML 增强: 使用 LightGBM 预测模型作为第七维度融入信号
-    # 需要先训练模型: python3.10 ml_live_integration.py --train
-    use_ml_enhancement: bool = False
-    ml_enhancement_shadow_mode: bool = True       # shadow 模式: 只记录不实际修改分数
+    # ML 增强: LGB+LSTM+Regime+分位数 四层 ML 预测融入信号
+    # 模型来源: H800 GPU 训练 (v5_gpu_ensemble, 2026-02-19)
+    use_ml_enhancement: bool = True
+    ml_enhancement_shadow_mode: bool = True       # shadow 模式: 只记录不实际修改分数 (先观察再开启实际增强)
     # 融合模式
     fusion_mode: str = "c6_veto_4"
     veto_threshold: float = 25

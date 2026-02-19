@@ -2112,23 +2112,29 @@ async function loadMLModelStatus() {
         if (data.success && data.status) {
             const s = data.status;
             let parts = [];
-            if (s.regime_model) {
-                parts.push('<span style="color: var(--accent-green);">✓ Regime 模型</span> (' + s.regime_trained_at + ')');
-            } else {
-                parts.push('<span style="color: var(--accent-red);">✗ Regime 模型未训练</span>');
+            const ok = '<span style="color: var(--accent-green);">✓</span>';
+            const no = '<span style="color: var(--accent-red);">✗</span>';
+            parts.push(s.lgb_direction_model ? ok + ' LGB方向' : no + ' LGB方向');
+            parts.push(s.lstm_model ? ok + ' LSTM' : no + ' LSTM');
+            parts.push(s.regime_model ? ok + ' Regime' : no + ' Regime');
+            parts.push(s.quantile_model ? ok + ' 分位数' : no + ' 分位数');
+            let html = 'ML模型 (' + (s.model_count || 0) + '/4): ' + parts.join(' · ');
+            if (s.training_meta) {
+                const m = s.training_meta;
+                html += '<br><span style="color: var(--text-muted); font-size: 11px;">'
+                    + (m.version || '') + ' | GPU: ' + (m.gpu || 'N/A')
+                    + ' | 训练: ' + (m.trained_at || '').slice(0, 16)
+                    + ' | LGB AUC: ' + (m.lgb_direction_test_auc || '-')
+                    + ' | LSTM AUC: ' + (m.lstm_test_auc || '-')
+                    + '</span>';
             }
-            if (s.quantile_model) {
-                parts.push('<span style="color: var(--accent-green);">✓ 分位数模型</span> (' + s.quantile_trained_at + ')');
-            } else {
-                parts.push('<span style="color: var(--accent-red);">✗ 分位数模型未训练</span>');
-            }
-            el.innerHTML = '模型状态: ' + parts.join(' · ');
             if (!s.any_model) {
-                el.innerHTML += '<br><span style="color: var(--accent-yellow);">⚠ 需先训练模型: python3.10 ml_live_integration.py --train</span>';
+                html += '<br><span style="color: var(--accent-yellow);">⚠ 模型未就绪</span>';
             }
+            el.innerHTML = html;
         }
     } catch(e) {
-        el.innerHTML = '模型状态: <span style="color: var(--accent-red);">查询失败</span>';
+        el.innerHTML = 'ML模型: <span style="color: var(--accent-red);">查询失败</span>';
     }
 }
 

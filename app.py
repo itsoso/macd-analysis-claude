@@ -1033,14 +1033,17 @@ def api_live_load_config():
 
 @app.route('/api/ml/status')
 def api_ml_status():
-    """检查 ML 模型状态"""
+    """检查 ML 模型状态 (v5: LGB+LSTM+Regime+Quantile)"""
     try:
         model_dir = os.path.join(BASE_DIR, 'data', 'ml_models')
         status = {
             'regime_model': False,
             'quantile_model': False,
+            'lgb_direction_model': False,
+            'lstm_model': False,
             'regime_trained_at': None,
             'quantile_trained_at': None,
+            'training_meta': None,
         }
         vol_path = os.path.join(model_dir, 'vol_regime_model.txt')
         if os.path.exists(vol_path):
@@ -1054,7 +1057,24 @@ def api_ml_status():
             status['quantile_trained_at'] = datetime.fromtimestamp(
                 os.path.getmtime(q_path)
             ).strftime('%Y-%m-%d %H:%M')
-        status['any_model'] = status['regime_model'] or status['quantile_model']
+        lgb_path = os.path.join(model_dir, 'lgb_direction_model.txt')
+        if os.path.exists(lgb_path):
+            status['lgb_direction_model'] = True
+        lstm_path = os.path.join(model_dir, 'lstm_1h.pt')
+        if os.path.exists(lstm_path):
+            status['lstm_model'] = True
+        meta_path = os.path.join(model_dir, 'training_meta.json')
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                status['training_meta'] = json.load(f)
+        status['any_model'] = any([
+            status['regime_model'], status['quantile_model'],
+            status['lgb_direction_model'], status['lstm_model'],
+        ])
+        status['model_count'] = sum([
+            status['regime_model'], status['quantile_model'],
+            status['lgb_direction_model'], status['lstm_model'],
+        ])
         return jsonify({"success": True, "status": status})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
