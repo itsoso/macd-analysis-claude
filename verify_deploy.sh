@@ -4,7 +4,6 @@
 # 用法: bash verify_deploy.sh
 # ============================================================
 
-set -e
 cd /opt/macd-analysis
 
 echo "=========================================="
@@ -29,8 +28,8 @@ echo ""
 echo "[1/6] Git 版本..."
 LATEST=$(git log --oneline -1)
 echo "  $LATEST"
-git log --oneline -1 | grep -q "ml_models\|ML\|ml" 2>/dev/null
-check $? "最新 commit 包含 ML 相关变更"
+git log --oneline -1 | grep -q "ml_models\|ML\|ml" 2>/dev/null && RET=0 || RET=1
+check $RET "最新 commit 包含 ML 相关变更"
 
 # 2. 模型文件
 echo ""
@@ -70,30 +69,30 @@ CODE_FILES=(
     "ml_predictor.py"
 )
 for f in "${CODE_FILES[@]}"; do
-    test -f "$f"
-    check $? "$f 存在"
+    test -f "$f" && RET=0 || RET=1
+    check $RET "$f 存在"
 done
 
 # 4. ml_live_integration v5
 echo ""
 echo "[4/6] ML 集成版本..."
-grep -q "v5" ml_live_integration.py 2>/dev/null
-check $? "ml_live_integration.py 已升级到 v5"
-grep -q "direction_model" ml_live_integration.py 2>/dev/null
-check $? "方向预测模型已集成"
+grep -q "v5" ml_live_integration.py 2>/dev/null && RET=0 || RET=1
+check $RET "ml_live_integration.py 已升级到 v5"
+grep -q "direction_model" ml_live_integration.py 2>/dev/null && RET=0 || RET=1
+check $RET "方向预测模型已集成"
 
 # 5. Web 服务
 echo ""
 echo "[5/6] Web 服务..."
 WEB_STATUS=$(systemctl is-active macd-analysis 2>/dev/null || echo "inactive")
 echo "  服务状态: $WEB_STATUS"
-[ "$WEB_STATUS" = "active" ]
-check $? "macd-analysis 服务运行中"
+[ "$WEB_STATUS" = "active" ] && RET=0 || RET=1
+check $RET "macd-analysis 服务运行中"
 
 HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://localhost:5100/ 2>/dev/null || echo "000")
 echo "  HTTP 状态码: $HTTP_CODE"
-[ "$HTTP_CODE" = "200" ]
-check $? "Web 响应正常 (200)"
+[ "$HTTP_CODE" = "200" ] && RET=0 || RET=1
+check $RET "Web 响应正常 (200)"
 
 # 6. Python 导入测试
 echo ""
@@ -119,8 +118,8 @@ except Exception as ex:
 IFS='|' read -r STATUS COUNT COMPONENTS <<< "$IMPORT_RESULT"
 echo "  加载状态: $STATUS"
 echo "  模型组件: $COMPONENTS ($COUNT 个)"
-[ "$STATUS" = "OK" ] && [ "$COUNT" -ge 2 ]
-check $? "MLSignalEnhancer 加载成功 (>=2 组件)"
+[ "$STATUS" = "OK" ] && [ "$COUNT" -ge 2 ] && RET=0 || RET=1
+check $RET "MLSignalEnhancer 加载成功 (>=2 组件)"
 
 # 汇总
 echo ""
