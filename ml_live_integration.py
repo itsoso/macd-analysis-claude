@@ -1,8 +1,8 @@
 """
-ML 实盘集成模块 v6 (GPU 增强版 — 8 模型矩阵)
+ML 实盘集成模块 v6 (GPU 增强版 — 8 模型矩阵 + Stacking Ensemble)
 
 五层架构:
-  1. 方向预测层: LGB + LSTM + TFT + 跨资产LGB 集成 → bull_prob
+  1. 方向预测层: Stacking(LGB+XGB+LSTM+TFT→Meta) 或 LGB+LSTM+TFT+跨资产LGB 加权
   2. 预测层: 分位数回归 → 输出收益分布 (q05~q95) → Kelly 仓位 + 动态止损
   3. 决策层: Regime 过滤 + 成本感知门槛
   4. 融合层: MTF Fusion MLP (可选, 替代规则加权)
@@ -12,10 +12,12 @@ v6 更新:
   - 集成 TFT (AUC 0.55+) + 跨资产 LGB (94维, AUC 0.55)
   - 修复 LSTM 标准化 (从 TFT meta 读取 feat_mean/feat_std)
   - ONNX 推理加速 (如可用)
+  - Stacking Ensemble: 4 基模型 OOF → LogisticRegression 元学习器
 
 使用:
   1. 训练: python train_gpu.py --mode all_v3 (在 H800 上)
-  2. 实盘: live_signal_generator.py 自动调用 MLSignalEnhancer.enhance_signal()
+  2. Stacking: python train_gpu.py --mode stacking --tf 1h
+  3. 实盘: live_signal_generator.py 自动调用 MLSignalEnhancer.enhance_signal()
 """
 
 import os
@@ -34,10 +36,10 @@ MODEL_DIR = os.path.join('data', 'ml_models')
 
 class MLSignalEnhancer:
     """
-    ML 信号增强器 v6 — 8 模型矩阵集成
+    ML 信号增强器 v6 — 8 模型矩阵集成 + Stacking Ensemble
 
     工作模式:
-      1. 方向预测: LGB + LSTM + TFT + 跨资产LGB → bull_prob
+      1. 方向预测: Stacking(优先) 或 LGB+LSTM+TFT+跨资产LGB → bull_prob
       2. 计算 regime (vol_prob, trend_prob, trade_confidence)
       3. 如有分位数模型: 收益分布 → Kelly 仓位 + 动态止损
       4. 综合输出: 增强/抑制规则信号
@@ -53,6 +55,14 @@ class MLSignalEnhancer:
         self._cross_asset_model = None  # v6: 跨资产 LGB
         self._cross_asset_meta = None
         self._loaded = False
+
+        # Stacking ensemble
+        self._stacking_meta_model = None  # LogisticRegression 元学习器
+        self._stacking_config = None      # stacking_meta.json 配置
+        self._stacking_lgb = None         # stacking 专用 LGB
+        self._stacking_xgb = None         # stacking 专用 XGBoost
+        self._stacking_lstm = None        # stacking 专用 LSTM
+        self._stacking_tft = None         # stacking 专用 TFT
 
         # 方向预测参数
         self._direction_meta = None
@@ -195,6 +205,40 @@ class MLSignalEnhancer:
         except Exception as e:
             logger.warning(f"集成配置加载失败: {e}")
 
+        # Stacking ensemble 元学习器
+        try:
+            stacking_meta_path = os.path.join(self.model_dir, 'stacking_meta.json')
+            stacking_pkl_path = os.path.join(self.model_dir, 'stacking_meta.pkl')
+            if os.path.exists(stacking_meta_path) and os.path.exists(stacking_pkl_path):
+                with open(stacking_meta_path) as f:
+                    self._stacking_config = json.load(f)
+
+                import pickle
+                with open(stacking_pkl_path, 'rb') as f:
+                    self._stacking_meta_model = pickle.load(f)
+
+                # 加载 stacking 专用 LGB
+                lgb_file = self._stacking_config.get('model_files', {}).get('lgb', '')
+                lgb_stk_path = os.path.join(self.model_dir, lgb_file)
+                if lgb_file and os.path.exists(lgb_stk_path):
+                    import lightgbm as lgb_lib
+                    self._stacking_lgb = lgb_lib.Booster(model_file=lgb_stk_path)
+
+                # 加载 stacking 专用 XGBoost
+                xgb_file = self._stacking_config.get('model_files', {}).get('xgboost', '')
+                xgb_stk_path = os.path.join(self.model_dir, xgb_file)
+                if xgb_file and os.path.exists(xgb_stk_path):
+                    import xgboost as xgb_lib
+                    self._stacking_xgb = xgb_lib.Booster()
+                    self._stacking_xgb.load_model(xgb_stk_path)
+
+                # LSTM/TFT 延迟加载 (需要 torch)
+                logger.info(f"Stacking 元学习器加载成功 "
+                            f"(AUC={self._stacking_config.get('val_auc', '?')})")
+                loaded_any = True
+        except Exception as e:
+            logger.warning(f"Stacking 元学习器加载失败: {e}")
+
         # 日志汇总
         model_list = []
         if self._direction_model: model_list.append('LGB')
@@ -203,6 +247,7 @@ class MLSignalEnhancer:
         if self._cross_asset_model: model_list.append('CrossAsset')
         if self._regime_model: model_list.append('Regime')
         if self._quantile_model: model_list.append('Quantile')
+        if self._stacking_meta_model: model_list.append('Stacking')
         logger.info(f"ML 模型加载完成: {len(model_list)} 个 [{', '.join(model_list)}]")
 
         self._loaded = loaded_any
@@ -436,6 +481,224 @@ class MLSignalEnhancer:
             logger.warning(f"跨资产 LGB 预测失败: {e}")
             return None
 
+    def _predict_stacking(self, df: pd.DataFrame, ml_info: Dict) -> Optional[float]:
+        """Stacking ensemble 预测: 4 基模型 → 元学习器 → bull_prob"""
+        if self._stacking_meta_model is None or self._stacking_config is None:
+            return None
+
+        features = self._compute_direction_features(df)
+        if features is None or len(features) == 0:
+            return None
+
+        cfg = self._stacking_config
+        feat_names_73 = cfg.get('feature_names_73', [])
+        feat_names_94 = cfg.get('feature_names_94', [])
+
+        # 对齐 73 维特征
+        latest = features.iloc[[-1]]
+        X_73 = pd.DataFrame(0.0, index=latest.index, columns=feat_names_73)
+        for col in feat_names_73:
+            if col in latest.columns:
+                X_73[col] = latest[col].values
+        X_73 = X_73.replace([np.inf, -np.inf], np.nan).fillna(0).values.astype(np.float32)
+
+        # 基模型 1: LGB
+        lgb_prob = 0.5
+        if self._stacking_lgb is not None:
+            try:
+                lgb_prob = float(np.clip(self._stacking_lgb.predict(X_73)[0], 0, 1))
+                ml_info['stacking_lgb_prob'] = round(lgb_prob, 4)
+            except Exception as e:
+                logger.warning(f"Stacking LGB 失败: {e}")
+
+        # 基模型 2: XGBoost
+        xgb_prob = 0.5
+        if self._stacking_xgb is not None:
+            try:
+                import xgboost as xgb_lib
+                dmat = xgb_lib.DMatrix(X_73)
+                xgb_prob = float(np.clip(self._stacking_xgb.predict(dmat)[0], 0, 1))
+                ml_info['stacking_xgb_prob'] = round(xgb_prob, 4)
+            except Exception as e:
+                logger.warning(f"Stacking XGBoost 失败: {e}")
+
+        # 基模型 3: LSTM (延迟加载)
+        lstm_prob = 0.5
+        try:
+            lstm_prob = self._predict_stacking_lstm(features, cfg)
+            if lstm_prob is not None:
+                ml_info['stacking_lstm_prob'] = round(lstm_prob, 4)
+            else:
+                lstm_prob = 0.5
+        except Exception as e:
+            logger.warning(f"Stacking LSTM 失败: {e}")
+
+        # 基模型 4: TFT (延迟加载)
+        tft_prob = 0.5
+        try:
+            tft_prob = self._predict_stacking_tft(features, cfg)
+            if tft_prob is not None:
+                ml_info['stacking_tft_prob'] = round(tft_prob, 4)
+            else:
+                tft_prob = 0.5
+        except Exception as e:
+            logger.warning(f"Stacking TFT 失败: {e}")
+
+        # 组装元特征
+        meta_X = np.array([[lgb_prob, xgb_prob, lstm_prob, tft_prob]])
+
+        # 附加特征 (hvol_20 等)
+        extra_features = cfg.get('extra_features', [])
+        if 'hvol_20' in extra_features and 'hvol_20' in features.columns:
+            hvol = float(features['hvol_20'].iloc[-1])
+            if np.isnan(hvol) or np.isinf(hvol):
+                hvol = 0.0
+            meta_X = np.hstack([meta_X, [[hvol]]])
+
+        # 元学习器预测
+        bull_prob = float(self._stacking_meta_model.predict_proba(meta_X)[0, 1])
+        bull_prob = float(np.clip(bull_prob, 0, 1))
+        ml_info['stacking_bull_prob'] = round(bull_prob, 4)
+        ml_info['stacking_mode'] = True
+        return bull_prob
+
+    def _predict_stacking_lstm(self, features: pd.DataFrame, cfg: Dict) -> Optional[float]:
+        """Stacking 专用 LSTM 推理"""
+        import torch
+        import torch.nn as nn
+
+        model_file = cfg.get('model_files', {}).get('lstm', '')
+        model_path = os.path.join(self.model_dir, model_file)
+        if not model_file or not os.path.exists(model_path):
+            return None
+
+        feat_names = cfg.get('feature_names_73', [])
+        SEQ_LEN = 48
+        if len(features) < SEQ_LEN:
+            return None
+
+        # 对齐特征
+        X_df = pd.DataFrame(0.0, index=features.index, columns=feat_names)
+        for col in feat_names:
+            if col in features.columns:
+                X_df[col] = features[col].values
+        X_df = X_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+        vals = X_df.values.astype(np.float32)
+
+        # 标准化
+        feat_mean = np.array(cfg.get('feat_mean_73', [0.0] * len(feat_names)), dtype=np.float32)
+        feat_std = np.array(cfg.get('feat_std_73', [1.0] * len(feat_names)), dtype=np.float32)
+        vals = (vals - feat_mean) / np.maximum(feat_std, 1e-8)
+        vals = np.clip(np.nan_to_num(vals, nan=0.0, posinf=3.0, neginf=-3.0), -5, 5)
+
+        seq = vals[-SEQ_LEN:]
+        X_tensor = torch.FloatTensor(seq).unsqueeze(0)
+
+        if self._stacking_lstm is None:
+            input_dim = len(feat_names)
+
+            class LSTMAttention(nn.Module):
+                def __init__(self, in_dim, hidden=128, layers=2, drop=0.3):
+                    super().__init__()
+                    self.lstm = nn.LSTM(in_dim, hidden, layers,
+                                        batch_first=True, dropout=drop, bidirectional=True)
+                    self.attn_fc = nn.Linear(hidden * 2, 1)
+                    self.classifier = nn.Sequential(
+                        nn.Linear(hidden * 2, 64), nn.GELU(), nn.Dropout(0.2),
+                        nn.Linear(64, 1))
+
+                def forward(self, x):
+                    out, _ = self.lstm(x)
+                    w = torch.softmax(self.attn_fc(out), dim=1)
+                    ctx = (w * out).sum(dim=1)
+                    return self.classifier(ctx).squeeze(-1)
+
+            self._stacking_lstm = LSTMAttention(input_dim)
+            state = torch.load(model_path, map_location='cpu', weights_only=True)
+            self._stacking_lstm.load_state_dict(state)
+            self._stacking_lstm.eval()
+            logger.info(f"Stacking LSTM 加载完成 (input_dim={input_dim})")
+
+        with torch.no_grad():
+            logit = self._stacking_lstm(X_tensor)
+            prob = torch.sigmoid(logit).item()
+        return float(np.clip(prob, 0, 1))
+
+    def _predict_stacking_tft(self, features: pd.DataFrame, cfg: Dict) -> Optional[float]:
+        """Stacking 专用 TFT 推理"""
+        import torch
+        import torch.nn as nn
+
+        model_file = cfg.get('model_files', {}).get('tft', '')
+        model_path = os.path.join(self.model_dir, model_file)
+        if not model_file or not os.path.exists(model_path):
+            return None
+
+        feat_names = cfg.get('feature_names_94', [])
+        SEQ_LEN = 96
+        if len(features) < SEQ_LEN:
+            return None
+
+        # 对齐特征 (94 维含跨资产)
+        X_df = pd.DataFrame(0.0, index=features.index, columns=feat_names)
+        for col in feat_names:
+            if col in features.columns:
+                X_df[col] = features[col].values
+        X_df = X_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+        vals = X_df.values.astype(np.float32)
+
+        # 标准化
+        feat_mean = np.array(cfg.get('feat_mean_94', [0.0] * len(feat_names)), dtype=np.float32)
+        feat_std = np.array(cfg.get('feat_std_94', [1.0] * len(feat_names)), dtype=np.float32)
+        vals = (vals - feat_mean) / np.maximum(feat_std, 1e-8)
+        vals = np.clip(np.nan_to_num(vals, nan=0.0, posinf=3.0, neginf=-3.0), -5, 5)
+
+        seq = vals[-SEQ_LEN:]
+        X_tensor = torch.FloatTensor(seq).unsqueeze(0)
+
+        if self._stacking_tft is None:
+            input_dim = len(feat_names)
+
+            class EfficientTFT(nn.Module):
+                def __init__(self, in_dim, d_model=64, n_heads=4, d_ff=128, n_layers=2, drop=0.15):
+                    super().__init__()
+                    self.input_proj = nn.Sequential(
+                        nn.Linear(in_dim, d_model), nn.LayerNorm(d_model),
+                        nn.GELU(), nn.Dropout(drop))
+                    self.lstm = nn.LSTM(d_model, d_model, n_layers,
+                                        batch_first=True, dropout=drop if n_layers > 1 else 0)
+                    self.lstm_norm = nn.LayerNorm(d_model)
+                    encoder_layer = nn.TransformerEncoderLayer(
+                        d_model=d_model, nhead=n_heads, dim_feedforward=d_ff,
+                        dropout=drop, activation='gelu', batch_first=True)
+                    self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
+                    self.transformer_norm = nn.LayerNorm(d_model)
+                    self.attn_pool = nn.Linear(d_model, 1)
+                    self.classifier = nn.Sequential(
+                        nn.Linear(d_model, d_ff), nn.GELU(), nn.Dropout(drop),
+                        nn.Linear(d_ff, 1))
+
+                def forward(self, x):
+                    h = self.input_proj(x)
+                    lstm_out, _ = self.lstm(h)
+                    h = self.lstm_norm(lstm_out + h)
+                    h = self.transformer(h)
+                    h = self.transformer_norm(h)
+                    w = torch.softmax(self.attn_pool(h), dim=1)
+                    ctx = (w * h).sum(dim=1)
+                    return self.classifier(ctx).squeeze(-1)
+
+            self._stacking_tft = EfficientTFT(input_dim)
+            state = torch.load(model_path, map_location='cpu', weights_only=True)
+            self._stacking_tft.load_state_dict(state)
+            self._stacking_tft.eval()
+            logger.info(f"Stacking TFT 加载完成 (input_dim={input_dim})")
+
+        with torch.no_grad():
+            logit = self._stacking_tft(X_tensor)
+            prob = torch.sigmoid(logit).item()
+        return float(np.clip(prob, 0, 1))
+
     def enhance_signal(
         self,
         sell_score: float,
@@ -456,63 +719,77 @@ class MLSignalEnhancer:
         enhanced_buy = buy_score
         enhanced_sell = sell_score
 
-        # 0. 方向预测 (多模型集成: LGB + LSTM + TFT + 跨资产)
-        has_direction = (self._direction_model is not None or self._lstm_meta is not None
-                         or self._tft_meta is not None or self._cross_asset_model is not None)
-        if has_direction:
+        # 0. 方向预测: Stacking(优先) → 多模型加权(fallback)
+        bull_prob = None
+
+        if self._stacking_meta_model is not None:
+            # Stacking ensemble — 4 基模型 → 元学习器
             try:
-                features = self._compute_direction_features(df)
-                if features is not None and len(features) > 0:
-                    lgb_prob = self._predict_direction_lgb(features)
-                    lstm_prob = self._predict_direction_lstm(features)
-                    tft_prob = self._predict_direction_tft(features)
-                    ca_prob = self._predict_direction_cross_asset(features)
-
-                    probs = []
-                    weights = []
-                    if lgb_prob is not None:
-                        probs.append(lgb_prob)
-                        weights.append(self.lgb_weight)
-                        ml_info['lgb_bull_prob'] = round(lgb_prob, 4)
-                    if lstm_prob is not None:
-                        probs.append(lstm_prob)
-                        weights.append(self.lstm_weight)
-                        ml_info['lstm_bull_prob'] = round(lstm_prob, 4)
-                    if tft_prob is not None:
-                        probs.append(tft_prob)
-                        weights.append(self.tft_weight)
-                        ml_info['tft_bull_prob'] = round(tft_prob, 4)
-                    if ca_prob is not None:
-                        probs.append(ca_prob)
-                        weights.append(self.cross_asset_weight)
-                        ml_info['ca_bull_prob'] = round(ca_prob, 4)
-
-                    if probs:
-                        total_w = sum(weights)
-                        bull_prob = sum(p * w for p, w in zip(probs, weights)) / total_w
-                        ml_info['bull_prob'] = round(bull_prob, 4)
-
-                        # 方向性调整: bull_prob 偏向做多时加强 BS, 偏向做空时加强 SS
-                        if bull_prob >= self.direction_long_threshold:
-                            # ML 看涨 → BS 加权, SS 降权
-                            strength = (bull_prob - 0.5) * 2  # 0~1 范围
-                            bs_mult = 1.0 + strength * (self.direction_boost - 1.0)
-                            ss_mult = 1.0 - strength * (1.0 - self.direction_dampen)
-                            enhanced_buy *= bs_mult
-                            enhanced_sell *= ss_mult
-                            ml_info['direction_action'] = f'bullish(BS*{bs_mult:.2f},SS*{ss_mult:.2f})'
-                        elif bull_prob <= self.direction_short_threshold:
-                            # ML 看跌 → SS 加权, BS 降权
-                            strength = (0.5 - bull_prob) * 2
-                            ss_mult = 1.0 + strength * (self.direction_boost - 1.0)
-                            bs_mult = 1.0 - strength * (1.0 - self.direction_dampen)
-                            enhanced_sell *= ss_mult
-                            enhanced_buy *= bs_mult
-                            ml_info['direction_action'] = f'bearish(SS*{ss_mult:.2f},BS*{bs_mult:.2f})'
-                        else:
-                            ml_info['direction_action'] = 'neutral'
+                bull_prob = self._predict_stacking(df, ml_info)
             except Exception as e:
-                logger.warning(f"方向预测计算异常: {e}")
+                logger.warning(f"Stacking 预测失败，退回加权集成: {e}")
+                bull_prob = None
+
+        if bull_prob is None:
+            # Fallback: 多模型加权集成 (LGB + LSTM + TFT + 跨资产)
+            has_direction = (self._direction_model is not None or self._lstm_meta is not None
+                             or self._tft_meta is not None or self._cross_asset_model is not None)
+            if has_direction:
+                try:
+                    features = self._compute_direction_features(df)
+                    if features is not None and len(features) > 0:
+                        lgb_prob = self._predict_direction_lgb(features)
+                        lstm_prob = self._predict_direction_lstm(features)
+                        tft_prob = self._predict_direction_tft(features)
+                        ca_prob = self._predict_direction_cross_asset(features)
+
+                        probs = []
+                        weights = []
+                        if lgb_prob is not None:
+                            probs.append(lgb_prob)
+                            weights.append(self.lgb_weight)
+                            ml_info['lgb_bull_prob'] = round(lgb_prob, 4)
+                        if lstm_prob is not None:
+                            probs.append(lstm_prob)
+                            weights.append(self.lstm_weight)
+                            ml_info['lstm_bull_prob'] = round(lstm_prob, 4)
+                        if tft_prob is not None:
+                            probs.append(tft_prob)
+                            weights.append(self.tft_weight)
+                            ml_info['tft_bull_prob'] = round(tft_prob, 4)
+                        if ca_prob is not None:
+                            probs.append(ca_prob)
+                            weights.append(self.cross_asset_weight)
+                            ml_info['ca_bull_prob'] = round(ca_prob, 4)
+
+                        if probs:
+                            total_w = sum(weights)
+                            bull_prob = sum(p * w for p, w in zip(probs, weights)) / total_w
+                except Exception as e:
+                    logger.warning(f"方向预测计算异常: {e}")
+
+        if bull_prob is not None:
+            ml_info['bull_prob'] = round(bull_prob, 4)
+
+            # 方向性调整: bull_prob 偏向做多时加强 BS, 偏向做空时加强 SS
+            if bull_prob >= self.direction_long_threshold:
+                # ML 看涨 → BS 加权, SS 降权
+                strength = (bull_prob - 0.5) * 2  # 0~1 范围
+                bs_mult = 1.0 + strength * (self.direction_boost - 1.0)
+                ss_mult = 1.0 - strength * (1.0 - self.direction_dampen)
+                enhanced_buy *= bs_mult
+                enhanced_sell *= ss_mult
+                ml_info['direction_action'] = f'bullish(BS*{bs_mult:.2f},SS*{ss_mult:.2f})'
+            elif bull_prob <= self.direction_short_threshold:
+                # ML 看跌 → SS 加权, BS 降权
+                strength = (0.5 - bull_prob) * 2
+                ss_mult = 1.0 + strength * (self.direction_boost - 1.0)
+                bs_mult = 1.0 - strength * (1.0 - self.direction_dampen)
+                enhanced_sell *= ss_mult
+                enhanced_buy *= bs_mult
+                ml_info['direction_action'] = f'bearish(SS*{ss_mult:.2f},BS*{bs_mult:.2f})'
+            else:
+                ml_info['direction_action'] = 'neutral'
 
         # 1. Regime 过滤
         if self._regime_model:

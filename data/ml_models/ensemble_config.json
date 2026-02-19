@@ -20,6 +20,14 @@
     "regime": {
       "model_file": "trend_regime_model.txt",
       "weight": 0.0
+    },
+    "stacking": {
+      "meta_model": "stacking_meta.pkl",
+      "config_file": "stacking_meta.json",
+      "base_models": ["stacking_lgb", "stacking_xgb", "stacking_lstm", "stacking_tft"],
+      "meta_learner": "LogisticRegression",
+      "priority": "highest",
+      "note": "When stacking available, overrides lgb+lstm weighted average"
     }
   },
   "thresholds": {

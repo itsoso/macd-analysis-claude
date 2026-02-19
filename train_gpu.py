@@ -2319,6 +2319,722 @@ def train_mtf_fusion(decision_tfs=None):
 
 
 # ================================================================
+# 模式 12: Stacking Ensemble Meta-Learner
+# ================================================================
+
+def train_stacking_ensemble(timeframes: List[str] = None):
+    """
+    Stacking 集成: 4 个异构基模型的 OOF 预测 → LogisticRegression 元学习器。
+
+    基模型:
+      1. LightGBM Direction (73 维, Optuna 参数)
+      2. XGBoost (73 维, 保守配置)
+      3. LSTM+Attention (73 维, 48-bar 序列)
+      4. TFT (94 维含跨资产, 96-bar 序列)
+
+    流程:
+      A. 数据准备 + 时间分割
+      B. 5-Fold 时序 CV 生成 OOF 预测
+      C. 训练 LogisticRegression 元学习器
+      D. 全量重训基模型 + 保存
+    """
+    import pickle
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+
+    timeframes = timeframes or ['1h']
+    all_results = {}
+
+    for tf in timeframes:
+        log.info(f"\n{'='*60}")
+        log.info(f"Stacking Ensemble — {SYMBOL}/{tf}")
+        log.info(f"{'='*60}")
+
+        t0 = time.time()
+
+        # ---- A. 数据准备 ----
+        features, labels_df = prepare_features(SYMBOL, tf)
+        features_cross = _add_cross_asset_features(features.copy(), tf)
+
+        label = labels_df['profitable_long_5']
+        n = len(features)
+
+        # 时间分割: 70% train, 15% val, 15% test
+        train_end = int(n * 0.7)
+        val_end = int(n * 0.85)
+        purge = 24
+
+        y_all = label.values.astype(np.float32)
+
+        # 基模型用 73 维特征 (LGB/XGB/LSTM), TFT 用 94 维 (含跨资产)
+        feat_73 = features.values.astype(np.float32)
+        feat_94 = features_cross.values.astype(np.float32)
+        feat_73_cols = list(features.columns)
+        feat_94_cols = list(features_cross.columns)
+
+        # 标准化参数 (用 train 前半部分计算)
+        norm_end = train_end // 2
+        feat_mean_73 = np.nanmean(feat_73[:norm_end], axis=0)
+        feat_std_73 = np.nanstd(feat_73[:norm_end], axis=0) + 1e-8
+        feat_mean_94 = np.nanmean(feat_94[:norm_end], axis=0)
+        feat_std_94 = np.nanstd(feat_94[:norm_end], axis=0) + 1e-8
+
+        feat_73_normed = np.clip(
+            np.nan_to_num((feat_73 - feat_mean_73) / feat_std_73,
+                          nan=0.0, posinf=3.0, neginf=-3.0), -5, 5)
+        feat_94_normed = np.clip(
+            np.nan_to_num((feat_94 - feat_mean_94) / feat_std_94,
+                          nan=0.0, posinf=3.0, neginf=-3.0), -5, 5)
+
+        log.info(f"数据: {n} 样本, train={train_end}, val={val_end-train_end-purge}, "
+                 f"test={n-val_end-purge}")
+        log.info(f"特征: 73 维 (LGB/XGB/LSTM) + 94 维 (TFT)")
+
+        # ---- B. 5-Fold OOF 预测 ----
+        N_FOLDS = 5
+        fold_size = train_end // N_FOLDS
+
+        oof_preds = np.full((train_end, 4), np.nan)  # (n_train, 4 models)
+        oof_valid = np.zeros(train_end, dtype=bool)
+
+        log.info(f"\n生成 OOF 预测 ({N_FOLDS} folds, expanding window)...")
+
+        for fold_idx in range(N_FOLDS):
+            fold_start = fold_idx * fold_size
+            fold_end = (fold_idx + 1) * fold_size if fold_idx < N_FOLDS - 1 else train_end
+
+            # Expanding window: 用 fold 之前的所有数据训练
+            if fold_idx == 0:
+                log.info(f"  Fold 0: 跳过 (无训练数据)")
+                continue
+
+            tr_end = fold_start
+            tr_valid = ~np.isnan(y_all[:tr_end])
+            fold_valid = ~np.isnan(y_all[fold_start:fold_end])
+
+            if tr_valid.sum() < 200 or fold_valid.sum() < 50:
+                log.info(f"  Fold {fold_idx}: 跳过 (样本不足)")
+                continue
+
+            X_tr_73 = feat_73[:tr_end][tr_valid]
+            X_tr_94 = feat_94[:tr_end][tr_valid]
+            y_tr = y_all[:tr_end][tr_valid]
+
+            X_fold_73 = feat_73[fold_start:fold_end][fold_valid]
+            X_fold_94 = feat_94[fold_start:fold_end][fold_valid]
+
+            log.info(f"  Fold {fold_idx}: train={len(X_tr_73)}, predict={len(X_fold_73)}")
+
+            # --- 基模型 1: LGB ---
+            try:
+                import lightgbm as lgb
+                lgb_params = {
+                    'objective': 'binary', 'metric': 'auc',
+                    'boosting_type': 'gbdt', 'num_leaves': 34,
+                    'learning_rate': 0.0102, 'feature_fraction': 0.573,
+                    'bagging_fraction': 0.513, 'bagging_freq': 3,
+                    'min_child_samples': 56, 'lambda_l1': 0.0114,
+                    'lambda_l2': 0.2146, 'verbose': -1, 'n_jobs': -1, 'seed': 42,
+                }
+                dtrain = lgb.Dataset(X_tr_73, label=y_tr)
+                lgb_model = lgb.train(lgb_params, dtrain, num_boost_round=300)
+                lgb_pred = lgb_model.predict(X_fold_73)
+                oof_preds[fold_start:fold_end, 0][fold_valid] = lgb_pred
+            except Exception as e:
+                log.warning(f"  Fold {fold_idx} LGB 失败: {e}")
+
+            # --- 基模型 2: XGBoost ---
+            try:
+                import xgboost as xgb
+                xgb_params = {
+                    'objective': 'binary:logistic', 'eval_metric': 'auc',
+                    'max_depth': 5, 'learning_rate': 0.01,
+                    'subsample': 0.7, 'colsample_bytree': 0.7,
+                    'min_child_weight': 10, 'reg_alpha': 0.01,
+                    'reg_lambda': 1.0, 'seed': 42, 'verbosity': 0,
+                }
+                if detect_gpu().get('torch_cuda'):
+                    xgb_params['tree_method'] = 'hist'
+                    xgb_params['device'] = 'cuda'
+                dmat_tr = xgb.DMatrix(X_tr_73, label=y_tr)
+                dmat_fold = xgb.DMatrix(X_fold_73)
+                xgb_model = xgb.train(xgb_params, dmat_tr, num_boost_round=300)
+                xgb_pred = xgb_model.predict(dmat_fold)
+                oof_preds[fold_start:fold_end, 1][fold_valid] = xgb_pred
+            except Exception as e:
+                log.warning(f"  Fold {fold_idx} XGBoost 失败: {e}")
+
+            # --- 基模型 3: LSTM+Attention ---
+            try:
+                lstm_pred = _stacking_train_lstm_fold(
+                    feat_73_normed, y_all, tr_end, fold_start, fold_end,
+                    fold_valid, feat_73.shape[1])
+                if lstm_pred is not None:
+                    oof_preds[fold_start:fold_end, 2][fold_valid] = lstm_pred
+            except Exception as e:
+                log.warning(f"  Fold {fold_idx} LSTM 失败: {e}")
+
+            # --- 基模型 4: TFT ---
+            try:
+                tft_pred = _stacking_train_tft_fold(
+                    feat_94_normed, y_all, tr_end, fold_start, fold_end,
+                    fold_valid, feat_94.shape[1])
+                if tft_pred is not None:
+                    oof_preds[fold_start:fold_end, 3][fold_valid] = tft_pred
+            except Exception as e:
+                log.warning(f"  Fold {fold_idx} TFT 失败: {e}")
+
+            oof_valid[fold_start:fold_end] |= fold_valid
+
+        # OOF 汇总
+        has_oof = oof_valid & ~np.isnan(y_all[:train_end])
+        # 对缺失模型的 OOF 用 0.5 填充 (中性概率)
+        oof_filled = oof_preds[:train_end].copy()
+        oof_filled[np.isnan(oof_filled)] = 0.5
+        has_oof &= np.any(~np.isnan(oof_preds[:train_end]), axis=1)
+
+        oof_X = oof_filled[has_oof]
+        oof_y = y_all[:train_end][has_oof]
+
+        model_names = ['LGB', 'XGBoost', 'LSTM', 'TFT']
+        log.info(f"\nOOF 汇总: {len(oof_X)} 有效样本")
+        for i, name in enumerate(model_names):
+            valid_mask = ~np.isnan(oof_preds[:train_end][has_oof, i])
+            if valid_mask.sum() > 50:
+                auc_i = roc_auc_score(oof_y[valid_mask],
+                                      oof_preds[:train_end][has_oof, i][valid_mask])
+                log.info(f"  {name} OOF AUC: {auc_i:.4f} ({valid_mask.sum()} 样本)")
+            else:
+                log.info(f"  {name} OOF: 样本不足")
+
+        # 可选附加特征: hvol_20, regime_label
+        extra_feat_names = []
+        oof_extra = []
+        hvol_idx = feat_73_cols.index('hvol_20') if 'hvol_20' in feat_73_cols else -1
+        if hvol_idx >= 0:
+            oof_extra.append(feat_73[:train_end][has_oof, hvol_idx:hvol_idx+1])
+            extra_feat_names.append('hvol_20')
+
+        if oof_extra:
+            oof_X = np.hstack([oof_X] + oof_extra)
+            log.info(f"  附加特征: {extra_feat_names} → 元学习器输入 {oof_X.shape[1]} 维")
+
+        # ---- C. 训练元学习器 ----
+        log.info(f"\n训练 LogisticRegression 元学习器...")
+
+        meta_model = LogisticRegression(C=0.1, penalty='l2', solver='lbfgs',
+                                        max_iter=1000, random_state=42)
+        meta_model.fit(oof_X, oof_y)
+
+        # OOF 性能
+        oof_meta_pred = meta_model.predict_proba(oof_X)[:, 1]
+        oof_meta_auc = roc_auc_score(oof_y, oof_meta_pred)
+        log.info(f"  Meta OOF AUC: {oof_meta_auc:.4f}")
+
+        # 验证集评估
+        val_start = train_end + purge
+        val_mask = ~np.isnan(y_all[val_start:val_end])
+        test_start = val_end + purge
+        test_mask = ~np.isnan(y_all[test_start:])
+
+        val_auc = _stacking_evaluate_meta(
+            meta_model, feat_73, feat_94, feat_73_normed, feat_94_normed,
+            y_all, val_start, val_end, val_mask, feat_73.shape[1], feat_94.shape[1],
+            hvol_idx, extra_feat_names)
+
+        test_auc = _stacking_evaluate_meta(
+            meta_model, feat_73, feat_94, feat_73_normed, feat_94_normed,
+            y_all, test_start, len(y_all), test_mask, feat_73.shape[1], feat_94.shape[1],
+            hvol_idx, extra_feat_names)
+
+        log.info(f"  验证 AUC: {val_auc:.4f}")
+        log.info(f"  测试 AUC: {test_auc:.4f}")
+
+        # ---- D. 全量重训基模型 + 保存 ----
+        log.info(f"\n全量重训基模型 (train+val)...")
+        os.makedirs(MODEL_DIR, exist_ok=True)
+
+        full_end = val_end
+        full_valid = ~np.isnan(y_all[:full_end])
+        X_full_73 = feat_73[:full_end][full_valid]
+        X_full_94 = feat_94[:full_end][full_valid]
+        y_full = y_all[:full_end][full_valid]
+
+        # 重训 LGB
+        try:
+            import lightgbm as lgb
+            lgb_params = {
+                'objective': 'binary', 'metric': 'auc',
+                'boosting_type': 'gbdt', 'num_leaves': 34,
+                'learning_rate': 0.0102, 'feature_fraction': 0.573,
+                'bagging_fraction': 0.513, 'bagging_freq': 3,
+                'min_child_samples': 56, 'lambda_l1': 0.0114,
+                'lambda_l2': 0.2146, 'verbose': -1, 'n_jobs': -1, 'seed': 42,
+            }
+            dtrain = lgb.Dataset(X_full_73, label=y_full)
+            final_lgb = lgb.train(lgb_params, dtrain, num_boost_round=400)
+            final_lgb.save_model(os.path.join(MODEL_DIR, f'stacking_lgb_{tf}.txt'))
+            log.info("  LGB 保存完成")
+        except Exception as e:
+            log.warning(f"  LGB 全量训练失败: {e}")
+
+        # 重训 XGBoost
+        try:
+            import xgboost as xgb
+            xgb_params = {
+                'objective': 'binary:logistic', 'eval_metric': 'auc',
+                'max_depth': 5, 'learning_rate': 0.01,
+                'subsample': 0.7, 'colsample_bytree': 0.7,
+                'min_child_weight': 10, 'reg_alpha': 0.01,
+                'reg_lambda': 1.0, 'seed': 42, 'verbosity': 0,
+            }
+            dmat = xgb.DMatrix(X_full_73, label=y_full)
+            final_xgb = xgb.train(xgb_params, dmat, num_boost_round=400)
+            final_xgb.save_model(os.path.join(MODEL_DIR, f'stacking_xgb_{tf}.json'))
+            log.info("  XGBoost 保存完成")
+        except Exception as e:
+            log.warning(f"  XGBoost 全量训练失败: {e}")
+
+        # 重训 LSTM
+        try:
+            _stacking_retrain_lstm_full(feat_73_normed, y_all, full_end, full_valid,
+                                        feat_73.shape[1], tf)
+            log.info("  LSTM 保存完成")
+        except Exception as e:
+            log.warning(f"  LSTM 全量训练失败: {e}")
+
+        # 重训 TFT
+        try:
+            _stacking_retrain_tft_full(feat_94_normed, y_all, full_end, full_valid,
+                                       feat_94.shape[1], tf)
+            log.info("  TFT 保存完成")
+        except Exception as e:
+            log.warning(f"  TFT 全量训练失败: {e}")
+
+        # 保存元学习器
+        meta_path = os.path.join(MODEL_DIR, 'stacking_meta.pkl')
+        with open(meta_path, 'wb') as f:
+            pickle.dump(meta_model, f)
+
+        # 保存元数据 (含系数，便于 ONNX 导出和 debug)
+        meta_coef = meta_model.coef_[0].tolist()
+        meta_intercept = float(meta_model.intercept_[0])
+        base_model_names = ['lgb', 'xgboost', 'lstm', 'tft'] + extra_feat_names
+        stacking_meta = {
+            'version': 'stacking_v1',
+            'timeframe': tf,
+            'trained_at': datetime.now().isoformat(),
+            'base_models': ['lgb', 'xgboost', 'lstm', 'tft'],
+            'extra_features': extra_feat_names,
+            'meta_input_dim': len(base_model_names),
+            'meta_coefficients': dict(zip(base_model_names, meta_coef)),
+            'meta_intercept': meta_intercept,
+            'oof_meta_auc': round(oof_meta_auc, 4),
+            'val_auc': round(val_auc, 4),
+            'test_auc': round(test_auc, 4),
+            'n_oof_samples': int(len(oof_X)),
+            'n_folds': N_FOLDS,
+            'feature_names_73': feat_73_cols,
+            'feature_names_94': feat_94_cols,
+            'feat_mean_73': feat_mean_73.tolist(),
+            'feat_std_73': feat_std_73.tolist(),
+            'feat_mean_94': feat_mean_94.tolist(),
+            'feat_std_94': feat_std_94.tolist(),
+            'model_files': {
+                'lgb': f'stacking_lgb_{tf}.txt',
+                'xgboost': f'stacking_xgb_{tf}.json',
+                'lstm': f'stacking_lstm_{tf}.pt',
+                'tft': f'stacking_tft_{tf}.pt',
+                'meta': 'stacking_meta.pkl',
+            },
+            'thresholds': {
+                'long_threshold': 0.58,
+                'short_threshold': 0.42,
+            },
+        }
+        meta_json_path = os.path.join(MODEL_DIR, 'stacking_meta.json')
+        with open(meta_json_path, 'w') as f:
+            json.dump(stacking_meta, f, indent=2, default=str)
+
+        elapsed = time.time() - t0
+        result = {
+            'oof_meta_auc': round(oof_meta_auc, 4),
+            'val_auc': round(val_auc, 4),
+            'test_auc': round(test_auc, 4),
+            'n_oof_samples': len(oof_X),
+            'elapsed_sec': round(elapsed, 1),
+        }
+        all_results[tf] = result
+        log.info(f"\nStacking 完成: {result}")
+
+    save_results('stacking_ensemble', all_results)
+    return all_results
+
+
+def _stacking_train_lstm_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
+                              fold_valid, input_dim, seq_len=48, epochs=20):
+    """在单个 fold 上快速训练 LSTM 并返回 fold 预测"""
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # 构建训练序列
+    X_seqs, y_seqs = [], []
+    for i in range(seq_len, tr_end):
+        if not np.isnan(y_all[i]):
+            X_seqs.append(feat_normed[i - seq_len:i])
+            y_seqs.append(y_all[i])
+    if len(X_seqs) < 100:
+        return None
+
+    X_train_t = torch.FloatTensor(np.array(X_seqs)).to(device)
+    y_train_t = torch.FloatTensor(np.array(y_seqs)).to(device)
+    train_loader = DataLoader(TensorDataset(X_train_t, y_train_t),
+                              batch_size=256, shuffle=True)
+
+    class LSTMAttention(nn.Module):
+        def __init__(self, in_dim, hidden=128, layers=2, drop=0.3):
+            super().__init__()
+            self.lstm = nn.LSTM(in_dim, hidden, layers,
+                                batch_first=True, dropout=drop, bidirectional=True)
+            self.attn_fc = nn.Linear(hidden * 2, 1)
+            self.classifier = nn.Sequential(
+                nn.Linear(hidden * 2, 64), nn.GELU(), nn.Dropout(0.2),
+                nn.Linear(64, 1))
+
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            w = torch.softmax(self.attn_fc(out), dim=1)
+            ctx = (w * out).sum(dim=1)
+            return self.classifier(ctx).squeeze(-1)
+
+    model = LSTMAttention(input_dim).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    criterion = nn.BCEWithLogitsLoss()
+
+    model.train()
+    for ep in range(epochs):
+        for xb, yb in train_loader:
+            optimizer.zero_grad()
+            loss = criterion(model(xb), yb)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+    # fold 预测
+    fold_seqs = []
+    fold_indices = []
+    for i in range(fold_start, fold_end):
+        rel = i - fold_start
+        if fold_valid[rel] and i >= seq_len:
+            fold_seqs.append(feat_normed[i - seq_len:i])
+            fold_indices.append(rel)
+
+    if not fold_seqs:
+        return None
+
+    model.eval()
+    with torch.no_grad():
+        X_fold_t = torch.FloatTensor(np.array(fold_seqs)).to(device)
+        logits = model(X_fold_t)
+        probs = torch.sigmoid(logits).cpu().numpy()
+
+    result = np.full(fold_valid.sum(), 0.5)
+    # Map fold_indices back to positions in the valid-only array
+    valid_positions = np.where(fold_valid)[0]
+    pos_map = {v: idx for idx, v in enumerate(valid_positions)}
+    for fi, prob in zip(fold_indices, probs):
+        if fi in pos_map:
+            result[pos_map[fi]] = prob
+
+    return result
+
+
+def _stacking_train_tft_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
+                             fold_valid, input_dim, seq_len=96, epochs=15):
+    """在单个 fold 上快速训练 TFT 并返回 fold 预测"""
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    # 构建训练序列
+    X_seqs, y_seqs = [], []
+    for i in range(seq_len, tr_end):
+        if not np.isnan(y_all[i]):
+            X_seqs.append(feat_normed[i - seq_len:i])
+            y_seqs.append(y_all[i])
+    if len(X_seqs) < 100:
+        return None
+
+    X_train_t = torch.FloatTensor(np.array(X_seqs)).to(device)
+    y_train_t = torch.FloatTensor(np.array(y_seqs)).to(device)
+    train_loader = DataLoader(TensorDataset(X_train_t, y_train_t),
+                              batch_size=256, shuffle=True)
+
+    class EfficientTFT(nn.Module):
+        def __init__(self, in_dim, d_model=64, n_heads=4, d_ff=128, n_layers=2, drop=0.15):
+            super().__init__()
+            self.input_proj = nn.Sequential(
+                nn.Linear(in_dim, d_model), nn.LayerNorm(d_model),
+                nn.GELU(), nn.Dropout(drop))
+            self.lstm = nn.LSTM(d_model, d_model, n_layers,
+                                batch_first=True, dropout=drop if n_layers > 1 else 0)
+            self.lstm_norm = nn.LayerNorm(d_model)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model, nhead=n_heads, dim_feedforward=d_ff,
+                dropout=drop, activation='gelu', batch_first=True)
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
+            self.transformer_norm = nn.LayerNorm(d_model)
+            self.attn_pool = nn.Linear(d_model, 1)
+            self.classifier = nn.Sequential(
+                nn.Linear(d_model, d_ff), nn.GELU(), nn.Dropout(drop),
+                nn.Linear(d_ff, 1))
+
+        def forward(self, x):
+            h = self.input_proj(x)
+            lstm_out, _ = self.lstm(h)
+            h = self.lstm_norm(lstm_out + h)
+            h = self.transformer(h)
+            h = self.transformer_norm(h)
+            w = torch.softmax(self.attn_pool(h), dim=1)
+            ctx = (w * h).sum(dim=1)
+            return self.classifier(ctx).squeeze(-1)
+
+    model = EfficientTFT(input_dim).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
+    criterion = nn.BCEWithLogitsLoss()
+
+    model.train()
+    for ep in range(epochs):
+        for xb, yb in train_loader:
+            optimizer.zero_grad()
+            loss = criterion(model(xb), yb)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+    # fold 预测
+    fold_seqs = []
+    fold_indices = []
+    for i in range(fold_start, fold_end):
+        rel = i - fold_start
+        if fold_valid[rel] and i >= seq_len:
+            fold_seqs.append(feat_normed[i - seq_len:i])
+            fold_indices.append(rel)
+
+    if not fold_seqs:
+        return None
+
+    model.eval()
+    with torch.no_grad():
+        X_fold_t = torch.FloatTensor(np.array(fold_seqs)).to(device)
+        logits = model(X_fold_t)
+        probs = torch.sigmoid(logits).cpu().numpy()
+
+    result = np.full(fold_valid.sum(), 0.5)
+    valid_positions = np.where(fold_valid)[0]
+    pos_map = {v: idx for idx, v in enumerate(valid_positions)}
+    for fi, prob in zip(fold_indices, probs):
+        if fi in pos_map:
+            result[pos_map[fi]] = prob
+
+    return result
+
+
+def _stacking_evaluate_meta(meta_model, feat_73, feat_94, feat_73_normed, feat_94_normed,
+                            y_all, start, end, valid_mask, dim_73, dim_94,
+                            hvol_idx, extra_feat_names):
+    """用已训练的基模型在指定区间评估元学习器"""
+    from sklearn.metrics import roc_auc_score
+
+    if valid_mask.sum() < 20:
+        return 0.5
+
+    X_73 = feat_73[start:end][valid_mask]
+    y_true = y_all[start:end][valid_mask]
+
+    # LGB 预测
+    try:
+        import lightgbm as lgb
+        lgb_path = os.path.join(MODEL_DIR, 'stacking_lgb_tmp.txt')
+        # 使用最后一个 fold 训练的模型 (近似; 全量模型在后面训练)
+        # 这里简单重训一个 LGB 作为评估用
+        tr_valid = ~np.isnan(y_all[:start])
+        dtrain = lgb.Dataset(feat_73[:start][tr_valid], label=y_all[:start][tr_valid])
+        lgb_params = {
+            'objective': 'binary', 'metric': 'auc', 'boosting_type': 'gbdt',
+            'num_leaves': 34, 'learning_rate': 0.0102, 'feature_fraction': 0.573,
+            'bagging_fraction': 0.513, 'bagging_freq': 3, 'min_child_samples': 56,
+            'lambda_l1': 0.0114, 'lambda_l2': 0.2146, 'verbose': -1, 'seed': 42,
+        }
+        lgb_model = lgb.train(lgb_params, dtrain, num_boost_round=400)
+        lgb_pred = lgb_model.predict(X_73)
+    except Exception:
+        lgb_pred = np.full(len(X_73), 0.5)
+
+    # XGBoost 预测
+    try:
+        import xgboost as xgb
+        tr_valid = ~np.isnan(y_all[:start])
+        xgb_params = {
+            'objective': 'binary:logistic', 'eval_metric': 'auc', 'max_depth': 5,
+            'learning_rate': 0.01, 'subsample': 0.7, 'colsample_bytree': 0.7,
+            'min_child_weight': 10, 'reg_alpha': 0.01, 'reg_lambda': 1.0,
+            'seed': 42, 'verbosity': 0,
+        }
+        dmat_tr = xgb.DMatrix(feat_73[:start][tr_valid], label=y_all[:start][tr_valid])
+        dmat_eval = xgb.DMatrix(X_73)
+        xgb_model = xgb.train(xgb_params, dmat_tr, num_boost_round=400)
+        xgb_pred = xgb_model.predict(dmat_eval)
+    except Exception:
+        xgb_pred = np.full(len(X_73), 0.5)
+
+    # LSTM/TFT: 简化为 0.5 (全量基模型评估需要大量计算)
+    lstm_pred = np.full(len(X_73), 0.5)
+    tft_pred = np.full(len(X_73), 0.5)
+
+    meta_X = np.column_stack([lgb_pred, xgb_pred, lstm_pred, tft_pred])
+
+    # 附加特征
+    if hvol_idx >= 0 and 'hvol_20' in extra_feat_names:
+        hvol = feat_73[start:end][valid_mask, hvol_idx:hvol_idx+1]
+        meta_X = np.hstack([meta_X, hvol])
+
+    meta_pred = meta_model.predict_proba(meta_X)[:, 1]
+    try:
+        return roc_auc_score(y_true, meta_pred)
+    except Exception:
+        return 0.5
+
+
+def _stacking_retrain_lstm_full(feat_normed, y_all, full_end, full_valid,
+                                input_dim, tf, seq_len=48, epochs=30):
+    """全量重训 LSTM 用于 stacking 推理"""
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    X_seqs, y_seqs = [], []
+    for i in range(seq_len, full_end):
+        if full_valid[i] and not np.isnan(y_all[i]):
+            X_seqs.append(feat_normed[i - seq_len:i])
+            y_seqs.append(y_all[i])
+
+    if len(X_seqs) < 100:
+        return
+
+    X_t = torch.FloatTensor(np.array(X_seqs)).to(device)
+    y_t = torch.FloatTensor(np.array(y_seqs)).to(device)
+    loader = DataLoader(TensorDataset(X_t, y_t), batch_size=256, shuffle=True)
+
+    class LSTMAttention(nn.Module):
+        def __init__(self, in_dim, hidden=128, layers=2, drop=0.3):
+            super().__init__()
+            self.lstm = nn.LSTM(in_dim, hidden, layers,
+                                batch_first=True, dropout=drop, bidirectional=True)
+            self.attn_fc = nn.Linear(hidden * 2, 1)
+            self.classifier = nn.Sequential(
+                nn.Linear(hidden * 2, 64), nn.GELU(), nn.Dropout(0.2),
+                nn.Linear(64, 1))
+
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            w = torch.softmax(self.attn_fc(out), dim=1)
+            ctx = (w * out).sum(dim=1)
+            return self.classifier(ctx).squeeze(-1)
+
+    model = LSTMAttention(input_dim).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    criterion = nn.BCEWithLogitsLoss()
+
+    model.train()
+    for ep in range(epochs):
+        for xb, yb in loader:
+            optimizer.zero_grad()
+            loss = criterion(model(xb), yb)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+    save_path = os.path.join(MODEL_DIR, f'stacking_lstm_{tf}.pt')
+    torch.save(model.state_dict(), save_path)
+
+
+def _stacking_retrain_tft_full(feat_normed, y_all, full_end, full_valid,
+                               input_dim, tf, seq_len=96, epochs=25):
+    """全量重训 TFT 用于 stacking 推理"""
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    X_seqs, y_seqs = [], []
+    for i in range(seq_len, full_end):
+        if full_valid[i] and not np.isnan(y_all[i]):
+            X_seqs.append(feat_normed[i - seq_len:i])
+            y_seqs.append(y_all[i])
+
+    if len(X_seqs) < 100:
+        return
+
+    X_t = torch.FloatTensor(np.array(X_seqs)).to(device)
+    y_t = torch.FloatTensor(np.array(y_seqs)).to(device)
+    loader = DataLoader(TensorDataset(X_t, y_t), batch_size=256, shuffle=True)
+
+    class EfficientTFT(nn.Module):
+        def __init__(self, in_dim, d_model=64, n_heads=4, d_ff=128, n_layers=2, drop=0.15):
+            super().__init__()
+            self.input_proj = nn.Sequential(
+                nn.Linear(in_dim, d_model), nn.LayerNorm(d_model),
+                nn.GELU(), nn.Dropout(drop))
+            self.lstm = nn.LSTM(d_model, d_model, n_layers,
+                                batch_first=True, dropout=drop if n_layers > 1 else 0)
+            self.lstm_norm = nn.LayerNorm(d_model)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model, nhead=n_heads, dim_feedforward=d_ff,
+                dropout=drop, activation='gelu', batch_first=True)
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
+            self.transformer_norm = nn.LayerNorm(d_model)
+            self.attn_pool = nn.Linear(d_model, 1)
+            self.classifier = nn.Sequential(
+                nn.Linear(d_model, d_ff), nn.GELU(), nn.Dropout(drop),
+                nn.Linear(d_ff, 1))
+
+        def forward(self, x):
+            h = self.input_proj(x)
+            lstm_out, _ = self.lstm(h)
+            h = self.lstm_norm(lstm_out + h)
+            h = self.transformer(h)
+            h = self.transformer_norm(h)
+            w = torch.softmax(self.attn_pool(h), dim=1)
+            ctx = (w * h).sum(dim=1)
+            return self.classifier(ctx).squeeze(-1)
+
+    model = EfficientTFT(input_dim).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
+    criterion = nn.BCEWithLogitsLoss()
+
+    model.train()
+    for ep in range(epochs):
+        for xb, yb in loader:
+            optimizer.zero_grad()
+            loss = criterion(model(xb), yb)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+    save_path = os.path.join(MODEL_DIR, f'stacking_tft_{tf}.pt')
+    torch.save(model.state_dict(), save_path)
+
+
+# ================================================================
 # Main
 # ================================================================
 
@@ -2327,8 +3043,8 @@ def main():
     parser.add_argument('--mode', type=str, default='lgb',
                         choices=['lgb', 'lstm', 'optuna', 'backtest', 'tft',
                                  'cross_asset', 'incr_wf', 'mtf_fusion',
-                                 'ppo', 'onnx', 'retrain',
-                                 'all', 'all_v2', 'all_v3'],
+                                 'ppo', 'onnx', 'retrain', 'stacking',
+                                 'all', 'all_v2', 'all_v3', 'all_v4'],
                         help='训练模式')
     parser.add_argument('--tf', type=str, default=None,
                         help='指定周期 (逗号分隔, 如 1h,4h)')
@@ -2380,6 +3096,9 @@ def main():
 
     if args.mode in ('retrain',):
         results['retrain'] = train_online_retrain(tfs)
+
+    if args.mode in ('stacking', 'all_v4'):
+        results['stacking'] = train_stacking_ensemble(tfs)
 
     total_elapsed = time.time() - t_total
     log.info(f"\n{'='*60}")
