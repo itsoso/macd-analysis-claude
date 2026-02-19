@@ -126,6 +126,12 @@ class LGBPredictor:
         if X_val is not None:
             X_val = X_val.replace([np.inf, -np.inf], np.nan)
 
+        # CUDA 后端不能正确处理 NaN, 需要填充
+        if self.config.lgb_params.get('device') == 'cuda':
+            X_train = X_train.fillna(0)
+            if X_val is not None:
+                X_val = X_val.fillna(0)
+
         dtrain = lgb.Dataset(X_train, label=y_train)
         valid_sets = [dtrain]
         valid_names = ['train']
@@ -159,6 +165,8 @@ class LGBPredictor:
         if self.model is None:
             raise RuntimeError("模型未训练")
         X = X[self.feature_names].replace([np.inf, -np.inf], np.nan)
+        if self.config.lgb_params.get('device') == 'cuda':
+            X = X.fillna(0)
         return self.model.predict(X)
 
     def predict(self, X: pd.DataFrame) -> np.ndarray:

@@ -79,9 +79,13 @@ def _calc_bottom_score(sig, trend):
     score = 0
     if sig.get('sep_divs_bottom', 0) >= 2: score += 30
     elif sig.get('sep_divs_bottom', 0) >= 1 or sig.get('separated_bottom', 0) >= 1:
-        score += 15
-    if sig.get('exhaust_buy'): score += 18
+        score += 18
     if sig.get('area_bottom_div', 0) >= 1: score += 10
+    if sig.get('dif_bottom_div', 0) >= 1:
+        score += 8
+    if sig.get('exhaust_buy'): score += 18
+    if sig.get('zero_returns_bottom', 0) >= 1:
+        score += 10
     if sig.get('bottom', 0) >= 20: score += sig['bottom'] * 0.15
     if trend.get('is_uptrend'): score = int(score * 1.2)
     return score

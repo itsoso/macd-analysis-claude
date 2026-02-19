@@ -75,19 +75,38 @@ def _parse_overrides(raw: List[str]) -> Dict:
 def _extract_perp_quality(df: pd.DataFrame) -> Tuple[dict, List[str]]:
     audit = dict(df.attrs.get("perp_data_audit_dict") or {})
     oi_audit = dict(audit.get("open_interest") or {})
+    fr_audit = dict(audit.get("funding_rate") or {})
     oi_cov = float(oi_audit.get("orig_coverage", 0.0) or 0.0)
-    oi_stale = int(oi_audit.get("max_stale_bars", 0) or 0)
+    oi_stale = int(
+        oi_audit.get("max_internal_stale_bars", oi_audit.get("max_stale_bars", 0)) or 0
+    )
+    fr_cov = float(fr_audit.get("orig_coverage", 0.0) or 0.0)
+    fr_stale = int(
+        fr_audit.get("max_internal_stale_bars", fr_audit.get("max_stale_bars", 0)) or 0
+    )
     flags = []
     if (oi_cov < 0.20) or (oi_stale > 12):
         for c in ("open_interest", "open_interest_value"):
             if c in df.columns:
                 df[c] = np.nan
         flags.append("oi_soft_disabled")
+    # Funding 理论原始覆盖率(1h主TF)通常应接近 12.5% (8h)。
+    # 若远低于此且 stale 极长，视作历史缺失，避免将稀疏样本误用为“真实全历史”。
+    if (fr_cov < 0.05) or (fr_stale > 48):
+        for c in ("funding_rate", "funding_interval_hours"):
+            if c in df.columns:
+                df[c] = np.nan
+        flags.append("funding_soft_disabled")
     quality = {
         "audit": audit,
         "oi_orig_coverage": oi_cov,
         "oi_max_stale_bars": oi_stale,
+        "oi_max_stale_bars_raw": int(oi_audit.get("max_stale_bars", 0) or 0),
         "oi_soft_disabled": bool("oi_soft_disabled" in flags),
+        "funding_orig_coverage": fr_cov,
+        "funding_max_stale_bars": fr_stale,
+        "funding_max_stale_bars_raw": int(fr_audit.get("max_stale_bars", 0) or 0),
+        "funding_soft_disabled": bool("funding_soft_disabled" in flags),
         "quality_flags": flags,
     }
     return quality, flags
@@ -229,20 +248,30 @@ def run_once(
     fee_mult: float = 1.0,
     slippage_abs: float | None = None,
     tf_score_map: dict | None = None,
+    primary_warmup_days: int = 120,
 ) -> dict:
     cfg = dict(base_config)
     if tf_score_map is None:
         tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, cfg)
+    primary_df = all_data[PRIMARY_TF]
+    trade_end_dt = end + pd.Timedelta(hours=23, minutes=59)
+    # WFO 只跑窗口+warmup，避免每个窗口重复扫描全历史。
+    # 不改变信号口径（tf_score_map仍用全量预计算），仅缩短策略循环长度。
+    if primary_warmup_days > 0:
+        slice_start = start - pd.Timedelta(days=int(primary_warmup_days))
+        primary_window = primary_df[(primary_df.index >= slice_start) & (primary_df.index <= trade_end_dt)].copy()
+        if len(primary_window) >= 200:
+            primary_df = primary_window
     with cost_scenario(fee_mult=fee_mult, slippage_abs=slippage_abs):
         result = run_strategy_multi_tf(
-            primary_df=all_data[PRIMARY_TF],
+            primary_df=primary_df,
             tf_score_map=tf_score_map,
             decision_tfs=DECISION_TFS,
             config=cfg,
             primary_tf=PRIMARY_TF,
             trade_days=0,
             trade_start_dt=start,
-            trade_end_dt=end + pd.Timedelta(hours=23, minutes=59),
+            trade_end_dt=trade_end_dt,
         )
     return result
 
@@ -322,11 +351,44 @@ def main():
     p.add_argument("--end", default=pd.Timestamp.now().strftime("%Y-%m-%d"))
     p.add_argument("--train-months", type=int, default=6)
     p.add_argument("--test-months", type=int, default=1)
+    p.add_argument(
+        "--max-wfo-windows",
+        type=int,
+        default=0,
+        help="仅用于快筛：限制WFO测试窗口数量(0=全量)",
+    )
+    p.add_argument(
+        "--wfo-progress-step",
+        type=int,
+        default=5,
+        help="WFO进度打印步长(<=0表示不打印窗口级进度)",
+    )
+    p.add_argument(
+        "--primary-warmup-days",
+        type=int,
+        default=120,
+        help="WFO/单次运行时对primary_df保留的warmup天数(仅用于提速)",
+    )
     p.add_argument("--bootstrap-n", type=int, default=1000)
+    p.add_argument("--skip-bootstrap", action="store_true", help="跳过 bootstrap 显著性")
+    p.add_argument("--skip-stress", action="store_true", help="跳过压力测试")
+    p.add_argument(
+        "--fast",
+        action="store_true",
+        help="快速模式: 等价于 --skip-bootstrap --skip-stress (保留全量WFO)",
+    )
     p.add_argument("--override", action="append", default=[], help="基线覆盖 key=value")
     p.add_argument("--variant-override", action="append", default=[], help="变体覆盖 key=value")
     p.add_argument("--output-dir", default="logs/v10_3_validation")
+    p.add_argument(
+        "--baseline-summary",
+        default="",
+        help="可选: 复用历史 validation json 的 baseline_metrics（快筛提速）",
+    )
     args = p.parse_args()
+    if args.fast:
+        args.skip_bootstrap = True
+        args.skip_stress = True
 
     os.makedirs(args.output_dir, exist_ok=True)
     start_ts = pd.Timestamp(args.start)
@@ -337,16 +399,23 @@ def main():
     print("=" * 90)
 
     all_data, all_signals, perp_quality, quality_flags = load_all_data(args.symbol, args.start, args.end)
-    print(f"数据质量: flags={quality_flags or ['none']}, oi_cov={perp_quality.get('oi_orig_coverage', 0.0):.2%}, "
-          f"oi_max_stale={perp_quality.get('oi_max_stale_bars', 0)}")
+    print(
+        f"数据质量: flags={quality_flags or ['none']}, "
+        f"oi_cov={perp_quality.get('oi_orig_coverage', 0.0):.2%}, "
+        f"oi_max_stale={perp_quality.get('oi_max_stale_bars', 0)}, "
+        f"fr_cov={perp_quality.get('funding_orig_coverage', 0.0):.2%}, "
+        f"fr_max_stale={perp_quality.get('funding_max_stale_bars', 0)}"
+    )
 
     base_cfg = _scale_runtime_config(_build_default_config(), PRIMARY_TF)
-    base_cfg.update(_parse_overrides(args.override))
+    base_overrides = _parse_overrides(args.override)
+    variant_overrides = _parse_overrides(args.variant_override)
+    base_cfg.update(base_overrides)
     base_cfg["_perp_data_quality"] = perp_quality
     base_cfg["_data_quality_flags"] = quality_flags
 
     variant_cfg = dict(base_cfg)
-    variant_cfg.update(_parse_overrides(args.variant_override))
+    variant_cfg.update(variant_overrides)
 
     # tf_score_index 构建代价高（searchsorted on timestamps），按配置预构建并复用。
     base_tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, base_cfg)
@@ -354,9 +423,44 @@ def main():
 
     # C1: 扩样基线重测
     print("\n[1/4] 扩样基线重测...")
-    base_res = run_once(all_data, all_signals, base_cfg, start_ts, end_ts, tf_score_map=base_tf_score_map)
-    var_res = run_once(all_data, all_signals, variant_cfg, start_ts, end_ts, tf_score_map=var_tf_score_map)
-    base_m = _extract_metrics(base_res, start_ts, end_ts)
+    base_res = None
+    base_m = None
+    use_cached_baseline = False
+    baseline_path = str(args.baseline_summary or "").strip()
+    if baseline_path:
+        try:
+            with open(baseline_path, "r", encoding="utf-8") as f:
+                _b = json.load(f)
+            _bm = dict(_b.get("baseline_metrics") or {})
+            required = {"return_pct", "max_drawdown_pct", "contract_pf", "portfolio_pf", "calmar", "trades"}
+            if required.issubset(set(_bm.keys())):
+                base_m = _bm
+                use_cached_baseline = True
+                print(f"  baseline: 复用 {baseline_path}")
+            else:
+                print(f"  baseline: {baseline_path} 缺少关键字段，回退实时重算")
+        except Exception as _e:
+            print(f"  baseline: 读取 {baseline_path} 失败 ({_e})，回退实时重算")
+    if base_m is None:
+        base_res = run_once(
+            all_data,
+            all_signals,
+            base_cfg,
+            start_ts,
+            end_ts,
+            tf_score_map=base_tf_score_map,
+            primary_warmup_days=args.primary_warmup_days,
+        )
+        base_m = _extract_metrics(base_res, start_ts, end_ts)
+    var_res = run_once(
+        all_data,
+        all_signals,
+        variant_cfg,
+        start_ts,
+        end_ts,
+        tf_score_map=var_tf_score_map,
+        primary_warmup_days=args.primary_warmup_days,
+    )
     var_m = _extract_metrics(var_res, start_ts, end_ts)
     print(f"  baseline: Ret={base_m['return_pct']:+.2f}% pPF={base_m['portfolio_pf']:.3f} "
           f"cPF={base_m['contract_pf']:.3f} Calmar={base_m['calmar']:.3f} MDD={base_m['max_drawdown_pct']:.2f}%")
@@ -365,10 +469,31 @@ def main():
 
     # C2: 月度滚动WFO
     print("\n[2/4] 月度滚动 WFO (6m+1m)...")
-    windows = build_monthly_windows(args.start, args.end, args.train_months, args.test_months)
+    windows_all = build_monthly_windows(args.start, args.end, args.train_months, args.test_months)
+    windows = list(windows_all)
+    if args.max_wfo_windows and args.max_wfo_windows > 0 and len(windows_all) > args.max_wfo_windows:
+        # 均匀子采样窗口，保留时间分布代表性；用于方向性快筛。
+        idx = np.linspace(0, len(windows_all) - 1, num=args.max_wfo_windows, dtype=int)
+        windows = [windows_all[int(i)] for i in sorted(set(idx.tolist()))]
+        print(f"  WFO窗口子采样: {len(windows_all)} -> {len(windows)}")
     wfo_rows = []
+    total_windows = len(windows)
+    progress_step = int(args.wfo_progress_step or 0)
     for i, (tr_s, tr_e, te_s, te_e) in enumerate(windows, 1):
-        te_res = run_once(all_data, all_signals, variant_cfg, te_s, te_e, tf_score_map=var_tf_score_map)
+        if progress_step > 0 and (i == 1 or i == total_windows or i % progress_step == 0):
+            print(
+                f"  WFO进度: {i}/{total_windows} | test={te_s.strftime('%Y-%m-%d')}~{te_e.strftime('%Y-%m-%d')}",
+                flush=True,
+            )
+        te_res = run_once(
+            all_data,
+            all_signals,
+            variant_cfg,
+            te_s,
+            te_e,
+            tf_score_map=var_tf_score_map,
+            primary_warmup_days=args.primary_warmup_days,
+        )
         te_m = _extract_metrics(te_res, te_s, te_e)
         wfo_rows.append(
             {
@@ -391,68 +516,93 @@ def main():
     print(f"  WFO窗口: {len(wfo_df)} | 盈利占比={win_ratio:.2%} | 中位pPF={median_ppf:.3f} | pass={wfo_pass}")
 
     # C3: bootstrap 显著性
-    print("\n[3/4] bootstrap 显著性...")
-    stat_ppf = bootstrap_delta(base_m["pnl_values"], var_m["pnl_values"], n=args.bootstrap_n)
-    stat_calmar = bootstrap_delta_calmar(
-        base_m["history_daily_returns"], var_m["history_daily_returns"], n=args.bootstrap_n
-    )
-    print(f"  ΔpPF p={stat_ppf['p_value']:.4f} CI[{stat_ppf['ci_low']:.4f},{stat_ppf['ci_high']:.4f}]")
-    print(f"  ΔCalmar p={stat_calmar['p_value']:.4f} CI[{stat_calmar['ci_low']:.4f},{stat_calmar['ci_high']:.4f}]")
+    if args.skip_bootstrap:
+        print("\n[3/4] bootstrap 显著性... (skip)")
+        stat_ppf = {"p_value": 1.0, "ci_low": 0.0, "ci_high": 0.0, "delta_obs": 0.0}
+        stat_calmar = {"p_value": 1.0, "ci_low": 0.0, "ci_high": 0.0, "delta_obs": 0.0}
+    else:
+        if use_cached_baseline or base_res is None:
+            raise RuntimeError(
+                "bootstrap 需要实时 baseline 交易序列；请去掉 --baseline-summary 或加 --skip-bootstrap"
+            )
+        print("\n[3/4] bootstrap 显著性...")
+        stat_ppf = bootstrap_delta(base_m["pnl_values"], var_m["pnl_values"], n=args.bootstrap_n)
+        stat_calmar = bootstrap_delta_calmar(
+            base_m["history_daily_returns"], var_m["history_daily_returns"], n=args.bootstrap_n
+        )
+        print(f"  ΔpPF p={stat_ppf['p_value']:.4f} CI[{stat_ppf['ci_low']:.4f},{stat_ppf['ci_high']:.4f}]")
+        print(f"  ΔCalmar p={stat_calmar['p_value']:.4f} CI[{stat_calmar['ci_low']:.4f},{stat_calmar['ci_high']:.4f}]")
 
     # C4: 压力测试
-    print("\n[4/4] 压力测试...")
-    stress_cases = [
-        ("baseline_cost", 1.0, None),
-        ("fee_x2", 2.0, None),
-        ("slippage_0.03pct", 1.0, 0.0003),
-        ("slippage_0.05pct", 1.0, 0.0005),
-    ]
-    stress_rows = []
-    for name, fee_mult, slip in stress_cases:
-        rs = run_once(
-            all_data,
-            all_signals,
-            variant_cfg,
-            start_ts,
-            end_ts,
-            fee_mult=fee_mult,
-            slippage_abs=slip,
-            tf_score_map=var_tf_score_map,
-        )
-        m = _extract_metrics(rs, start_ts, end_ts)
-        stress_rows.append(
-            {
-                "scenario": name,
-                "fee_mult": fee_mult,
-                "slippage": slip,
-                "return_pct": m["return_pct"],
-                "portfolio_pf": m["portfolio_pf"],
-                "max_drawdown_pct": m["max_drawdown_pct"],
-            }
-        )
-        print(f"  {name:<18} Ret={m['return_pct']:+.2f}% pPF={m['portfolio_pf']:.3f} MDD={m['max_drawdown_pct']:.2f}%")
-    stress_df = pd.DataFrame(stress_rows)
-    base_stress = stress_df.iloc[0] if not stress_df.empty else None
-    pressure_pass = True
-    if base_stress is not None:
-        base_mdd_abs = abs(float(base_stress["max_drawdown_pct"]))
-        for _, row in stress_df.iloc[1:].iterrows():
-            if float(row["portfolio_pf"]) <= 1.0:
-                pressure_pass = False
-            if base_mdd_abs > 1e-9 and abs(float(row["max_drawdown_pct"])) > base_mdd_abs * 1.25:
-                pressure_pass = False
-    print(f"  压力测试通过: {pressure_pass}")
+    if args.skip_stress:
+        print("\n[4/4] 压力测试... (skip)")
+        stress_rows = []
+        stress_df = pd.DataFrame(stress_rows)
+        pressure_pass = True
+    else:
+        print("\n[4/4] 压力测试...")
+        stress_cases = [
+            ("baseline_cost", 1.0, None),
+            ("fee_x2", 2.0, None),
+            ("slippage_0.03pct", 1.0, 0.0003),
+            ("slippage_0.05pct", 1.0, 0.0005),
+        ]
+        stress_rows = []
+        for name, fee_mult, slip in stress_cases:
+            rs = run_once(
+                all_data,
+                all_signals,
+                variant_cfg,
+                start_ts,
+                end_ts,
+                fee_mult=fee_mult,
+                slippage_abs=slip,
+                tf_score_map=var_tf_score_map,
+                primary_warmup_days=args.primary_warmup_days,
+            )
+            m = _extract_metrics(rs, start_ts, end_ts)
+            stress_rows.append(
+                {
+                    "scenario": name,
+                    "fee_mult": fee_mult,
+                    "slippage": slip,
+                    "return_pct": m["return_pct"],
+                    "portfolio_pf": m["portfolio_pf"],
+                    "max_drawdown_pct": m["max_drawdown_pct"],
+                }
+            )
+            print(f"  {name:<18} Ret={m['return_pct']:+.2f}% pPF={m['portfolio_pf']:.3f} MDD={m['max_drawdown_pct']:.2f}%")
+        stress_df = pd.DataFrame(stress_rows)
+        base_stress = stress_df.iloc[0] if not stress_df.empty else None
+        pressure_pass = True
+        if base_stress is not None:
+            base_mdd_abs = abs(float(base_stress["max_drawdown_pct"]))
+            for _, row in stress_df.iloc[1:].iterrows():
+                if float(row["portfolio_pf"]) <= 1.0:
+                    pressure_pass = False
+                if base_mdd_abs > 1e-9 and abs(float(row["max_drawdown_pct"])) > base_mdd_abs * 1.25:
+                    pressure_pass = False
+        print(f"  压力测试通过: {pressure_pass}")
 
     out = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "symbol": args.symbol,
         "range": {"start": args.start, "end": args.end},
+        "config": {
+            "base_overrides": base_overrides,
+            "variant_overrides": variant_overrides,
+            "baseline_summary": baseline_path if use_cached_baseline else None,
+            "primary_warmup_days": int(args.primary_warmup_days),
+            "max_wfo_windows": int(args.max_wfo_windows or 0),
+            "fast_mode": bool(args.fast),
+        },
         "perp_data_quality": perp_quality,
         "baseline_metrics": {k: v for k, v in base_m.items() if k not in ("history_daily_returns", "pnl_values")},
         "variant_metrics": {k: v for k, v in var_m.items() if k not in ("history_daily_returns", "pnl_values")},
         "wfo": {
             "train_months": args.train_months,
             "test_months": args.test_months,
+            "windows_all": int(len(windows_all)),
             "windows": int(len(wfo_df)),
             "profit_window_ratio": win_ratio,
             "median_portfolio_pf": median_ppf,
@@ -460,12 +610,14 @@ def main():
         },
         "stat_significance": {
             "bootstrap_n": int(args.bootstrap_n),
+            "skipped": bool(args.skip_bootstrap),
             "delta_portfolio_pf": stat_ppf,
             "delta_calmar": stat_calmar,
             "pass_rule": "p<=0.10 and direction_consistent",
         },
         "stress_test": {
             "rows": stress_rows,
+            "skipped": bool(args.skip_stress),
             "pass": bool(pressure_pass),
             "pass_rule": "pPF>1.0 and MDD not worse than 1.25x baseline",
         },

@@ -711,8 +711,21 @@ def _vectorized_top_score(merged_arrays, trend_down):
     return score
 
 
-def _vectorized_bottom_score(merged_arrays, trend_up):
-    """向量化版 _calc_bottom_score"""
+def _vectorized_bottom_score(
+    merged_arrays,
+    trend_up,
+    single_bonus: float = 18.0,
+    area_bonus: float = 10.0,
+    dif_bonus: float = 8.0,
+    exhaust_bonus: float = 18.0,
+    zero_ret_bonus: float = 10.0,
+    top_mult: float = 0.15,
+    trend_mult: float = 1.2,
+):
+    """向量化版 _calc_bottom_score.
+
+    v10.3+: 底部背离各项加分支持配置化, 便于做 A/B 消融而不改核心逻辑。
+    """
     n = len(trend_up)
     score = np.zeros(n, dtype=np.float64)
 
@@ -720,18 +733,22 @@ def _vectorized_bottom_score(merged_arrays, trend_up):
     separated_bot = merged_arrays.get('separated_bottom', np.zeros(n))
     exhaust_buy = merged_arrays.get('exhaust_buy', np.zeros(n, dtype=np.bool_))
     area_bot = merged_arrays.get('area_bottom_div', np.zeros(n))
+    dif_bot = merged_arrays.get('dif_bottom_div', np.zeros(n))
+    zero_ret_bot = merged_arrays.get('zero_returns_bottom', np.zeros(n))
     bottom = merged_arrays.get('bottom', np.zeros(n))
 
     mask_double = sep_bot >= 2
     mask_single = (~mask_double) & ((sep_bot >= 1) | (separated_bot >= 1))
     score += np.where(mask_double, 30, 0)
-    score += np.where(mask_single, 15, 0)
+    score += np.where(mask_single, single_bonus, 0)
 
-    score += np.where(exhaust_buy, 18, 0)
-    score += np.where(area_bot >= 1, 10, 0)
-    score += np.where(bottom >= 20, bottom * 0.15, 0)
+    score += np.where(area_bot >= 1, area_bonus, 0)
+    score += np.where(dif_bot >= 1, dif_bonus, 0)
+    score += np.where(exhaust_buy, exhaust_bonus, 0)
+    score += np.where(zero_ret_bot >= 1, zero_ret_bonus, 0)
+    score += np.where(bottom >= 20, bottom * top_mult, 0)
 
-    score = np.where(trend_up, np.floor(score * 1.2), score)
+    score = np.where(trend_up, np.floor(score * trend_mult), score)
 
     return score
 
@@ -989,7 +1006,24 @@ def calc_fusion_score_six_batch(signals, df, config, warmup=60, return_features=
 
     # ─── 4. 向量化 top/bottom score ───
     div_sell = _vectorized_top_score(merged, trend_down)
-    div_buy = _vectorized_bottom_score(merged, trend_up)
+    _div_bottom_single_bonus = float(config.get("div_bottom_single_bonus", 18.0))
+    _div_bottom_area_bonus = float(config.get("div_bottom_area_bonus", 10.0))
+    _div_bottom_dif_bonus = float(config.get("div_bottom_dif_bonus", 8.0))
+    _div_bottom_exhaust_bonus = float(config.get("div_bottom_exhaust_bonus", 18.0))
+    _div_bottom_zero_ret_bonus = float(config.get("div_bottom_zero_ret_bonus", 10.0))
+    _div_bottom_top_mult = float(config.get("div_bottom_top_mult", 0.15))
+    _div_bottom_trend_mult = float(config.get("div_bottom_trend_mult", 1.2))
+    div_buy = _vectorized_bottom_score(
+        merged,
+        trend_up,
+        single_bonus=_div_bottom_single_bonus,
+        area_bonus=_div_bottom_area_bonus,
+        dif_bonus=_div_bottom_dif_bonus,
+        exhaust_bonus=_div_bottom_exhaust_bonus,
+        zero_ret_bonus=_div_bottom_zero_ret_bonus,
+        top_mult=_div_bottom_top_mult,
+        trend_mult=_div_bottom_trend_mult,
+    )
 
     # ─── 4b. 双 MACD 共振加分 (快 MACD 与标准背离同向时加分) ───
     if config.get("use_dual_macd") and "DIF_FAST" in df.columns and "DEA_FAST" in df.columns:

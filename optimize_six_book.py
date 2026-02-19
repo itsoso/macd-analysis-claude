@@ -514,9 +514,25 @@ def _build_microstructure_features(primary_df, config):
     oi_std = oi_series.rolling(lookback, min_periods=minp).std(ddof=0).replace(0, np.nan)
     oi_z = ((oi_series - oi_mean) / oi_std).clip(-5.0, 5.0).fillna(0.0)
 
-    # 资金费率: 优先真实 funding_rate；缺失时用基差映射为资金费代理
-    if 'funding_rate' in primary_df.columns:
-        funding_rate = pd.to_numeric(primary_df['funding_rate'], errors='coerce').fillna(0.0)
+    # 资金费率: 优先真实 funding_rate；若数据质量不足(soft-disabled)则回退到基差代理
+    _dq_flags_raw = config.get('_data_quality_flags', [])
+    if isinstance(_dq_flags_raw, str):
+        _dq_flags = {x.strip() for x in _dq_flags_raw.split(',') if x.strip()}
+    elif isinstance(_dq_flags_raw, (list, tuple, set)):
+        _dq_flags = {str(x).strip() for x in _dq_flags_raw if str(x).strip()}
+    else:
+        _dq_flags = set()
+    _funding_soft_disabled = 'funding_soft_disabled' in _dq_flags
+
+    if ('funding_rate' in primary_df.columns) and (not _funding_soft_disabled):
+        _fr_raw = pd.to_numeric(primary_df['funding_rate'], errors='coerce')
+        # 若原始 funding 过于稀疏，也回退代理，避免“绝大多数为0”的伪特征。
+        _fr_cov = float(_fr_raw.notna().mean()) if len(_fr_raw) else 0.0
+        if _fr_cov >= 0.05:
+            funding_rate = _fr_raw.fillna(0.0)
+        else:
+            funding_mult = float(config.get('micro_funding_proxy_mult', 0.35))
+            funding_rate = (basis_raw * funding_mult).clip(-0.0020, 0.0020).fillna(0.0)
     else:
         funding_mult = float(config.get('micro_funding_proxy_mult', 0.35))
         funding_rate = (basis_raw * funding_mult).clip(-0.0020, 0.0020).fillna(0.0)
@@ -617,6 +633,16 @@ def _apply_microstructure_overlay(ss, bs, micro_state, config):
         'block_short': False,
         'margin_mult': 1.0,
     }
+    # ── P38: Funding Alpha — 独立于 use_microstructure, 只需 micro_state 有效 ──
+    if config.get('use_funding_alpha', False) and isinstance(micro_state, dict) and micro_state.get('valid', False):
+        _fz_p38 = float(micro_state.get('funding_z', 0.0))
+        _fa_thr = float(config.get('funding_alpha_z_threshold', 1.5))
+        _fa_bonus = float(config.get('funding_alpha_bonus', 0.08))
+        if _fz_p38 >= _fa_thr:
+            ss *= 1.0 + _fa_bonus * (_fz_p38 / _fa_thr)
+        elif _fz_p38 <= -_fa_thr:
+            bs *= 1.0 + _fa_bonus * (abs(_fz_p38) / _fa_thr)
+
     if not config.get('use_microstructure', False):
         return ss, bs, overlay
     if not isinstance(micro_state, dict) or not micro_state.get('valid', False):
@@ -812,6 +838,7 @@ def _run_strategy_core(
     buy_threshold = config.get('buy_threshold', 25)
     short_threshold = config.get('short_threshold', 25)
     long_threshold = config.get('long_threshold', 40)
+    close_signal_margin = float(config.get('close_signal_margin', 0.0) or 0.0)
     sell_pct = config.get('sell_pct', 0.55)
     margin_use = config.get('margin_use', 0.70)
     lev = config.get('lev', 5)
@@ -827,6 +854,7 @@ def _run_strategy_core(
     long_trail = config.get('long_trail', 0.20)
     long_max_hold = config.get('long_max_hold', 72)
     trail_pullback = config.get('trail_pullback', 0.60)
+    min_atr_pct_to_open = float(config.get('min_atr_pct_to_open', 0.0) or 0.0)
 
     use_dynamic_tp = config.get('use_dynamic_tp', False)
     use_partial_tp = config.get('use_partial_tp', False)
@@ -1226,6 +1254,10 @@ def _run_strategy_core(
     continuous_trail_start_pnl = float(config.get('continuous_trail_start_pnl', 0.05))
     continuous_trail_max_pb = float(config.get('continuous_trail_max_pb', 0.60))
     continuous_trail_min_pb = float(config.get('continuous_trail_min_pb', 0.30))
+    # P37: Regime-Adaptive Trail — 趋势 regime 宽松追踪, 震荡 regime 紧追踪
+    use_regime_trail = config.get('use_regime_trail', False)
+    regime_trail_trend_pb = float(config.get('regime_trail_trend_pb', 0.30))    # 趋势: 更宽松
+    regime_trail_choppy_pb = float(config.get('regime_trail_choppy_pb', 0.55))  # 震荡: 更紧
 
     # ── P18: Regime-Adaptive 六维融合权重 (回测路径: 从 book_features 重新融合) ──
     use_regime_adaptive_fusion = config.get('use_regime_adaptive_fusion', False)
@@ -2287,7 +2319,8 @@ def _run_strategy_core(
     has_pending_signal = False
     prot_state = _init_protection_state(config, eng.total_value(primary_df['close'].iloc[init_idx]))
     trade_cursor = 0
-    micro_df = _build_microstructure_features(primary_df, config) if config.get('use_microstructure', False) else None
+    _need_micro = config.get('use_microstructure', False) or config.get('use_funding_alpha', False)
+    micro_df = _build_microstructure_features(primary_df, config) if _need_micro else None
     vol_ann = _build_realized_vol_series(primary_df, primary_tf, config)
     regime_precomputed = _build_regime_precomputed(primary_df, config)
 
@@ -2887,7 +2920,8 @@ def _run_strategy_core(
         _just_reverse_closed_long = False
         if eng.futures_short and short_bars >= reverse_min_hold_short and bs >= cur_close_short_bs:
             bs_dom = (ss < bs * 0.7) if bs > 0 else True
-            if bs_dom:
+            bs_margin_ok = (bs - ss) >= close_signal_margin
+            if bs_dom and bs_margin_ok:
                 eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}", bar_low=_bar_low, bar_high=_bar_high)
                 reverse_hand_stats['reverse_close_short'] += 1
                 _just_reverse_closed_short = True
@@ -2895,7 +2929,8 @@ def _run_strategy_core(
                 short_partial_done = False; short_partial2_done = False
         if eng.futures_long and long_bars >= reverse_min_hold_long and ss >= cur_close_long_ss:
             ss_dom = (bs < ss * 0.7) if bs > 0 else True
-            if ss_dom:
+            ss_margin_ok = (ss - bs) >= close_signal_margin
+            if ss_dom and ss_margin_ok:
                 eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}", bar_low=_bar_low, bar_high=_bar_high)
                 reverse_hand_stats['reverse_close_long'] += 1
                 _just_reverse_closed_long = True
@@ -3082,6 +3117,12 @@ def _run_strategy_core(
             if 0 <= _p8_confirms < trend_short_min_confirms_n:
                 _trend_confirms_ok = False
 
+        _atr_open_ok = (
+            min_atr_pct_to_open <= 0.0
+            or _atr_pct_val <= 0.0
+            or _atr_pct_val >= min_atr_pct_to_open
+        )
+
         _short_candidate_pre_struct = (
             short_cd == 0 and ss >= effective_short_threshold
             and not eng.futures_short and not eng.futures_long
@@ -3090,6 +3131,7 @@ def _run_strategy_core(
             and _bk_short_ok and extreme_div_short_ok
             and _large_tf_short_ok               # P7
             and _trend_confirms_ok               # P8
+            and _atr_open_ok
         )
         _short_candidate = (
             _short_candidate_pre_struct and neutral_struct_short_ok
@@ -3279,6 +3321,7 @@ def _run_strategy_core(
                 eng.total_slippage_cost += slippage_cost
                 eng.futures_short.quantity = old_qty - partial_qty
                 eng.futures_short.margin *= (1 - partial_tp_1_pct)
+                eng.futures_short.accumulated_funding *= (1 - partial_tp_1_pct)  # P1: 按比例扣减资金费
                 short_partial_done = True
                 eng._record_trade(dt, price, 'PARTIAL_TP', 'short', partial_qty,
                     partial_qty * actual_close_p, fee,
@@ -3305,6 +3348,7 @@ def _run_strategy_core(
                 eng.total_slippage_cost += slippage_cost
                 eng.futures_short.quantity = old_qty - partial_qty
                 eng.futures_short.margin *= (1 - partial_tp_2_pct)
+                eng.futures_short.accumulated_funding *= (1 - partial_tp_2_pct)  # P1: 按比例扣减资金费
                 short_partial2_done = True
                 eng._record_trade(dt, price, 'PARTIAL_TP', 'short', partial_qty,
                     partial_qty * actual_close_p, fee,
@@ -3327,7 +3371,15 @@ def _run_strategy_core(
                     # P20: Short 侧使用更紧的 max_pb (空头跑得快)
                     _short_max_pb = continuous_trail_max_pb_short
                     _eff_pb = _short_max_pb - (_short_max_pb - continuous_trail_min_pb) * _progress
-                    if pnl_r < short_max_pnl * _eff_pb:
+                    # P37: Regime-Adaptive Trail — 趋势宽松, 震荡紧
+                    if use_regime_trail:
+                        _rl_here = regime_ctl.get('regime_label', 'neutral')
+                        if _rl_here in ('trend', 'low_vol_trend'):
+                            _eff_pb = min(_eff_pb, regime_trail_trend_pb)
+                        elif _rl_here in ('high_vol_choppy', 'high_vol'):
+                            _eff_pb = max(_eff_pb, regime_trail_choppy_pb)
+                    _trail_level = short_max_pnl * _eff_pb
+                    if pnl_r < _trail_level:
                         eng.close_short(price, dt,
                             f"连续追踪 max={short_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
                             bar_low=_bar_low, bar_high=_bar_high)
@@ -3342,6 +3394,13 @@ def _run_strategy_core(
                         for _rt_thr, _rt_pb in ratchet_trail_tiers:
                             if short_max_pnl >= _rt_thr:
                                 _eff_pb = _rt_pb
+                    # P37: Regime-Adaptive Trail — 趋势宽松, 震荡紧
+                    if use_regime_trail:
+                        _rl_here = regime_ctl.get('regime_label', 'neutral')
+                        if _rl_here in ('trend', 'low_vol_trend'):
+                            _eff_pb = min(_eff_pb, regime_trail_trend_pb)
+                        elif _rl_here in ('high_vol_choppy', 'high_vol'):
+                            _eff_pb = max(_eff_pb, regime_trail_choppy_pb)
                     if pnl_r < short_max_pnl * _eff_pb:
                         eng.close_short(price, dt,
                             f"追踪止盈 max={short_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
@@ -3371,7 +3430,8 @@ def _run_strategy_core(
                     short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_short and short_bars >= reverse_min_hold_short and bs >= cur_close_short_bs:
                     bs_dom = (ss < bs * 0.7) if bs > 0 else True
-                    if bs_dom:
+                    bs_margin_ok = (bs - ss) >= close_signal_margin
+                    if bs_dom and bs_margin_ok:
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
                         eng.close_short(exec_price, dt, f"反向平空 BS={bs:.0f}", bar_low=_bar_low, bar_high=_bar_high)
                         _short_sl_streak = 0  # 盈利退出重置连续止损计数
@@ -3398,11 +3458,12 @@ def _run_strategy_core(
                     short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown * short_sl_cd_mult * _streak_mult; short_bars = 0
                     short_partial_done = False; short_partial2_done = False
                 if eng.futures_short and short_bars >= int(max(3, short_max_hold * hold_mult)):
-                    # 超时平仓为主观决策, 用 exec_price
-                    eng.close_short(exec_price, dt, "超时", bar_low=_bar_low, bar_high=_bar_high)
-                    _short_sl_streak = 0  # 任何非止损出场都重置连续计数
-                    short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown; short_bars = 0
-                    short_partial_done = False; short_partial2_done = False  # 修复P1: 重置TP状态
+                    # P2: 盈利仓位(>5%)跳过超时, 交给追踪止损管理
+                    if pnl_r < 0.05:
+                        eng.close_short(exec_price, dt, "超时", bar_low=_bar_low, bar_high=_bar_high)
+                        _short_sl_streak = 0  # 任何非止损出场都重置连续计数
+                        short_max_pnl = 0; short_min_pnl = 0.0; short_cd = cooldown; short_bars = 0
+                        short_partial_done = False; short_partial2_done = False
         elif eng.futures_short and short_just_opened:
             short_bars = 1
 
@@ -3621,6 +3682,7 @@ def _run_strategy_core(
             and buy_dom and not in_conflict and can_open_risk
             and not micro_block_long and neutral_long_ok
             and _bk_long_ok
+            and _atr_open_ok
         )
         _long_high_conf_block = False
         _long_high_conf_reason = ''
@@ -3761,6 +3823,7 @@ def _run_strategy_core(
                 eng.total_slippage_cost += slippage_cost
                 eng.futures_long.quantity = old_qty - partial_qty
                 eng.futures_long.margin *= (1 - partial_tp_1_pct)
+                eng.futures_long.accumulated_funding *= (1 - partial_tp_1_pct)  # P1: 按比例扣减资金费
                 long_partial_done = True
                 eng._record_trade(dt, price, 'PARTIAL_TP', 'long', partial_qty,
                     partial_qty * actual_close_p, fee,
@@ -3787,6 +3850,7 @@ def _run_strategy_core(
                 eng.total_slippage_cost += slippage_cost
                 eng.futures_long.quantity = old_qty - partial_qty
                 eng.futures_long.margin *= (1 - partial_tp_2_pct)
+                eng.futures_long.accumulated_funding *= (1 - partial_tp_2_pct)  # P1: 按比例扣减资金费
                 long_partial2_done = True
                 eng._record_trade(dt, price, 'PARTIAL_TP', 'long', partial_qty,
                     partial_qty * actual_close_p, fee,
@@ -3810,7 +3874,15 @@ def _run_strategy_core(
                         for _rt_thr, _rt_pb in ratchet_trail_tiers:
                             if long_max_pnl >= _rt_thr:
                                 _eff_pb = _rt_pb
-                    if pnl_r < long_max_pnl * _eff_pb:
+                    # P37: Regime-Adaptive Trail — 趋势宽松, 震荡紧
+                    if use_regime_trail:
+                        _rl_here = regime_ctl.get('regime_label', 'neutral')
+                        if _rl_here in ('trend', 'low_vol_trend'):
+                            _eff_pb = min(_eff_pb, regime_trail_trend_pb)
+                        elif _rl_here in ('high_vol_choppy', 'high_vol'):
+                            _eff_pb = max(_eff_pb, regime_trail_choppy_pb)
+                    _trail_level_long = long_max_pnl * _eff_pb
+                    if pnl_r < _trail_level_long:
                         eng.close_long(price, dt,
                             f"追踪止盈 max={long_max_pnl*100:.0f}% pb={_eff_pb:.0%}",
                             bar_low=_bar_low, bar_high=_bar_high)
@@ -3839,7 +3911,8 @@ def _run_strategy_core(
                     long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
                 if eng.futures_long and long_bars >= reverse_min_hold_long and ss >= cur_close_long_ss:
                     ss_dom = (bs < ss * 0.7) if bs > 0 else True
-                    if ss_dom:
+                    ss_margin_ok = (ss - bs) >= close_signal_margin
+                    if ss_dom and ss_margin_ok:
                         # 信号驱动平仓用 exec_price (当前bar open), 因为信号来自上一根bar
                         eng.close_long(exec_price, dt, f"反向平多 SS={ss:.0f}", bar_low=_bar_low, bar_high=_bar_high)
                         _long_sl_streak = 0
@@ -3865,11 +3938,12 @@ def _run_strategy_core(
                     long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown * long_sl_cd_mult * _streak_mult; long_bars = 0
                     long_partial_done = False; long_partial2_done = False
                 if eng.futures_long and long_bars >= int(max(3, long_max_hold * hold_mult)):
-                    # 超时平仓为主观决策, 用 exec_price
-                    eng.close_long(exec_price, dt, "超时", bar_low=_bar_low, bar_high=_bar_high)
-                    _long_sl_streak = 0
-                    long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown; long_bars = 0
-                    long_partial_done = False; long_partial2_done = False  # 修复P1: 重置TP状态
+                    # P2: 盈利仓位(>5%)跳过超时, 交给追踪止损管理
+                    if pnl_r < 0.05:
+                        eng.close_long(exec_price, dt, "超时", bar_low=_bar_low, bar_high=_bar_high)
+                        _long_sl_streak = 0
+                        long_max_pnl = 0; long_min_pnl = 0.0; long_cd = cooldown; long_bars = 0
+                        long_partial_done = False; long_partial2_done = False
         elif eng.futures_long and long_just_opened:
             long_bars = 1
 

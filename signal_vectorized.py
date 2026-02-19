@@ -695,8 +695,9 @@ def analyze_signals_enhanced_fast(df, window):
         elif i > 0:
             cci_last_direction[i] = cci_last_direction[i - 1]
 
-    # DIF rolling max (预计算)
+    # DIF rolling max/min (预计算)
     dif_rmax = pd.Series(dif).rolling(w2, min_periods=w2 // 2).max().values
+    dif_rmin = pd.Series(dif).rolling(w2, min_periods=w2 // 2).min().values
 
     # RSI rolling max/min (预计算)
     rsi_rmax = rsi_s.rolling(w2, min_periods=w2 // 2).max().values
@@ -758,6 +759,9 @@ def analyze_signals_enhanced_fast(df, window):
         # DIF/DEA背离 (价格新高但DIF更低) — 使用预计算的 dif_rmax
         if near_high[i] and dif[i] < dif_rmax[i] * 0.85:
             sig['dif_top_div'] = 1
+        # DIF底部背离 (价格新低但DIF更高) — 使用预计算的 dif_rmin
+        if near_low[i] and not np.isnan(dif_rmin[i]) and dif[i] > dif_rmin[i] * 0.85:
+            sig['dif_bottom_div'] = 1
 
         # 综合 top score
         if sig['sep_divs_top'] >= 2:
@@ -775,8 +779,12 @@ def analyze_signals_enhanced_fast(df, window):
         if sig['sep_divs_bottom'] >= 2:
             bot_s += 30
         elif sig['sep_divs_bottom'] >= 1:
-            bot_s += 15
+            bot_s += 18
         if sig.get('area_bottom_div'):
+            bot_s += 10
+        if sig.get('dif_bottom_div'):
+            bot_s += 8
+        if sig['zero_returns_bottom'] >= 1:
             bot_s += 10
 
         sig['top'] = top_s

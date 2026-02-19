@@ -52,6 +52,19 @@ def _parse_float_list(raw: str) -> List[float]:
     return out
 
 
+def _parse_bool_list(raw: str) -> List[bool]:
+    out: List[bool] = []
+    for x in (raw or "").split(","):
+        v = x.strip().lower()
+        if not v:
+            continue
+        if v in ("1", "true", "yes", "y", "on"):
+            out.append(True)
+        elif v in ("0", "false", "no", "n", "off"):
+            out.append(False)
+    return out
+
+
 def _normalize_cfg_for_json(cfg: Dict) -> Dict:
     out = {}
     for k, v in cfg.items():
@@ -90,11 +103,37 @@ def main():
     p.add_argument("--cooldowns", default="4,6")
     p.add_argument("--risk-pcts", default="0.020,0.025")
     p.add_argument(
+        "--close-long-ss-values",
+        default="",
+        help="close_long_ss 候选列表(逗号分隔)。留空则使用基线值",
+    )
+    p.add_argument(
         "--neutral-short-budgets",
         default="0.10",
         help="risk_budget_neutral_short 候选列表，逗号分隔",
     )
+    p.add_argument(
+        "--book-consensus-values",
+        default="false",
+        help="use_neutral_book_consensus 候选布尔值，逗号分隔，如 false,true",
+    )
+    p.add_argument(
+        "--dynamic-neutral-short-budget-values",
+        default="false",
+        help="use_neutral_short_dynamic_budget 候选布尔值，逗号分隔，如 false,true",
+    )
+    p.add_argument(
+        "--structure-anchor-sl-values",
+        default="",
+        help="use_structure_anchor_sl 候选布尔值，逗号分隔。留空则使用基线值",
+    )
     p.add_argument("--override", action="append", default=[], help="基线覆盖 key=value")
+    p.add_argument(
+        "--reuse-tf-score-map",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="是否在网格中复用同一份 tf_score_map（默认开启，加速明显）",
+    )
     p.add_argument("--output-dir", default="logs/v10_3_wfo_grid")
     args = p.parse_args()
 
@@ -111,7 +150,9 @@ def main():
     print(
         f"数据质量: flags={quality_flags or ['none']} | "
         f"oi_cov={perp_quality.get('oi_orig_coverage', 0.0):.2%} | "
-        f"oi_max_stale={perp_quality.get('oi_max_stale_bars', 0)}"
+        f"oi_max_stale={perp_quality.get('oi_max_stale_bars', 0)} | "
+        f"fr_cov={perp_quality.get('funding_orig_coverage', 0.0):.2%} | "
+        f"fr_max_stale={perp_quality.get('funding_max_stale_bars', 0)}"
     )
     print(f"WFO 窗口数: {len(windows)} (train={args.train_months}m,test={args.test_months}m)")
 
@@ -124,16 +165,36 @@ def main():
     shorts = _parse_int_list(args.neutral_short_thresholds)
     cds = _parse_int_list(args.cooldowns)
     rps = _parse_float_list(args.risk_pcts)
+    cls = _parse_int_list(args.close_long_ss_values)
+    if not cls:
+        cls = [int(base_cfg.get("close_long_ss", 40))]
     nbs = _parse_float_list(args.neutral_short_budgets)
-    combos = list(product(longs, shorts, cds, rps, nbs))
+    bcs = _parse_bool_list(args.book_consensus_values) or [False]
+    dyns = _parse_bool_list(args.dynamic_neutral_short_budget_values) or [False]
+    sas = _parse_bool_list(args.structure_anchor_sl_values)
+    if not sas:
+        sas = [bool(base_cfg.get("use_structure_anchor_sl", False))]
+    combos = list(product(longs, shorts, cds, rps, nbs, bcs, dyns, cls, sas))
 
     print(f"组合总数: {len(combos)}")
+    shared_tf_score_map = None
+    if args.reuse_tf_score_map:
+        shared_tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, base_cfg)
+        print("tf_score_map: 复用模式 ON")
+    else:
+        print("tf_score_map: 逐组合重建模式 ON")
     rows = []
-    for i, (lt, nst, cd, rp, nb) in enumerate(combos, 1):
+    for i, (lt, nst, cd, rp, nb, bc, dyn_budget, cls_v, sas_v) in enumerate(combos, 1):
         cfg = _apply_combo(base_cfg, lt, nst, cd, rp)
         cfg["risk_budget_neutral_short"] = float(nb)
         cfg["use_leg_risk_budget"] = True
-        tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, cfg)
+        cfg["use_neutral_book_consensus"] = bool(bc)
+        cfg["use_neutral_short_dynamic_budget"] = bool(dyn_budget)
+        cfg["close_long_ss"] = int(cls_v)
+        cfg["use_structure_anchor_sl"] = bool(sas_v)
+        tf_score_map = shared_tf_score_map
+        if tf_score_map is None:
+            tf_score_map = _build_tf_score_index(all_data, all_signals, NEEDED_TFS, cfg)
         full_res = run_once(all_data, all_signals, cfg, start_ts, end_ts, tf_score_map=tf_score_map)
         full_m = _extract_metrics(full_res, start_ts, end_ts)
 
@@ -165,7 +226,11 @@ def main():
             "neutral_short_threshold": int(nst),
             "cooldown": int(cd),
             "risk_per_trade_pct": float(rp),
+            "close_long_ss": int(cls_v),
+            "use_structure_anchor_sl": bool(sas_v),
             "risk_budget_neutral_short": float(nb),
+            "use_neutral_book_consensus": bool(bc),
+            "use_neutral_short_dynamic_budget": bool(dyn_budget),
             "full_return_pct": float(full_m["return_pct"]),
             "full_portfolio_pf": float(full_m["portfolio_pf"]),
             "full_contract_pf": float(full_m["contract_pf"]),
@@ -175,7 +240,8 @@ def main():
         }
         rows.append(row)
         print(
-            f"[{i:02d}/{len(combos)}] lt={lt} nst={nst} cd={cd} rp={rp:.3f} nbs={nb:.3f} | "
+            f"[{i:02d}/{len(combos)}] lt={lt} nst={nst} cd={cd} rp={rp:.3f} cls={int(cls_v)} "
+            f"nbs={nb:.3f} bc={int(bool(bc))} dyn={int(bool(dyn_budget))} sas={int(bool(sas_v))} | "
             f"WFO(win={win_ratio:.1%},medPPF={median_ppf:.3f},pass={pass_flag}) | "
             f"Full(Ret={row['full_return_pct']:+.2f}%,pPF={row['full_portfolio_pf']:.3f})"
         )
@@ -199,7 +265,11 @@ def main():
             "neutral_short_thresholds": shorts,
             "cooldowns": cds,
             "risk_pcts": rps,
+            "close_long_ss_values": cls,
             "neutral_short_budgets": nbs,
+            "book_consensus_values": bcs,
+            "dynamic_neutral_short_budget_values": dyns,
+            "structure_anchor_sl_values": sas,
             "train_months": args.train_months,
             "test_months": args.test_months,
             "num_combos": len(combos),

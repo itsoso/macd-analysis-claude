@@ -75,6 +75,7 @@ def _build_default_config():
         'long_threshold': _LIVE_DEFAULT.long_threshold,
         'close_short_bs': _LIVE_DEFAULT.close_short_bs,
         'close_long_ss': _LIVE_DEFAULT.close_long_ss,
+        'close_signal_margin': _LIVE_DEFAULT.close_signal_margin,
         'sell_pct': _LIVE_DEFAULT.sell_pct,
         'margin_use': _LIVE_DEFAULT.margin_use,
         'lev': _LIVE_DEFAULT.leverage,
@@ -88,6 +89,7 @@ def _build_default_config():
         'long_trail': _LIVE_DEFAULT.long_trail,
         'long_max_hold': _LIVE_DEFAULT.long_max_hold,
         'trail_pullback': _LIVE_DEFAULT.trail_pullback,
+        'min_atr_pct_to_open': _LIVE_DEFAULT.min_atr_pct_to_open,
         'cooldown': _LIVE_DEFAULT.cooldown,
         'spot_cooldown': _LIVE_DEFAULT.spot_cooldown,
         'use_partial_tp': _LIVE_DEFAULT.use_partial_tp,
@@ -176,6 +178,13 @@ def _build_default_config():
         'bb_bonus': _LIVE_DEFAULT.bb_bonus,
         'vp_bonus': _LIVE_DEFAULT.vp_bonus,
         'cs_bonus': _LIVE_DEFAULT.cs_bonus,
+        'div_bottom_single_bonus': _LIVE_DEFAULT.div_bottom_single_bonus,
+        'div_bottom_area_bonus': _LIVE_DEFAULT.div_bottom_area_bonus,
+        'div_bottom_dif_bonus': _LIVE_DEFAULT.div_bottom_dif_bonus,
+        'div_bottom_exhaust_bonus': _LIVE_DEFAULT.div_bottom_exhaust_bonus,
+        'div_bottom_zero_ret_bonus': _LIVE_DEFAULT.div_bottom_zero_ret_bonus,
+        'div_bottom_top_mult': _LIVE_DEFAULT.div_bottom_top_mult,
+        'div_bottom_trend_mult': _LIVE_DEFAULT.div_bottom_trend_mult,
         # ── 实盘口径对齐（与 live 引擎一致） ──
         'use_live_gate': True,
         'consensus_min_strength': _LIVE_DEFAULT.consensus_min_strength,
@@ -504,10 +513,18 @@ def fetch_data_for_tf(tf, days, allow_api_fallback=False):
                     df = merge_perp_data_into_klines(df, mark_df, funding_df, oi_df)
                     audit_dict = dict(df.attrs.get('perp_data_audit_dict') or {})
                     oi_audit = dict(audit_dict.get('open_interest') or {})
+                    fr_audit = dict(audit_dict.get('funding_rate') or {})
                     oi_orig_cov = float(oi_audit.get('orig_coverage', 0.0) or 0.0)
-                    oi_max_stale = int(oi_audit.get('max_stale_bars', 0) or 0)
+                    oi_max_stale = int(
+                        oi_audit.get('max_internal_stale_bars', oi_audit.get('max_stale_bars', 0)) or 0
+                    )
+                    fr_orig_cov = float(fr_audit.get('orig_coverage', 0.0) or 0.0)
+                    fr_max_stale = int(
+                        fr_audit.get('max_internal_stale_bars', fr_audit.get('max_stale_bars', 0)) or 0
+                    )
                     quality_flags = []
                     oi_soft_disabled = False
+                    funding_soft_disabled = False
                     # A3: OI 仅近30天可信；覆盖率低或 stale 过长则自动软降级
                     if (oi_orig_cov < 0.20) or (oi_max_stale > 12):
                         for _oi_col in ('open_interest', 'open_interest_value'):
@@ -515,12 +532,25 @@ def fetch_data_for_tf(tf, days, allow_api_fallback=False):
                                 df[_oi_col] = np.nan
                         oi_soft_disabled = True
                         quality_flags.append('oi_soft_disabled')
+                    # Funding 理论原始覆盖率(1h主TF)通常应接近 12.5% (8h)。
+                    # 若远低于此且 stale 极长，视作历史缺失并软禁用。
+                    if (fr_orig_cov < 0.05) or (fr_max_stale > 48):
+                        for _fr_col in ('funding_rate', 'funding_interval_hours'):
+                            if _fr_col in df.columns:
+                                df[_fr_col] = np.nan
+                        funding_soft_disabled = True
+                        quality_flags.append('funding_soft_disabled')
                     PERP_DATA_QUALITY[tf] = {
                         'tf': tf,
                         'audit': audit_dict,
                         'oi_orig_coverage': oi_orig_cov,
                         'oi_max_stale_bars': oi_max_stale,
+                        'oi_max_stale_bars_raw': int(oi_audit.get('max_stale_bars', 0) or 0),
                         'oi_soft_disabled': oi_soft_disabled,
+                        'funding_orig_coverage': fr_orig_cov,
+                        'funding_max_stale_bars': fr_max_stale,
+                        'funding_max_stale_bars_raw': int(fr_audit.get('max_stale_bars', 0) or 0),
+                        'funding_soft_disabled': funding_soft_disabled,
                         'quality_flags': quality_flags,
                     }
                     _perp_cols = [

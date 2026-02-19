@@ -403,6 +403,30 @@ def fetch_funding_rate_history(symbol: str = "ETHUSDT",
         - mark_price: 结算时的 mark price
         - funding_interval_hours: 当前结算间隔 (小时)
     """
+    def _normalize_funding_df(_df: pd.DataFrame) -> pd.DataFrame:
+        """统一 funding 索引为 UTC整点(无时区), 去重排序.
+
+        Binance fundingTime 理论上是整点结算；缓存中的浮点时间漂移会导致
+        merge 审计 `orig_count` 被低估，因此这里做一次强制标准化。
+        """
+        if _df is None or len(_df) == 0:
+            return pd.DataFrame()
+        _df = _df.copy()
+        # 仅保留策略需要的列，兼容历史缓存字段差异
+        keep_cols = [c for c in ['funding_rate', 'mark_price_at_funding', 'funding_interval_hours'] if c in _df.columns]
+        if keep_cols:
+            _df = _df[keep_cols]
+        # 索引标准化
+        _idx = pd.to_datetime(_df.index, errors='coerce')
+        _df = _df.loc[~_idx.isna()].copy()
+        _idx = pd.to_datetime(_df.index)
+        if getattr(_idx, 'tz', None) is not None:
+            _idx = _idx.tz_localize(None)
+        # 回归整点，消除秒/毫秒漂移
+        _df.index = _idx.round('1h')
+        _df = _df[~_df.index.duplicated(keep='last')].sort_index()
+        return _df
+
     # ── 先尝试本地缓存 ──
     if not force_api:
         cache_path = os.path.join(_FUNDING_DIR, f'{symbol}_funding.parquet')
@@ -410,8 +434,7 @@ def fetch_funding_rate_history(symbol: str = "ETHUSDT",
             try:
                 df = pd.read_parquet(cache_path)
                 if df is not None and len(df) >= 10:
-                    if df.index.tz is not None:
-                        df.index = df.index.tz_localize(None)
+                    df = _normalize_funding_df(df)
                     end_dt = pd.Timestamp.now()
                     start_dt = end_dt - pd.Timedelta(days=days)
                     if allow_api_fallback:
@@ -470,7 +493,11 @@ def fetch_funding_rate_history(symbol: str = "ETHUSDT",
         return pd.DataFrame()
 
     df = pd.DataFrame(all_records)
-    df['date'] = pd.to_datetime(df['fundingTime'], unit='ms')
+    # fundingTime 强制转整数毫秒，避免浮点精度导致的秒/毫秒漂移
+    _ft_ms = pd.to_numeric(df['fundingTime'], errors='coerce').dropna()
+    df = df.loc[_ft_ms.index].copy()
+    df['fundingTime'] = _ft_ms.astype('int64')
+    df['date'] = pd.to_datetime(df['fundingTime'], unit='ms', utc=True).dt.tz_localize(None)
     df = df.set_index('date')
 
     df['funding_rate'] = pd.to_numeric(df['fundingRate'], errors='coerce')
@@ -489,10 +516,7 @@ def fetch_funding_rate_history(symbol: str = "ETHUSDT",
     df['funding_interval_hours'] = df['funding_interval_hours'].clip(0.5, 24.0)
 
     df = df[['funding_rate', 'mark_price_at_funding', 'funding_interval_hours']].copy()
-    df = df[~df.index.duplicated(keep='first')].sort_index()
-
-    if df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
+    df = _normalize_funding_df(df)
 
     # ── 保存缓存 ──
     os.makedirs(_FUNDING_DIR, exist_ok=True)
@@ -574,31 +598,45 @@ def fetch_open_interest_history(symbol: str = "ETHUSDT",
 
     # ── API 获取 ──
     # openInterestHist: limit=500, 按 period 粒度返回
+    # Binance OI API startTime 上限约 30 天，需分段拉取
+    CHUNK_DAYS = 29
     all_records = []
-    end_time = int(datetime.now().timestamp() * 1000)
-    start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
-    current_start = start_time
+    final_end = int(datetime.now().timestamp() * 1000)
+    request_start = datetime.now() - timedelta(days=days)
 
-    print(f"正在从 Binance Futures API 获取 {symbol} Open Interest {period} (最近{days}天)...")
+    print(f"正在从 Binance Futures API 获取 {symbol} Open Interest {period} "
+          f"(最近{days}天, 分{(days // CHUNK_DAYS) + 1}段)...")
 
-    while current_start < end_time:
-        url = (f"{BINANCE_FUTURES_OI_HIST_URL}?symbol={symbol}"
-               f"&period={period}"
-               f"&startTime={current_start}"
-               f"&endTime={end_time}"
-               f"&limit=500")
+    chunk_idx = 0
+    while request_start < datetime.now():
+        chunk_end_dt = min(request_start + timedelta(days=CHUNK_DAYS), datetime.now())
+        chunk_start_ms = int(request_start.timestamp() * 1000)
+        chunk_end_ms = int(chunk_end_dt.timestamp() * 1000)
+        current_start = chunk_start_ms
 
-        data = _api_get_json(url)
-        if not data:
-            break
+        while current_start < chunk_end_ms:
+            url = (f"{BINANCE_FUTURES_OI_HIST_URL}?symbol={symbol}"
+                   f"&period={period}"
+                   f"&startTime={current_start}"
+                   f"&endTime={chunk_end_ms}"
+                   f"&limit=500")
 
-        all_records.extend(data)
-        # 下一批从最后一条之后
-        current_start = data[-1]['timestamp'] + 1
+            data = _api_get_json(url)
+            if not data:
+                break
 
-        if len(data) < 500:
-            break
-        time.sleep(0.15)
+            all_records.extend(data)
+            current_start = data[-1]['timestamp'] + 1
+
+            if len(data) < 500:
+                break
+            time.sleep(0.15)
+
+        request_start = chunk_end_dt + timedelta(seconds=1)
+        chunk_idx += 1
+        if chunk_idx % 4 == 0:
+            print(f"  ... 已拉取 {len(all_records)} 条 (第{chunk_idx}段)")
+        time.sleep(0.2)
 
     if not all_records:
         print("  未获取到 Open Interest 数据!")
@@ -700,22 +738,25 @@ def merge_perp_data_into_klines(kline_df: pd.DataFrame,
         _orig_coverage = _orig_count / _total_bars if _total_bars > 0 else 0.0
         # 最长连续 stale 段 (原始数据点之间的最大间隔)
         _max_stale = 0
+        _max_internal_stale = 0
         if _orig_count > 0:
             _orig_positions = _orig_mask[_orig_mask].index
             if len(_orig_positions) > 1:
                 _orig_iloc = [result.index.get_loc(p) for p in _orig_positions]
                 _gaps = [_orig_iloc[i+1] - _orig_iloc[i] for i in range(len(_orig_iloc)-1)]
-                _max_stale = max(_gaps) if _gaps else 0
+                _max_internal_stale = max(_gaps) if _gaps else 0
+                _max_stale = _max_internal_stale
             # 也检查第一个原始点之前和最后一个之后的间隔
             _first_iloc = result.index.get_loc(_orig_positions[0])
             _last_iloc = result.index.get_loc(_orig_positions[-1])
             _max_stale = max(_max_stale, _first_iloc, _total_bars - 1 - _last_iloc)
         else:
             _max_stale = _total_bars
+            _max_internal_stale = _total_bars
         _audit_lines.append(
             f"  {src_label}: coverage={_coverage:.1%} "
             f"(orig_points={_orig_count}/{_total_bars}, orig_coverage={_orig_coverage:.1%}, "
-            f"max_stale_bars={_max_stale})"
+            f"max_stale_bars={_max_stale}, max_internal_stale_bars={_max_internal_stale})"
         )
         _audit_dict[col_name] = {
             'coverage': _coverage,
@@ -723,6 +764,7 @@ def merge_perp_data_into_klines(kline_df: pd.DataFrame,
             'total_bars': _total_bars,
             'orig_coverage': _orig_coverage,
             'max_stale_bars': int(_max_stale),
+            'max_internal_stale_bars': int(_max_internal_stale),
         }
     if _audit_lines:
         import logging

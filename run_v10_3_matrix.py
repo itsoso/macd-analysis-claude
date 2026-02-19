@@ -80,7 +80,9 @@ def main():
     print(
         f"数据质量: flags={quality_flags or ['none']}, "
         f"oi_cov={perp_quality.get('oi_orig_coverage', 0.0):.2%}, "
-        f"oi_max_stale={perp_quality.get('oi_max_stale_bars', 0)}"
+        f"oi_max_stale={perp_quality.get('oi_max_stale_bars', 0)}, "
+        f"fr_cov={perp_quality.get('funding_orig_coverage', 0.0):.2%}, "
+        f"fr_max_stale={perp_quality.get('funding_max_stale_bars', 0)}"
     )
 
     base_cfg = _scale_runtime_config(_build_default_config(), PRIMARY_TF)

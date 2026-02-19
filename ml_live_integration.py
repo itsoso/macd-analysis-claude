@@ -1,18 +1,20 @@
 """
-ML 实盘集成模块 v4 (最终版)
+ML 实盘集成模块 v5 (GPU 增强版)
 
-三层架构 (GPT Pro 建议):
-  1. 预测层: 分位数回归 → 输出收益分布 (q05/q25/q50/q75/q95)
-  2. 决策层: Regime 过滤 + 成本感知门槛 + Kelly 仓位
-  3. 执行层: 与现有六书融合信号协同
+四层架构:
+  1. 方向预测层: LightGBM (Optuna优化) + LSTM 集成 → 涨跌概率
+  2. 预测层: 分位数回归 → 输出收益分布 (q05/q25/q50/q75/q95)
+  3. 决策层: Regime 过滤 + 成本感知门槛 + Kelly 仓位
+  4. 执行层: 与现有六书融合信号协同
 
-核心价值:
-  - 分位数校准准确 (OOS 90% 覆盖率 88.4%, 几乎完美)
-  - Regime 预测有效 (OOS AUC 0.60, 回报密度 2.2x)
-  - 两者组合: regime 判断"何时交易", 分位数判断"交易多大仓位"
+v5 新增 (H800 GPU 训练):
+  - LightGBM 方向预测 (Optuna 优化, AUC 0.55+)
+  - LSTM+Attention 方向预测 (双向LSTM, AUC 0.54+)
+  - LGB + LSTM 加权集成 → bull_prob
+  - bull_prob > 0.58 → 做多加权, < 0.42 → 做空加权
 
 使用:
-  1. 训练: python3.10 ml_live_integration.py --train
+  1. 训练: python train_production_model.py (在 H800 上)
   2. 实盘: live_signal_generator.py 自动调用 MLSignalEnhancer.enhance_signal()
 """
 
@@ -32,19 +34,32 @@ MODEL_DIR = os.path.join('data', 'ml_models')
 
 class MLSignalEnhancer:
     """
-    ML 信号增强器 v4 — Regime 过滤 + 分位数风控
+    ML 信号增强器 v5 — 方向预测 + Regime 过滤 + 分位数风控
 
     工作模式:
-      1. 计算 regime (vol_prob, trend_prob, trade_confidence)
-      2. 如有分位数模型: 计算收益分布 → 风险调整
-      3. 综合输出: 增强/抑制规则信号
+      1. 方向预测: LGB + LSTM 集成 → bull_prob (v5 新增)
+      2. 计算 regime (vol_prob, trend_prob, trade_confidence)
+      3. 如有分位数模型: 计算收益分布 → 风险调整
+      4. 综合输出: 增强/抑制规则信号
     """
 
     def __init__(self, model_dir: str = MODEL_DIR):
         self.model_dir = model_dir
         self._regime_model = None
         self._quantile_model = None
+        self._direction_model = None  # v5: LGB 方向预测
+        self._lstm_model = None       # v5: LSTM 方向预测
         self._loaded = False
+
+        # v5: 方向预测参数
+        self._direction_meta = None
+        self._lstm_meta = None
+        self.direction_long_threshold = 0.58
+        self.direction_short_threshold = 0.42
+        self.direction_boost = 1.15       # bull_prob 高时加权
+        self.direction_dampen = 0.85      # bull_prob 低时降权
+        self.lgb_weight = 0.65            # LGB 在集成中的权重
+        self.lstm_weight = 0.35           # LSTM 权重
 
         # Regime 增强参数
         self.high_conf_threshold = 0.55
@@ -60,6 +75,36 @@ class MLSignalEnhancer:
     def load_model(self) -> bool:
         """加载所有可用模型"""
         loaded_any = False
+
+        # v5: LightGBM 方向预测模型
+        try:
+            lgb_path = os.path.join(self.model_dir, 'lgb_direction_model.txt')
+            if os.path.exists(lgb_path):
+                import lightgbm as lgb_lib
+                self._direction_model = lgb_lib.Booster(model_file=lgb_path)
+                meta_path = lgb_path + '.meta.json'
+                if os.path.exists(meta_path):
+                    with open(meta_path) as f:
+                        self._direction_meta = json.load(f)
+                    # 读取集成配置中的阈值
+                    thresholds = self._direction_meta.get('thresholds', {})
+                    self.direction_long_threshold = thresholds.get('long_threshold', 0.58)
+                    self.direction_short_threshold = thresholds.get('short_threshold', 0.42)
+                logger.info(f"LGB 方向预测模型加载成功 ({len(self._direction_meta.get('feature_names', []))} 特征)")
+                loaded_any = True
+        except Exception as e:
+            logger.warning(f"LGB 方向预测模型加载失败: {e}")
+
+        # v5: LSTM 方向预测模型
+        try:
+            lstm_path = os.path.join(self.model_dir, 'lstm_1h.pt')
+            if os.path.exists(lstm_path):
+                self._lstm_meta = {'model_path': lstm_path}
+                # LSTM 延迟加载 (需要 torch，避免启动时加载)
+                logger.info("LSTM 方向预测模型路径已注册 (延迟加载)")
+                loaded_any = True
+        except Exception as e:
+            logger.warning(f"LSTM 方向预测模型注册失败: {e}")
 
         # Regime 模型
         try:
@@ -85,8 +130,139 @@ class MLSignalEnhancer:
         except Exception as e:
             logger.warning(f"分位数模型加载失败: {e}")
 
+        # 读取集成配置
+        try:
+            cfg_path = os.path.join(self.model_dir, 'ensemble_config.json')
+            if os.path.exists(cfg_path):
+                with open(cfg_path) as f:
+                    ecfg = json.load(f)
+                comps = ecfg.get('components', {})
+                if 'lgb_direction' in comps:
+                    self.lgb_weight = comps['lgb_direction'].get('weight', 0.65)
+                if 'lstm_1h' in comps:
+                    self.lstm_weight = comps['lstm_1h'].get('weight', 0.35)
+                logger.info(f"集成配置已加载 (LGB:{self.lgb_weight}, LSTM:{self.lstm_weight})")
+        except Exception as e:
+            logger.warning(f"集成配置加载失败: {e}")
+
         self._loaded = loaded_any
         return loaded_any
+
+    def _compute_direction_features(self, df: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """计算方向预测所需特征 (复用 ml_features.py)"""
+        try:
+            from ml_features import compute_ml_features
+            features = compute_ml_features(df)
+            return features
+        except Exception as e:
+            logger.warning(f"方向特征计算失败: {e}")
+            return None
+
+    def _predict_direction_lgb(self, features: pd.DataFrame) -> Optional[float]:
+        """LGB 方向预测 → bull_prob"""
+        if self._direction_model is None or self._direction_meta is None:
+            return None
+        try:
+            feat_names = self._direction_meta.get('feature_names', [])
+            # 对齐特征列 (缺失列填 0)
+            latest = features.iloc[[-1]]
+            X = pd.DataFrame(0.0, index=latest.index, columns=feat_names)
+            for col in feat_names:
+                if col in latest.columns:
+                    X[col] = latest[col].values
+            X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+            pred = self._direction_model.predict(X)
+            return float(np.clip(pred[0], 0, 1))
+        except Exception as e:
+            logger.warning(f"LGB 方向预测失败: {e}")
+            return None
+
+    def _predict_direction_lstm(self, features: pd.DataFrame) -> Optional[float]:
+        """LSTM 方向预测 → bull_prob"""
+        if self._lstm_meta is None:
+            return None
+        try:
+            import torch
+            import torch.nn as nn
+
+            model_path = self._lstm_meta['model_path']
+            if not os.path.exists(model_path):
+                return None
+
+            # 需要至少 48 根K线的序列
+            SEQ_LEN = 48
+            if len(features) < SEQ_LEN:
+                return None
+
+            feat_names = self._direction_meta.get('feature_names', []) if self._direction_meta else list(features.columns)
+
+            # 对齐特征
+            X_df = pd.DataFrame(0.0, index=features.index, columns=feat_names)
+            for col in feat_names:
+                if col in features.columns:
+                    X_df[col] = features[col].values
+            X_df = X_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+            feat_values = X_df.values.astype(np.float32)
+
+            # 标准化 (用训练集的 mean/std)
+            if self._direction_meta and 'feat_mean' in self._direction_meta:
+                mean_dict = self._direction_meta['feat_mean']
+                std_dict = self._direction_meta['feat_std']
+                for i, col in enumerate(feat_names):
+                    m = mean_dict.get(col, 0.0)
+                    s = std_dict.get(col, 1.0)
+                    feat_values[:, i] = (feat_values[:, i] - m) / max(s, 1e-8)
+            else:
+                # 回退: 用最近数据的统计量
+                half = len(feat_values) // 2
+                m = np.nanmean(feat_values[:half], axis=0)
+                s = np.nanstd(feat_values[:half], axis=0) + 1e-8
+                feat_values = (feat_values - m) / s
+
+            feat_values = np.nan_to_num(feat_values, nan=0.0, posinf=3.0, neginf=-3.0)
+
+            # 取最后 SEQ_LEN 根
+            seq = feat_values[-SEQ_LEN:]
+            X_tensor = torch.FloatTensor(seq).unsqueeze(0)  # (1, SEQ_LEN, features)
+
+            # 延迟加载 LSTM 模型
+            if self._lstm_model is None:
+                input_dim = len(feat_names)
+
+                class LSTMAttention(nn.Module):
+                    def __init__(self, in_dim, hidden_dim=128, num_layers=2, dropout=0.3):
+                        super().__init__()
+                        self.lstm = nn.LSTM(in_dim, hidden_dim, num_layers,
+                                            batch_first=True, dropout=dropout, bidirectional=True)
+                        self.attn_fc = nn.Linear(hidden_dim * 2, 1)
+                        self.classifier = nn.Sequential(
+                            nn.Linear(hidden_dim * 2, 64),
+                            nn.GELU(),
+                            nn.Dropout(0.2),
+                            nn.Linear(64, 1),
+                        )
+
+                    def forward(self, x):
+                        lstm_out, _ = self.lstm(x)
+                        attn_weights = torch.softmax(self.attn_fc(lstm_out), dim=1)
+                        context = (attn_weights * lstm_out).sum(dim=1)
+                        return self.classifier(context).squeeze(-1)
+
+                device = 'cpu'  # 推理用 CPU 即可
+                self._lstm_model = LSTMAttention(input_dim).to(device)
+                state = torch.load(model_path, map_location=device, weights_only=True)
+                self._lstm_model.load_state_dict(state)
+                self._lstm_model.eval()
+                logger.info(f"LSTM 模型加载完成 (input_dim={input_dim})")
+
+            with torch.no_grad():
+                logit = self._lstm_model(X_tensor)
+                prob = torch.sigmoid(logit).item()
+            return float(np.clip(prob, 0, 1))
+
+        except Exception as e:
+            logger.warning(f"LSTM 方向预测失败: {e}")
+            return None
 
     def enhance_signal(
         self,
@@ -95,7 +271,7 @@ class MLSignalEnhancer:
         df: pd.DataFrame,
     ) -> Tuple[float, float, Dict]:
         """
-        综合 ML 增强: Regime + 分位数
+        综合 ML 增强: 方向预测 + Regime + 分位数
 
         返回:
             (enhanced_sell_score, enhanced_buy_score, ml_info)
@@ -104,9 +280,56 @@ class MLSignalEnhancer:
             if not self.load_model():
                 return sell_score, buy_score, {'ml_available': False}
 
-        ml_info = {'ml_available': True, 'ml_version': 'v4'}
+        ml_info = {'ml_available': True, 'ml_version': 'v5'}
         enhanced_buy = buy_score
         enhanced_sell = sell_score
+
+        # 0. v5: 方向预测 (LGB + LSTM 集成)
+        if self._direction_model is not None or self._lstm_meta is not None:
+            try:
+                features = self._compute_direction_features(df)
+                if features is not None and len(features) > 0:
+                    lgb_prob = self._predict_direction_lgb(features)
+                    lstm_prob = self._predict_direction_lstm(features)
+
+                    # 加权集成
+                    probs = []
+                    weights = []
+                    if lgb_prob is not None:
+                        probs.append(lgb_prob)
+                        weights.append(self.lgb_weight)
+                        ml_info['lgb_bull_prob'] = round(lgb_prob, 4)
+                    if lstm_prob is not None:
+                        probs.append(lstm_prob)
+                        weights.append(self.lstm_weight)
+                        ml_info['lstm_bull_prob'] = round(lstm_prob, 4)
+
+                    if probs:
+                        total_w = sum(weights)
+                        bull_prob = sum(p * w for p, w in zip(probs, weights)) / total_w
+                        ml_info['bull_prob'] = round(bull_prob, 4)
+
+                        # 方向性调整: bull_prob 偏向做多时加强 BS, 偏向做空时加强 SS
+                        if bull_prob >= self.direction_long_threshold:
+                            # ML 看涨 → BS 加权, SS 降权
+                            strength = (bull_prob - 0.5) * 2  # 0~1 范围
+                            bs_mult = 1.0 + strength * (self.direction_boost - 1.0)
+                            ss_mult = 1.0 - strength * (1.0 - self.direction_dampen)
+                            enhanced_buy *= bs_mult
+                            enhanced_sell *= ss_mult
+                            ml_info['direction_action'] = f'bullish(BS*{bs_mult:.2f},SS*{ss_mult:.2f})'
+                        elif bull_prob <= self.direction_short_threshold:
+                            # ML 看跌 → SS 加权, BS 降权
+                            strength = (0.5 - bull_prob) * 2
+                            ss_mult = 1.0 + strength * (self.direction_boost - 1.0)
+                            bs_mult = 1.0 - strength * (1.0 - self.direction_dampen)
+                            enhanced_sell *= ss_mult
+                            enhanced_buy *= bs_mult
+                            ml_info['direction_action'] = f'bearish(SS*{ss_mult:.2f},BS*{bs_mult:.2f})'
+                        else:
+                            ml_info['direction_action'] = 'neutral'
+            except Exception as e:
+                logger.warning(f"方向预测计算异常: {e}")
 
         # 1. Regime 过滤
         if self._regime_model:

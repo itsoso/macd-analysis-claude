@@ -1,0 +1,33 @@
+# H800 GPU 训练依赖
+# 安装顺序: 先装 requirements.txt 基础依赖，再装本文件
+
+# ── PyTorch (CUDA 12.x) ──
+# 注: 需要通过 --index-url 安装，pip install 时加:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# 如果内网有 PyPI 镜像且包含 GPU 版本，可直接:
+torch>=2.2.0
+torchvision>=0.17.0
+torchaudio>=2.2.0
+
+# ── ML 框架 ──
+lightgbm>=4.0.0
+xgboost>=2.0.0
+scikit-learn>=1.4.0
+
+# ── 深度学习工具 ──
+pytorch-lightning>=2.2.0
+tensorboard>=2.16.0
+
+# ── 超参优化 ──
+optuna>=3.5.0
+optuna-integration>=3.6.0
+
+# ── 数据处理 (已在 requirements.txt 中，确保版本兼容) ──
+# pandas, numpy, matplotlib 由基础依赖覆盖
+
+# ── 可选: RAPIDS GPU DataFrame (需 conda 安装) ──
+# conda install -c rapidsai -c conda-forge cudf-cu12 cuml-cu12
+# 或 pip install cudf-cu12 (如果有 RAPIDS pip 源)
+
+# ── 可选: CuPy (NumPy GPU 替代) ──
+# pip install cupy-cuda12x
