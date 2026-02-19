@@ -65,7 +65,7 @@ $SSH_CMD "systemctl restart macd-analysis && sleep 2 && systemctl is-active macd
 # 5. 重启交易引擎 (加载新代码)
 echo ""
 echo "[5/5] 重启交易引擎..."
-$SSH_CMD "systemctl restart macd-engine && sleep 3 && systemctl is-active macd-engine >/dev/null && echo '  ✅ 交易引擎已重启 (paper mode)' || echo '  ❌ 交易引擎重启失败!'"
+$SSH_CMD "rm -f $REMOTE_DIR/data/live/engine.pid; systemctl reset-failed macd-engine 2>/dev/null; systemctl restart macd-engine && sleep 5 && systemctl is-active macd-engine >/dev/null && echo '  ✅ 交易引擎已重启 (paper mode)' || echo '  ❌ 交易引擎重启失败!'"
 
 # 最终确认
 echo ""

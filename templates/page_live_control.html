@@ -796,7 +796,7 @@
             <div class="btn-group">
                 <button class="btn btn-outline btn-sm" onclick="refreshLogs()">刷新</button>
                 <button class="btn btn-outline btn-sm" onclick="autoRefreshLogs()">
-                    <span id="autoLogBtn">自动刷新: 关</span>
+                    <span id="autoLogBtn">自动刷新: 开</span>
                 </button>
             </div>
         </div>
@@ -2053,6 +2053,14 @@ async function refreshStatus() {
 // ============================================================
 let _autoLogInterval = null;
 
+function startAutoLogRefresh() {
+    if (!_autoLogInterval) {
+        refreshLogs();
+        _autoLogInterval = setInterval(refreshLogs, 5000);
+        document.getElementById('autoLogBtn').textContent = '自动刷新: 开';
+    }
+}
+
 async function refreshLogs() {
     try {
         const data = await apiCall('/api/live/logs?lines=150');
@@ -2245,6 +2253,7 @@ restoreAutoDetect();   // 恢复自动检测开关
 loadMonitorRules();
 loadV11Toggles();      // 加载 v11 开关状态
 refreshStatus();
+startAutoLogRefresh(); // 默认启动日志自动刷新
 setInterval(refreshStatus, 30000); // 每30秒刷新状态
 </script>
 {% endblock %}
