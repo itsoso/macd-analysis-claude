@@ -852,50 +852,69 @@ v10.0 ("连续化改造"):
 
 <h2 id="section-13">十三、ML 预测子系统</h2>
 
-### 13.1 三层 ML 架构
+### 13.1 ML 模型矩阵 (H800 训练产出)
+
+| 模型 | 文件 | 架构 | Test AUC | 用途 |
+|------|------|------|----------|------|
+| **LGB 方向预测** | `lgb_direction_model.txt` | LightGBM (Optuna) | **0.5537** | 涨跌概率 → bull_prob |
+| **LSTM+Attention** | `lstm_1h.pt` + ONNX | 双向LSTM+Attention, BF16 | **0.5366** | 序列模式方向预测 |
+| **跨资产 LGB** | `lgb_cross_asset_1h.txt` | LightGBM + BTC/SOL/BNB 特征 | **0.5485** | 跨市场联动预测 |
+| **TFT** | `tft_1h.pt` + ONNX | Temporal Fusion Transformer | — | 可解释时序预测 |
+| **MTF 融合 MLP** | `mtf_fusion_mlp.pt` + ONNX | 多周期分数神经融合 | **0.5586** | 替代规则加权共识 |
+| **Regime 分类** | `vol_regime_model.txt` | LightGBM (vol+trend) | vol AUC **0.5852** | 波动率/趋势质量 |
+| **分位数回归** | `quantile_h{5,12}_q{05~95}.txt` | LightGBM × 5分位 × 2周期 | — | 收益分布 + Kelly 仓位 |
+| **PPO 仓位** | `ppo_position_agent.zip` | 强化学习 (stable-baselines3) | — | 动态仓位优化 (实验性) |
+
+> 集成方式: **LGB(0.65) + LSTM(0.35) → bull_prob → 方向增强** + Regime 过滤 + 分位数 Kelly 仓位 + 动态止损
+
+### 13.2 五层 ML 架构
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  预测层                                                       │
-│  ml_predictor.py → LGBPredictor (LightGBM 方向预测)           │
-│    Walk-Forward: 扩展窗口, 多尺度集成 (3h/5h/12h/24h)          │
-│    Stacking: LightGBM + XGBoost + Ridge 三模型元学习器          │
-│  ml_regime.py → RegimePredictor (波动率 + 趋势质量)            │
-│    vol_regime: 未来 12bar 是否高波动 (OOS AUC 0.60)            │
-│    trend_quality: 趋势是否可持续                               │
-│  ml_quantile.py → QuantilePredictor (收益分布 q05~q95)        │
-│    分位数校准: OOS 90% 覆盖率 88.4%                            │
-└───────────────┬──────────────────────────────────────────────┘
-                ▼
-┌──────────────────────────────────────────────────────────────┐
-│  决策层 (ml_live_integration.py → MLSignalEnhancer)           │
-│  Regime 过滤 → 成本感知门槛 → Kelly 仓位                       │
-│  高波动+强趋势 → 加强规则信号                                  │
-│  低波动 → 抑制信号 (大概率震荡)                                │
-│  高波动+无趋势 → 保持原信号 (可能反转)                          │
-└───────────────┬──────────────────────────────────────────────┘
-                ▼
-┌──────────────────────────────────────────────────────────────┐
-│  执行层 (与六书融合信号协同)                                    │
-│  ML 增强/抑制 → 最终 SS/BS 分数 → 开仓决策                     │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  方向预测层                                                   │
+│  LGB 方向预测 (Optuna, AUC 0.55) ────┐                       │
+│  LSTM+Attention (BF16, AUC 0.54) ────┤→ 加权集成 bull_prob   │
+│  跨资产 LGB (BTC/SOL/BNB, AUC 0.55)  │  (可选扩展)           │
+│  TFT (94维特征, ONNX 加速) ──────────┘                       │
+├─────────────────────────────────────────────────────────────┤
+│  多周期融合层 (可选, 替代规则加权)                              │
+│  MTF Fusion MLP (5TF×4特征=23维, AUC 0.56)                   │
+│  neural_fuse_tf_scores() → 替代 fuse_tf_scores()             │
+├─────────────────────────────────────────────────────────────┤
+│  Regime 分类层                                               │
+│  vol_regime (高波动概率) + trend_quality (趋势可持续性)         │
+│  → trade_confidence → boost/dampen/neutral                   │
+├─────────────────────────────────────────────────────────────┤
+│  分位数风控层                                                 │
+│  收益分布: q05/q25/q50/q75/q95 (h5+h12 双周期)               │
+│  → Kelly 仓位: f* = (p·b - q·a)/(b·a), 半 Kelly 保守         │
+│  → 动态止损: long_SL=|q05|, short_SL=q95 (1%~8%)            │
+│  → 尾部风险降权: q05 < -3% → position_scale × tail_factor    │
+├─────────────────────────────────────────────────────────────┤
+│  执行层 (MLSignalEnhancer)                                   │
+│  bull_prob ≥ 0.58 → BS 加权, SS 降权 (做多方向)               │
+│  bull_prob ≤ 0.42 → SS 加权, BS 降权 (做空方向)               │
+│  → 输出: enhanced_ss, enhanced_bs, kelly, dynamic_sl         │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 13.2 特征工程 (ml_features.py, 70+ 维)
+### 13.3 特征工程 (94 维)
 
 | 分类 | 特征数 | 代表特征 |
 |------|--------|---------|
-| 价格动量 | 7 | ret_{1,2,3,5,8,13,21}, log_ret, roc, momentum_accel |
-| 趋势 | 8 | dist_MA{5,10,20,60}, slope_MA, ma_cross_5_20 |
+| 价格动量 | 14 | ret_{1,2,3,5,8,13,21}, log_ret, roc, momentum_accel, price_percentile |
+| 趋势 | 11 | dist_MA{5,10,20,60}, slope_MA, ma_cross_5_20/10_60 |
 | MACD | 7 | macd_dif/dea/bar, macd_bar_change, macd_cross |
-| 振荡器 | 10 | rsi6/12, kdj_k/d/j, cci, mfi |
-| 波动率 | 8 | atr_14/5, hvol_5/20, bb_pct_b, bb_bw |
-| 量价 | 8 | vol_ratio, obv_slope, vwap_dist, taker_buy_ratio |
-| 微结构 | 7 | body_ratio, shadow_ratio, bull_streak |
+| 振荡器 | 11 | rsi6/12 + slope, kdj_k/d/j, cci + slope |
+| 波动率 | 8 | atr_14/5, hvol_5/20, hvol_ratio, hl_position, dist_high/low_20 |
+| 量价 | 8 | vol_ratio, vol_change, vol_price_corr, taker_buy_ratio |
+| 微结构 | 9 | body/shadow_ratio, is_bull, bull/bear_streak, avg_body_3, max_range_3 |
 | 时间 | 4 | hour_sin/cos, dow_sin/cos |
+| 排名/Sharpe | 4 | cum_ret_{5,20}_rank, sharpe_{5,20} |
 | 合约衍生品 | 4 | funding_rate, funding_rate_ma, oi_change, oi_change_5 |
+| **跨资产** | **21** | btc/sol/bnb: ret_{1,5,21}, corr_{20,60}, rel_strength, vol_ratio |
 
-### 13.3 Walk-Forward 验证
+### 13.4 Walk-Forward 验证
 
 ```python
 # 扩展窗口 + Purge Gap 防未来泄露:
@@ -903,6 +922,21 @@ v10.0 ("连续化改造"):
 # 重训间隔: 120 bars (5天), 最小训练窗口: 720 bars (30天)
 # 特征精选: 首窗口 69→30 核心特征, 后续 fold 复用
 # 多尺度: 3h/5h/12h/24h 四个 horizon 模型投票, 跨尺度共识
+```
+
+### 13.5 实盘 ML 增强流程 (shadow 模式运行中)
+
+```
+live_signal_generator.py → compute_signals_six() → 六书 SS/BS
+  ↓ (use_ml_enhancement=True, shadow_mode=True)
+ml_live_integration.py → MLSignalEnhancer.enhance_signal()
+  ├─ 方向: LGB+LSTM → bull_prob → SS/BS 乘法调整
+  ├─ Regime: vol_prob + trend_prob → boost/dampen
+  ├─ 分位数: q05~q95 → Kelly 仓位 + 动态止损 + 尾部降权
+  └─ 输出: enhanced_ss, enhanced_bs, kelly_fraction, dynamic_sl
+  ↓
+shadow 模式: 只记录到日志, 不实际修改信号 (观察期)
+正式模式: SS/BS 用 ML 增强值, 仓位用 kelly, 止损用 dynamic_sl
 ```
 
 ---
@@ -939,83 +973,87 @@ v10.0 ("连续化改造"):
 
 > **Binance OI API 限制**: `startTime` 最多约30天前，`binance_fetcher.py` 已实现分段拉取 (29天/段)。
 
-### 14.3 GPU 训练模式 (train_gpu.py)
+### 14.3 GPU 训练模式 (train_gpu.py, 11 种模式)
 
-| 模式 | 命令 | 说明 | 预计耗时 |
-|------|------|------|---------|
-| LightGBM GPU | `--mode lgb` | Walk-Forward, CUDA 后端, 多尺度集成 | ~5分钟 |
-| LSTM+Attention | `--mode lstm` | PyTorch, BF16, 双向LSTM+Attention | ~30分钟 |
-| Optuna 超参 | `--mode optuna` | 贝叶斯 TPE 搜索, 替代网格搜索 | ~1小时 |
-| 回测参数优化 | `--mode backtest` | Optuna 优化 SL/TP/阈值等回测参数 | ~1小时 |
+| 模式 | 命令 | 说明 |
+|------|------|------|
+| LightGBM | `--mode lgb` | Walk-Forward, Optuna 优化, 多尺度集成 |
+| LSTM+Attention | `--mode lstm` | 双向LSTM, BF16 混合精度, 时间注意力 |
+| Optuna 超参 | `--mode optuna` | 贝叶斯 TPE, 200 trials, MedianPruner |
+| 回测优化 | `--mode backtest` | Optuna 优化 SL/TP/阈值等回测参数 |
+| **TFT** | `--mode tft` | Temporal Fusion Transformer, 94维特征 |
+| **跨资产 LGB** | `--mode cross_asset` | BTC/SOL/BNB 联动特征, 94维 |
+| **增量 WF** | `--mode incr_wf` | 增量 Walk-Forward, 月度滚动重训 |
+| **MTF 融合** | `--mode mtf_fusion` | 多周期分数 MLP, 替代规则加权 |
+| **PPO 仓位** | `--mode ppo` | 强化学习仓位优化 (stable-baselines3) |
+| **ONNX 导出** | `--mode onnx` | LSTM/TFT/MLP → ONNX 加速推理 |
+| **定时重训** | `--mode retrain` | 自动检测数据更新并触发重训 |
 
-数据加载管线 (纯本地, 不触发 API):
-```
-load_klines_local()        → Parquet 直读
-    ↓
-add_all_indicators()       → MACD/KDJ/RSI/CCI
-add_moving_averages()      → MA5/10/20/60
-    ↓
-compute_ml_features()      → 70+ 维特征矩阵
-    ↓
-标签: profitable_long_{3,5,12,24}  → 利润化多尺度标签
-    ↓
-训练 → data/ml_models/, data/gpu_results/
-```
+### 14.4 关键模型架构
 
-### 14.4 LSTM + Attention 模型
-
+**LSTM+Attention** (方向预测, AUC 0.54):
 ```python
-# 架构: 双向 LSTM + 时间注意力 + 分类头
 LSTMAttention(
-    LSTM(input_dim=70, hidden=128, layers=2, bidirectional=True, dropout=0.3)
+    LSTM(input_dim=73, hidden=128, layers=2, bidirectional=True, dropout=0.3)
     → Attention(hidden*2 → 1)  # 时间步加权聚合
     → FC(256→64) → GELU → Dropout(0.2) → FC(64→1) → Sigmoid
 )
-# H800 优化: BF16 混合精度, CosineAnnealing LR, 梯度裁剪
-# Walk-Forward: 60% train / 10% val / 30% test, early stopping
+# BF16 混合精度, CosineAnnealing LR, 梯度裁剪, early stopping
 ```
 
-### 14.5 Optuna 超参搜索
-
+**TFT** (可解释时序预测, 94 维特征):
 ```python
-# 搜索空间 (LightGBM):
-num_leaves:       [8, 64]
-learning_rate:    [0.01, 0.2] (log)
-feature_fraction: [0.4, 0.9]
-lambda_l1/l2:     [0.01, 10.0] (log)
-num_boost_round:  [100, 800]
-
-# 搜索策略: TPE (Tree Parzen Estimator) + MedianPruner
-# 200 trials 即可超越 1000+ 网格搜索组合
-# Holdout 验证: 70% 搜索空间 + 30% 最终验证, 防过拟合
+EfficientTFT(
+    input_proj(94→64) → PositionalEncoding(seq=96)
+    → TransformerEncoder(d_model=64, n_heads=4, layers=2)
+    → global_pool → FC(64→1) → Sigmoid
+)
+# 参数量: 148K (轻量), ONNX 导出支持
 ```
 
-### 14.6 核心文件
+**MTF Fusion MLP** (多周期融合, AUC 0.56):
+```python
+MTFFusionMLP(
+    23维输入: 5TF × (ss, bs, net, max) + 大小同向 + 大周期均值 + 小周期均值
+    → FC(23→64) → BatchNorm → GELU → Dropout(0.3)
+    → FC(64→32) → BatchNorm → GELU → Dropout(0.2)
+    → FC(32→1) → Sigmoid
+)
+# Focal Loss (gamma=2.0, alpha=0.25) 处理类别不平衡
+```
+
+### 14.5 核心文件
 
 | 文件 | 作用 |
 |------|------|
-| `fetch_5year_data.py` | 批量下载 5 年训练数据 (支持 `--skip-klines` / `--only-funding` / `--only-oi`) |
+| `fetch_5year_data.py` | 批量下载 5 年训练数据 (4对×4周期+衍生品) |
 | `pack_for_h800.sh` | 数据完整性检查 + 打包 + 传输提示 |
-| `setup_h800.sh` | H800 一键环境搭建 (GPU检测 + conda + 依赖安装 + 验证) |
-| `requirements-gpu.txt` | GPU 训练依赖 (PyTorch CUDA, Optuna, TensorBoard) |
-| `verify_data.py` | 训练数据完整性验证 (必需/可选检查 + GPU 环境检测) |
-| `train_gpu.py` | **GPU 离线训练入口** (4种模式, 完全不依赖 Binance API) |
+| `setup_h800.sh` | H800 一键环境搭建 (GPU检测 + conda + 依赖 + 验证) |
+| `requirements-gpu.txt` | GPU 依赖 (PyTorch CUDA, Optuna, TensorBoard, stable-baselines3) |
+| `verify_data.py` | 训练数据完整性验证 |
+| `train_gpu.py` | **GPU 离线训练入口** (11种模式, 不依赖 API) |
 
-### 14.7 模型部署回路
+### 14.6 模型部署回路
 
 ```
-H800 训练产出:
-  data/ml_models/lgb_model.txt       (LightGBM 模型)
-  data/ml_models/lstm_{tf}.pt        (PyTorch LSTM 权重)
-  data/ml_models/*.meta.json         (特征名/重要性/训练指标)
-  data/gpu_results/*_{timestamp}.json (训练结果日志)
+H800 训练产出 (data/ml_models/):
+  lgb_direction_model.txt    LGB 方向 (Optuna, AUC 0.55)
+  lgb_cross_asset_1h.txt     跨资产 LGB (94维, AUC 0.55)
+  lstm_1h.pt + .onnx         LSTM+Attention (AUC 0.54)
+  tft_1h.pt + .onnx          TFT (148K参数)
+  mtf_fusion_mlp.pt + .onnx  MTF 融合 MLP (AUC 0.56)
+  vol/trend_regime_model.txt Regime 分类 (vol AUC 0.59)
+  quantile_h{5,12}_q*.txt   分位数模型 (10个)
+  ppo_position_agent.zip    PPO 仓位 (实验性)
+  *.meta.json               特征名/重要性/训练指标
 
-回传: tar -czf macd_models.tar.gz data/ml_models/ data/gpu_results/
+部署流程:
+  git push (模型文件在 git 跟踪中)
+  → 服务器 git pull → systemctl restart
+  → MLSignalEnhancer.load_model() 自动加载
+  → CPU 推理 (LGB 原生 / LSTM+TFT ONNX / MLP PyTorch CPU)
 
-生产部署:
-  ml_live_integration.py → MLSignalEnhancer.load()
-  → CPU 推理 (LightGBM .txt 原生支持, LSTM 用 ONNX 或 CPU PyTorch)
-  → 增强六书融合信号 → 实盘交易决策
+当前状态: shadow 模式运行中 (只记录不修改信号)
 ```
 
 ---
@@ -1069,7 +1107,8 @@ H800 训练产出:
 
 | 版本 | 日期 | 核心变更 |
 |------|------|---------|
-| **v10.2+ML** | **2026-02-18** | **ML 预测子系统 + H800 GPU 离线训练架构: LightGBM/LSTM/Optuna, 70+维特征, Walk-Forward 验证, 三机协作数据管线** |
+| **v10.2+ML v2** | **2026-02-19** | **8 模型矩阵部署: LGB/LSTM/TFT/跨资产LGB/MTF融合MLP/Regime/分位数/PPO, Kelly 仓位+动态止损, ONNX 加速, shadow 模式上线** |
+| v10.2+ML | 2026-02-18 | ML 预测子系统 + H800 GPU 离线训练架构: LightGBM/LSTM/Optuna, 70+维特征, Walk-Forward 验证, 三机协作数据管线 |
 | v10.2 | 2026-02-15 | Regime Sigmoid + Leg Budget 5×2 + MAE 追踪: Phase 2 连续化改造 |
 | **v10.1** | **2026-02-15** | **ATR-SL + P21绑定: OOS +8.7%→+16.0%, OOS PF 1.04→1.31, 尾部风险-55%, DIV 0.50 实验失败保留0.70** |
 | v10.0 | 2026-02-15 | Soft Veto + Leg Budget + Funding-in-PnL: IS PF 0.90→1.31, OOS -3.8%→+7.9%, 连续化替代硬门控 |

@@ -2556,15 +2556,16 @@ else: SLIPPAGE = 0.001                        # 0.10% default
 
 ### H.4 完成标准 (全量验证门槛)
 
-| 指标 | 目标值 | 当前值 | 差距 |
-|------|--------|--------|------|
-| IS PF (Profit Factor) | > 1.2 | 0.90 (v5) | 严重不达标 |
-| WFO 胜率 | ≥ 65% | 55.4% | -9.6pp |
-| Bootstrap p-value | < 0.05 | 0.45 / 0.47 | 远不显著 |
+| 指标 | 目标值 | 当前值 (v6.1) | 差距 |
+|------|--------|--------------|------|
+| IS PF (Profit Factor) | > 1.2 | 1.1735 (v6.1 CandD基线) | 接近达标 |
+| 5yr PF (Profit Factor) | > 1.2 | 1.2031 (v6.1 CandD基线) | ✅ 达标 |
+| WFO 胜率 | ≥ 65% | 55.4% (v10.3) | -9.6pp |
+| Bootstrap p-value | < 0.05 | 0.45 / 0.47 (v10.3) | 远不显著 |
 | 压力测试 (fee×2) | pPF > 1.0 | ✅ 通过 | 达标 |
-| OOS PF | > 1.0 | 无 short 交易, 无法验证 | 需 P35 扩展 |
+| 多币种一致性 | 全部 > 1.0 | ✅ 4/4 币种 PF>1.0 | 达标 |
 
-### H.5 已完成项目汇总 (v10.0-v11.0)
+### H.5 已完成项目汇总 (v10.0-v11.0 + v6 优化)
 
 | 版本 | 已完成 P# | 关键特性 |
 |------|----------|---------|
@@ -2572,6 +2573,7 @@ else: SLIPPAGE = 0.001                        # 0.10% default
 | v10.1 | P21 (放开) + ATR-SL | ATR-SL regime-specific mults; risk_per_trade 2.5% |
 | v10.2 | Regime Sigmoid + MAE + TP禁 | Regime 连续化; MAE 追踪; 趋势禁 TP; 5×2 Leg Budget |
 | **v11.0** | **三阶段路线图** | MAE 校准 + Soft Anti-Squeeze + Score Calibration + Shrinkage + Rolling Regime + WFO + DSR/PSR + 清算流/OI 采集 |
+| **v6.1** | **P37-P48 多币种优化** | P42 Soft Veto 校准 + CLS45 反向平仓 + 4 币种验证 |
 
 **v11.0 新增实现** (2026-02-16):
 - ✅ Phase 1a: MAE 校准器 (`mae_calibrator.py`)
@@ -2585,12 +2587,33 @@ else: SLIPPAGE = 0.001                        # 0.10% default
 - ✅ Phase 3c: 清算流采集 (`liquidation_collector.py`)
 - ✅ Phase 3d: OI 自采集 (`oi_collector.py`)
 
+**v6.1 多币种参数优化** (2026-02-17):
+- ✅ P37 Funding Alpha → 拒绝 (5yr -0.005)
+- ✅ P38 Funding Alpha 实现 → 代码就绪, 实验拒绝
+- ✅ P39 Dynamic Regime Thresholds → 拒绝 (5yr -0.011)
+- ✅ P40 Regime Adaptive Fusion → 拒绝 (IS/OOS 正, 5yr 负)
+- ✅ P41 Short Conflict Discount → 拒绝 (IS +0.005, OOS/5yr 负)
+- ✅ **P42 SV20+CLS45 → 接受** (IS +0.009, OOS +0.014, 5yr +0.007)
+  - soft_veto_midpoint: 1.0→2.0, soft_veto_steepness: 3.0→5.0
+  - close_short_bs: 40→45, close_long_ss: 40→45
+- ✅ P43 sell_pct 扫描 → 拒绝 (零效果)
+- ✅ P44 Partial TP + Breakeven → 拒绝 (灾难性, PF -0.14 to -0.30)
+- ✅ P46 Cooldown 扫描 → 拒绝 (IS 过拟合陷阱)
+- ✅ P47 ATR SL 扫描 → 拒绝 (噪音级效果)
+- ✅ P48 Max Hold 不对称 → 观察 (5yr MH_S48 +0.011 可重复, 但未纳入 v6)
+
 **已完成的实验/验证任务**: P0 (OOS 验证), P1/P2 (敏感度), P3 (退出消融), P4 (六书判别力), P16 (Cohen's d 分析)
 
-**已关闭/拒绝的特性**: P6 (Ghost Cooldown), P7 (24h 方向门控), P8 (结构确认硬门槛), P9 (Regime 调权), P10 (Fast-fail), P14 (多头折扣)
+**已关闭/拒绝的特性**: P6 (Ghost Cooldown), P7 (24h 方向门控), P8 (结构确认硬门槛), P9 (Regime 调权), P10 (Fast-fail), P14 (多头折扣), P37-P41 (v6 实验), P43-P47 (v6 扫描)
 
 > **注意**: P12 (动态 Regime 阈值) 之前在 AB 测试中关闭 (OOS -1.23%), 但 v11 Phase 2c 以改进形式重新启用 (滚动百分位 + 2160 bars 窗口), 需运行实验验证效果是否改善。
 
 ### H.6 版本说明
 
-本附录最后更新于 2026-02-16 (v11.0 三阶段优化路线图实施后)。所有脚本路径在该日期有效。v11 新增模块已部署生产，但实验脚本尚未全部执行 — 需运行 `run_v11_phase1.py` 和 `run_v11_phase2.py` 获取实验数据。
+本附录最后更新于 2026-02-17 (v6.1 多币种参数优化完成后)。
+
+**v6 配置已写入 `live_config.py`**:
+- 通过 `STRATEGY_VERSION=v6` 环境变量切换
+- 当前生产仍使用 v5 (默认), v6 待实盘验证后切换
+- v6 继承 v5 全部参数, 仅覆盖 P42 验证的 4 个参数
+- 详见 `logs/v6_optimization_report.md` 完整优化报告
