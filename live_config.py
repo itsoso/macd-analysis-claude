@@ -548,10 +548,14 @@ class StrategyConfig:
     min_atr_pct_to_open: float = 0.003  # 0.3%
     # 反向信号平仓后是否立即反手开仓 (默认关闭, 等下一 bar 冷静确认)
     reverse_immediate: bool = False
-    # ML 增强: LGB+LSTM+Regime+分位数 四层 ML 预测融入信号
+    # ML 增强: LGB+LSTM+Regime+分位数+TFT+跨资产 五层 ML 预测融入信号
     # 模型来源: H800 GPU 训练 (v5_gpu_ensemble, 2026-02-19)
     use_ml_enhancement: bool = True
     ml_enhancement_shadow_mode: bool = True       # shadow 模式: 只记录不实际修改分数 (先观察再开启实际增强)
+    # GPU ML 子功能开关 (shadow 模式关闭后才生效)
+    ml_use_kelly_position: bool = False           # Kelly 公式计算仓位 (半Kelly, 0.1~1.0)
+    ml_use_dynamic_sl: bool = False               # 分位数驱动动态止损 (q05/q95, 1%~8%)
+    ml_use_neural_fusion: bool = False            # MTF Fusion MLP 替代规则加权共识
     # 融合模式
     fusion_mode: str = "c6_veto_4"
     veto_threshold: float = 25

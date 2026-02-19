@@ -1033,48 +1033,55 @@ def api_live_load_config():
 
 @app.route('/api/ml/status')
 def api_ml_status():
-    """检查 ML 模型状态 (v5: LGB+LSTM+Regime+Quantile)"""
+    """检查 ML 模型状态 (v5: 8 模型矩阵)"""
     try:
         model_dir = os.path.join(BASE_DIR, 'data', 'ml_models')
-        status = {
-            'regime_model': False,
-            'quantile_model': False,
-            'lgb_direction_model': False,
-            'lstm_model': False,
-            'regime_trained_at': None,
-            'quantile_trained_at': None,
-            'training_meta': None,
+        models = {
+            'lgb_direction': ('lgb_direction_model.txt', 'LGB方向'),
+            'lstm': ('lstm_1h.pt', 'LSTM'),
+            'regime': ('vol_regime_model.txt', 'Regime'),
+            'quantile': ('quantile_config.json', '分位数'),
+            'tft': ('tft_1h.pt', 'TFT'),
+            'cross_asset': ('lgb_cross_asset_1h.txt', '跨资产'),
+            'mtf_fusion': ('mtf_fusion_mlp.pt', 'MTF融合'),
+            'ppo': ('ppo_position_agent.zip', 'PPO仓位'),
         }
-        vol_path = os.path.join(model_dir, 'vol_regime_model.txt')
-        if os.path.exists(vol_path):
-            status['regime_model'] = True
-            status['regime_trained_at'] = datetime.fromtimestamp(
-                os.path.getmtime(vol_path)
-            ).strftime('%Y-%m-%d %H:%M')
-        q_path = os.path.join(model_dir, 'quantile_config.json')
-        if os.path.exists(q_path):
-            status['quantile_model'] = True
-            status['quantile_trained_at'] = datetime.fromtimestamp(
-                os.path.getmtime(q_path)
-            ).strftime('%Y-%m-%d %H:%M')
-        lgb_path = os.path.join(model_dir, 'lgb_direction_model.txt')
-        if os.path.exists(lgb_path):
-            status['lgb_direction_model'] = True
-        lstm_path = os.path.join(model_dir, 'lstm_1h.pt')
-        if os.path.exists(lstm_path):
-            status['lstm_model'] = True
+        status = {'training_meta': None, 'models': {}}
+        for key, (fname, label) in models.items():
+            fpath = os.path.join(model_dir, fname)
+            exists = os.path.exists(fpath)
+            info = {'exists': exists, 'label': label}
+            if exists:
+                meta_path = fpath + '.meta.json'
+                if not os.path.exists(meta_path):
+                    base = os.path.splitext(fpath)[0]
+                    meta_path = base + '.meta.json'
+                if os.path.exists(meta_path):
+                    try:
+                        with open(meta_path) as f:
+                            m = json.load(f)
+                        info['test_auc'] = m.get('test_auc') or m.get('val_auc')
+                        info['trained_at'] = m.get('trained_at', '')[:16]
+                    except Exception:
+                        pass
+            status['models'][key] = info
+
+        # 兼容旧字段
+        status['lgb_direction_model'] = status['models']['lgb_direction']['exists']
+        status['lstm_model'] = status['models']['lstm']['exists']
+        status['regime_model'] = status['models']['regime']['exists']
+        status['quantile_model'] = status['models']['quantile']['exists']
+
         meta_path = os.path.join(model_dir, 'training_meta.json')
         if os.path.exists(meta_path):
             with open(meta_path) as f:
                 status['training_meta'] = json.load(f)
-        status['any_model'] = any([
-            status['regime_model'], status['quantile_model'],
-            status['lgb_direction_model'], status['lstm_model'],
-        ])
-        status['model_count'] = sum([
-            status['regime_model'], status['quantile_model'],
-            status['lgb_direction_model'], status['lstm_model'],
-        ])
+
+        all_exists = [v['exists'] for v in status['models'].values()]
+        status['any_model'] = any(all_exists)
+        status['model_count'] = sum(all_exists)
+        status['total_models'] = len(models)
+
         return jsonify({"success": True, "status": status})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500

@@ -554,10 +554,12 @@
                     </label>
                 </div>
                 <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.6;">
-                    LightGBM 预测模型融入六书信号，三层架构：<br>
-                    <span style="color: #a78bfa;">① Regime 过滤</span> — 识别趋势/震荡市场 (OOS AUC 0.60)，趋势行情增强信号、震荡行情抑制信号<br>
-                    <span style="color: #a78bfa;">② 分位数风控</span> — 预测收益分布 (q05~q95)，尾部风险过大时自动降权<br>
-                    <span style="color: #a78bfa;">③ 信号增强</span> — 高置信度 +20% boost, 低置信度 -12% dampen
+                    H800 GPU 训练 8 模型矩阵融入六书信号，五层架构：<br>
+                    <span style="color: #a78bfa;">① 方向预测</span> — LGB(AUC 0.55) + LSTM(0.54) 加权集成 → bull_prob<br>
+                    <span style="color: #a78bfa;">② Regime 过滤</span> — 波动率+趋势分类，趋势行情 boost / 震荡行情 dampen<br>
+                    <span style="color: #a78bfa;">③ 分位数风控</span> — 收益分布 q05~q95 → Kelly 仓位 + 动态止损 + 尾部降权<br>
+                    <span style="color: #a78bfa;">④ 神经融合</span> — MTF Fusion MLP (AUC 0.56) 替代规则加权共识 (可选)<br>
+                    <span style="color: #a78bfa;">⑤ 执行层</span> — bull_prob ≥ 0.58 做多 / ≤ 0.42 做空 → 信号乘法调整
                 </div>
                 <div id="mlModelStatus" style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
                     模型状态: 检查中...
@@ -568,6 +570,36 @@
                                style="margin-right:4px;">
                         Shadow 模式 (只记录 ML 输出，不实际修改信号分数)
                     </label>
+                </div>
+
+                <!-- GPU ML 子功能开关 -->
+                <div id="mlSubToggles" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(139,92,246,0.15);">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; font-weight: 600;">
+                        🚀 GPU ML 子功能 <span style="color: var(--text-muted); font-weight: normal;">(shadow 关闭后生效)</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text-secondary);background:rgba(0,0,0,0.2);padding:8px 10px;border-radius:8px;">
+                            <input type="checkbox" id="toggle_ml_kelly" onchange="onV11ToggleChange()" style="accent-color:#a78bfa;">
+                            <div>
+                                <div style="font-weight:600;color:var(--text-primary);">Kelly 仓位</div>
+                                <div style="font-size:10px;margin-top:2px;">半 Kelly 公式 (0.1~1.0)</div>
+                            </div>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text-secondary);background:rgba(0,0,0,0.2);padding:8px 10px;border-radius:8px;">
+                            <input type="checkbox" id="toggle_ml_dynamic_sl" onchange="onV11ToggleChange()" style="accent-color:#a78bfa;">
+                            <div>
+                                <div style="font-weight:600;color:var(--text-primary);">动态止损</div>
+                                <div style="font-size:10px;margin-top:2px;">q05/q95 驱动 (1%~8%)</div>
+                            </div>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:var(--text-secondary);background:rgba(0,0,0,0.2);padding:8px 10px;border-radius:8px;">
+                            <input type="checkbox" id="toggle_ml_neural_fusion" onchange="onV11ToggleChange()" style="accent-color:#a78bfa;">
+                            <div>
+                                <div style="font-weight:600;color:var(--text-primary);">神经融合</div>
+                                <div style="font-size:10px;margin-top:2px;">MLP 替代规则加权</div>
+                            </div>
+                        </label>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2094,6 +2126,12 @@ async function loadV11Toggles() {
                 !!strategy.use_ml_enhancement;
             document.getElementById('toggle_ml_shadow').checked =
                 strategy.ml_enhancement_shadow_mode !== false;
+            document.getElementById('toggle_ml_kelly').checked =
+                !!strategy.ml_use_kelly_position;
+            document.getElementById('toggle_ml_dynamic_sl').checked =
+                !!strategy.ml_use_dynamic_sl;
+            document.getElementById('toggle_ml_neural_fusion').checked =
+                !!strategy.ml_use_neural_fusion;
             onV11ToggleChange();
             document.getElementById('v11ToggleResult').innerHTML =
                 '<span class="result-badge success">✓ 状态已刷新</span>';
@@ -2111,21 +2149,32 @@ async function loadMLModelStatus() {
         const data = await apiCall('/api/ml/status');
         if (data.success && data.status) {
             const s = data.status;
-            let parts = [];
             const ok = '<span style="color: var(--accent-green);">✓</span>';
             const no = '<span style="color: var(--accent-red);">✗</span>';
-            parts.push(s.lgb_direction_model ? ok + ' LGB方向' : no + ' LGB方向');
-            parts.push(s.lstm_model ? ok + ' LSTM' : no + ' LSTM');
-            parts.push(s.regime_model ? ok + ' Regime' : no + ' Regime');
-            parts.push(s.quantile_model ? ok + ' 分位数' : no + ' 分位数');
-            let html = 'ML模型 (' + (s.model_count || 0) + '/4): ' + parts.join(' · ');
+            let parts = [];
+            if (s.models) {
+                for (const [key, m] of Object.entries(s.models)) {
+                    let tag = m.exists ? ok : no;
+                    let label = m.label || key;
+                    if (m.exists && m.test_auc) {
+                        label += '<span style="color:var(--text-muted);">(' + m.test_auc.toFixed(3) + ')</span>';
+                    }
+                    parts.push(tag + ' ' + label);
+                }
+            } else {
+                parts.push(s.lgb_direction_model ? ok + ' LGB方向' : no + ' LGB方向');
+                parts.push(s.lstm_model ? ok + ' LSTM' : no + ' LSTM');
+                parts.push(s.regime_model ? ok + ' Regime' : no + ' Regime');
+                parts.push(s.quantile_model ? ok + ' 分位数' : no + ' 分位数');
+            }
+            let total = s.total_models || 4;
+            let html = 'ML模型 (' + (s.model_count || 0) + '/' + total + '): '
+                + parts.join(' · ');
             if (s.training_meta) {
                 const m = s.training_meta;
-                html += '<br><span style="color: var(--text-muted); font-size: 11px;">'
+                html += '<br><span style="color: var(--text-muted); font-size: 10px;">'
                     + (m.version || '') + ' | GPU: ' + (m.gpu || 'N/A')
                     + ' | 训练: ' + (m.trained_at || '').slice(0, 16)
-                    + ' | LGB AUC: ' + (m.lgb_direction_test_auc || '-')
-                    + ' | LSTM AUC: ' + (m.lstm_test_auc || '-')
                     + '</span>';
             }
             if (!s.any_model) {
@@ -2160,6 +2209,12 @@ async function saveV11Toggles() {
             document.getElementById('toggle_ml_enhancement').checked;
         config.strategy.ml_enhancement_shadow_mode =
             document.getElementById('toggle_ml_shadow').checked;
+        config.strategy.ml_use_kelly_position =
+            document.getElementById('toggle_ml_kelly').checked;
+        config.strategy.ml_use_dynamic_sl =
+            document.getElementById('toggle_ml_dynamic_sl').checked;
+        config.strategy.ml_use_neural_fusion =
+            document.getElementById('toggle_ml_neural_fusion').checked;
 
         // 保存
         const saveData = await apiCall('/api/live/save_config', {
