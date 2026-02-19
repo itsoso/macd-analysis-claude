@@ -38,7 +38,7 @@ from bollinger_strategy import compute_bollinger_scores
 from volume_price_strategy import compute_volume_price_scores
 from kdj_strategy import compute_kdj_scores
 from signal_core import calc_fusion_score_six, compute_signals_six
-from multi_tf_consensus import compute_weighted_consensus, fuse_tf_scores
+from multi_tf_consensus import compute_weighted_consensus, fuse_tf_scores, neural_fuse_tf_scores
 
 
 class SignalResult:
@@ -334,6 +334,8 @@ class LiveSignalGenerator:
                         _bull = _ml_info.get('bull_prob', '-')
                         _lgb = _ml_info.get('lgb_bull_prob', '-')
                         _lstm = _ml_info.get('lstm_bull_prob', '-')
+                        _tft = _ml_info.get('tft_bull_prob', '-')
+                        _ca = _ml_info.get('ca_bull_prob', '-')
                         _dir_act = _ml_info.get('direction_action', '-')
                         _regime = _ml_info.get('regime', '?')
                         _conf = _ml_info.get('trade_confidence', 0)
@@ -341,9 +343,10 @@ class LiveSignalGenerator:
                         _kelly = _ml_info.get('kelly_fraction', '-')
                         _pos_scale = _ml_info.get('position_scale', '-')
                         _q_act = _ml_info.get('quantile_action', '-')
+                        _ver = _ml_info.get('ml_version', 'v?')
                         self.logger.info(
-                            f"[ML {_mode}] bull_prob={_bull} "
-                            f"(LGB={_lgb}, LSTM={_lstm}) "
+                            f"[ML {_mode} {_ver}] bull_prob={_bull} "
+                            f"(LGB={_lgb}, LSTM={_lstm}, TFT={_tft}, CA={_ca}) "
                             f"dir={_dir_act} regime={_regime} "
                             f"conf={_conf:.3f} "
                             f"kelly={_kelly} pos_scale={_pos_scale} "
@@ -366,6 +369,8 @@ class LiveSignalGenerator:
                 components['ml_bull_prob'] = _ml_info.get('bull_prob', 0.5)
                 components['ml_lgb_prob'] = _ml_info.get('lgb_bull_prob', '-')
                 components['ml_lstm_prob'] = _ml_info.get('lstm_bull_prob', '-')
+                components['ml_tft_prob'] = _ml_info.get('tft_bull_prob', '-')
+                components['ml_ca_prob'] = _ml_info.get('ca_bull_prob', '-')
                 components['ml_direction'] = _ml_info.get('direction_action', 'neutral')
                 components['ml_regime'] = _ml_info.get('regime', '-')
                 components['ml_confidence'] = _ml_info.get('trade_confidence', 0)
@@ -901,7 +906,12 @@ class LiveSignalGenerator:
             'long_threshold': self.config.long_threshold,
             'coverage_min': getattr(self.config, 'coverage_min', 0.5),
         }
-        consensus = fuse_tf_scores(tf_scores, decision_tfs, fuse_config)
+        if getattr(self.config, 'ml_use_neural_fusion', False):
+            consensus = neural_fuse_tf_scores(tf_scores, decision_tfs, fuse_config)
+            if self.logger and consensus.get('neural_prob') is not None:
+                self.logger.info(f"[ML Neural Fusion] prob={consensus['neural_prob']:.4f}")
+        else:
+            consensus = fuse_tf_scores(tf_scores, decision_tfs, fuse_config)
 
         elapsed = time.time() - start_time
         if self.logger:

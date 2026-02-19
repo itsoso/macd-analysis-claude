@@ -1,20 +1,20 @@
 """
-ML 实盘集成模块 v5 (GPU 增强版)
+ML 实盘集成模块 v6 (GPU 增强版 — 8 模型矩阵)
 
-四层架构:
-  1. 方向预测层: LightGBM (Optuna优化) + LSTM 集成 → 涨跌概率
-  2. 预测层: 分位数回归 → 输出收益分布 (q05/q25/q50/q75/q95)
-  3. 决策层: Regime 过滤 + 成本感知门槛 + Kelly 仓位
-  4. 执行层: 与现有六书融合信号协同
+五层架构:
+  1. 方向预测层: LGB + LSTM + TFT + 跨资产LGB 集成 → bull_prob
+  2. 预测层: 分位数回归 → 输出收益分布 (q05~q95) → Kelly 仓位 + 动态止损
+  3. 决策层: Regime 过滤 + 成本感知门槛
+  4. 融合层: MTF Fusion MLP (可选, 替代规则加权)
+  5. 执行层: 与六书融合信号协同
 
-v5 新增 (H800 GPU 训练):
-  - LightGBM 方向预测 (Optuna 优化, AUC 0.55+)
-  - LSTM+Attention 方向预测 (双向LSTM, AUC 0.54+)
-  - LGB + LSTM 加权集成 → bull_prob
-  - bull_prob > 0.58 → 做多加权, < 0.42 → 做空加权
+v6 更新:
+  - 集成 TFT (AUC 0.55+) + 跨资产 LGB (94维, AUC 0.55)
+  - 修复 LSTM 标准化 (从 TFT meta 读取 feat_mean/feat_std)
+  - ONNX 推理加速 (如可用)
 
 使用:
-  1. 训练: python train_production_model.py (在 H800 上)
+  1. 训练: python train_gpu.py --mode all_v3 (在 H800 上)
   2. 实盘: live_signal_generator.py 自动调用 MLSignalEnhancer.enhance_signal()
 """
 
@@ -34,12 +34,12 @@ MODEL_DIR = os.path.join('data', 'ml_models')
 
 class MLSignalEnhancer:
     """
-    ML 信号增强器 v5 — 方向预测 + Regime 过滤 + 分位数风控
+    ML 信号增强器 v6 — 8 模型矩阵集成
 
     工作模式:
-      1. 方向预测: LGB + LSTM 集成 → bull_prob (v5 新增)
+      1. 方向预测: LGB + LSTM + TFT + 跨资产LGB → bull_prob
       2. 计算 regime (vol_prob, trend_prob, trade_confidence)
-      3. 如有分位数模型: 计算收益分布 → 风险调整
+      3. 如有分位数模型: 收益分布 → Kelly 仓位 + 动态止损
       4. 综合输出: 增强/抑制规则信号
     """
 
@@ -47,19 +47,27 @@ class MLSignalEnhancer:
         self.model_dir = model_dir
         self._regime_model = None
         self._quantile_model = None
-        self._direction_model = None  # v5: LGB 方向预测
-        self._lstm_model = None       # v5: LSTM 方向预测
+        self._direction_model = None  # LGB 方向预测
+        self._lstm_model = None       # LSTM 方向预测
+        self._tft_model = None        # v6: TFT 方向预测
+        self._cross_asset_model = None  # v6: 跨资产 LGB
+        self._cross_asset_meta = None
         self._loaded = False
 
-        # v5: 方向预测参数
+        # 方向预测参数
         self._direction_meta = None
         self._lstm_meta = None
+        self._tft_meta = None
+        self._norm_mean = None        # v6: 共享标准化参数
+        self._norm_std = None
         self.direction_long_threshold = 0.58
         self.direction_short_threshold = 0.42
-        self.direction_boost = 1.15       # bull_prob 高时加权
-        self.direction_dampen = 0.85      # bull_prob 低时降权
-        self.lgb_weight = 0.65            # LGB 在集成中的权重
-        self.lstm_weight = 0.35           # LSTM 权重
+        self.direction_boost = 1.15
+        self.direction_dampen = 0.85
+        self.lgb_weight = 0.55            # v6: 调整权重分配
+        self.lstm_weight = 0.25
+        self.tft_weight = 0.10            # v6: TFT 权重
+        self.cross_asset_weight = 0.10    # v6: 跨资产权重
 
         # Regime 增强参数
         self.high_conf_threshold = 0.55
@@ -69,8 +77,8 @@ class MLSignalEnhancer:
         self.strong_boost_factor = 1.20
 
         # 分位数风控参数
-        self.cost_threshold = 0.003       # 来回成本 0.3%
-        self.risk_dampen_q05 = -0.03      # q05 < -3% 时强制降权
+        self.cost_threshold = 0.003
+        self.risk_dampen_q05 = -0.03
 
     def load_model(self) -> bool:
         """加载所有可用模型"""
@@ -95,16 +103,49 @@ class MLSignalEnhancer:
         except Exception as e:
             logger.warning(f"LGB 方向预测模型加载失败: {e}")
 
-        # v5: LSTM 方向预测模型
+        # LSTM 方向预测模型
         try:
             lstm_path = os.path.join(self.model_dir, 'lstm_1h.pt')
             if os.path.exists(lstm_path):
                 self._lstm_meta = {'model_path': lstm_path}
-                # LSTM 延迟加载 (需要 torch，避免启动时加载)
                 logger.info("LSTM 方向预测模型路径已注册 (延迟加载)")
                 loaded_any = True
         except Exception as e:
             logger.warning(f"LSTM 方向预测模型注册失败: {e}")
+
+        # v6: TFT 方向预测模型
+        try:
+            tft_path = os.path.join(self.model_dir, 'tft_1h.pt')
+            tft_meta_path = os.path.join(self.model_dir, 'tft_1h.meta.json')
+            if os.path.exists(tft_path) and os.path.exists(tft_meta_path):
+                with open(tft_meta_path) as f:
+                    self._tft_meta = json.load(f)
+                self._tft_meta['model_path'] = tft_path
+                logger.info(f"TFT 模型路径已注册 (input_dim={self._tft_meta.get('input_dim', '?')}, 延迟加载)")
+                loaded_any = True
+                # 从 TFT meta 提取标准化参数 (TFT 训练保存了完整的 feat_mean/feat_std)
+                if 'feat_mean' in self._tft_meta and 'feat_std' in self._tft_meta:
+                    feat_names = self._tft_meta.get('feature_names', [])
+                    self._norm_mean = dict(zip(feat_names, self._tft_meta['feat_mean']))
+                    self._norm_std = dict(zip(feat_names, self._tft_meta['feat_std']))
+                    logger.info(f"标准化参数已从 TFT meta 加载 ({len(feat_names)} 维)")
+        except Exception as e:
+            logger.warning(f"TFT 模型注册失败: {e}")
+
+        # v6: 跨资产 LGB
+        try:
+            ca_path = os.path.join(self.model_dir, 'lgb_cross_asset_1h.txt')
+            ca_meta_path = ca_path + '.meta.json'
+            if os.path.exists(ca_path):
+                import lightgbm as lgb_lib
+                self._cross_asset_model = lgb_lib.Booster(model_file=ca_path)
+                if os.path.exists(ca_meta_path):
+                    with open(ca_meta_path) as f:
+                        self._cross_asset_meta = json.load(f)
+                logger.info(f"跨资产 LGB 加载成功 ({len(self._cross_asset_meta.get('feature_names', []))} 特征)")
+                loaded_any = True
+        except Exception as e:
+            logger.warning(f"跨资产 LGB 加载失败: {e}")
 
         # Regime 模型
         try:
@@ -138,12 +179,31 @@ class MLSignalEnhancer:
                     ecfg = json.load(f)
                 comps = ecfg.get('components', {})
                 if 'lgb_direction' in comps:
-                    self.lgb_weight = comps['lgb_direction'].get('weight', 0.65)
+                    self.lgb_weight = comps['lgb_direction'].get('weight', 0.55)
                 if 'lstm_1h' in comps:
-                    self.lstm_weight = comps['lstm_1h'].get('weight', 0.35)
-                logger.info(f"集成配置已加载 (LGB:{self.lgb_weight}, LSTM:{self.lstm_weight})")
+                    self.lstm_weight = comps['lstm_1h'].get('weight', 0.25)
+                # 如 ensemble_config 也存了标准化参数 (兼容)
+                if self._norm_mean is None and 'feat_mean' in ecfg:
+                    feat_names = ecfg.get('feature_names', [])
+                    self._norm_mean = dict(zip(feat_names, ecfg['feat_mean']))
+                    self._norm_std = dict(zip(feat_names, ecfg['feat_std']))
+                    logger.info(f"标准化参数已从 ensemble_config 加载 ({len(feat_names)} 维)")
+                logger.info(
+                    f"集成配置已加载 (LGB:{self.lgb_weight}, LSTM:{self.lstm_weight}, "
+                    f"TFT:{self.tft_weight}, CA:{self.cross_asset_weight})"
+                )
         except Exception as e:
             logger.warning(f"集成配置加载失败: {e}")
+
+        # 日志汇总
+        model_list = []
+        if self._direction_model: model_list.append('LGB')
+        if self._lstm_meta: model_list.append('LSTM')
+        if self._tft_meta: model_list.append('TFT')
+        if self._cross_asset_model: model_list.append('CrossAsset')
+        if self._regime_model: model_list.append('Regime')
+        if self._quantile_model: model_list.append('Quantile')
+        logger.info(f"ML 模型加载完成: {len(model_list)} 个 [{', '.join(model_list)}]")
 
         self._loaded = loaded_any
         return loaded_any
@@ -204,16 +264,24 @@ class MLSignalEnhancer:
             X_df = X_df.replace([np.inf, -np.inf], np.nan).fillna(0)
             feat_values = X_df.values.astype(np.float32)
 
-            # 标准化 (用训练集的 mean/std)
-            if self._direction_meta and 'feat_mean' in self._direction_meta:
+            # 标准化: 优先用持久化的 mean/std (v6: 从 TFT meta 或 ensemble_config)
+            norm_applied = False
+            norm_source = self._norm_mean or (self._direction_meta or {}).get('feat_mean')
+            if self._norm_mean:
+                for i, col in enumerate(feat_names):
+                    m = self._norm_mean.get(col, 0.0)
+                    s = self._norm_std.get(col, 1.0)
+                    feat_values[:, i] = (feat_values[:, i] - m) / max(s, 1e-8)
+                norm_applied = True
+            elif self._direction_meta and isinstance(self._direction_meta.get('feat_mean'), dict):
                 mean_dict = self._direction_meta['feat_mean']
                 std_dict = self._direction_meta['feat_std']
                 for i, col in enumerate(feat_names):
                     m = mean_dict.get(col, 0.0)
                     s = std_dict.get(col, 1.0)
                     feat_values[:, i] = (feat_values[:, i] - m) / max(s, 1e-8)
-            else:
-                # 回退: 用最近数据的统计量
+                norm_applied = True
+            if not norm_applied:
                 half = len(feat_values) // 2
                 m = np.nanmean(feat_values[:half], axis=0)
                 s = np.nanstd(feat_values[:half], axis=0) + 1e-8
@@ -264,6 +332,100 @@ class MLSignalEnhancer:
             logger.warning(f"LSTM 方向预测失败: {e}")
             return None
 
+    def _predict_direction_tft(self, features: pd.DataFrame) -> Optional[float]:
+        """TFT 方向预测 → bull_prob"""
+        if self._tft_meta is None:
+            return None
+        try:
+            import torch
+            import torch.nn as nn
+
+            model_path = self._tft_meta['model_path']
+            if not os.path.exists(model_path):
+                return None
+
+            tft_feat_names = self._tft_meta.get('feature_names', [])
+            seq_len = self._tft_meta.get('seq_len', 96)
+            if len(features) < seq_len:
+                return None
+
+            X_df = pd.DataFrame(0.0, index=features.index, columns=tft_feat_names)
+            for col in tft_feat_names:
+                if col in features.columns:
+                    X_df[col] = features[col].values
+            X_df = X_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+            vals = X_df.values.astype(np.float32)
+
+            # TFT meta 自带标准化参数
+            if 'feat_mean' in self._tft_meta:
+                mean_arr = np.array(self._tft_meta['feat_mean'], dtype=np.float32)
+                std_arr = np.array(self._tft_meta['feat_std'], dtype=np.float32)
+                std_arr = np.where(std_arr < 1e-8, 1.0, std_arr)
+                vals = (vals - mean_arr) / std_arr
+
+            vals = np.nan_to_num(vals, nan=0.0, posinf=3.0, neginf=-3.0)
+            seq = vals[-seq_len:]
+            X_tensor = torch.FloatTensor(seq).unsqueeze(0)
+
+            if self._tft_model is None:
+                input_dim = self._tft_meta.get('input_dim', len(tft_feat_names))
+                d_model = self._tft_meta.get('d_model', 64)
+                n_heads = self._tft_meta.get('n_heads', 4)
+                d_ff = d_model * 2
+                n_layers = 2
+
+                class EfficientTFT(nn.Module):
+                    def __init__(self, in_dim, dm, nh, dff, nl, dropout=0.15):
+                        super().__init__()
+                        self.input_proj = nn.Linear(in_dim, dm)
+                        self.pos_enc = nn.Parameter(torch.randn(1, 512, dm) * 0.02)
+                        enc_layer = nn.TransformerEncoderLayer(
+                            d_model=dm, nhead=nh, dim_feedforward=dff,
+                            dropout=dropout, batch_first=True)
+                        self.encoder = nn.TransformerEncoder(enc_layer, nl)
+                        self.head = nn.Sequential(nn.LayerNorm(dm), nn.Linear(dm, 1))
+
+                    def forward(self, x):
+                        h = self.input_proj(x) + self.pos_enc[:, :x.size(1)]
+                        h = self.encoder(h)
+                        return self.head(h.mean(dim=1)).squeeze(-1)
+
+                self._tft_model = EfficientTFT(input_dim, d_model, n_heads, d_ff, n_layers)
+                state = torch.load(model_path, map_location='cpu', weights_only=False)
+                if isinstance(state, dict) and 'state_dict' in state:
+                    self._tft_model.load_state_dict(state['state_dict'])
+                else:
+                    self._tft_model.load_state_dict(state)
+                self._tft_model.eval()
+                logger.info(f"TFT 模型加载完成 (input_dim={input_dim}, d_model={d_model})")
+
+            with torch.no_grad():
+                logit = self._tft_model(X_tensor)
+                prob = torch.sigmoid(logit).item()
+            return float(np.clip(prob, 0, 1))
+
+        except Exception as e:
+            logger.warning(f"TFT 方向预测失败: {e}")
+            return None
+
+    def _predict_direction_cross_asset(self, features: pd.DataFrame) -> Optional[float]:
+        """跨资产 LGB 方向预测 (94 维含 BTC/SOL/BNB)"""
+        if self._cross_asset_model is None or self._cross_asset_meta is None:
+            return None
+        try:
+            feat_names = self._cross_asset_meta.get('feature_names', [])
+            latest = features.iloc[[-1]]
+            X = pd.DataFrame(0.0, index=latest.index, columns=feat_names)
+            for col in feat_names:
+                if col in latest.columns:
+                    X[col] = latest[col].values
+            X = X.replace([np.inf, -np.inf], np.nan).fillna(0)
+            pred = self._cross_asset_model.predict(X)
+            return float(np.clip(pred[0], 0, 1))
+        except Exception as e:
+            logger.warning(f"跨资产 LGB 预测失败: {e}")
+            return None
+
     def enhance_signal(
         self,
         sell_score: float,
@@ -280,19 +442,22 @@ class MLSignalEnhancer:
             if not self.load_model():
                 return sell_score, buy_score, {'ml_available': False}
 
-        ml_info = {'ml_available': True, 'ml_version': 'v5'}
+        ml_info = {'ml_available': True, 'ml_version': 'v6'}
         enhanced_buy = buy_score
         enhanced_sell = sell_score
 
-        # 0. v5: 方向预测 (LGB + LSTM 集成)
-        if self._direction_model is not None or self._lstm_meta is not None:
+        # 0. 方向预测 (多模型集成: LGB + LSTM + TFT + 跨资产)
+        has_direction = (self._direction_model is not None or self._lstm_meta is not None
+                         or self._tft_meta is not None or self._cross_asset_model is not None)
+        if has_direction:
             try:
                 features = self._compute_direction_features(df)
                 if features is not None and len(features) > 0:
                     lgb_prob = self._predict_direction_lgb(features)
                     lstm_prob = self._predict_direction_lstm(features)
+                    tft_prob = self._predict_direction_tft(features)
+                    ca_prob = self._predict_direction_cross_asset(features)
 
-                    # 加权集成
                     probs = []
                     weights = []
                     if lgb_prob is not None:
@@ -303,6 +468,14 @@ class MLSignalEnhancer:
                         probs.append(lstm_prob)
                         weights.append(self.lstm_weight)
                         ml_info['lstm_bull_prob'] = round(lstm_prob, 4)
+                    if tft_prob is not None:
+                        probs.append(tft_prob)
+                        weights.append(self.tft_weight)
+                        ml_info['tft_bull_prob'] = round(tft_prob, 4)
+                    if ca_prob is not None:
+                        probs.append(ca_prob)
+                        weights.append(self.cross_asset_weight)
+                        ml_info['ca_bull_prob'] = round(ca_prob, 4)
 
                     if probs:
                         total_w = sum(weights)
