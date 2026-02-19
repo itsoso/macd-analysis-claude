@@ -340,7 +340,10 @@ def cmd_test_signal(args):
         print(f"  冲突: {'是' if sig.conflict else '否'}")
         print(f"\n  六维分量:")
         for k, v in sig.components.items():
-            print(f"    {k}: {v:.1f}")
+            if isinstance(v, float):
+                print(f"    {k}: {v:.4f}")
+            else:
+                print(f"    {k}: {v}")
 
         # 评估动作
         sig = gen.evaluate_action(sig)
