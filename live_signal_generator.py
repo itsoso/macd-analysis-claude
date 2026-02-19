@@ -329,15 +329,24 @@ class LiveSignalGenerator:
                     )
                     _ml_shadow = getattr(self.config, 'ml_enhancement_shadow_mode', True)
                     _ml_info['shadow_mode'] = _ml_shadow
-                    if _ml_shadow:
-                        if self.logger:
-                            self.logger.info(
-                                f"[ML shadow] regime={_ml_info.get('regime','?')} "
-                                f"conf={_ml_info.get('trade_confidence',0):.3f} "
-                                f"SS {sell_score:.1f}→{_ml_ss:.1f} "
-                                f"BS {buy_score:.1f}→{_ml_bs:.1f}"
-                            )
-                    else:
+                    if self.logger:
+                        # v5: 记录完整 ML 决策信息
+                        _bull = _ml_info.get('bull_prob', '-')
+                        _lgb = _ml_info.get('lgb_bull_prob', '-')
+                        _lstm = _ml_info.get('lstm_bull_prob', '-')
+                        _dir_act = _ml_info.get('direction_action', '-')
+                        _regime = _ml_info.get('regime', '?')
+                        _conf = _ml_info.get('trade_confidence', 0)
+                        _mode = 'shadow' if _ml_shadow else 'LIVE'
+                        self.logger.info(
+                            f"[ML {_mode}] bull_prob={_bull} "
+                            f"(LGB={_lgb}, LSTM={_lstm}) "
+                            f"dir={_dir_act} regime={_regime} "
+                            f"conf={_conf:.3f} "
+                            f"SS {sell_score:.1f}→{_ml_ss:.1f} "
+                            f"BS {buy_score:.1f}→{_ml_bs:.1f}"
+                        )
+                    if not _ml_shadow:
                         sell_score, buy_score = _ml_ss, _ml_bs
                 except Exception as _ml_err:
                     if self.logger:
@@ -350,7 +359,13 @@ class LiveSignalGenerator:
                 components['antisq_short_penalty'] = _antisq_info.get('short_penalty', 0)
             if _ml_info:
                 components['ml_bull_prob'] = _ml_info.get('bull_prob', 0.5)
-                components['ml_action'] = _ml_info.get('action', 'neutral')
+                components['ml_lgb_prob'] = _ml_info.get('lgb_bull_prob', '-')
+                components['ml_lstm_prob'] = _ml_info.get('lstm_bull_prob', '-')
+                components['ml_direction'] = _ml_info.get('direction_action', 'neutral')
+                components['ml_regime'] = _ml_info.get('regime', '-')
+                components['ml_confidence'] = _ml_info.get('trade_confidence', 0)
+                components['ml_shadow'] = _ml_info.get('shadow_mode', True)
+                components['ml_version'] = _ml_info.get('ml_version', '-')
 
             # 构建结果
             result = SignalResult()
