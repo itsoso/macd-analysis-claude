@@ -903,8 +903,8 @@ def page_strategy_tech_doc():
         'page_strategy_tech_doc.html',
         active_page='strategy-tech-doc',
         content=html_content,
-        version='10.2',
-        last_updated='2026-02-15',
+        version='10.2 + ML/GPU',
+        last_updated='2026-02-18',
         win_rate='64.9%',
         cpf='2.51',
     )

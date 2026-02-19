@@ -1,4 +1,4 @@
-# ETH/USDT 六书融合量化交易策略 v10.2 — 完整技术规格书
+# ETH/USDT 六书融合量化交易策略 v10.2+ML — 完整技术规格书
 
 **交易标的**: ETH/USDT 永续合约 (Binance Futures)
 **主时间框架**: 1h K线
@@ -7,11 +7,17 @@
 **OOS验证区间**: 2024-01 ~ 2024-12 (12个月)
 **Walk-Forward验证**: 6窗口滚动 (2024Q1 ~ 2025Q4)
 **初始资金**: $100,000 USDT
-**策略版本**: v10.2 — Regime 连续化 + MAE 追踪版
+**策略版本**: v10.2+ML — 六书融合 + ML 预测子系统 + H800 GPU 训练
 **生产配置版本**: v5 (`STRATEGY_VERSION=v5`)
+**GPU训练**: H800 离线训练 (LightGBM CUDA / LSTM BF16 / Optuna TPE)
 
-> **v10.2 Phase 2 改造摘要** (2026-02-15):
-> 基于 Phase 1 数据驱动分析，执行 Phase 2 改造:
+> **v10.2+ML 架构升级摘要** (2026-02-18):
+> **ML 预测子系统**: 新增三层 ML 架构 (方向预测 + Regime 分类 + 分位数回归), 70+ 维特征工程,
+> Walk-Forward 验证防止过拟合, MLSignalEnhancer 增强/抑制六书融合信号。
+> **H800 GPU 离线训练**: 三机协作架构 (本机→H800→生产), LightGBM CUDA + LSTM BF16 + Optuna TPE,
+> 完整离线数据管线 (5年K线 + Mark Price + Funding + OI), 一键打包/环境搭建/数据验证。
+>
+> **v10.2 Phase 2 改造** (2026-02-15):
 > 1. **MAE 追踪**: trade record 新增 min_pnl_r/max_pnl_r 字段，收集仓位生命周期最大逆向偏移数据
 > 2. **Leg Budget 5×2**: 差异化 regime×direction 仓位预算 (high_vol_choppy 做空=0.20, trend 做多=1.20)
 > 3. **Regime Sigmoid**: SL/杠杆/阈值 3 处 sigmoid 连续过渡，消除 regime 切换硬跳变
@@ -168,7 +174,7 @@
 
 <h2 id="section-2">二、系统架构</h2>
 
-### 2.1 五层架构 (v10.0)
+### 2.1 六层架构 (v10.2+ML)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -182,6 +188,15 @@
 │  六维独立评分: DIV / MA / CS / BB / VP / KDJ              │
 │  每本书独立输出 sell_score 和 buy_score (0-100)            │
 │  向量化批量计算 + 多进程并行 (P0/P1 优化)                  │
+└──────────────┬──────────────────────────────────────────┘
+               ▼
+┌─────────────────────────────────────────────────────────┐
+│  Layer 1.5: ML 增强 (ml_live_integration.py) ← NEW      │
+│  ml_features.py → 70+ 维特征工程                         │
+│  ml_predictor.py → LightGBM/XGBoost 方向预测             │
+│  ml_regime.py → 波动率 regime + 趋势质量分类              │
+│  ml_quantile.py → 收益分位数预测 (q05~q95)               │
+│  → MLSignalEnhancer: 增强/抑制六书信号                    │
 └──────────────┬──────────────────────────────────────────┘
                ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -214,13 +229,13 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 数据流水线 (v9.0 新增)
+### 2.2 数据流水线
 
 ```
   实盘 (live_signal_generator.py)           回测 (optimize_six_book.py)
   ┌─────────────────────────┐              ┌─────────────────────────┐
   │ fetch_binance_klines()  │              │ 从本地 DB 加载 K线       │
-  │ fetch_mark_price_klines()│←── 新增 ──→ │ merge_perp_data()       │
+  │ fetch_mark_price_klines()│←── 共享 ──→ │ merge_perp_data()       │
   │ fetch_funding_rate_history()│           │ (mark/funding/OI 合并)  │
   │ fetch_open_interest_history()│          │                         │
   │ merge_perp_data_into_klines()│         │ _compute_microstructure()│
@@ -229,7 +244,16 @@
              ▼                                        ▼
     compute_signals_six()                    _vectorized_fuse_scores()
     calc_fusion_score_six()                  _apply_microstructure_overlay()
-                                             └─ Anti-Squeeze Filter
+             │                                └─ Anti-Squeeze Filter
+             ▼
+    ml_live_integration.py (可选)   GPU 离线训练 (train_gpu.py)
+    ┌─────────────────────────┐    ┌──────────────────────────┐
+    │ ml_features → 70+ 维    │    │ load_klines_local()      │
+    │ ml_predictor → 方向预测 │    │ → add_all_indicators()   │
+    │ ml_regime → regime 分类 │    │ → compute_ml_features()  │
+    │ MLSignalEnhancer        │    │ → train LGB/LSTM/Optuna  │
+    │ → 增强/抑制六书信号     │    │ → data/ml_models/*.txt   │
+    └─────────────────────────┘    └──────────────────────────┘
 ```
 
 ### 2.3 核心代码文件
@@ -244,6 +268,14 @@
 | `multi_tf_consensus.py` | ~641 | 多周期共识、TF权重、链式检测 |
 | `live_runner.py` | — | 实盘运行入口、systemd 管理 |
 | `app.py` | — | Flask Web 应用、监控面板 |
+| **ML/GPU 文件** | | |
+| `ml_features.py` | — | 70+ 维 ML 特征工程 |
+| `ml_predictor.py` | — | LightGBM/XGBoost Walk-Forward 预测 |
+| `ml_regime.py` | — | 波动率 regime + 趋势质量分类 |
+| `ml_quantile.py` | — | 收益分位数预测 (q05~q95) |
+| `ml_live_integration.py` | — | ML 信号增强器 (MLSignalEnhancer) |
+| `train_gpu.py` | — | H800 GPU 离线训练入口 (LGB/LSTM/Optuna) |
+| `fetch_5year_data.py` | — | 批量下载 5 年训练数据 (4对×4周期) |
 
 ---
 
@@ -818,9 +850,179 @@ v10.0 ("连续化改造"):
 
 ---
 
-<h2 id="section-13">十三、未来优化方向</h2>
+<h2 id="section-13">十三、ML 预测子系统</h2>
 
-### 13.1 优先级路线图
+### 13.1 三层 ML 架构
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  预测层                                                       │
+│  ml_predictor.py → LGBPredictor (LightGBM 方向预测)           │
+│    Walk-Forward: 扩展窗口, 多尺度集成 (3h/5h/12h/24h)          │
+│    Stacking: LightGBM + XGBoost + Ridge 三模型元学习器          │
+│  ml_regime.py → RegimePredictor (波动率 + 趋势质量)            │
+│    vol_regime: 未来 12bar 是否高波动 (OOS AUC 0.60)            │
+│    trend_quality: 趋势是否可持续                               │
+│  ml_quantile.py → QuantilePredictor (收益分布 q05~q95)        │
+│    分位数校准: OOS 90% 覆盖率 88.4%                            │
+└───────────────┬──────────────────────────────────────────────┘
+                ▼
+┌──────────────────────────────────────────────────────────────┐
+│  决策层 (ml_live_integration.py → MLSignalEnhancer)           │
+│  Regime 过滤 → 成本感知门槛 → Kelly 仓位                       │
+│  高波动+强趋势 → 加强规则信号                                  │
+│  低波动 → 抑制信号 (大概率震荡)                                │
+│  高波动+无趋势 → 保持原信号 (可能反转)                          │
+└───────────────┬──────────────────────────────────────────────┘
+                ▼
+┌──────────────────────────────────────────────────────────────┐
+│  执行层 (与六书融合信号协同)                                    │
+│  ML 增强/抑制 → 最终 SS/BS 分数 → 开仓决策                     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 13.2 特征工程 (ml_features.py, 70+ 维)
+
+| 分类 | 特征数 | 代表特征 |
+|------|--------|---------|
+| 价格动量 | 7 | ret_{1,2,3,5,8,13,21}, log_ret, roc, momentum_accel |
+| 趋势 | 8 | dist_MA{5,10,20,60}, slope_MA, ma_cross_5_20 |
+| MACD | 7 | macd_dif/dea/bar, macd_bar_change, macd_cross |
+| 振荡器 | 10 | rsi6/12, kdj_k/d/j, cci, mfi |
+| 波动率 | 8 | atr_14/5, hvol_5/20, bb_pct_b, bb_bw |
+| 量价 | 8 | vol_ratio, obv_slope, vwap_dist, taker_buy_ratio |
+| 微结构 | 7 | body_ratio, shadow_ratio, bull_streak |
+| 时间 | 4 | hour_sin/cos, dow_sin/cos |
+| 合约衍生品 | 4 | funding_rate, funding_rate_ma, oi_change, oi_change_5 |
+
+### 13.3 Walk-Forward 验证
+
+```python
+# 扩展窗口 + Purge Gap 防未来泄露:
+# |----train (expanding)----|--purge (24bar)--|--val (168bar)--|--test (120bar)--|
+# 重训间隔: 120 bars (5天), 最小训练窗口: 720 bars (30天)
+# 特征精选: 首窗口 69→30 核心特征, 后续 fold 复用
+# 多尺度: 3h/5h/12h/24h 四个 horizon 模型投票, 跨尺度共识
+```
+
+---
+
+<h2 id="section-14">十四、GPU 训练架构 (H800)</h2>
+
+### 14.1 三机协作架构
+
+```
+本机 (开发机, macOS)              H800 GPU (办公内网)           阿里云 (生产)
+┌───────────────────┐           ┌───────────────────┐       ┌───────────────┐
+│ Binance 数据拉取   │           │ GPU 模型训练       │       │ Flask Web     │
+│ 代码开发 + 回测    │  tar.gz   │ 超参优化 (Optuna) │       │ 实盘信号检测   │
+│ fetch_5year_data  │ ───SCP──→ │ 深度学习 (LSTM)   │       │ 交易执行      │
+│ pack_for_h800.sh  │           │ train_gpu.py      │       │               │
+│                   │  模型回传  │                   │ ──→   │ 模型推理(CPU) │
+│ data/ml_models/ ← │ ←──SCP── │ data/ml_models/   │       │               │
+└───────────────────┘           └───────────────────┘       └───────────────┘
+```
+
+> **约束**: H800 位于办公内网，需跳板机登录，无法直接访问 Binance API。所有训练数据必须在本机下载后离线传输。
+
+### 14.2 训练数据管线
+
+| 数据类型 | 来源 | 缓存路径 | 覆盖范围 | 下载工具 |
+|---------|------|---------|---------|---------|
+| K线 (OHLCV) | Binance Spot API | `data/klines/{SYMBOL}/{interval}.parquet` | 5年, 4交易对×4周期 | `fetch_5year_data.py` |
+| Mark Price | Futures markPriceKlines | `data/mark_klines/ETHUSDT/{interval}.parquet` | 5年 | `fetch_5year_data.py` |
+| Funding Rate | Futures fundingRate | `data/funding_rates/{SYMBOL}_funding.parquet` | 5年 (~5500条/对) | `fetch_5year_data.py` |
+| Open Interest | Futures openInterestHist | `data/open_interest/{SYMBOL}/{period}.parquet` | ~30天 (API限制) | `fetch_5year_data.py` |
+
+交易对: ETHUSDT (主力), BTCUSDT, SOLUSDT, BNBUSDT
+周期: 15m (ML细粒度), 1h (主力训练), 4h (中期趋势), 24h (宏观背景)
+
+> **Binance OI API 限制**: `startTime` 最多约30天前，`binance_fetcher.py` 已实现分段拉取 (29天/段)。
+
+### 14.3 GPU 训练模式 (train_gpu.py)
+
+| 模式 | 命令 | 说明 | 预计耗时 |
+|------|------|------|---------|
+| LightGBM GPU | `--mode lgb` | Walk-Forward, CUDA 后端, 多尺度集成 | ~5分钟 |
+| LSTM+Attention | `--mode lstm` | PyTorch, BF16, 双向LSTM+Attention | ~30分钟 |
+| Optuna 超参 | `--mode optuna` | 贝叶斯 TPE 搜索, 替代网格搜索 | ~1小时 |
+| 回测参数优化 | `--mode backtest` | Optuna 优化 SL/TP/阈值等回测参数 | ~1小时 |
+
+数据加载管线 (纯本地, 不触发 API):
+```
+load_klines_local()        → Parquet 直读
+    ↓
+add_all_indicators()       → MACD/KDJ/RSI/CCI
+add_moving_averages()      → MA5/10/20/60
+    ↓
+compute_ml_features()      → 70+ 维特征矩阵
+    ↓
+标签: profitable_long_{3,5,12,24}  → 利润化多尺度标签
+    ↓
+训练 → data/ml_models/, data/gpu_results/
+```
+
+### 14.4 LSTM + Attention 模型
+
+```python
+# 架构: 双向 LSTM + 时间注意力 + 分类头
+LSTMAttention(
+    LSTM(input_dim=70, hidden=128, layers=2, bidirectional=True, dropout=0.3)
+    → Attention(hidden*2 → 1)  # 时间步加权聚合
+    → FC(256→64) → GELU → Dropout(0.2) → FC(64→1) → Sigmoid
+)
+# H800 优化: BF16 混合精度, CosineAnnealing LR, 梯度裁剪
+# Walk-Forward: 60% train / 10% val / 30% test, early stopping
+```
+
+### 14.5 Optuna 超参搜索
+
+```python
+# 搜索空间 (LightGBM):
+num_leaves:       [8, 64]
+learning_rate:    [0.01, 0.2] (log)
+feature_fraction: [0.4, 0.9]
+lambda_l1/l2:     [0.01, 10.0] (log)
+num_boost_round:  [100, 800]
+
+# 搜索策略: TPE (Tree Parzen Estimator) + MedianPruner
+# 200 trials 即可超越 1000+ 网格搜索组合
+# Holdout 验证: 70% 搜索空间 + 30% 最终验证, 防过拟合
+```
+
+### 14.6 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `fetch_5year_data.py` | 批量下载 5 年训练数据 (支持 `--skip-klines` / `--only-funding` / `--only-oi`) |
+| `pack_for_h800.sh` | 数据完整性检查 + 打包 + 传输提示 |
+| `setup_h800.sh` | H800 一键环境搭建 (GPU检测 + conda + 依赖安装 + 验证) |
+| `requirements-gpu.txt` | GPU 训练依赖 (PyTorch CUDA, Optuna, TensorBoard) |
+| `verify_data.py` | 训练数据完整性验证 (必需/可选检查 + GPU 环境检测) |
+| `train_gpu.py` | **GPU 离线训练入口** (4种模式, 完全不依赖 Binance API) |
+
+### 14.7 模型部署回路
+
+```
+H800 训练产出:
+  data/ml_models/lgb_model.txt       (LightGBM 模型)
+  data/ml_models/lstm_{tf}.pt        (PyTorch LSTM 权重)
+  data/ml_models/*.meta.json         (特征名/重要性/训练指标)
+  data/gpu_results/*_{timestamp}.json (训练结果日志)
+
+回传: tar -czf macd_models.tar.gz data/ml_models/ data/gpu_results/
+
+生产部署:
+  ml_live_integration.py → MLSignalEnhancer.load()
+  → CPU 推理 (LightGBM .txt 原生支持, LSTM 用 ONNX 或 CPU PyTorch)
+  → 增强六书融合信号 → 实盘交易决策
+```
+
+---
+
+<h2 id="section-15">十五、未来优化方向</h2>
+
+### 15.1 优先级路线图
 
 > ✅ **v10.0 已解决 P33/P27/P30 (2026-02-15)**:
 > IS PF 0.90→1.31, OOS -3.8%→+7.9%。B1b 硬禁止已被 Leg Budget 替代, Funding 已纳入 trade PnL。
@@ -841,7 +1043,19 @@ v10.0 ("连续化改造"):
 | P2 | P31 | 动态 Regime 阈值 (滚动百分位) | 适应市场周期变化 | 待设计 |
 | P2 | P32 | MAE 追踪 + 数据驱动止损校准 | ATR mult 精确校准 | **待执行** (Phase 2) |
 
-### 13.2 长期架构方向 (LLM 共识)
+### 15.2 GPU/ML 训练路线图 (新增)
+
+| 优先级 | 方向 | 说明 | 状态 |
+|--------|------|------|------|
+| P0 | LightGBM Walk-Forward 基线 | 1h 周期, 5年数据, GPU 加速 | ✅ train_gpu.py 就绪 |
+| P0 | LSTM+Attention 深度模型 | BF16 混合精度, 双向 LSTM | ✅ train_gpu.py 就绪 |
+| P0 | Optuna 超参搜索 | 替代手工网格搜索, TPE 采样 | ✅ train_gpu.py 就绪 |
+| P1 | 多周期特征融合 | 15m/1h/4h/24h 跨周期特征堆叠 | 待开发 |
+| P1 | Temporal Fusion Transformer | 替代 LSTM, 可解释性更强 | 待评估 |
+| P2 | RAPIDS cuDF/cuML 加速 | GPU 加速特征计算和信号生成 | 待评估 |
+| P2 | Ray Tune 分布式 HPO | 多 GPU 并行超参搜索 | 待评估 |
+
+### 15.3 长期架构方向 (LLM 共识)
 
 1. **策略拆腿 + 组合风险预算**: 按 (regime × direction) 拆成独立 legs, 每个 leg 有独立风控 KPI 和风险预算。v10 的 `use_leg_risk_budget` + `risk_budget_neutral_short=0.10` 是这个方向的第一步落地 (从 B1b 的 0% → 10% 软降权)。下一步: 让 budget 动态调整 (基于近 N 笔胜率/PnL)。
 
@@ -855,6 +1069,8 @@ v10.0 ("连续化改造"):
 
 | 版本 | 日期 | 核心变更 |
 |------|------|---------|
+| **v10.2+ML** | **2026-02-18** | **ML 预测子系统 + H800 GPU 离线训练架构: LightGBM/LSTM/Optuna, 70+维特征, Walk-Forward 验证, 三机协作数据管线** |
+| v10.2 | 2026-02-15 | Regime Sigmoid + Leg Budget 5×2 + MAE 追踪: Phase 2 连续化改造 |
 | **v10.1** | **2026-02-15** | **ATR-SL + P21绑定: OOS +8.7%→+16.0%, OOS PF 1.04→1.31, 尾部风险-55%, DIV 0.50 实验失败保留0.70** |
 | v10.0 | 2026-02-15 | Soft Veto + Leg Budget + Funding-in-PnL: IS PF 0.90→1.31, OOS -3.8%→+7.9%, 连续化替代硬门控 |
 | v9.0.1 | 2026-02-15 | v5 完整回测验证: IS PF=0.90 ⚠️, 发现 B1b 误杀盈利信号 |
