@@ -364,7 +364,7 @@ class MLSignalEnhancer:
             except Exception as e:
                 logger.warning(f"Regime 计算异常: {e}")
 
-        # 2. 分位数风控 (如有)
+        # 2. 分位数风控 + Kelly 仓位 + 动态止损
         if self._quantile_model:
             try:
                 from ml_quantile import compute_enhanced_features
@@ -372,34 +372,77 @@ class MLSignalEnhancer:
                 q_latest = q_features.iloc[[-1]]
                 q_preds = self._quantile_model.predict(q_latest)
 
-                # 取第一个 horizon
-                h = self._quantile_model.config.horizons[0]
-                if h in q_preds:
-                    row = q_preds[h].iloc[0]
-                    q05 = float(row['q05'])
-                    q25 = float(row['q25'])
-                    q50 = float(row['q50'])
-                    q75 = float(row['q75'])
-                    q95 = float(row['q95'])
+                # 取短期 horizon (用于止损) 和长期 horizon (用于方向)
+                horizons = self._quantile_model.config.horizons
+                h_short = horizons[0]  # e.g. 5 bars
+                h_long = horizons[-1] if len(horizons) > 1 else h_short  # e.g. 12 bars
 
-                    ml_info['quantile'] = {
-                        'q05': round(q05, 5), 'q25': round(q25, 5),
-                        'q50': round(q50, 5), 'q75': round(q75, 5),
-                        'q95': round(q95, 5),
-                    }
+                q_all = {}
+                for h in [h_short, h_long]:
+                    if h in q_preds:
+                        row = q_preds[h].iloc[0]
+                        q_all[h] = {
+                            'q05': float(row['q05']), 'q25': float(row['q25']),
+                            'q50': float(row['q50']), 'q75': float(row['q75']),
+                            'q95': float(row['q95']),
+                        }
 
-                    # 风险调整: 如果尾部风险太大, 降权
-                    if q05 < self.risk_dampen_q05:
-                        risk_factor = max(0.7, 1.0 + q05 / 0.10)
-                        enhanced_buy *= risk_factor
-                        ml_info['quantile_action'] = f'risk_dampen({risk_factor:.2f})'
-                    elif q95 > -self.risk_dampen_q05:
-                        # 极端上涨风险 → 降低做空
-                        risk_factor = max(0.7, 1.0 - q95 / 0.10)
-                        enhanced_sell *= risk_factor
-                        ml_info['quantile_action'] = f'short_risk_dampen({risk_factor:.2f})'
+                if h_short in q_all:
+                    qs = q_all[h_short]
+                    ml_info['quantile'] = {k: round(v, 5) for k, v in qs.items()}
+                    if h_long in q_all and h_long != h_short:
+                        ml_info['quantile_long'] = {k: round(v, 5) for k, v in q_all[h_long].items()}
+
+                    # --- Kelly 仓位计算 ---
+                    bull_prob = ml_info.get('bull_prob', 0.5)
+                    q05 = qs['q05']
+                    q50 = qs['q50']
+                    q95 = qs['q95']
+
+                    # Kelly: f* = (p * b - q * a) / (b * a)
+                    # p = win_prob, q = 1-p, b = avg_win, a = avg_loss
+                    if bull_prob >= 0.5:
+                        # 做多视角: win = q95, loss = abs(q05)
+                        avg_win = max(q95, 0.001)
+                        avg_loss = max(abs(q05), 0.001)
+                        kelly_raw = (bull_prob * avg_win - (1 - bull_prob) * avg_loss) / (avg_win * avg_loss)
                     else:
-                        ml_info['quantile_action'] = 'neutral'
+                        # 做空视角: win = abs(q05), loss = q95
+                        avg_win = max(abs(q05), 0.001)
+                        avg_loss = max(q95, 0.001)
+                        kelly_raw = ((1 - bull_prob) * avg_win - bull_prob * avg_loss) / (avg_win * avg_loss)
+
+                    # 半 Kelly (保守) + 上下限
+                    kelly_half = kelly_raw * 0.5
+                    kelly_fraction = float(np.clip(kelly_half, 0.1, 1.0))
+                    ml_info['kelly_fraction'] = round(kelly_fraction, 4)
+                    ml_info['kelly_raw'] = round(kelly_raw, 4)
+
+                    # --- 动态止损 (基于 q05/q95) ---
+                    # 做多止损 = |q05| of short horizon; 做空止损 = q95
+                    dynamic_sl_long = abs(q05) if q05 < 0 else 0.02
+                    dynamic_sl_short = q95 if q95 > 0 else 0.02
+                    # 限制在 1%~8% 范围
+                    dynamic_sl_long = float(np.clip(dynamic_sl_long, 0.01, 0.08))
+                    dynamic_sl_short = float(np.clip(dynamic_sl_short, 0.01, 0.08))
+                    ml_info['dynamic_sl_long'] = round(dynamic_sl_long, 4)
+                    ml_info['dynamic_sl_short'] = round(dynamic_sl_short, 4)
+
+                    # --- 仓位缩放 (综合 Kelly + 风险) ---
+                    position_scale = kelly_fraction
+                    # 尾部风险额外降权
+                    if q05 < self.risk_dampen_q05:
+                        tail_factor = max(0.5, 1.0 + q05 / 0.10)
+                        position_scale *= tail_factor
+                        ml_info['quantile_action'] = f'risk_dampen(kelly={kelly_fraction:.2f},tail={tail_factor:.2f})'
+                    elif q95 > -self.risk_dampen_q05:
+                        tail_factor = max(0.5, 1.0 - q95 / 0.10)
+                        position_scale *= tail_factor
+                        ml_info['quantile_action'] = f'short_risk(kelly={kelly_fraction:.2f},tail={tail_factor:.2f})'
+                    else:
+                        ml_info['quantile_action'] = f'kelly({kelly_fraction:.2f})'
+
+                    ml_info['position_scale'] = round(float(np.clip(position_scale, 0.1, 1.0)), 4)
 
             except Exception as e:
                 logger.warning(f"分位数计算异常: {e}")

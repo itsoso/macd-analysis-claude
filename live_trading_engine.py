@@ -758,6 +758,17 @@ class LiveTradingEngine:
                 f"仓位比例={scale:.0%}"
             )
 
+        # ML Kelly 仓位缩放
+        if sig is not None:
+            ml_components = getattr(sig, 'components', {}) or {}
+            ml_pos_scale = ml_components.get('ml_position_scale')
+            if ml_pos_scale is not None and 0 < ml_pos_scale <= 1.0:
+                raw_margin *= ml_pos_scale
+                self.logger.info(
+                    f"[ML仓位] Kelly缩放={ml_pos_scale:.2f} "
+                    f"(kelly={ml_components.get('ml_kelly_fraction', '?')})"
+                )
+
         margin = self.risk_manager.constrain_margin(
             raw_margin, equity, self.frozen_margin
         )

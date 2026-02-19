@@ -1,0 +1,9 @@
+{
+  "model": "PPO",
+  "tf": "1h",
+  "total_steps": 200000,
+  "final_equity": 0.0431,
+  "max_drawdown": 0.9646,
+  "avg_position": 0.4927,
+  "trained_at": "2026-02-19T12:30:35.697081"
+}

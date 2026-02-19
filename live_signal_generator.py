@@ -338,11 +338,16 @@ class LiveSignalGenerator:
                         _regime = _ml_info.get('regime', '?')
                         _conf = _ml_info.get('trade_confidence', 0)
                         _mode = 'shadow' if _ml_shadow else 'LIVE'
+                        _kelly = _ml_info.get('kelly_fraction', '-')
+                        _pos_scale = _ml_info.get('position_scale', '-')
+                        _q_act = _ml_info.get('quantile_action', '-')
                         self.logger.info(
                             f"[ML {_mode}] bull_prob={_bull} "
                             f"(LGB={_lgb}, LSTM={_lstm}) "
                             f"dir={_dir_act} regime={_regime} "
                             f"conf={_conf:.3f} "
+                            f"kelly={_kelly} pos_scale={_pos_scale} "
+                            f"q_act={_q_act} "
                             f"SS {sell_score:.1f}→{_ml_ss:.1f} "
                             f"BS {buy_score:.1f}→{_ml_bs:.1f}"
                         )
@@ -366,6 +371,12 @@ class LiveSignalGenerator:
                 components['ml_confidence'] = _ml_info.get('trade_confidence', 0)
                 components['ml_shadow'] = _ml_info.get('shadow_mode', True)
                 components['ml_version'] = _ml_info.get('ml_version', '-')
+                # v5: Kelly 仓位 + 动态止损
+                components['ml_kelly_fraction'] = _ml_info.get('kelly_fraction', '-')
+                components['ml_position_scale'] = _ml_info.get('position_scale', '-')
+                components['ml_dynamic_sl_long'] = _ml_info.get('dynamic_sl_long', '-')
+                components['ml_dynamic_sl_short'] = _ml_info.get('dynamic_sl_short', '-')
+                components['ml_quantile_action'] = _ml_info.get('quantile_action', '-')
 
             # 构建结果
             result = SignalResult()

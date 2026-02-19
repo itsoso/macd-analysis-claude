@@ -1,0 +1,41 @@
+{
+  "model": "MTFFusionMLP",
+  "tfs": [
+    "15m",
+    "1h",
+    "4h",
+    "8h",
+    "24h"
+  ],
+  "input_dim": 23,
+  "feature_cols": [
+    "15m_ss",
+    "15m_bs",
+    "15m_net",
+    "15m_max",
+    "1h_ss",
+    "1h_bs",
+    "1h_net",
+    "1h_max",
+    "4h_ss",
+    "4h_bs",
+    "4h_net",
+    "4h_max",
+    "8h_ss",
+    "8h_bs",
+    "8h_net",
+    "8h_max",
+    "24h_ss",
+    "24h_bs",
+    "24h_net",
+    "24h_max",
+    "large_small_agree",
+    "large_net_avg",
+    "small_net_avg"
+  ],
+  "val_auc": 0.5594,
+  "test_auc": 0.5586,
+  "n_train": 12747,
+  "n_test": 2732,
+  "trained_at": "2026-02-19T12:21:04.055973"
+}

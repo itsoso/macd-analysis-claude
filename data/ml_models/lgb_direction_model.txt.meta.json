@@ -322,5 +322,10 @@
   "thresholds": {
     "long_threshold": 0.58,
     "short_threshold": 0.42
-  }
+  },
+  "test_auc": 0.5566,
+  "trained_at": "2026-02-19T12:38:29.368023",
+  "retrain_type": "incremental",
+  "prev_auc": 0,
+  "num_trees": 11
 }

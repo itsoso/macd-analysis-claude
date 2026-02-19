@@ -638,3 +638,160 @@ def _empty_consensus(decision_tfs, coverage):
         "direction": "hold",
         "long": [], "short": [], "hold": [],
     }
+
+
+# ================================================================
+# 神经融合推理 (可选, 需 mtf_fusion_mlp.pt)
+# ================================================================
+
+_mtf_fusion_model = None
+_mtf_fusion_loaded = False
+
+
+def neural_fuse_tf_scores(tf_scores, decision_tfs, config=None):
+    """
+    使用训练好的 MLP 融合多周期分数。
+    回退到规则融合 (fuse_tf_scores) 如果模型不可用。
+
+    返回与 fuse_tf_scores 相同结构的 dict，额外添加 neural_prob 字段。
+    """
+    global _mtf_fusion_model, _mtf_fusion_loaded
+    import os
+    import json as _json
+
+    MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'data', 'ml_models')
+    model_path = os.path.join(MODEL_DIR, 'mtf_fusion_mlp.pt')
+
+    # 懒加载
+    if not _mtf_fusion_loaded:
+        _mtf_fusion_loaded = True
+        if os.path.exists(model_path):
+            try:
+                import torch
+                ckpt = torch.load(model_path, map_location='cpu', weights_only=False)
+                import torch.nn as nn
+
+                class MTFFusionMLP(nn.Module):
+                    def __init__(self, in_dim, hidden=64):
+                        super().__init__()
+                        self.net = nn.Sequential(
+                            nn.Linear(in_dim, hidden),
+                            nn.LayerNorm(hidden),
+                            nn.GELU(),
+                            nn.Dropout(0.2),
+                            nn.Linear(hidden, hidden // 2),
+                            nn.LayerNorm(hidden // 2),
+                            nn.GELU(),
+                            nn.Dropout(0.1),
+                            nn.Linear(hidden // 2, 1),
+                        )
+
+                    def forward(self, x):
+                        return self.net(x).squeeze(-1)
+
+                model = MTFFusionMLP(ckpt['input_dim'], ckpt.get('hidden', 64))
+                model.load_state_dict(ckpt['state_dict'])
+                model.eval()
+                _mtf_fusion_model = {
+                    'model': model,
+                    'feature_cols': ckpt['feature_cols'],
+                    'available_tfs': ckpt['available_tfs'],
+                    'mean': ckpt['mean'],
+                    'std': ckpt['std'],
+                }
+            except Exception:
+                pass
+
+    # 先运行规则融合作为基础
+    result = fuse_tf_scores(tf_scores, decision_tfs, config)
+
+    if _mtf_fusion_model is None:
+        return result
+
+    # 构造特征向量
+    try:
+        import torch
+        import numpy as np
+
+        info = _mtf_fusion_model
+        available_tfs = info['available_tfs']
+        feature_cols = info['feature_cols']
+
+        feature_vec = []
+        for col in feature_cols:
+            if col.endswith('_ss'):
+                tf = col[:-3]
+                feature_vec.append(tf_scores.get(tf, (0, 0))[0] if tf in tf_scores else 0)
+            elif col.endswith('_bs'):
+                tf = col[:-3]
+                feature_vec.append(tf_scores.get(tf, (0, 0))[1] if tf in tf_scores else 0)
+            elif col.endswith('_net'):
+                tf = col[:-4]
+                ss, bs = tf_scores.get(tf, (0, 0)) if tf in tf_scores else (0, 0)
+                feature_vec.append(bs - ss)
+            elif col.endswith('_max'):
+                tf = col[:-4]
+                ss, bs = tf_scores.get(tf, (0, 0)) if tf in tf_scores else (0, 0)
+                feature_vec.append(max(ss, bs))
+            elif col == 'large_small_agree':
+                large_nets = []
+                small_nets = []
+                TF_MIN = {'15m': 15, '30m': 30, '1h': 60, '4h': 240, '8h': 480, '24h': 1440}
+                for tf in available_tfs:
+                    if tf in tf_scores:
+                        ss, bs = tf_scores[tf]
+                        net = bs - ss
+                        if TF_MIN.get(tf, 60) >= 240:
+                            large_nets.append(net)
+                        else:
+                            small_nets.append(net)
+                if large_nets and small_nets:
+                    l_avg = sum(large_nets) / len(large_nets)
+                    s_avg = sum(small_nets) / len(small_nets)
+                    feature_vec.append(1.0 if l_avg * s_avg > 0 else 0.0)
+                else:
+                    feature_vec.append(0.0)
+            elif col == 'large_net_avg':
+                nets = []
+                TF_MIN = {'15m': 15, '30m': 30, '1h': 60, '4h': 240, '8h': 480, '24h': 1440}
+                for tf in available_tfs:
+                    if tf in tf_scores and TF_MIN.get(tf, 60) >= 240:
+                        ss, bs = tf_scores[tf]
+                        nets.append(bs - ss)
+                feature_vec.append(sum(nets) / len(nets) if nets else 0)
+            elif col == 'small_net_avg':
+                nets = []
+                TF_MIN = {'15m': 15, '30m': 30, '1h': 60, '4h': 240, '8h': 480, '24h': 1440}
+                for tf in available_tfs:
+                    if tf in tf_scores and TF_MIN.get(tf, 60) < 240:
+                        ss, bs = tf_scores[tf]
+                        nets.append(bs - ss)
+                feature_vec.append(sum(nets) / len(nets) if nets else 0)
+            else:
+                feature_vec.append(0)
+
+        x = np.array(feature_vec, dtype=np.float32)
+        mean = np.array(info['mean'], dtype=np.float32)
+        std = np.array(info['std'], dtype=np.float32)
+        x_norm = (x - mean) / std
+
+        with torch.no_grad():
+            logit = info['model'](torch.tensor(x_norm).unsqueeze(0))
+            prob = torch.sigmoid(logit).item()
+
+        result['neural_prob'] = round(prob, 4)
+        result['neural_direction'] = 'long' if prob > 0.55 else ('short' if prob < 0.45 else 'hold')
+
+        # 如果神经网络与规则一致，增强 strength
+        rule_dir = result['decision']['direction']
+        neural_dir = result['neural_direction']
+        if rule_dir == neural_dir and rule_dir in ('long', 'short'):
+            boost = 1.0 + abs(prob - 0.5) * 0.3
+            result['decision']['strength'] = min(100, round(result['decision']['strength'] * boost))
+            result['decision']['reason'] += f' | 神经融合确认(prob={prob:.3f})'
+
+    except Exception:
+        pass
+
+    return result
