@@ -50,11 +50,7 @@ def build_app(device: str = "cpu"):
 
             # GPU 机推理时优先 CUDA
             use_device = os.environ.get("ML_INFERENCE_DEVICE") or device
-            env = os.environ.copy()
-            if use_device == "cuda":
-                env.setdefault("ML_INFERENCE_DEVICE", "cuda")
-            e = MLSignalEnhancer()
-            # 注入推理设备到内部（当前 MLSignalEnhancer 内部写死 cpu，这里仅做占位；实际 GPU 需改 ml_live_integration）
+            e = MLSignalEnhancer(inference_device=use_device)
             e.load_model()
             enhancer = e
             log.info("MLSignalEnhancer 已加载 (device=%s)", use_device)
@@ -87,8 +83,11 @@ def build_app(device: str = "cpu"):
         except Exception as e:
             return jsonify({"success": False, "error": f"Failed to build DataFrame: {e}"}), 400
 
-        if len(df) < 1:
-            return jsonify({"success": False, "error": "features must have at least 1 row"}), 400
+        if len(df) < FEATURE_MIN_ROWS:
+            return jsonify({
+                "success": False,
+                "error": f"features must have at least {FEATURE_MIN_ROWS} rows",
+            }), 400
 
         try:
             en = get_enhancer()

@@ -46,7 +46,12 @@ class MLSignalEnhancer:
       4. 综合输出: 增强/抑制规则信号
     """
 
-    def __init__(self, model_dir: str = MODEL_DIR, gpu_inference_url: str = ""):
+    def __init__(
+        self,
+        model_dir: str = MODEL_DIR,
+        gpu_inference_url: str = "",
+        inference_device: str = "",
+    ):
         self.model_dir = model_dir
         self.gpu_inference_url = (gpu_inference_url or "").strip() or os.environ.get("ML_GPU_INFERENCE_URL", "").strip()
         self.gpu_inference_timeout = int(os.environ.get("ML_GPU_INFERENCE_TIMEOUT", "5"))
@@ -78,12 +83,27 @@ class MLSignalEnhancer:
         self.direction_boost = 1.15
         self.direction_dampen = 0.85
         self.lgb_weight = 0.55            # v6: 调整权重分配
-        # 推理设备: 环境变量 ML_INFERENCE_DEVICE 或 有 CUDA 则用 cuda（方案二 GPU 机推理时生效）
+        # 推理设备: 显式参数 > 环境变量 > 自动探测
+        requested_device = (inference_device or os.environ.get("ML_INFERENCE_DEVICE", "")).strip().lower()
+        if requested_device not in ("", "cpu", "cuda"):
+            logger.warning(f"未知推理设备 '{requested_device}'，将使用自动探测")
+            requested_device = ""
+
+        cuda_available = False
         try:
             import torch
-            self._inference_device = os.environ.get("ML_INFERENCE_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
+            cuda_available = torch.cuda.is_available()
         except Exception:
-            self._inference_device = "cpu"
+            cuda_available = False
+
+        if requested_device == "cuda" and not cuda_available:
+            logger.warning("请求 CUDA 推理但当前不可用，回退到 CPU")
+            requested_device = "cpu"
+
+        if requested_device:
+            self._inference_device = requested_device
+        else:
+            self._inference_device = "cuda" if cuda_available else "cpu"
         self.lstm_weight = 0.25
         self.tft_weight = 0.10            # v6: TFT 权重
         self.cross_asset_weight = 0.10    # v6: 跨资产权重
@@ -847,59 +867,62 @@ class MLSignalEnhancer:
 
         # 0. 方向预测: 优先远程 GPU API → 否则本地 Stacking(优先) → 多模型加权(fallback)
         bull_prob = None
+        has_direction = (
+            self._direction_model is not None or self._lstm_meta is not None
+            or self._tft_meta is not None or self._cross_asset_model is not None
+        )
 
-        if self.gpu_inference_url:
-            features_for_remote = self._compute_direction_features(df)
-            if features_for_remote is not None and len(features_for_remote) >= 1:
-                bull_prob, remote_ml = self._request_remote_direction(
-                    features_for_remote, sell_score, buy_score
-                )
-                if bull_prob is not None and remote_ml:
-                    ml_info.update(remote_ml)
+        # 统一计算一次方向特征，避免远程失败后本地 fallback 重复计算
+        direction_features = None
+        if self.gpu_inference_url or self._stacking_meta_model is not None or has_direction:
+            direction_features = self._compute_direction_features(df)
 
-        if bull_prob is None and self._stacking_meta_model is not None:
+        if self.gpu_inference_url and direction_features is not None and len(direction_features) >= 1:
+            bull_prob, remote_ml = self._request_remote_direction(
+                direction_features, sell_score, buy_score
+            )
+            if bull_prob is not None and remote_ml:
+                ml_info.update(remote_ml)
+
+        if bull_prob is None and self._stacking_meta_model is not None and direction_features is not None:
             # Stacking ensemble — 4 基模型 → 元学习器
             try:
-                bull_prob = self._predict_stacking(df, ml_info)
+                bull_prob = self._predict_stacking_from_features(direction_features, ml_info)
             except Exception as e:
                 logger.warning(f"Stacking 预测失败，退回加权集成: {e}")
                 bull_prob = None
 
-        if bull_prob is None:
+        if bull_prob is None and has_direction and direction_features is not None:
             # Fallback: 多模型加权集成 (LGB + LSTM + TFT + 跨资产)
-            has_direction = (self._direction_model is not None or self._lstm_meta is not None
-                             or self._tft_meta is not None or self._cross_asset_model is not None)
-            if has_direction:
+            if len(direction_features) > 0:
                 try:
-                    features = self._compute_direction_features(df)
-                    if features is not None and len(features) > 0:
-                        lgb_prob = self._predict_direction_lgb(features)
-                        lstm_prob = self._predict_direction_lstm(features)
-                        tft_prob = self._predict_direction_tft(features)
-                        ca_prob = self._predict_direction_cross_asset(features)
+                    lgb_prob = self._predict_direction_lgb(direction_features)
+                    lstm_prob = self._predict_direction_lstm(direction_features)
+                    tft_prob = self._predict_direction_tft(direction_features)
+                    ca_prob = self._predict_direction_cross_asset(direction_features)
 
-                        probs = []
-                        weights = []
-                        if lgb_prob is not None:
-                            probs.append(lgb_prob)
-                            weights.append(self.lgb_weight)
-                            ml_info['lgb_bull_prob'] = round(lgb_prob, 4)
-                        if lstm_prob is not None:
-                            probs.append(lstm_prob)
-                            weights.append(self.lstm_weight)
-                            ml_info['lstm_bull_prob'] = round(lstm_prob, 4)
-                        if tft_prob is not None:
-                            probs.append(tft_prob)
-                            weights.append(self.tft_weight)
-                            ml_info['tft_bull_prob'] = round(tft_prob, 4)
-                        if ca_prob is not None:
-                            probs.append(ca_prob)
-                            weights.append(self.cross_asset_weight)
-                            ml_info['ca_bull_prob'] = round(ca_prob, 4)
+                    probs = []
+                    weights = []
+                    if lgb_prob is not None:
+                        probs.append(lgb_prob)
+                        weights.append(self.lgb_weight)
+                        ml_info['lgb_bull_prob'] = round(lgb_prob, 4)
+                    if lstm_prob is not None:
+                        probs.append(lstm_prob)
+                        weights.append(self.lstm_weight)
+                        ml_info['lstm_bull_prob'] = round(lstm_prob, 4)
+                    if tft_prob is not None:
+                        probs.append(tft_prob)
+                        weights.append(self.tft_weight)
+                        ml_info['tft_bull_prob'] = round(tft_prob, 4)
+                    if ca_prob is not None:
+                        probs.append(ca_prob)
+                        weights.append(self.cross_asset_weight)
+                        ml_info['ca_bull_prob'] = round(ca_prob, 4)
 
-                        if probs:
-                            total_w = sum(weights)
-                            bull_prob = sum(p * w for p, w in zip(probs, weights)) / total_w
+                    if probs:
+                        total_w = sum(weights)
+                        bull_prob = sum(p * w for p, w in zip(probs, weights)) / total_w
                 except Exception as e:
                     logger.warning(f"方向预测计算异常: {e}")
 

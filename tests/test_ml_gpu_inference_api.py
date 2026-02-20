@@ -110,9 +110,22 @@ def test_enhance_signal_with_remote_uses_bull_prob(monkeypatch, minimal_features
     assert ml_info.get("remote_inference") is True
 
 
-def test_inference_server_predict_payload(minimal_features_df):
+def test_inference_server_predict_payload(monkeypatch, minimal_features_df):
     """验证 /predict 的 request/response 形状与 build_app 解析一致"""
+    import ml_live_integration
     from ml_inference_server import build_app
+
+    class FakeEnhancer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def load_model(self):
+            return True
+
+        def predict_direction_from_features(self, features):
+            return 0.61, {"mocked": True}
+
+    monkeypatch.setattr(ml_live_integration, "MLSignalEnhancer", FakeEnhancer)
 
     app = build_app(device="cpu")
     client = app.test_client()
@@ -125,12 +138,10 @@ def test_inference_server_predict_payload(minimal_features_df):
         resp = client.post("/predict", data=json.dumps(payload), content_type="application/json")
     except Exception as e:
         pytest.skip(f"predict endpoint failed (e.g. no models): {e}")
-    assert resp.status_code in (200, 500)
-    if resp.status_code == 200:
-        data = resp.get_json()
-        assert "success" in data
-        if data.get("success") and "bull_prob" in data:
-            assert 0 <= data["bull_prob"] <= 1
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["success"] is True
+    assert 0 <= data["bull_prob"] <= 1
 
 
 def test_inference_server_health():

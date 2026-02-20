@@ -2372,19 +2372,7 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         feat_73_cols = list(features.columns)
         feat_94_cols = list(features_cross.columns)
 
-        # 标准化参数 (用 train 前半部分计算)
-        norm_end = train_end // 2
-        feat_mean_73 = np.nanmean(feat_73[:norm_end], axis=0)
-        feat_std_73 = np.nanstd(feat_73[:norm_end], axis=0) + 1e-8
-        feat_mean_94 = np.nanmean(feat_94[:norm_end], axis=0)
-        feat_std_94 = np.nanstd(feat_94[:norm_end], axis=0) + 1e-8
-
-        feat_73_normed = np.clip(
-            np.nan_to_num((feat_73 - feat_mean_73) / feat_std_73,
-                          nan=0.0, posinf=3.0, neginf=-3.0), -5, 5)
-        feat_94_normed = np.clip(
-            np.nan_to_num((feat_94 - feat_mean_94) / feat_std_94,
-                          nan=0.0, posinf=3.0, neginf=-3.0), -5, 5)
+        # 标准化参数改为按 fold 训练窗口计算，避免全局统计量泄漏未来信息。
 
         log.info(f"数据: {n} 样本, train={train_end}, val={val_end-train_end-purge}, "
                  f"test={n-val_end-purge}")
@@ -2422,6 +2410,11 @@ def train_stacking_ensemble(timeframes: List[str] = None):
 
             X_fold_73 = feat_73[fold_start:fold_end][fold_valid]
             X_fold_94 = feat_94[fold_start:fold_end][fold_valid]
+
+            fold_mean_73 = np.nanmean(X_tr_73, axis=0)
+            fold_std_73 = np.nanstd(X_tr_73, axis=0) + 1e-8
+            fold_mean_94 = np.nanmean(X_tr_94, axis=0)
+            fold_std_94 = np.nanstd(X_tr_94, axis=0) + 1e-8
 
             log.info(f"  Fold {fold_idx}: train={len(X_tr_73)}, predict={len(X_fold_73)}")
 
@@ -2467,8 +2460,8 @@ def train_stacking_ensemble(timeframes: List[str] = None):
             # --- 基模型 3: LSTM+Attention ---
             try:
                 lstm_pred = _stacking_train_lstm_fold(
-                    feat_73_normed, y_all, tr_end, fold_start, fold_end,
-                    fold_valid, feat_73.shape[1])
+                    feat_73, y_all, tr_end, fold_start, fold_end,
+                    fold_valid, feat_73.shape[1], fold_mean_73, fold_std_73)
                 if lstm_pred is not None:
                     oof_preds[fold_start:fold_end, 2][fold_valid] = lstm_pred
             except Exception as e:
@@ -2477,8 +2470,8 @@ def train_stacking_ensemble(timeframes: List[str] = None):
             # --- 基模型 4: TFT ---
             try:
                 tft_pred = _stacking_train_tft_fold(
-                    feat_94_normed, y_all, tr_end, fold_start, fold_end,
-                    fold_valid, feat_94.shape[1])
+                    feat_94, y_all, tr_end, fold_start, fold_end,
+                    fold_valid, feat_94.shape[1], fold_mean_94, fold_std_94)
                 if tft_pred is not None:
                     oof_preds[fold_start:fold_end, 3][fold_valid] = tft_pred
             except Exception as e:
@@ -2538,12 +2531,12 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         test_mask = ~np.isnan(y_all[test_start:])
 
         val_auc = _stacking_evaluate_meta(
-            meta_model, feat_73, feat_94, feat_73_normed, feat_94_normed,
+            meta_model, feat_73, feat_94,
             y_all, val_start, val_end, val_mask, feat_73.shape[1], feat_94.shape[1],
             hvol_idx, extra_feat_names)
 
         test_auc = _stacking_evaluate_meta(
-            meta_model, feat_73, feat_94, feat_73_normed, feat_94_normed,
+            meta_model, feat_73, feat_94,
             y_all, test_start, len(y_all), test_mask, feat_73.shape[1], feat_94.shape[1],
             hvol_idx, extra_feat_names)
 
@@ -2559,6 +2552,10 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         X_full_73 = feat_73[:full_end][full_valid]
         X_full_94 = feat_94[:full_end][full_valid]
         y_full = y_all[:full_end][full_valid]
+        feat_mean_73 = np.nanmean(X_full_73, axis=0)
+        feat_std_73 = np.nanstd(X_full_73, axis=0) + 1e-8
+        feat_mean_94 = np.nanmean(X_full_94, axis=0)
+        feat_std_94 = np.nanstd(X_full_94, axis=0) + 1e-8
 
         # 重训 LGB
         try:
@@ -2597,16 +2594,20 @@ def train_stacking_ensemble(timeframes: List[str] = None):
 
         # 重训 LSTM
         try:
-            _stacking_retrain_lstm_full(feat_73_normed, y_all, full_end, full_valid,
-                                        feat_73.shape[1], tf)
+            _stacking_retrain_lstm_full(
+                feat_73, y_all, full_end, full_valid, feat_73.shape[1], tf,
+                feat_mean_73, feat_std_73
+            )
             log.info("  LSTM 保存完成")
         except Exception as e:
             log.warning(f"  LSTM 全量训练失败: {e}")
 
         # 重训 TFT
         try:
-            _stacking_retrain_tft_full(feat_94_normed, y_all, full_end, full_valid,
-                                       feat_94.shape[1], tf)
+            _stacking_retrain_tft_full(
+                feat_94, y_all, full_end, full_valid, feat_94.shape[1], tf,
+                feat_mean_94, feat_std_94
+            )
             log.info("  TFT 保存完成")
         except Exception as e:
             log.warning(f"  TFT 全量训练失败: {e}")
@@ -2671,8 +2672,16 @@ def train_stacking_ensemble(timeframes: List[str] = None):
     return all_results
 
 
-def _stacking_train_lstm_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
-                              fold_valid, input_dim, seq_len=48, epochs=20):
+def _stacking_normalize_seq(seq: np.ndarray, feat_mean: np.ndarray, feat_std: np.ndarray) -> np.ndarray:
+    """序列标准化并裁剪异常值。"""
+    seq_n = (seq - feat_mean) / np.maximum(feat_std, 1e-8)
+    seq_n = np.nan_to_num(seq_n, nan=0.0, posinf=3.0, neginf=-3.0)
+    return np.clip(seq_n, -5, 5).astype(np.float32)
+
+
+def _stacking_train_lstm_fold(feat_raw, y_all, tr_end, fold_start, fold_end,
+                              fold_valid, input_dim, feat_mean, feat_std,
+                              seq_len=48, epochs=20):
     """在单个 fold 上快速训练 LSTM 并返回 fold 预测"""
     import torch
     import torch.nn as nn
@@ -2680,11 +2689,15 @@ def _stacking_train_lstm_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # 构建训练序列
+    feat_mean = np.asarray(feat_mean, dtype=np.float32)
+    feat_std = np.asarray(feat_std, dtype=np.float32)
+
+    # 构建训练序列（使用该 fold 训练窗口统计量标准化）
     X_seqs, y_seqs = [], []
     for i in range(seq_len, tr_end):
         if not np.isnan(y_all[i]):
-            X_seqs.append(feat_normed[i - seq_len:i])
+            seq = _stacking_normalize_seq(feat_raw[i - seq_len:i], feat_mean, feat_std)
+            X_seqs.append(seq)
             y_seqs.append(y_all[i])
     if len(X_seqs) < 100:
         return None
@@ -2729,7 +2742,8 @@ def _stacking_train_lstm_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
     for i in range(fold_start, fold_end):
         rel = i - fold_start
         if fold_valid[rel] and i >= seq_len:
-            fold_seqs.append(feat_normed[i - seq_len:i])
+            seq = _stacking_normalize_seq(feat_raw[i - seq_len:i], feat_mean, feat_std)
+            fold_seqs.append(seq)
             fold_indices.append(rel)
 
     if not fold_seqs:
@@ -2752,8 +2766,9 @@ def _stacking_train_lstm_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
     return result
 
 
-def _stacking_train_tft_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
-                             fold_valid, input_dim, seq_len=96, epochs=15):
+def _stacking_train_tft_fold(feat_raw, y_all, tr_end, fold_start, fold_end,
+                             fold_valid, input_dim, feat_mean, feat_std,
+                             seq_len=96, epochs=15):
     """在单个 fold 上快速训练 TFT 并返回 fold 预测"""
     import torch
     import torch.nn as nn
@@ -2761,11 +2776,15 @@ def _stacking_train_tft_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # 构建训练序列
+    feat_mean = np.asarray(feat_mean, dtype=np.float32)
+    feat_std = np.asarray(feat_std, dtype=np.float32)
+
+    # 构建训练序列（使用该 fold 训练窗口统计量标准化）
     X_seqs, y_seqs = [], []
     for i in range(seq_len, tr_end):
         if not np.isnan(y_all[i]):
-            X_seqs.append(feat_normed[i - seq_len:i])
+            seq = _stacking_normalize_seq(feat_raw[i - seq_len:i], feat_mean, feat_std)
+            X_seqs.append(seq)
             y_seqs.append(y_all[i])
     if len(X_seqs) < 100:
         return None
@@ -2823,7 +2842,8 @@ def _stacking_train_tft_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
     for i in range(fold_start, fold_end):
         rel = i - fold_start
         if fold_valid[rel] and i >= seq_len:
-            fold_seqs.append(feat_normed[i - seq_len:i])
+            seq = _stacking_normalize_seq(feat_raw[i - seq_len:i], feat_mean, feat_std)
+            fold_seqs.append(seq)
             fold_indices.append(rel)
 
     if not fold_seqs:
@@ -2845,7 +2865,7 @@ def _stacking_train_tft_fold(feat_normed, y_all, tr_end, fold_start, fold_end,
     return result
 
 
-def _stacking_evaluate_meta(meta_model, feat_73, feat_94, feat_73_normed, feat_94_normed,
+def _stacking_evaluate_meta(meta_model, feat_73, feat_94,
                             y_all, start, end, valid_mask, dim_73, dim_94,
                             hvol_idx, extra_feat_names):
     """用已训练的基模型在指定区间评估元学习器"""
@@ -2911,8 +2931,9 @@ def _stacking_evaluate_meta(meta_model, feat_73, feat_94, feat_73_normed, feat_9
         return 0.5
 
 
-def _stacking_retrain_lstm_full(feat_normed, y_all, full_end, full_valid,
-                                input_dim, tf, seq_len=48, epochs=30):
+def _stacking_retrain_lstm_full(feat_raw, y_all, full_end, full_valid,
+                                input_dim, tf, feat_mean, feat_std,
+                                seq_len=48, epochs=30):
     """全量重训 LSTM 用于 stacking 推理"""
     import torch
     import torch.nn as nn
@@ -2920,10 +2941,14 @@ def _stacking_retrain_lstm_full(feat_normed, y_all, full_end, full_valid,
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    feat_mean = np.asarray(feat_mean, dtype=np.float32)
+    feat_std = np.asarray(feat_std, dtype=np.float32)
+
     X_seqs, y_seqs = [], []
     for i in range(seq_len, full_end):
         if full_valid[i] and not np.isnan(y_all[i]):
-            X_seqs.append(feat_normed[i - seq_len:i])
+            seq = _stacking_normalize_seq(feat_raw[i - seq_len:i], feat_mean, feat_std)
+            X_seqs.append(seq)
             y_seqs.append(y_all[i])
 
     if len(X_seqs) < 100:
@@ -2966,8 +2991,9 @@ def _stacking_retrain_lstm_full(feat_normed, y_all, full_end, full_valid,
     torch.save(model.state_dict(), save_path)
 
 
-def _stacking_retrain_tft_full(feat_normed, y_all, full_end, full_valid,
-                               input_dim, tf, seq_len=96, epochs=25):
+def _stacking_retrain_tft_full(feat_raw, y_all, full_end, full_valid,
+                               input_dim, tf, feat_mean, feat_std,
+                               seq_len=96, epochs=25):
     """全量重训 TFT 用于 stacking 推理"""
     import torch
     import torch.nn as nn
@@ -2975,10 +3001,14 @@ def _stacking_retrain_tft_full(feat_normed, y_all, full_end, full_valid,
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    feat_mean = np.asarray(feat_mean, dtype=np.float32)
+    feat_std = np.asarray(feat_std, dtype=np.float32)
+
     X_seqs, y_seqs = [], []
     for i in range(seq_len, full_end):
         if full_valid[i] and not np.isnan(y_all[i]):
-            X_seqs.append(feat_normed[i - seq_len:i])
+            seq = _stacking_normalize_seq(feat_raw[i - seq_len:i], feat_mean, feat_std)
+            X_seqs.append(seq)
             y_seqs.append(y_all[i])
 
     if len(X_seqs) < 100:
