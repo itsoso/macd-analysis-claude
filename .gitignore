@@ -44,6 +44,3 @@ live_trading_config.json
 
 # 训练临时文件
 catboost_info/
-
-# 超过 GitHub 100MB 限制的文件
-ml/checkpoints/tft_best_1h.pt
