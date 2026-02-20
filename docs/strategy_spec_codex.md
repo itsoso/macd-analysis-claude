@@ -1,348 +1,241 @@
-# ETH/USDT 六书融合策略 技术规格书（Codex）
+# ETH/USDT 策略技术规格（Codex Runtime Review）
 
-- 文档目的：给研发与其他 LLM 提供“可执行、可复核、与当前代码一致”的策略基线。
-- 适用范围：`backtest_multi_tf_daily.py` / `optimize_six_book.py` / `live_config.py` / `live_signal_generator.py`。
-- 更新时间：`2026-02-15 20:49:00 CST`
-- 页面入口：`/strategy/spec-codex`（独立于 `/strategy/spec` 与 `/strategy/tech-doc`）
-
----
-
-## 1. 执行摘要
-
-当前代码已经具备 v9/v10 的大部分能力（Mark 口径、真实 Funding、Leg 风险预算、Risk-per-trade、Soft Veto 等），但默认运行路径仍是“保守兼容”形态。主要结论如下：
-
-1. `STRATEGY_VERSION=v5` 已生效，且关键 v10 开关已映射到 `StrategyConfig`（本次修复）。
-2. 回测主链路 `kline_store.load_klines()` 现在会保留可选 `mark_* / funding_rate / open_interest` 列（若本地文件存在这些列）。
-3. 最新 v10 A/B（`data/backtests/v10/v10_backtest_20260215_192304.csv`）显示：
-   - `E1_v9_v5_prod`：IS `PF=0.90`（低于 1.0），OOS `Ret=-3.83%`
-   - `E4_v10_full`：IS `PF=1.31`，OOS `Ret=+7.87%`
-4. 结论不是“v10 默认已经上线”，而是“v10 机制可用，但默认配置与数据链路尚未形成单轨一致”。
+- 文档目标：基于**最新代码 + 实际运行日志 + 模拟交易结果 + 参数配置**，给出可执行的全局架构改进计划。
+- 页面入口：`/strategy/spec-codex`（线上地址：`https://invest.executor.life/strategy/spec-codex`）
+- 本地源文件：`docs/strategy_spec_codex.md`
+- 评估时间：`2026-02-20 23:10 CST`
+- 代码基线：`8b12f3f`（最近 5 次提交：`8b12f3f / f78a04a / 5af5516 / a97f4e7 / 0861145`）
 
 ---
 
-## 2. 代码事实基线
+## 1. 当前状态结论（先给结论）
 
-### 2.1 主流程
+当前系统的主问题已经从“模型效果”转为“运行架构失配”：
 
-1. 回测入口：`backtest_multi_tf_daily.py`
-2. 策略循环：`optimize_six_book.py`
-3. 配置来源：`live_config.py`（`StrategyConfig` + `STRATEGY_PARAM_VERSIONS`）
-4. 数据来源：`kline_store.py`（本地优先，可选 API 回退）
-5. 结果落库：`multi_tf_daily_db.py`（`mtf_runs` / `mtf_daily` / `mtf_trades`）
+1. **实时运行态没有吃到最新能力**：进程长期运行，日志行为与当前代码不一致。
+2. **数据面失效**：最新信号 bar 停在 `2026-02-17 17:00:00`，但引擎时间已到 `2026-02-20 22:47:59`（滞后 `77.8h`）。
+3. **ML 分支在线上日志中完全不可见**：`SIGNAL` 记录中 `ml_*` 字段为 0。
+4. **策略执行层实际“冻结”**：最近日志 `100` 条 `SIGNAL` 全部 `HOLD`，模拟权益横盘。
 
-### 2.2 实盘流程
-
-1. 实盘入口：`live_runner.py`
-2. 实盘信号：`live_signal_generator.py`
-3. 实盘数据增强：`binance_fetcher.py` 的
-   - `fetch_mark_price_klines`
-   - `fetch_funding_rate_history`
-   - `fetch_open_interest_history`
-   - `merge_perp_data_into_klines`
-
-说明：实盘链路已具备衍生品数据融合；回测链路默认未全量透传。
+这意味着：
+- 短期最优先不是继续加模型复杂度，而是先修复**数据新鲜度、运行版本一致性、上线门禁**。
 
 ---
 
-## 3. 当前默认配置（代码实测）
+## 2. 证据快照（2026-02-20）
 
-通过直接实例化 `StrategyConfig()`（当前环境 `STRATEGY_VERSION=v5`）得到：
+### 2.1 线上/实盘日志
 
-| 参数 | 实际值 |
-|---|---|
-| `short_threshold` | `40` |
-| `long_threshold` | `25` |
-| `short_sl` | `-0.20` |
-| `short_tp` | `0.60` |
-| `cooldown` | `6` |
-| `regime_short_threshold` | `neutral:60` |
-| `use_regime_adaptive_fusion` | `False` |
-| `use_leg_risk_budget` | `True` |
-| `risk_budget_neutral_short` | `0.1` |
-| `use_continuous_trail` | `True` |
-| `use_regime_adaptive_sl` | `True` |
-| `use_soft_veto` | `True` |
-| `soft_struct_min_mult` | `0.02` |
+来源：`logs/live/trade_20260216.jsonl`、`logs/live/engine_paper.log`
 
-关键点：本次已将 v5 关键开关纳入 `_resolve_param` 映射，`StrategyConfig()` 默认值与 `STRATEGY_PARAM_VERSIONS['v5']` 的关键参数对齐。
+- 事件计数：`FUNDING=449, BALANCE=1029, SIGNAL=100`
+- `SIGNAL` 动作：`HOLD=100`
+- `ml_*` 覆盖：
+  - `signals_with_ml_fields=0`
+  - `ml_enabled_true=0`
+  - `ml_available_true=0`
+- 最新信号：
+  - 记录时间：`2026-02-20 22:47:59,427`
+  - bar 时间：`2026-02-17 17:00:00`
+  - 滞后：`77.8h`
 
-剩余注意：仍有部分字段保持 dataclass 常量默认，若后续继续扩展版本参数，建议统一走映射或统一后处理覆盖。
+### 2.2 运行进程状态
 
-代码锚点：`live_config.py:323` 到 `live_config.py:340`、`live_config.py:432`。
+- 引擎进程：`PID=495`
+- 启动时间：`Mon Feb 16 15:33:24 2026`
+- 命令：`python live_runner.py --phase paper -y`
 
----
+这说明当前日志是长期进程输出，不一定代表最新代码语义。
 
-## 4. 策略架构（当前实现）
+### 2.3 模拟交易结果（本地 performance）
 
-### 4.1 五层架构
+来源：`data/live/performance.json`
 
-1. 信号层：`signal_core.py`
-   - 六书打分：DIV / MA / CS / BB / VP / KDJ
-   - 支持单 bar 与批量向量化计算
-2. 多周期融合层：`multi_tf_consensus.py`
-   - 默认决策 TF：`15m + 1h + 4h + 24h`
-   - 输出 `SS/BS + meta + book_features_weighted`
-3. 决策层：`optimize_six_book.py`
-   - Regime 判别
-   - 阈值动态化
-   - 门控与仓位控制
-   - 开平仓状态机（T+1 open）
-4. 执行层：`strategy_futures.py` + `optimize_six_book.py`
-   - 分段止盈、追踪止盈、强平、手续费、Funding
-5. 持久化与展示层：`multi_tf_daily_db.py` + `app.py`
-   - 数据库 + Web 页面
+- 已闭合交易：`5`
+- 胜率：`40%`（2 胜 / 3 负）
+- 平仓净收益（扣平仓手续费）：`-427.41`
+- 总费用累计：`280.13`
+- 最大回撤：`1.34%`
+- 最近多天基本无新增成交。
 
-### 4.2 v9/v10 已实现能力
+### 2.4 健康检查结果
 
-| 能力 | 实现位置 | 默认 |
-|---|---|---|
-| Mark 口径强平 | `optimize_six_book.py` | 关 |
-| UTC 锚定 Funding 结算 | `optimize_six_book.py` | 真实 funding 默认关 |
-| Leg 风险预算 | `optimize_six_book.py` | `v5` 下开 |
-| Risk-per-trade | `optimize_six_book.py` | 关 |
-| Weighted confirms | `optimize_six_book.py` | 关 |
-| Regime-adaptive fusion | `optimize_six_book.py` | 关 |
-| Soft Veto | `optimize_six_book.py` | `v5` 下开 |
-| Ghost cooldown / fast-fail | `optimize_six_book.py` | 关 |
+来源：`python3 check_ml_health.py --verbose`
+
+- 模型文件完整性：通过
+- 模型加载：失败（本机环境缺包）
+  - `lightgbm` 缺失
+  - `torch` 缺失
+  - `scikit-learn` 缺失
+- 端到端 `enhance_signal` 可执行但 `ml_available=False`
+- 最新 live `SIGNAL` 无 `ml_*` 字段：失败
 
 ---
 
-## 5. 数据口径与落库口径
+## 3. 代码 Review（按严重级别）
 
-### 5.1 回测数据链路的现实限制
+### P0（必须先修）
 
-`kline_store.load_klines()` 会裁剪列，但已包含衍生品可选列：
+1. **部署脚本默认强制开启 Stacking，和当前样本门禁策略冲突**  
+文件：`deploy.sh:22-32`, `deploy_local.sh:9-19`
+- 现状：`ML_ENABLE_STACKING=1` 写死。
+- 风险：与“小样本先禁用/门控后启用”策略冲突，导致线上行为不可预期。
+- 建议：默认改为 `0`，由 `promotion_decision.json` 自动控制启停。
 
-- 标准列：`open, high, low, close, volume, quote_volume`
-- 扩展列：`taker_buy_base, taker_buy_quote, trades`
-- 衍生品列：`mark_*`, `funding_rate`, `funding_interval_hours`, `open_interest`, `open_interest_value`
+2. **数据获取层对主 K 线“只要有本地缓存就直接使用”，未做 live 新鲜度门禁**  
+文件：`binance_fetcher.py:34-88`, `binance_fetcher.py:91-114`
+- 现状：`fetch_binance_klines()` 优先本地，不检查缓存是否过旧。
+- 风险：live 可能长期消费过期 bar。
+- 建议：为 live 模式增加 `require_fresh=True`；超过阈值时强制 API/降级/停机。
 
-代码锚点：`kline_store.py:358` 到 `kline_store.py:361`。
+3. **运行态版本不可追踪，难以确认“代码-模型-配置”是否一致**  
+文件：`live_runner.py`, `live_trading_engine.py`, `live_signal_generator.py`
+- 现状：日志无 `git_commit/config_hash/model_hash`。
+- 风险：出现“代码已修复但线上无效果”时无法快速定位。
+- 建议：启动时打印并落盘 runtime manifest（commit + model fingerprint + config digest）。
 
-影响：即使策略支持 `mark_*`/`funding_rate`/`open_interest`，如果不改加载链路，默认回测仍拿不到这些列。
+### P1（1-2周内）
 
-### 5.2 `summary_json` 字段（当前真实口径）
+4. **多周期共识上下文未写入 SIGNAL 结构化日志（已构造但未传递）**  
+文件：`live_trading_engine.py:366-385`, `trading_logger.py:129-163`
+- 现状：`log_extra` 变量构造后未传入 `log_signal(..., extra=...)`。
+- 风险：无法在 JSON 日志中回放共识决策细节。
+- 建议：补充 `extra=log_extra`，提高复盘可观测性。
 
-`backtest_multi_tf_daily.py` 输出的是：
+5. **衍生品 API 失败缺少断路器，重复重试造成每轮刷新延迟和日志噪音**  
+文件：`binance_fetcher.py:249-263`, `binance_fetcher.py:430-463`, `binance_fetcher.py:564-597`
+- 现状：每轮刷新都会重试网络失败。
+- 风险：刷新耗时抖动，日志刷屏，策略时效下降。
+- 建议：增加 per-endpoint 断路器（失败 N 次后冷却 T 分钟）。
 
-- `total_return_pct`
-- `max_drawdown_pct`
-- `win_rate_pct`
-- `contract_pf`
-- `portfolio_pf`
-- `profit_factor`（兼容字段，等于 `contract_pf`）
-- 费用与 Funding 字段
+6. **运行配置落库不完整，关键策略参数常以默认值隐式生效**  
+文件：`config_store.py`, `live_config.py`
+- 现状：DB `strategy` 中多项关键字段为空时回退默认。
+- 风险：改参数后可追踪性弱，环境漂移难排查。
+- 建议：保存“完整展开配置快照”，并生成 config diff 审计。
 
-代码锚点：`backtest_multi_tf_daily.py:1042` 到 `backtest_multi_tf_daily.py:1062`。
+### P2（中期）
 
-### 5.3 run id 口径
+7. **健康检查未与服务启动强绑定，仍靠人工执行**  
+文件：`check_ml_health.py`, `deploy.sh`, `deploy_local.sh`
+- 建议：systemd `ExecStartPre` 里执行 health check，失败则拒绝启动。
 
-数据库主键是 `mtf_runs.id`，不是 `run_id` 列。
-
-代码锚点：`multi_tf_daily_db.py` 表结构定义。
-
----
-
-## 6. 最新回测结果（以 CSV 为准）
-
-## 6.1 v9 Round 3（`data/backtests/v9_ab/v9_ab_r3_20260215_180525.csv`）
-
-| 变体 | IS Ret | IS PF | OOS Ret | OOS PF |
-|---|---:|---:|---:|---:|
-| `E0_baseline_fixed` | `+65.74%` | `1.14` | `-3.32%` | `1.67` |
-| `E1_P23_weighted` | `+43.21%` | `0.95` | `-12.64%` | `0.72` |
-| `E2_P21_risk_R` | `-9.95%` | `0.24` | `+0.06%` | `1.61` |
-| `E3_P23_P21` | `+48.33%` | `1.06` | `-10.98%` | `0.87` |
-| `E4_P18lite_P23` | `-6.22%` | `0.94` | `+28.91%` | `1.33` |
-| `E5_full_v9` | `-4.19%` | `1.18` | `+12.74%` | `1.09` |
-
-解读：IS/OOS 分裂明显，P18 类改造在 OOS 有改善，但 IS 不稳定。
-
-## 6.2 v9 全量对照（`data/backtests/v9_ab/v9_full_backtest_20260215_184527.csv`）
-
-| 变体 | IS Ret | IS PF | OOS Ret | OOS PF |
-|---|---:|---:|---:|---:|
-| `E0_v8_baseline` | `+67.34%` | `1.18` | `-3.83%` | `1.59` |
-| `E1_v9_v5_prod` | `+46.63%` | `0.90` | `-3.83%` | `1.59` |
-| `E2_v5_P18lite` | `-14.45%` | `0.44` | `+41.11%` | `2.27` |
-| `E3_v5_P18lite_P23` | `+5.02%` | `0.71` | `+37.75%` | `2.13` |
-
-结论：当前 `v5` 生产参数在 IS 的 `PF<1`，而 OOS 仍有 “仅 long 驱动” 特征。
-
-## 6.3 v10 验证（`data/backtests/v10/v10_backtest_20260215_192304.csv`）
-
-| 变体 | IS Ret | IS WR | IS PF | OOS Ret | OOS WR | OOS PF |
-|---|---:|---:|---:|---:|---:|---:|
-| `E0_v8_baseline` | `+67.34%` | `56.86%` | `1.19` | `-3.83%` | `65.12%` | `1.56` |
-| `E1_v9_v5_prod` | `+46.63%` | `56.36%` | `0.90` | `-3.83%` | `65.12%` | `1.56` |
-| `E2_soft_veto` | `+51.11%` | `58.87%` | `1.03` | `+7.03%` | `56.16%` | `0.92` |
-| `E3_sv_softStruct` | `+51.11%` | `58.87%` | `1.03` | `+7.03%` | `56.16%` | `0.92` |
-| `E4_v10_full` | `+49.14%` | `61.43%` | `1.31` | `+7.87%` | `56.16%` | `1.02` |
-| `E5_v10_relaxedSL` | `+46.81%` | `58.74%` | `1.14` | `+8.36%` | `58.11%` | `1.09` |
-
-结论：`E4/E5` 修复了 v5 的 `IS PF<1` 问题，并让 OOS 由负转正。
-
-## 6.4 v10.3（2021-01~2026-01，全窗口统计验证）
-
-> 口径说明：以下结果均基于 2026-02-18 的“回补后数据口径”。  
-> 关键变化：Funding 全历史已回补，`quality_flags` 从 `oi_soft_disabled+funding_soft_disabled` 修复为仅 `oi_soft_disabled`。
-
-### 6.4.1 基线（v5，回补后）
-
-文件：`logs/v10_3_validation_baseref_fullw_v5/v10_3_validation_20260218_030455.json`
-
-| 指标 | 数值 |
-|---|---:|
-| Return | `+59.59%` |
-| pPF | `2.3581` |
-| cPF | `1.4094` |
-| MDD | `-20.23%` |
-| WFO(55) | `58.18% / 1.6889 / fail` |
-
-### 6.4.2 候选 A：`close_long_ss=65 + rp19`
-
-文件：`logs/v10_3_validation_close65_rp19_full_v5ref/v10_3_validation_20260218_043319.json`
-
-| 指标 | 数值 | 相对基线 |
-|---|---:|---:|
-| Return | `+61.70%` | `+2.11pp` |
-| pPF | `2.2914` | `-0.0667` |
-| cPF | `1.2841` | `-0.1253` |
-| MDD | `-20.11%` | 改善 `+0.12pp` |
-| WFO(55) | `60.00% / 1.6677 / pass` | 通过 |
-| bootstrap ΔpPF | `p=0.465` | 不显著 |
-| stress | `pass=True` | 通过 |
-
-### 6.4.3 候选 B：`close_long_ss=65 + rp20`
-
-文件：`logs/v10_3_validation_close65_rp20_full_v5ref/v10_3_validation_20260218_040307.json`
-
-| 指标 | 数值 | 相对基线 |
-|---|---:|---:|
-| Return | `+61.99%` | `+2.40pp` |
-| pPF | `2.2780` | `-0.0801` |
-| cPF | `1.2672` | `-0.1422` |
-| MDD | `-20.03%` | 改善 `+0.20pp` |
-| WFO(55) | `60.00% / 1.6436 / pass` | 通过 |
-| bootstrap ΔpPF | `p=0.458` | 不显著 |
-| stress | `pass=True` | 通过 |
-
-### 6.4.4 候选 C（最终平衡最优）：`close_long_ss=65 + rp18`
-
-文件：`logs/v10_3_validation_close65_rp18_full_v5ref/v10_3_validation_20260218_052102.json`
-
-| 指标 | 数值 | 相对基线 |
-|---|---:|---:|
-| Return | `+61.54%` | `+1.95pp` |
-| pPF | `2.3120` | `-0.0461` |
-| cPF | `1.3114` | `-0.0980` |
-| MDD | `-20.19%` | 改善 `+0.04pp` |
-| WFO(55) | `60.00% / 1.6710 / pass` | 通过 |
-| bootstrap ΔpPF | `p=0.469` | 不显著 |
-| stress | `pass=True` | 通过 |
-
-阶段结论：
-- 两个候选都把 full WFO 从 `58.18%` 推到 `60.00%`，且压力测试通过。
-- `rp18/rp19/rp20` 都能过线；其中 `rp18` 在效率折价最小的同时保持 WFO 过线，是当前最平衡候选。
-- `rp20` 更偏收益/进攻，`rp19` 介于两者之间。
-- 两者统计显著性均未通过（`p>0.10`），因此当前应定义为“候选配置”，而非“显著优于基线”。
+8. **训练产物契约尚未强制化（虽已改善 Multi-Horizon）**  
+文件：`train_gpu.py`, `ml_live_integration.py`
+- 建议：统一产物规范：`{model, meta, schema, version, hashes, promotion_decision}`。
 
 ---
 
-## 7. 当前关键问题（按优先级）
+## 4. 目标架构（建议）
 
-## P0：版本映射仍需系统化
+### 4.1 四层控制闭环
 
-- 现状：已修复 v5 关键开关映射（leg budget / soft veto / 连续追踪 / regime-SL）。
-- 风险：版本键数量继续增加时，仍可能出现“版本表定义了但 dataclass 未映射”的漂移。
-- 方向：引入统一版本覆盖层（初始化后统一 apply），减少逐字段遗漏风险。
+1. **Data Plane（行情层）**
+- 统一 DataFreshnessGate：`max_lag_hours`、`freshness_source`、`stale_policy`。
+- 主 K / Mark / Funding / OI 分开 freshness 指标。
+- 断路器 + 回退顺序：LocalFresh -> API -> Halt。
 
-## P0：数据覆盖需持续维护（已修复首轮）
+2. **Model Plane（模型层）**
+- 训练产物必须带 schema/hash。
+- promotion 门禁自动化：样本量、AUC、OOF-Test gap、特征覆盖率。
+- 线上只加载 `production` 标签工件。
 
-- 2026-02-18 已完成 `Mark/Funding` 全历史回补，Funding 覆盖恢复正常。
-- 但该能力依赖本地缓存，后续仍需定期更新并保留覆盖率审计。
-- OI 仍受 Binance 官方 30 天窗口限制，只能 soft-disable 或短窗使用。
+3. **Decision Plane（决策层）**
+- 信号分三态：`tradeable` / `degraded` / `blocked`。
+- 明确 fail-open/fail-closed 策略：
+  - paper 可降级
+  - live 执行默认 fail-closed（至少开仓 fail-closed）
 
-## P1：指标口径混用风险
-
-- 新口径以 `total_return_pct/portfolio_pf` 为准。
-- 旧脚本仍常用 `strategy_return/profit_factor`，且 `profit_factor` 当前等于 `contract_pf`。
-
-## P1：实验结论分裂（IS/OOS）
-
-- P18/P23 在不同时间段方向相反，说明参数/机制对样本体制敏感。
-- 需要严格单变量和滚动验证，不宜直接全开。
-
----
-
-## 8. 下一步优化路线（可执行）
-
-### 阶段 A：先打通口径（已完成首轮）
-
-1. 统一版本覆盖机制：从“逐字段 `_resolve_param`”升级为“集中覆盖”，避免新参数漏映射。
-2. 打通回测 perp 数据注入：在主回测链路增加可控合并步骤，确保 `mark/funding/oi` 真实可用（已完成）。
-3. 固化输出口径：统一使用 `total_return_pct + contract_pf + portfolio_pf`。
-
-### 阶段 B：策略增强（当前主线）
-
-1. 以 `v10.3_baseline(v5,回补后)` 为基线，围绕 `close_long_ss + risk_per_trade_pct` 做小步 A/B。
-2. 候选优先顺序：`rp18`（平衡） > `rp19`（稳健） > `rp20`（进攻）。
-3. 上线门槛维持三条：`WFO pass` + `stress pass` + `bootstrap 仅作观察(当前均未显著)`。
-
-### 阶段 C：中期重构
-
-1. 将 `regime × side` 拆成独立 leg（状态、预算、KPI 分离）。
-2. 把 P18/P23 做成可插拔子模块，脱离主循环硬编码。
-3. 增加基于 DB 的回归测试（关键 run 的结果阈值断言）。
+4. **Ops & Observability（运维层）**
+- runtime manifest 强制落地。
+- 结构化日志最小集：`freshness, model_version, gating_reason, consensus_snapshot`。
+- 报警：连续 stale、ML 覆盖降至 0、API 连续失败、信号全 HOLD 超阈值。
 
 ---
 
-## 9. 给其他 LLM 的最小上下文
+## 5. 分阶段落地计划（务实可执行）
 
-可直接复制以下上下文给其他模型，避免重复误判：
+### Phase A（48小时）
 
-```markdown
-事实基线：
-1) 当前策略默认版本是 STRATEGY_VERSION=v5。
-2) v5 关键开关（soft veto / leg budget / continuous trail / regime-SL）已映射到 StrategyConfig 默认值。
-3) 回测主数据链路已支持保留 mark/funding/oi 列，但依赖本地 parquet 里实际存在这些字段。
-4) summary_json 真实字段是 total_return_pct / contract_pf / portfolio_pf。
-5) 最新 v10 CSV 显示 E4_v10_full: IS PF=1.31, OOS Ret=+7.87%。
-6) 最新 v5 生产对照 E1_v9_v5_prod: IS PF=0.90, OOS Ret=-3.83%。
+1. 部署脚本改默认：`ML_ENABLE_STACKING=0`。
+2. 启动前健康检查（依赖、模型、别名一致性）接入 systemd `ExecStartPre`。
+3. 引擎启动打印 runtime manifest（commit/config/model）。
+4. `SIGNAL` 日志补齐 `consensus_*` extra 字段。
 
-请基于以上事实给出：
-- 先做哪 3 个工程修复保证口径一致；
-- 再做哪 2 个策略实验提高 OOS 稳定性；
-- 每一步验收指标。
-```
+**验收标准**
+- 新启动日志里有 `runtime_manifest`。
+- `trade_*.jsonl` 的 `SIGNAL.data` 含 `consensus_strength`。
+- `check_ml_health` 结果可被 systemd 启动前消费。
+
+### Phase B（1-2周）
+
+1. `binance_fetcher` 增加 live freshness 校验与断路器。
+2. 数据滞后超过阈值时，进入 `degraded/blocked` 状态并报警。
+3. 配置持久化改为“完整展开 + diff 审计”。
+
+**验收标准**
+- 无网络时不再每小时长时间重试刷屏。
+- stale 场景下不会继续输出可交易信号。
+- 配置变更具备可追踪 diff。
+
+### Phase C（2-6周）
+
+1. 建立模型注册与晋升（promotion）流水线。
+2. 训练产物统一契约与签名校验。
+3. 远程 GPU 推理服务接入生产（本机仅轻量 fallback）。
+
+**验收标准**
+- 线上模型来源可追溯到单一 promotion 记录。
+- 推理服务切换后，ML 覆盖率稳定 >95%。
+- 可一键回滚至前一版已签名模型。
 
 ---
 
-## 10. 复现命令
+## 6. H800 执行计划（训练侧）
+
+以现有脚本为主：`scripts/run_h800_training_plan.sh`
+
+1. `base`：`lgb + lstm(multi-horizon) + tft + cross_asset`
+2. `stacking`：仅在 `n_samples >= 20000` 时执行
+3. `onnx`：导出并做 smoke test
+4. `report`：自动生成门禁判断（建议扩展为 `promotion_decision.json`）
+
+建议新增产物：
+- `data/ml_models/promotion_decision.json`
+- `data/ml_models/runtime_contract.json`
+
+---
+
+## 7. 本轮建议的“先后顺序”
+
+1. **先修运行一致性**（启动门禁 + manifest + 日志可观测）。
+2. **再修数据新鲜度与断路器**（避免 stale 驱动与重试风暴）。
+3. **最后再加模型复杂度**（RL/LLM/更深模型都应建立在稳定运行底座之上）。
+
+---
+
+## 8. 关键命令（运维/排查）
 
 ```bash
-# v9 round3
-python3 run_v9_ab_round3.py
+# 1) 训练后别名一致性
+python3 scripts/sync_stacking_alias.py --tf 1h --check-only
 
-# v9 full（v5生产对照）
-python3 run_v9_full_backtest.py
+# 2) 启动前健康检查
+python3 check_ml_health.py --timeframe 1h --verbose
 
-# v10 验证
-python3 run_v10_backtest.py
+# 3) 最近 7 天 shadow 覆盖
+python3 analyze_shadow_logs.py --days 7
 
-# 主回测（本地K线，不走API回退）
-BACKTEST_DAILY_ALLOW_API_FALLBACK=0 python3 backtest_multi_tf_daily.py \
-  --start 2025-01-01 --end 2026-01-31 --tag "codex-baseline"
+# 4) 查看最新 SIGNAL 是否含 ml_* 字段
+rg '"level": "SIGNAL"' logs/live/trade_*.jsonl | tail -n 5
+
+# 5) 查看引擎进程启动时间（确认是否重启到新版本）
+ps -p $(cat data/live/engine.pid) -o pid,lstart,command
 ```
 
 ---
 
-## 11. 代码锚点索引
+## 9. 说明
 
-- `live_config.py`: 版本与参数默认
-- `backtest_multi_tf_daily.py`: 回测编排与 `summary_json` 口径
-- `optimize_six_book.py`: 策略主循环与 v9/v10 开关实现
-- `kline_store.py`: 本地数据加载与列裁剪
-- `multi_tf_daily_db.py`: 结果入库与快照透传
-- `run_v9_ab_round3.py`: v9 A/B 实验矩阵
-- `run_v10_backtest.py`: v10 改造实验矩阵
+- 你给的线上地址是页面入口；本次已更新本地源文档 `docs/strategy_spec_codex.md`。  
+- 若线上站点未自动读取仓库文件，请执行你的发布流程同步该文档。

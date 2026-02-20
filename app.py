@@ -903,8 +903,8 @@ def page_strategy_tech_doc():
         'page_strategy_tech_doc.html',
         active_page='strategy-tech-doc',
         content=html_content,
-        version='10.2 + ML v3.1',
-        last_updated='2026-02-20',
+        version='10.2 + ML v3.2',
+        last_updated='2026-02-18',
         win_rate='64.9%',
         cpf='2.51',
     )
@@ -1293,12 +1293,12 @@ def api_live_test_signal_multi():
 
     try:
         # 同步 subprocess 会占用当前 worker 至多 timeout；sync worker 下会阻塞其他请求
-        # 超时 = 300s (线上服务器配置较低, 9个周期可能需要2-4分钟)
+        # 超时 = 360s (与 gunicorn timeout / nginx proxy_read_timeout 三层对齐)
         r = subprocess.run(
             [sys.executable, 'live_runner.py', '--test-signal-multi',
              '--timeframe', tf_str, '-o', output_file],
             capture_output=True, text=True,
-            timeout=300, cwd=BASE_DIR
+            timeout=360, cwd=BASE_DIR
         )
 
         # 尝试读取结构化 JSON 结果

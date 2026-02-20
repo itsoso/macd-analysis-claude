@@ -1,5 +1,9 @@
 # 每日自动重训 Cron 配置
 
+> 说明：本文件是 `train_gpu.py --mode retrain` 的轻量增量重训方案。  
+> 如果你在 H800 上跑完整训练计划（base/stacking/onnx/report），请优先使用：
+> `docs/h800_nightly_crontab.md` + `scripts/cron_h800_nightly.sh`。
+
 ## 安装步骤
 
 ### 1. 编辑 crontab

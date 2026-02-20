@@ -1,0 +1,150 @@
+{
+  "timestamp": "2026-02-17T23:54:19.538648",
+  "config": {
+    "days": 90,
+    "horizon": 5,
+    "use_lstm": false,
+    "tf": "1h"
+  },
+  "prediction_metrics": {
+    "samples": 1312,
+    "auc": 0.5188,
+    "accuracy": 0.638,
+    "precision": 0.3864,
+    "recall": 0.1146,
+    "bull_ratio": 0.3392,
+    "pred_bull_ratio": 0.1006,
+    "prob_p10": 0.3115,
+    "prob_p30": 0.362,
+    "prob_p50": 0.4049,
+    "prob_p70": 0.4477,
+    "prob_p90": 0.5009,
+    "top_20_accuracy": 0.5399,
+    "top_20_count": 263,
+    "bottom_20_accuracy": 0.6958,
+    "bottom_20_count": 263
+  },
+  "walkforward_summary": {
+    "total_folds": 11,
+    "avg_val_auc": 0.5491,
+    "min_val_auc": 0.3948,
+    "max_val_auc": 0.6371,
+    "std_val_auc": 0.0845
+  },
+  "backtest_results": {
+    "ml_IS": {
+      "alpha": 29.79,
+      "strategy_return": -6.82,
+      "max_drawdown": -8.87,
+      "total_trades": 30,
+      "fees": {
+        "spot_fees": 0,
+        "futures_fees": 753.1,
+        "funding_paid": 22.39,
+        "funding_received": 155.15,
+        "net_funding": 132.76,
+        "slippage_cost": 1505.57,
+        "liquidation_fees": 0,
+        "total_fees": 775.49,
+        "total_costs": 2281.06,
+        "fee_drag_pct": 2.28,
+        "gross_return_pct": -4.54
+      }
+    },
+    "ml_OOS": {
+      "alpha": 37.37,
+      "strategy_return": 0.76,
+      "max_drawdown": -6.43,
+      "total_trades": 30,
+      "fees": {
+        "spot_fees": 0,
+        "futures_fees": 749.29,
+        "funding_paid": 17.39,
+        "funding_received": 109.36,
+        "net_funding": 91.97,
+        "slippage_cost": 1498.01,
+        "liquidation_fees": 0,
+        "total_fees": 766.68,
+        "total_costs": 2264.69,
+        "fee_drag_pct": 2.26,
+        "gross_return_pct": 3.03
+      }
+    },
+    "ml_FULL": {
+      "alpha": 29.79,
+      "strategy_return": -6.82,
+      "max_drawdown": -8.87,
+      "total_trades": 30,
+      "fees": {
+        "spot_fees": 0,
+        "futures_fees": 753.1,
+        "funding_paid": 22.39,
+        "funding_received": 155.15,
+        "net_funding": 132.76,
+        "slippage_cost": 1505.57,
+        "liquidation_fees": 0,
+        "total_fees": 775.49,
+        "total_costs": 2281.06,
+        "fee_drag_pct": 2.28,
+        "gross_return_pct": -4.54
+      }
+    },
+    "six_IS": {
+      "alpha": -20.48,
+      "strategy_return": -14.54,
+      "max_drawdown": -22.47,
+      "total_trades": 217,
+      "fees": {
+        "spot_fees": 428.28,
+        "futures_fees": 3656.38,
+        "funding_paid": 278.44,
+        "funding_received": 345.65,
+        "net_funding": 67.2,
+        "slippage_cost": 8106.89,
+        "liquidation_fees": 0,
+        "total_fees": 4363.1,
+        "total_costs": 12469.99,
+        "fee_drag_pct": 12.47,
+        "gross_return_pct": -2.07
+      }
+    },
+    "six_OOS": {
+      "alpha": 58.69,
+      "strategy_return": 19.23,
+      "max_drawdown": -6.96,
+      "total_trades": 123,
+      "fees": {
+        "spot_fees": 320.09,
+        "futures_fees": 2054.99,
+        "funding_paid": 171.7,
+        "funding_received": 181.55,
+        "net_funding": 9.85,
+        "slippage_cost": 4711.57,
+        "liquidation_fees": 0,
+        "total_fees": 2546.78,
+        "total_costs": 7258.34,
+        "fee_drag_pct": 7.26,
+        "gross_return_pct": 26.49
+      }
+    },
+    "six_FULL": {
+      "alpha": 42.48,
+      "strategy_return": 6.62,
+      "max_drawdown": -22.47,
+      "total_trades": 334,
+      "fees": {
+        "spot_fees": 701.7,
+        "futures_fees": 5593.06,
+        "funding_paid": 442.14,
+        "funding_received": 484.6,
+        "net_funding": 42.46,
+        "slippage_cost": 12488.1,
+        "liquidation_fees": 0,
+        "total_fees": 6736.9,
+        "total_costs": 19225.0,
+        "fee_drag_pct": 19.23,
+        "gross_return_pct": 25.85
+      }
+    }
+  }
+}

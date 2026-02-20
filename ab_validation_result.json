@@ -1,0 +1,103 @@
+{
+  "timestamp": "2026-02-17T08:40:49.107673",
+  "config": {
+    "baseline": {
+      "close_short_bs": 40,
+      "close_long_ss": 40,
+      "reverse_min_hold_short": 0,
+      "reverse_min_hold_long": 0
+    },
+    "optimized": {
+      "close_short_bs": 60,
+      "close_long_ss": 60,
+      "reverse_min_hold_short": 8,
+      "reverse_min_hold_long": 8
+    }
+  },
+  "results": {
+    "IS": {
+      "baseline": {
+        "alpha": -13.74,
+        "strategy_return": -7.8,
+        "buy_hold_return": 5.95,
+        "max_drawdown": -12.09,
+        "total_trades": 245,
+        "liquidations": 0,
+        "total_costs": 14406.7,
+        "fee_drag_pct": 14.41,
+        "win_rate": 37.5,
+        "avg_hold_bars": 0,
+        "final_total": 92204.96
+      },
+      "optimized": {
+        "alpha": -12.16,
+        "strategy_return": -6.21,
+        "buy_hold_return": 5.95,
+        "max_drawdown": -13.29,
+        "total_trades": 193,
+        "liquidations": 0,
+        "total_costs": 10828.48,
+        "fee_drag_pct": 10.83,
+        "win_rate": 44.7,
+        "avg_hold_bars": 0,
+        "final_total": 93787.45
+      }
+    },
+    "OOS": {
+      "baseline": {
+        "alpha": 59.26,
+        "strategy_return": 19.8,
+        "buy_hold_return": -39.46,
+        "max_drawdown": -9.3,
+        "total_trades": 144,
+        "liquidations": 0,
+        "total_costs": 8747.82,
+        "fee_drag_pct": 8.75,
+        "win_rate": 47.5,
+        "avg_hold_bars": 0,
+        "final_total": 119801.16
+      },
+      "optimized": {
+        "alpha": 57.55,
+        "strategy_return": 18.09,
+        "buy_hold_return": -39.46,
+        "max_drawdown": -9.11,
+        "total_trades": 132,
+        "liquidations": 0,
+        "total_costs": 7399.26,
+        "fee_drag_pct": 7.4,
+        "win_rate": 53.1,
+        "avg_hold_bars": 0,
+        "final_total": 118092.48
+      }
+    },
+    "FULL": {
+      "baseline": {
+        "alpha": 46.49,
+        "strategy_return": 10.63,
+        "buy_hold_return": -35.86,
+        "max_drawdown": -12.09,
+        "total_trades": 375,
+        "liquidations": 0,
+        "total_costs": 21647.63,
+        "fee_drag_pct": 21.65,
+        "win_rate": 38.7,
+        "avg_hold_bars": 0,
+        "final_total": 110631.79
+      },
+      "optimized": {
+        "alpha": 59.38,
+        "strategy_return": 23.52,
+        "buy_hold_return": -35.86,
+        "max_drawdown": -13.29,
+        "total_trades": 323,
+        "liquidations": 0,
+        "total_costs": 18015.66,
+        "fee_drag_pct": 18.02,
+        "win_rate": 48.7,
+        "avg_hold_bars": 0,
+        "final_total": 123523.56
+      }
+    }
+  }
+}
