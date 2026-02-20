@@ -26,6 +26,13 @@ INTERVAL_MAP = {
     '10m': '15m',  # 币安没有10m, 用15m代替后重采样
 }
 
+# 各周期对应的小时数 (用于缓存新鲜度检查)
+INTERVAL_MAP_HOURS = {
+    '1m': 1/60, '3m': 3/60, '5m': 5/60, '10m': 10/60, '15m': 0.25,
+    '30m': 0.5, '1h': 1.0, '2h': 2.0, '3h': 3.0, '4h': 4.0,
+    '6h': 6.0, '8h': 8.0, '12h': 12.0, '16h': 16.0, '24h': 24.0, '1d': 24.0,
+}
+
 # ── 本地缓存路径 ──
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _KLINE_DIR = os.path.join(_BASE_DIR, 'data', 'klines')
@@ -288,7 +295,7 @@ def fetch_mark_price_klines(symbol: str = "ETHUSDT",
 
     返回: DataFrame with mark_open, mark_high, mark_low, mark_close columns
     """
-    # ── 先尝试本地缓存 ──
+    # ── 先尝试本地缓存 (含新鲜度检查) ──
     if not force_api:
         cache_path = os.path.join(_MARK_DIR, symbol, f'{interval}.parquet')
         if os.path.exists(cache_path):
@@ -298,10 +305,17 @@ def fetch_mark_price_klines(symbol: str = "ETHUSDT",
                     if df.index.tz is not None:
                         df.index = df.index.tz_localize(None)
                     df = df[~df.index.duplicated(keep='first')].sort_index()
-                    print(f"  [本地] {symbol} mark {interval} 加载 {len(df)} 条 "
-                          f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
-                          f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
-                    return df
+                    # 新鲜度检查: 缓存过期 (>6h) 则通过 API 重新拉取
+                    interval_hours = INTERVAL_MAP_HOURS.get(interval, 1.0)
+                    max_lag_hours = max(interval_hours * 2, 6.0)
+                    cache_lag_hours = (datetime.now() - df.index[-1]).total_seconds() / 3600
+                    if cache_lag_hours > max_lag_hours:
+                        print(f"  Mark kline 缓存已过期 ({cache_lag_hours:.1f}h > {max_lag_hours:.1f}h), 重新从API获取...")
+                    else:
+                        print(f"  [本地] {symbol} mark {interval} 加载 {len(df)} 条 "
+                              f"({df.index[0].strftime('%Y-%m-%d %H:%M')} ~ "
+                              f"{df.index[-1].strftime('%Y-%m-%d %H:%M')})")
+                        return df
             except Exception as e:
                 print(f"  Mark kline 缓存读取失败: {e}")
 
