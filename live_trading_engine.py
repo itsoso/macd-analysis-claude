@@ -382,6 +382,7 @@ class LiveTradingEngine:
                     conflict=sig.conflict,
                     action_taken=sig.action,
                     timestamp=sig.timestamp,
+                    extra=log_extra if log_extra else None,
                 )
 
                 # 9. 执行交易动作
