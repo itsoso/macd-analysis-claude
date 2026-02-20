@@ -324,7 +324,7 @@ def calc_fusion_score_six(signals, df, idx, dt, config):
 
     # 1b. 双 MACD 共振加分
     if config.get("use_dual_macd") and "DIF_FAST" in df.columns and "DEA_FAST" in df.columns:
-        bonus = int(config.get("dual_macd_bonus", 8))
+        bonus = float(config.get("dual_macd_bonus", 8))
         dif_f = float(df["DIF_FAST"].iloc[idx])
         dea_f = float(df["DEA_FAST"].iloc[idx])
         if div_sell > 0 and dif_f < dea_f:
