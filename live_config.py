@@ -809,7 +809,8 @@ class StrategyConfig:
     # neutral: DIV 大幅降权(25%), CS/KDJ 大幅升权(bonus 15%)
     # trend: DIV 保留高权重(60%), 背离在趋势末端有效
     # high_vol: VP 升权(12%), 量价在高波中更有效
-    use_regime_adaptive_fusion: bool = False
+    # 注意: 必须用 _resolve_param 以响应 v5/v6 策略版本覆盖
+    use_regime_adaptive_fusion: bool = field(default_factory=lambda: _resolve_param("use_regime_adaptive_fusion", False))
     # v11 Phase 2b: Shrinkage mixture
     p18_shrinkage_max_lambda: float = 0.40
     p18_shrinkage_n_scale: float = 100.0

@@ -159,7 +159,7 @@ config.py (全局指标参数)
       → 命令行覆盖 (--capital, --leverage 等)
 ```
 
-当前生产版本: `live_config.py` 中 `_ACTIVE_VERSION = "v5"`
+当前生产版本: `live_config.py` 中 `_ACTIVE_VERSION = "v6"`（可通过环境变量 `STRATEGY_VERSION` 覆盖）
 
 ## GPU 训练架构 (H800)
 

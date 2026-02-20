@@ -77,6 +77,12 @@ class MLSignalEnhancer:
         self.direction_boost = 1.15
         self.direction_dampen = 0.85
         self.lgb_weight = 0.55            # v6: 调整权重分配
+        # 推理设备: 环境变量 ML_INFERENCE_DEVICE 或 有 CUDA 则用 cuda（方案二 GPU 机推理时生效）
+        try:
+            import torch
+            self._inference_device = os.environ.get("ML_INFERENCE_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
+        except Exception:
+            self._inference_device = "cpu"
         self.lstm_weight = 0.25
         self.tft_weight = 0.10            # v6: TFT 权重
         self.cross_asset_weight = 0.10    # v6: 跨资产权重
@@ -363,15 +369,15 @@ class MLSignalEnhancer:
                         context = (attn_weights * lstm_out).sum(dim=1)
                         return self.classifier(context).squeeze(-1)
 
-                device = 'cpu'  # 推理用 CPU 即可
-                self._lstm_model = LSTMAttention(input_dim).to(device)
-                state = torch.load(model_path, map_location=device, weights_only=True)
+                dev = self._inference_device
+                self._lstm_model = LSTMAttention(input_dim).to(dev)
+                state = torch.load(model_path, map_location=dev, weights_only=True)
                 self._lstm_model.load_state_dict(state)
                 self._lstm_model.eval()
-                logger.info(f"LSTM 模型加载完成 (input_dim={input_dim})")
+                logger.info(f"LSTM 模型加载完成 (input_dim={input_dim}, device={dev})")
 
             with torch.no_grad():
-                logit = self._lstm_model(X_tensor)
+                logit = self._lstm_model(X_tensor.to(self._inference_device))
                 prob = torch.sigmoid(logit).item()
             return float(np.clip(prob, 0, 1))
 
@@ -451,13 +457,15 @@ class MLSignalEnhancer:
                         return self.classifier(context).squeeze(-1)
 
                 self._tft_model = EfficientTFT(input_dim, d_model, n_heads, d_ff, n_layers)
-                state = torch.load(model_path, map_location='cpu', weights_only=False)
+                dev = self._inference_device
+                state = torch.load(model_path, map_location=dev, weights_only=False)
                 self._tft_model.load_state_dict(state)
+                self._tft_model.to(dev)
                 self._tft_model.eval()
-                logger.info(f"TFT 模型加载完成 (input_dim={input_dim}, d_model={d_model})")
+                logger.info(f"TFT 模型加载完成 (input_dim={input_dim}, d_model={d_model}, device={dev})")
 
             with torch.no_grad():
-                logit = self._tft_model(X_tensor)
+                logit = self._tft_model(X_tensor.to(self._inference_device))
                 prob = torch.sigmoid(logit).item()
             return float(np.clip(prob, 0, 1))
 
@@ -728,14 +736,15 @@ class MLSignalEnhancer:
                     ctx = (w * out).sum(dim=1)
                     return self.classifier(ctx).squeeze(-1)
 
-            self._stacking_lstm = LSTMAttention(input_dim)
-            state = torch.load(model_path, map_location='cpu', weights_only=True)
+            dev = self._inference_device
+            self._stacking_lstm = LSTMAttention(input_dim).to(dev)
+            state = torch.load(model_path, map_location=dev, weights_only=True)
             self._stacking_lstm.load_state_dict(state)
             self._stacking_lstm.eval()
-            logger.info(f"Stacking LSTM 加载完成 (input_dim={input_dim})")
+            logger.info(f"Stacking LSTM 加载完成 (input_dim={input_dim}, device={dev})")
 
         with torch.no_grad():
-            logit = self._stacking_lstm(X_tensor)
+            logit = self._stacking_lstm(X_tensor.to(self._inference_device))
             prob = torch.sigmoid(logit).item()
         return float(np.clip(prob, 0, 1))
 
@@ -803,14 +812,15 @@ class MLSignalEnhancer:
                     ctx = (w * h).sum(dim=1)
                     return self.classifier(ctx).squeeze(-1)
 
-            self._stacking_tft = EfficientTFT(input_dim)
-            state = torch.load(model_path, map_location='cpu', weights_only=True)
+            dev = self._inference_device
+            self._stacking_tft = EfficientTFT(input_dim).to(dev)
+            state = torch.load(model_path, map_location=dev, weights_only=True)
             self._stacking_tft.load_state_dict(state)
             self._stacking_tft.eval()
-            logger.info(f"Stacking TFT 加载完成 (input_dim={input_dim})")
+            logger.info(f"Stacking TFT 加载完成 (input_dim={input_dim}, device={dev})")
 
         with torch.no_grad():
-            logit = self._stacking_tft(X_tensor)
+            logit = self._stacking_tft(X_tensor.to(self._inference_device))
             prob = torch.sigmoid(logit).item()
         return float(np.clip(prob, 0, 1))
 

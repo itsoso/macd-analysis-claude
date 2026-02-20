@@ -360,6 +360,7 @@ class LiveSignalGenerator:
                 except Exception as _ml_err:
                     if self.logger:
                         self.logger.warning(f"ML 增强失败: {_ml_err}")
+                    _ml_info = {'ml_error': str(_ml_err)[:120]}
 
             # 提取各维度分数
             components = self._extract_components(signals, idx, dt)
@@ -897,9 +898,37 @@ class LiveSignalGenerator:
 
         # ── 从各TF结果中提取连续分数 ──
         tf_scores = {}
+        tf_timestamps = {}
         for r in results:
             if r.get("ok") and "sell_score" in r and "buy_score" in r:
                 tf_scores[r["tf"]] = (r["sell_score"], r["buy_score"])
+                if r.get("timestamp"):
+                    tf_timestamps[r["tf"]] = r["timestamp"]
+
+        # ── TF 时间戳对齐校验: 各周期最新 K 线时间差超过自身周期的 10% 时告警 ──
+        _TF_MINUTES = {'15m': 15, '30m': 30, '1h': 60, '4h': 240, '8h': 480, '24h': 1440}
+        if len(tf_timestamps) >= 2 and self.logger:
+            import pandas as _pd
+            _ts_parsed = {}
+            for _tf, _ts in tf_timestamps.items():
+                try:
+                    _ts_parsed[_tf] = _pd.Timestamp(_ts)
+                except Exception:
+                    pass
+            if len(_ts_parsed) >= 2:
+                _ts_vals = sorted(_ts_parsed.values())
+                _max_gap_minutes = (_ts_vals[-1] - _ts_vals[0]).total_seconds() / 60
+                # 以最小参与周期作为容忍阈值
+                _min_tf_min = min(_TF_MINUTES.get(tf, 60) for tf in _ts_parsed)
+                _tolerance = _min_tf_min * 1.5
+                if _max_gap_minutes > _tolerance:
+                    _stale_tfs = [tf for tf, ts in _ts_parsed.items()
+                                  if (_ts_vals[-1] - ts).total_seconds() / 60 > _tolerance]
+                    self.logger.warning(
+                        f"[多周期对齐] TF 时间戳偏差 {_max_gap_minutes:.0f}min "
+                        f"(容忍 {_tolerance:.0f}min)，滞后 TF: {_stale_tfs}。"
+                        "共识决策可能基于过时数据。"
+                    )
 
         # ── 用统一融合算法计算共识 (与回测一致) ──
         fuse_config = {

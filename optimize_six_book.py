@@ -917,6 +917,15 @@ def _run_strategy_core(
                     sl_r = max(mae_sl_floor, min(mae_sl_ceil, sl_r))
                     _mae_sl_table[(_mr, _md)] = sl_r
 
+    # 警告: use_mae_driven_sl=True 但止损表为空 → 将静默降级到下一优先级止损模式
+    if use_mae_driven_sl and not _mae_sl_table:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "use_mae_driven_sl=True 但 _mae_sl_table 为空。"
+            "请检查 mae_sl_table 格式 (需含 {regime}_{dir}: {p75:..., p90:...}) "
+            "或 mae_sl_{regime}_{direction} config 键。已降级到下一优先级止损。"
+        )
+
     # [已移除] use_short_suppress: A/B+param_sweep双重验证完全零效果
 
     # Regime-aware 做空门控: trend/low_vol_trend 中提高做空门槛
@@ -4588,6 +4597,11 @@ def calc_multi_tf_consensus(tf_score_map, decision_tfs, dt, config):
     # 覆盖率门控可配置:
     # - 传统回测: coverage_min=0.0 (不门控)
     # - 实盘口径回放: coverage_min=0.5 (与 live 一致)
+    #
+    # use_live_gate (默认 False): 是否在回测中启用与实盘相同的四重门控
+    #   (actionable / direction / strength >= consensus_min_strength)。
+    # 设为 True 可使回测与实盘行为完全一致，但会过滤掉更多信号，
+    # 历史结果与未启用时不可比。建议在 coverage_min=0.5 基础上做对比实验。
     fuse_config = {
         'short_threshold': config.get('short_threshold', 25),
         'long_threshold': config.get('long_threshold', 40),
