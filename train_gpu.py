@@ -2544,7 +2544,7 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         # ---- C. 训练元学习器 ----
         log.info(f"\n训练 LogisticRegression 元学习器...")
 
-        meta_model = LogisticRegression(C=0.1, penalty='l2', solver='lbfgs',
+        meta_model = LogisticRegression(C=1.0, penalty='l2', solver='lbfgs',
                                         max_iter=1000, random_state=42)
         meta_model.fit(oof_X, oof_y)
 

@@ -71,6 +71,7 @@ class MLSignalEnhancer:
         self._quantile_model = None
         self._direction_model = None  # LGB 方向预测
         self._lstm_model = None       # LSTM 方向预测
+        self._lstm_onnx_session = None  # LSTM ONNX 推理会话（可选加速）
         self._tft_model = None        # v6: TFT 方向预测
         self._tft_onnx_session = None  # v6: TFT ONNX 推理会话（可选加速）
         self._cross_asset_model = None  # v6: 跨资产 LGB
@@ -531,6 +532,25 @@ class MLSignalEnhancer:
 
             # 取最后 SEQ_LEN 根
             seq = feat_values[-SEQ_LEN:]
+
+            # 优先尝试 ONNX 推理（CPU 友好，无需 PyTorch 模型加载）
+            onnx_path = model_path.replace('.pt', '.onnx')
+            if os.path.exists(onnx_path):
+                try:
+                    import onnxruntime as ort
+                    if self._lstm_onnx_session is None:
+                        self._lstm_onnx_session = ort.InferenceSession(
+                            onnx_path, providers=['CPUExecutionProvider'])
+                        logger.info(f"LSTM ONNX 加载完成 (seq={SEQ_LEN}, features={seq.shape[-1]})")
+                    ort_input = {self._lstm_onnx_session.get_inputs()[0].name: seq[np.newaxis].astype(np.float32)}
+                    logit = float(self._lstm_onnx_session.run(None, ort_input)[0][0, 0])
+                    prob = 1.0 / (1.0 + np.exp(-logit))  # sigmoid
+                    return float(np.clip(prob, 0, 1))
+                except Exception as onnx_err:
+                    logger.debug(f"LSTM ONNX 推理失败，回退 PyTorch: {onnx_err}")
+                    self._lstm_onnx_session = None
+
+            # PyTorch 回退
             X_tensor = torch.FloatTensor(seq).unsqueeze(0)  # (1, SEQ_LEN, features)
 
             # 延迟加载 LSTM 模型
