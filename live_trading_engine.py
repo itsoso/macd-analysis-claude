@@ -1131,11 +1131,20 @@ class LiveTradingEngine:
         except Exception as e:
             self.logger.warning(f"设置杠杆失败: {e}")
 
+    def _get_latest_price(self, default: float = 0.0) -> float:
+        """安全获取最新收盘价，_df 为 None 或空时返回 default"""
+        try:
+            _df = self.signal_generator._df
+            if _df is not None and len(_df) > 0:
+                return float(_df['close'].iloc[-1])
+        except Exception:
+            pass
+        return default
+
     def _log_balance(self):
         """记录余额快照"""
         try:
-            price = self.signal_generator._df['close'].iloc[-1] if \
-                self.signal_generator._df is not None else 0
+            price = self._get_latest_price()
             equity = self._calc_equity(price)
             unrealized = sum(p.calc_pnl(price) for p in self.positions.values())
 
@@ -1162,8 +1171,8 @@ class LiveTradingEngine:
             # 定期保存状态到文件，供 Web 控制面板读取
             self._save_state()
 
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.debug(f"_log_balance 失败: {e}")
 
     def _send_daily_summary(self, date: str):
         """发送每日总结"""
@@ -1171,8 +1180,7 @@ class LiveTradingEngine:
             daily = self.tracker.get_daily_summary(date)
             summary = self.tracker.get_summary()
 
-            price = (self.signal_generator._df['close'].iloc[-1]
-                    if self.signal_generator._df is not None else 0)
+            price = self._get_latest_price()
             equity = self._calc_equity(price)
 
             positions_info = []
@@ -1214,12 +1222,7 @@ class LiveTradingEngine:
     # ============================================================
     def _save_state(self):
         """保存引擎状态"""
-        price = 0
-        try:
-            if self.signal_generator._df is not None:
-                price = self.signal_generator._df['close'].iloc[-1]
-        except Exception:
-            pass
+        price = self._get_latest_price()
 
         state = {
             "phase": self.phase.value,
@@ -1337,9 +1340,7 @@ class LiveTradingEngine:
     # ============================================================
     def get_status(self) -> dict:
         """获取引擎状态"""
-        price = 0
-        if self.signal_generator._df is not None:
-            price = float(self.signal_generator._df['close'].iloc[-1])
+        price = self._get_latest_price()
 
         return {
             "phase": self.phase.value,
@@ -1369,10 +1370,9 @@ class LiveTradingEngine:
         """一键平仓"""
         self.risk_manager.activate_kill_switch(reason)
 
-        # 平仓所有持仓
-        if self.signal_generator._df is not None:
-            price = float(self.signal_generator._df['close'].iloc[-1])
-        else:
+        # 平仓所有持仓：优先用本地缓存价格，缺失时从交易所获取
+        price = self._get_latest_price()
+        if price == 0.0:
             price = self.order_manager.get_current_price(
                 self.config.strategy.symbol
             )
