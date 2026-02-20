@@ -57,7 +57,7 @@ $SSH_CMD "cd $REMOTE_DIR && git reset --hard HEAD && git pull origin main"
 # 3. 安装/更新 Python 依赖
 echo ""
 echo "[3/7] 安装 Python 依赖..."
-$SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && pip install --quiet onnxruntime>=1.16.0 'scikit-learn==1.7.2' 2>&1 | tail -3 && echo '  ✅ 依赖已确认 (onnxruntime, scikit-learn==1.7.2)'"
+$SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && pip install --quiet 'onnxruntime>=1.16.0' 'scikit-learn==1.7.2' 2>&1 | tail -3 && echo '  ✅ 依赖已确认 (onnxruntime, scikit-learn==1.7.2)'"
 
 # 4. 同步回测数据
 echo ""
