@@ -123,9 +123,11 @@ class MLSignalEnhancer:
         """加载所有可用模型"""
         loaded_any = False
 
-        # v5: LightGBM 方向预测模型
+        # v5: LightGBM 方向预测模型 (优先 1h 版本: 80维, AUC 0.5655)
         try:
-            lgb_path = os.path.join(self.model_dir, 'lgb_direction_model.txt')
+            lgb_path_1h = os.path.join(self.model_dir, 'lgb_direction_model_1h.txt')
+            lgb_path_old = os.path.join(self.model_dir, 'lgb_direction_model.txt')
+            lgb_path = lgb_path_1h if os.path.exists(lgb_path_1h) else lgb_path_old
             if os.path.exists(lgb_path):
                 import lightgbm as lgb_lib
                 self._direction_model = lgb_lib.Booster(model_file=lgb_path)
