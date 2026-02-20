@@ -2822,7 +2822,33 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         oof_meta_auc = roc_auc_score(oof_y, oof_meta_pred)
         log.info(f"  Meta OOF AUC: {oof_meta_auc:.4f}")
 
+        # 诊断: 检查负系数基模型 (L2 正则化可能对高度相关的树模型产生负权重)
+        base_coefs = meta_model.coef_[0][:len(model_names)]
+        neg_coef_models = [(model_names[i], round(float(base_coefs[i]), 4))
+                           for i in range(len(model_names)) if base_coefs[i] < 0]
+        if neg_coef_models:
+            log.warning(f"  ⚠️  负系数基模型: {neg_coef_models}")
+            log.warning(f"     负系数意味着该模型的看多预测反而使元学习器看空。")
+            log.warning(f"     可能原因: 两模型高度相关 + L2正则化 → 考虑 C=0.5 或移除该模型")
+        for i, (name, _) in enumerate(zip(model_names, base_coefs)):
+            log.info(f"  系数 {name}: {base_coefs[i]:.4f}")
+        if extra_feat_names:
+            extra_coefs = meta_model.coef_[0][len(model_names):]
+            for name, coef in zip(extra_feat_names, extra_coefs):
+                log.info(f"  系数 {name}: {coef:.4f}")
+        log.info(f"  截距: {float(meta_model.intercept_[0]):.4f}")
+
+        # 标签分布诊断 (高偏差警告)
+        label_mean = oof_y.mean()
+        oof_pred_mean = oof_meta_pred.mean()
+        log.info(f"  标签均值: {label_mean:.4f}, 预测均值: {oof_pred_mean:.4f}")
+        if abs(oof_pred_mean - label_mean) > 0.05:
+            log.warning(f"  ⚠️  元学习器预测存在偏差 ({oof_pred_mean:.3f} vs 标签{label_mean:.3f})，"
+                        f"可能导致实盘系统性{'看空' if oof_pred_mean < label_mean else '看多'}")
+
         # 验证/测试切分（最终评估放到全量基模型保存后，避免估计偏差）
+        # 注意: val_auc 使用全量重训基模型 (trained on train+val) 在 val 上评估 → 偏高 (in-sample)
+        # test_auc 使用全量重训基模型在 test 上评估 → 真实 holdout
         val_start = train_end + purge
         val_mask = ~np.isnan(y_all[val_start:val_end])
         test_start = val_end + purge
@@ -3499,13 +3525,16 @@ def _stacking_retrain_lstm_full(feat_raw, y_all, full_end, full_valid,
 
     model = LSTMAttention(input_dim).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    criterion = nn.BCEWithLogitsLoss()
+    # 标签平滑 (0→0.05, 1→0.95): 防止全量重训后 logit 过于极端，导致生产推理出现极端概率
+    # OOF 训练时 (20 epochs) 不会过拟合，但全量重训 (30 epochs) 容易收敛到极端 logit
+    label_smooth_eps = 0.05
 
     model.train()
     for ep in range(epochs):
         for xb, yb in loader:
             optimizer.zero_grad()
-            loss = criterion(model(xb), yb)
+            smooth_yb = yb * (1 - label_smooth_eps) + 0.5 * label_smooth_eps
+            loss = nn.functional.binary_cross_entropy_with_logits(model(xb), smooth_yb)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -3572,13 +3601,15 @@ def _stacking_retrain_tft_full(feat_raw, y_all, full_end, full_valid,
 
     model = EfficientTFT(input_dim).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-4)
-    criterion = nn.BCEWithLogitsLoss()
+    # 标签平滑: 防止全量重训 (25 epochs) 后 TFT logit 过于极端
+    label_smooth_eps = 0.05
 
     model.train()
     for ep in range(epochs):
         for xb, yb in loader:
             optimizer.zero_grad()
-            loss = criterion(model(xb), yb)
+            smooth_yb = yb * (1 - label_smooth_eps) + 0.5 * label_smooth_eps
+            loss = nn.functional.binary_cross_entropy_with_logits(model(xb), smooth_yb)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
