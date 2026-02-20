@@ -1,0 +1,19 @@
+{
+  "1h": {
+    "best_sharpe": 3.2892,
+    "best_params": {
+      "long_threshold": 47,
+      "short_threshold": 27,
+      "long_sl": -0.13597804559568402,
+      "long_tp": 0.5532508508609861,
+      "short_sl": -0.2009838844076499,
+      "short_tp": 0.7729518836397522,
+      "leverage": 3
+    },
+    "n_trials": 500,
+    "signal_time_sec": 62.5,
+    "optuna_time_sec": 6.4,
+    "total_time_sec": 70.5,
+    "trials_per_sec": 78.6
+  }
+}

@@ -19,6 +19,7 @@ logs/
 # 数据缓存
 data/
 !data/ml_models/
+!data/gpu_results/
 
 # IDE
 .idea/

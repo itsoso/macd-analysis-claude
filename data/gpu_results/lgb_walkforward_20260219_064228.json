@@ -1,0 +1,13 @@
+{
+  "15m": {
+    "total_folds": 1452,
+    "avg_val_auc": NaN,
+    "min_val_auc": NaN,
+    "max_val_auc": NaN,
+    "std_val_auc": NaN,
+    "elapsed_sec": 3193.6,
+    "timeframe": "15m",
+    "samples": 175043,
+    "features": 73
+  }
+}

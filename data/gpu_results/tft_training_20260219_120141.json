@@ -1,0 +1,14 @@
+{
+  "1h": {
+    "best_val_auc": 0.5479,
+    "test_auc": 0.5261,
+    "train_samples": 26147,
+    "val_samples": 8652,
+    "test_samples": 8652,
+    "epochs_trained": 20,
+    "input_dim": 94,
+    "n_params": 148482,
+    "bf16": true,
+    "elapsed_sec": 29.7
+  }
+}

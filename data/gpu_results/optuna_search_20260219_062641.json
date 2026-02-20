@@ -1,0 +1,20 @@
+{
+  "4h": {
+    "best_val_auc": 0.5581,
+    "holdout_auc": 0.5249,
+    "best_params": {
+      "boosting": "gbdt",
+      "num_leaves": 31,
+      "learning_rate": 0.06562482536484775,
+      "feature_fraction": 0.663282194345027,
+      "bagging_fraction": 0.7481661393492557,
+      "bagging_freq": 5,
+      "min_child_samples": 72,
+      "lambda_l1": 1.4522874562288282,
+      "lambda_l2": 0.061627744693131856,
+      "num_boost_round": 386
+    },
+    "n_trials": 100,
+    "elapsed_sec": 94.9
+  }
+}

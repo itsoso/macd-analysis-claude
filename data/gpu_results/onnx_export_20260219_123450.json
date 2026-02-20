@@ -1,0 +1,14 @@
+{
+  "tft_1h": {
+    "pytorch_cpu_ms": 9.524,
+    "onnx_cpu_ms": 1.734,
+    "speedup_cpu": 5.49,
+    "onnx_gpu_ms": 3.394,
+    "speedup_gpu": 2.81
+  },
+  "mtf_fusion": {
+    "pytorch_cpu_ms": 0.11,
+    "onnx_cpu_ms": 0.016,
+    "speedup_cpu": 6.73
+  }
+}

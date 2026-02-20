@@ -1,0 +1,2 @@
+{"timestamp": "2026-02-19T12:38:29.367546", "tf": "1h", "old_auc": 0, "new_auc": 0.5566, "n_train": 37178, "n_test": 3062, "action": "replaced"}
+{"timestamp": "2026-02-20T08:30:47.881461", "tf": "1h", "old_auc": 0.5566, "new_auc": 0.5593, "n_train": 37175, "n_test": 3063, "action": "replaced"}

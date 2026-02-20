@@ -1,0 +1,8 @@
+{
+  "1h": {
+    "val_auc": 0.5526,
+    "test_auc": 0.5485,
+    "n_features": 94,
+    "elapsed_sec": 8.3
+  }
+}
