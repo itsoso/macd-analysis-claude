@@ -1037,7 +1037,7 @@ def api_ml_status():
     try:
         model_dir = os.path.join(BASE_DIR, 'data', 'ml_models')
         models = {
-            'lgb_direction': ('lgb_direction_model.txt', 'LGB方向'),
+            'lgb_direction': ('lgb_direction_model_1h.txt', 'LGB方向(1h)'),
             'lstm': ('lstm_1h.pt', 'LSTM'),
             'regime': ('vol_regime_model.txt', 'Regime'),
             'quantile': ('quantile_config.json', '分位数'),
@@ -1045,25 +1045,41 @@ def api_ml_status():
             'cross_asset': ('lgb_cross_asset_1h.txt', '跨资产'),
             'mtf_fusion': ('mtf_fusion_mlp.pt', 'MTF融合'),
             'ppo': ('ppo_position_agent.zip', 'PPO仓位'),
+            'stacking': ('stacking_meta_1h.json', 'Stacking(1h)'),
         }
         status = {'training_meta': None, 'models': {}}
         for key, (fname, label) in models.items():
             fpath = os.path.join(model_dir, fname)
+            # lgb_direction: 优先 _1h.txt，fallback .txt（与推理侧一致）
+            if key == 'lgb_direction' and not os.path.exists(fpath):
+                fpath = os.path.join(model_dir, 'lgb_direction_model.txt')
             exists = os.path.exists(fpath)
             info = {'exists': exists, 'label': label}
             if exists:
-                meta_path = fpath + '.meta.json'
-                if not os.path.exists(meta_path):
-                    base = os.path.splitext(fpath)[0]
-                    meta_path = base + '.meta.json'
-                if os.path.exists(meta_path):
+                # stacking_meta_*.json 本身就是元数据，直接读
+                if fpath.endswith('.json') and 'stacking_meta' in fpath:
                     try:
-                        with open(meta_path) as f:
+                        with open(fpath) as f:
                             m = json.load(f)
-                        info['test_auc'] = m.get('test_auc') or m.get('val_auc')
+                        info['val_auc'] = m.get('val_auc')
+                        info['test_auc'] = m.get('test_auc')
                         info['trained_at'] = m.get('trained_at', '')[:16]
+                        info['base_models'] = m.get('base_models', [])
                     except Exception:
                         pass
+                else:
+                    meta_path = fpath + '.meta.json'
+                    if not os.path.exists(meta_path):
+                        base = os.path.splitext(fpath)[0]
+                        meta_path = base + '.meta.json'
+                    if os.path.exists(meta_path):
+                        try:
+                            with open(meta_path) as f:
+                                m = json.load(f)
+                            info['test_auc'] = m.get('test_auc') or m.get('val_auc')
+                            info['trained_at'] = m.get('trained_at', '')[:16]
+                        except Exception:
+                            pass
             status['models'][key] = info
 
         # 兼容旧字段

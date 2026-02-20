@@ -11,7 +11,13 @@ gunicorn>=22.0.0
 requests>=2.31.0
 python-binance>=1.0.19
 pytest>=8.0.0
-# ML 推理依赖 (v5 GPU ensemble 模型)
+# ML 推理依赖 (v6 GPU ensemble 模型)
 lightgbm>=4.0.0
 scikit-learn>=1.3.0
+xgboost>=1.7.0
+onnxruntime>=1.16.0
 pytorch-tabnet>=4.0
+
+# ML 训练依赖 (H800/本机训练时安装，推理环境可选)
+# torch>=2.0.0
+# optuna>=3.0.0

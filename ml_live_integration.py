@@ -209,6 +209,22 @@ class MLSignalEnhancer:
             gap = oof_auc - test_auc
             if gap > self.stacking_max_oof_test_gap:
                 return False, f"overfit_gap_too_large({gap:.4f}>{self.stacking_max_oof_test_gap:.4f})"
+
+        # meta_input_dim 严格校验：防止 schema 漂移导致维度不一致
+        declared_dim = cfg.get('meta_input_dim')
+        if declared_dim is not None:
+            expected_dim = len(cfg.get('base_models', [])) + len(cfg.get('extra_features', []))
+            if expected_dim > 0 and declared_dim != expected_dim:
+                return False, f"meta_dim_mismatch(declared={declared_dim},computed={expected_dim})"
+
+        # 相对门控：Stacking val_auc 不得低于 LGB direction test_auc - margin
+        # 避免系数失衡的 Stacking 劣于单模型 LGB
+        if val_auc is not None and self._direction_meta:
+            lgb_auc = _to_float(self._direction_meta.get('test_auc'))
+            margin = float(os.environ.get("ML_STACKING_MIN_RELATIVE_MARGIN", "-0.01"))
+            if lgb_auc is not None and val_auc < lgb_auc + margin:
+                return False, f"stacking_underperforms_lgb(stk={val_auc:.4f}<lgb={lgb_auc:.4f}+margin={margin})"
+
         return True, ""
 
     def _can_use_cross_asset(self, features: pd.DataFrame, ml_info: Optional[Dict] = None) -> bool:
@@ -487,13 +503,10 @@ class MLSignalEnhancer:
             return None
 
     def _predict_direction_lstm(self, features: pd.DataFrame) -> Optional[float]:
-        """LSTM 方向预测 → bull_prob"""
+        """LSTM 方向预测 → bull_prob（ONNX 优先，PyTorch fallback）"""
         if self._lstm_meta is None:
             return None
         try:
-            import torch
-            import torch.nn as nn
-
             model_path = self._lstm_meta['model_path']
             if not os.path.exists(model_path):
                 return None
@@ -559,7 +572,9 @@ class MLSignalEnhancer:
                     logger.debug(f"LSTM ONNX 推理失败，回退 PyTorch: {onnx_err}")
                     self._lstm_onnx_session = None
 
-            # PyTorch 回退
+            # PyTorch 回退（torch 仅在此处按需引入）
+            import torch
+            import torch.nn as nn
             X_tensor = torch.FloatTensor(seq).unsqueeze(0)  # (1, SEQ_LEN, features)
 
             # 延迟加载 LSTM 模型
@@ -602,13 +617,10 @@ class MLSignalEnhancer:
             return None
 
     def _predict_direction_tft(self, features: pd.DataFrame) -> Optional[float]:
-        """TFT 方向预测 → bull_prob"""
+        """TFT 方向预测 → bull_prob（ONNX 优先，PyTorch fallback）"""
         if self._tft_meta is None:
             return None
         try:
-            import torch
-            import torch.nn as nn
-
             model_path = self._tft_meta['model_path']
             if not os.path.exists(model_path):
                 return None
@@ -652,6 +664,9 @@ class MLSignalEnhancer:
                     logger.debug(f"TFT ONNX 推理失败，回退 PyTorch: {onnx_err}")
                     self._tft_onnx_session = None  # 清除，下次重试
 
+            # PyTorch 回退（torch 仅在此处按需引入）
+            import torch
+            import torch.nn as nn
             X_tensor = torch.FloatTensor(seq).unsqueeze(0)
 
             if self._tft_model is None:
