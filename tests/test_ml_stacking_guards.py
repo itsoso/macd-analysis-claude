@@ -36,35 +36,35 @@ def test_stacking_quality_gate_rejects_low_auc():
     assert "val_auc_too_low" in reason
 
 
-def test_stacking_quality_gate_relative_uses_val_auc():
-    """相对门控改为用 val_auc（OOF，更可靠）而非 test_auc（单次holdout，高方差）。
-    val_auc=0.57 > lgb(0.56)-margin(0.01)=0.55 → 应通过；test_auc 低不影响。"""
+def test_stacking_quality_gate_relative_uses_oof_auc():
+    """相对门控改为用 oof_meta_auc（真正 OOF，~24k 样本）而非 val_auc（in-sample，偏高）。
+    oof_meta_auc=0.58 > lgb(0.56)-margin(0.01)=0.55 → 应通过；val_auc/test_auc 低不影响相对门控。"""
     enhancer = MLSignalEnhancer()
     enhancer._direction_meta = {"test_auc": 0.56}
     ok, reason = enhancer._stacking_quality_gate(
         {
             "timeframe": "1h",
-            "val_auc": 0.57,      # 高于 LGB-0.01=0.55 → 用 val_auc 应通过
-            "test_auc": 0.54,     # 低于 LGB-0.01=0.55，但 test_auc 不再参与相对门控
-            "oof_meta_auc": 0.58,
+            "val_auc": 0.57,
+            "test_auc": 0.54,
+            "oof_meta_auc": 0.58,  # 真正 OOF，高于 LGB-0.01=0.55 → 应通过
             "base_models": ["lgb", "xgboost", "lstm", "tft", "cross_asset_lgb"],
             "extra_features": ["hvol_20"],
             "meta_input_dim": 6,
         }
     )
-    assert ok is True, f"val_auc(0.57)>=lgb(0.56)-margin(0.01) 应通过，reason={reason}"
+    assert ok is True, f"oof_meta_auc(0.58)>=lgb(0.56)-margin(0.01) 应通过，reason={reason}"
 
 
-def test_stacking_quality_gate_relative_blocks_low_val_auc():
-    """val_auc 低于 LGB-margin 时，相对门控应拒绝。"""
+def test_stacking_quality_gate_relative_blocks_low_oof_auc():
+    """oof_meta_auc 低于 LGB-margin 时，相对门控应拒绝（val_auc 高不影响结论）。"""
     enhancer = MLSignalEnhancer()
     enhancer._direction_meta = {"test_auc": 0.56}
     ok, reason = enhancer._stacking_quality_gate(
         {
             "timeframe": "1h",
-            "val_auc": 0.54,      # 低于 LGB(0.56)-0.01=0.55 → 应被拒绝
+            "val_auc": 0.83,      # in-sample 偏高，不再参与相对门控
             "test_auc": 0.57,
-            "oof_meta_auc": 0.58,
+            "oof_meta_auc": 0.54,  # 真 OOF 低于 LGB(0.56)-0.01=0.55 → 应被拒绝
             "base_models": ["lgb", "xgboost", "lstm", "tft", "cross_asset_lgb"],
             "extra_features": ["hvol_20"],
             "meta_input_dim": 6,

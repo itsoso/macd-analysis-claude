@@ -269,11 +269,12 @@ class MLSignalEnhancer:
             if expected_dim > 0 and declared_dim != expected_dim:
                 return False, f"meta_dim_mismatch(declared={declared_dim},computed={expected_dim})"
 
-        # 相对门控：Stacking val_auc 基于 5 折 OOF（~24k 样本，统计更可靠）
-        # test_auc 为单次 holdout（方差大）；用 val_auc 做相对比较更公平。
-        # 无 val 时回退 test_auc。
+        # 相对门控：val_auc 实为全量基模型在 val 段的 in-sample AUC（偏高，≈0.83），
+        # 不可用于与 LGB holdout test_auc 的公平比较。
+        # 改用 oof_meta_auc（5 折 OOF，~24k 样本，真正 out-of-sample）作为相对基准；
+        # oof 不可用时回退 test_auc（单次 holdout，方差大但仍公平）。
         if self._direction_meta:
-            stk_auc = val_auc if val_auc is not None else test_auc
+            stk_auc = oof_auc if oof_auc is not None else test_auc
             lgb_auc = _to_float(self._direction_meta.get('test_auc'))
             if lgb_auc is None:
                 lgb_auc = _to_float(self._direction_meta.get('val_auc'))
@@ -1166,11 +1167,15 @@ class MLSignalEnhancer:
         else:
             meta_X = np.array([[lgb_prob, xgb_prob, lstm_prob, tft_prob]])
 
-        # 附加特征 (hvol_20 等)
+        # 附加特征 (hvol_20 等)；当模型期望该特征时必须追加，否则维度不匹配
         extra_features = cfg.get('extra_features', [])
-        if 'hvol_20' in extra_features and 'hvol_20' in features.columns:
-            hvol = float(features['hvol_20'].iloc[-1])
-            if np.isnan(hvol) or np.isinf(hvol):
+        if 'hvol_20' in extra_features:
+            if 'hvol_20' in features.columns:
+                hvol = float(features['hvol_20'].iloc[-1])
+                if np.isnan(hvol) or np.isinf(hvol):
+                    hvol = 0.0
+            else:
+                logger.warning("Stacking: hvol_20 不在 features 中，使用 0.0 fallback")
                 hvol = 0.0
             meta_X = np.hstack([meta_X, [[hvol]]])
 
