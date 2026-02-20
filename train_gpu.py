@@ -1638,7 +1638,7 @@ def export_onnx_models():
             model.load_state_dict(state)
             model.eval()
 
-            seq_len = ckpt.get('seq_len', 24) if isinstance(ckpt, dict) and 'seq_len' in ckpt else 24
+            seq_len = ckpt.get('seq_len', 48) if isinstance(ckpt, dict) and 'seq_len' in ckpt else 48
             dummy = torch.randn(1, seq_len, input_dim)
             onnx_path = os.path.join(MODEL_DIR, 'lstm_1h.onnx')
 
@@ -2384,7 +2384,7 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         N_FOLDS = 5
         fold_size = train_end // N_FOLDS
 
-        oof_preds = np.full((train_end, 4), np.nan)  # (n_train, 4 models)
+        oof_preds = np.full((train_end, 5), np.nan)  # (n_train, 5 models)
         oof_valid = np.zeros(train_end, dtype=bool)
 
         log.info(f"\n生成 OOF 预测 ({N_FOLDS} folds, expanding window)...")
@@ -2479,6 +2479,24 @@ def train_stacking_ensemble(timeframes: List[str] = None):
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} TFT 失败: {e}")
 
+            # --- 基模型 5: Cross-Asset LGB (94 dims) ---
+            try:
+                import lightgbm as lgb
+                lgb_cross_params = {
+                    'objective': 'binary', 'metric': 'auc',
+                    'boosting_type': 'gbdt', 'num_leaves': 34,
+                    'learning_rate': 0.0102, 'feature_fraction': 0.573,
+                    'bagging_fraction': 0.513, 'bagging_freq': 3,
+                    'min_child_samples': 56, 'lambda_l1': 0.0114,
+                    'lambda_l2': 0.2146, 'verbose': -1, 'n_jobs': -1, 'seed': 43,
+                }
+                dtrain_cross = lgb.Dataset(X_tr_94, label=y_tr)
+                lgb_cross_model = lgb.train(lgb_cross_params, dtrain_cross, num_boost_round=300)
+                lgb_cross_pred = lgb_cross_model.predict(X_fold_94)
+                oof_preds[fold_start:fold_end, 4][fold_valid] = lgb_cross_pred
+            except Exception as e:
+                log.warning(f"  Fold {fold_idx} Cross-Asset LGB 失败: {e}")
+
             oof_valid[fold_start:fold_end] |= fold_valid
 
         # OOF 汇总
@@ -2491,7 +2509,7 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         oof_X = oof_filled[has_oof]
         oof_y = y_all[:train_end][has_oof]
 
-        model_names = ['LGB', 'XGBoost', 'LSTM', 'TFT']
+        model_names = ['LGB', 'XGBoost', 'LSTM', 'TFT', 'CrossAssetLGB']
         log.info(f"\nOOF 汇总: {len(oof_X)} 有效样本")
         for i, name in enumerate(model_names):
             valid_mask = ~np.isnan(oof_preds[:train_end][has_oof, i])
@@ -2613,6 +2631,24 @@ def train_stacking_ensemble(timeframes: List[str] = None):
             log.info("  TFT 保存完成")
         except Exception as e:
             log.warning(f"  TFT 全量训练失败: {e}")
+
+        # 重训 Cross-Asset LGB
+        try:
+            import lightgbm as lgb
+            lgb_cross_params = {
+                'objective': 'binary', 'metric': 'auc',
+                'boosting_type': 'gbdt', 'num_leaves': 34,
+                'learning_rate': 0.0102, 'feature_fraction': 0.573,
+                'bagging_fraction': 0.513, 'bagging_freq': 3,
+                'min_child_samples': 56, 'lambda_l1': 0.0114,
+                'lambda_l2': 0.2146, 'verbose': -1, 'n_jobs': -1, 'seed': 43,
+            }
+            dtrain_cross = lgb.Dataset(X_full_94, label=y_full)
+            final_lgb_cross = lgb.train(lgb_cross_params, dtrain_cross, num_boost_round=400)
+            final_lgb_cross.save_model(os.path.join(MODEL_DIR, f'stacking_lgb_cross_{tf}.txt'))
+            log.info("  Cross-Asset LGB 保存完成")
+        except Exception as e:
+            log.warning(f"  Cross-Asset LGB 全量训练失败: {e}")
 
         # 保存元学习器（按 timeframe 隔离，避免多周期互相覆盖）
         meta_file = f'stacking_meta_{tf}.pkl'
@@ -2922,11 +2958,12 @@ def _stacking_evaluate_meta(meta_model, feat_73, feat_94,
     except Exception:
         xgb_pred = np.full(len(X_73), 0.5)
 
-    # LSTM/TFT: 简化为 0.5 (全量基模型评估需要大量计算)
+    # LSTM/TFT/CrossAssetLGB: 简化为 0.5 (全量基模型评估需要大量计算)
     lstm_pred = np.full(len(X_73), 0.5)
     tft_pred = np.full(len(X_73), 0.5)
+    lgb_cross_pred = np.full(len(X_73), 0.5)
 
-    meta_X = np.column_stack([lgb_pred, xgb_pred, lstm_pred, tft_pred])
+    meta_X = np.column_stack([lgb_pred, xgb_pred, lstm_pred, tft_pred, lgb_cross_pred])
 
     # 附加特征
     if hvol_idx >= 0 and 'hvol_20' in extra_feat_names:
