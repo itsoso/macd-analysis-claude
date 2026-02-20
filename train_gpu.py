@@ -1803,7 +1803,7 @@ def export_onnx_models():
             seq_len = int(lstm_meta.get('seq_len', 48))
 
             # 检测是否为 Multi-Horizon 模型 (head_5h.* keys vs classifier.* keys)
-            is_multi_horizon = bool(lstm_meta.get('multi_horizon', False)) or any(k.startswith('head_5h.') for k in state)
+            is_multi_horizon = any('head_5h' in k for k in state)
 
             if is_multi_horizon:
                 # 读取 meta 文件确定最佳预测头
@@ -2567,7 +2567,7 @@ def train_mtf_fusion(decision_tfs=None):
 # 模式 12: Stacking Ensemble Meta-Learner
 # ================================================================
 
-def train_stacking_ensemble(timeframes: List[str] = None):
+def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 20000):
     """
     Stacking 集成: 4 个异构基模型的 OOF 预测 → LogisticRegression 元学习器。
 
@@ -2604,6 +2604,19 @@ def train_stacking_ensemble(timeframes: List[str] = None):
 
         label = labels_df['profitable_long_5']
         n = len(features)
+
+        # 样本门禁：小样本下 Stacking 容易过拟合，直接跳过避免浪费 H800 资源
+        if n < int(min_samples):
+            reason = f"insufficient_samples({n}<{int(min_samples)})"
+            log.warning(f"跳过 {tf} Stacking: {reason}")
+            all_results[tf] = {
+                "timeframe": tf,
+                "skipped": True,
+                "skip_reason": reason,
+                "n_samples": n,
+                "min_samples_required": int(min_samples),
+            }
+            continue
 
         # 时间分割: 70% train, 15% val, 15% test
         train_end = int(n * 0.7)
@@ -3572,7 +3585,7 @@ def _stacking_retrain_tft_full(feat_raw, y_all, full_end, full_valid,
 # 模式 13: TabNet 训练 (表格数据专用深度学习)
 # ================================================================
 
-def train_tabnet(timeframes: List[str] = None):
+def train_tabnet(timeframes: List[str] = None, min_samples: int = 10000):
     """
     训练 TabNet 模型 — 表格数据专用深度学习
 
@@ -3581,12 +3594,6 @@ def train_tabnet(timeframes: List[str] = None):
     - 稀疏特征选择
     - 性能优于传统 GBDT (在某些任务上)
     """
-    try:
-        from ml_tabnet import TabNetPredictor, train_tabnet_walk_forward
-    except ImportError:
-        log.error("ml_tabnet 模块未找到，请确保 ml_tabnet.py 存在")
-        return {}
-
     timeframes = timeframes or ['1h']
     all_results = {}
 
@@ -3602,7 +3609,33 @@ def train_tabnet(timeframes: List[str] = None):
 
         # 添加跨资产特征
         features = _add_cross_asset_features(features, tf)
-        log.info(f"含跨资产特征: {features.shape[1]} 维")
+        n_samples = len(features)
+        log.info(f"含跨资产特征: {features.shape[1]} 维, 样本: {n_samples}")
+
+        # 样本门禁：TabNet 在小样本上不稳定，达到门槛再训练
+        if n_samples < int(min_samples):
+            reason = f"insufficient_samples({n_samples}<{int(min_samples)})"
+            log.warning(f"跳过 {tf} TabNet: {reason}")
+            all_results[tf] = {
+                "timeframe": tf,
+                "skipped": True,
+                "skip_reason": reason,
+                "n_samples": n_samples,
+                "min_samples_required": int(min_samples),
+            }
+            continue
+
+        try:
+            from ml_tabnet import train_tabnet_walk_forward
+        except ImportError:
+            log.error("ml_tabnet 模块未找到，请确保 ml_tabnet.py 存在")
+            all_results[tf] = {
+                "timeframe": tf,
+                "skipped": True,
+                "skip_reason": "ml_tabnet_missing",
+                "n_samples": n_samples,
+            }
+            continue
 
         # 使用利润化标签
         target_col = 'profitable_long_5'
@@ -3679,6 +3712,12 @@ def main():
                         help='交易对')
     parser.add_argument('--multi-horizon', type=int, default=1, choices=[0, 1],
                         help='LSTM 是否启用 Multi-Horizon (1=启用, 0=单头回退)')
+    parser.add_argument('--min-stacking-samples', type=int,
+                        default=int(os.environ.get('ML_STACKING_MIN_OOF_SAMPLES', '20000')),
+                        help='Stacking 最小样本门槛 (默认 20000)')
+    parser.add_argument('--min-tabnet-samples', type=int,
+                        default=int(os.environ.get('ML_TABNET_MIN_SAMPLES', '10000')),
+                        help='TabNet 最小样本门槛 (默认 10000)')
     args = parser.parse_args()
 
     global SYMBOL
@@ -3725,10 +3764,10 @@ def main():
         results['retrain'] = train_online_retrain(tfs)
 
     if args.mode in ('stacking', 'all_v4'):
-        results['stacking'] = train_stacking_ensemble(tfs)
+        results['stacking'] = train_stacking_ensemble(tfs, min_samples=args.min_stacking_samples)
 
     if args.mode == 'tabnet':
-        results['tabnet'] = train_tabnet(tfs)
+        results['tabnet'] = train_tabnet(tfs, min_samples=args.min_tabnet_samples)
 
     total_elapsed = time.time() - t_total
     log.info(f"\n{'='*60}")

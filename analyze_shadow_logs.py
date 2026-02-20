@@ -53,11 +53,20 @@ def load_signals(log_files):
 def summarize_coverage(signals):
     """统计 ML shadow 覆盖率"""
     total = len(signals)
-    with_ml = sum(1 for s in signals
-                  if 'ml_bull_prob' in s.get('data', {}).get('components', {}))
-    with_error = sum(1 for s in signals
-                     if 'ml_error' in s.get('data', {}).get('components', {}))
-    no_ml = total - with_ml - with_error
+    with_ml = 0
+    with_error = 0
+    no_ml = 0
+    for s in signals:
+        c = s.get('data', {}).get('components', {})
+        has_ml = 'ml_bull_prob' in c
+        err = str(c.get('ml_error', '')).strip()
+        has_error = bool(err)
+        if has_ml:
+            with_ml += 1
+        if has_error:
+            with_error += 1
+        if not has_ml and not has_error:
+            no_ml += 1
 
     print(f"\n── 信号覆盖率 (共 {total} 条信号) ──────────────")
     if total == 0:
@@ -84,7 +93,21 @@ def analyze_bull_prob(signals):
         print(f"  {WARN} 无 ML 预测数据，跳过")
         return
 
-    probs = [float(s['data']['components']['ml_bull_prob']) for s in ml_sigs]
+    def _to_float(v):
+        try:
+            return float(v)
+        except Exception:
+            return None
+
+    probs = []
+    for s in ml_sigs:
+        p = _to_float(s['data']['components'].get('ml_bull_prob'))
+        if p is not None:
+            probs.append(p)
+    if not probs:
+        print(f"\n── Bull Prob 分析 ───────────────────────────")
+        print(f"  {WARN} bull_prob 字段存在但全部不可解析，跳过")
+        return
     directions = [s['data']['components'].get('ml_direction', 'neutral') for s in ml_sigs]
 
     def _dir_bucket(raw):
@@ -139,6 +162,56 @@ def analyze_bull_prob(signals):
     if lgb_tft_rate is not None:
         print(f"  {INFO} LGB-TFT  方向一致率: {lgb_tft_rate:.1%} (N={n2})")
 
+    # 子模型健康诊断
+    lstm_vals = [v for v in (_to_float(x) for x in lstm_probs) if v is not None]
+    tft_vals = [v for v in (_to_float(x) for x in tft_probs) if v is not None]
+    stacking_flags = [
+        bool(s.get('data', {}).get('components', {}).get('ml_stacking_mode', False))
+        for s in ml_sigs
+    ]
+    disabled_reasons = [
+        str(s.get('data', {}).get('components', {}).get('ml_stacking_disabled_reason', '')).strip()
+        for s in ml_sigs
+    ]
+    disabled_reasons = [r for r in disabled_reasons if r]
+
+    print(f"\n── 子模型健康诊断 ──────────────────────────")
+    if tft_vals:
+        tft_zero_ratio = sum(1 for v in tft_vals if abs(v) <= 1e-8) / len(tft_vals)
+        if tft_zero_ratio >= 0.95 and len(tft_vals) >= 10:
+            print(f"  {FAIL} TFT 输出近乎恒为 0 (zero_ratio={tft_zero_ratio:.1%}, N={len(tft_vals)})")
+        else:
+            print(f"  {INFO} TFT 输出正常 (N={len(tft_vals)}, min={min(tft_vals):.4f}, max={max(tft_vals):.4f})")
+    else:
+        print(f"  {WARN} TFT 无可用输出")
+
+    if lstm_vals:
+        import statistics
+        lstm_p90 = sorted(lstm_vals)[int(0.9 * (len(lstm_vals) - 1))]
+        lstm_median = statistics.median(lstm_vals)
+        if len(lstm_vals) >= 10 and lstm_median < 0.15 and lstm_p90 < 0.30:
+            print(f"  {FAIL} LSTM 输出异常偏低 (median={lstm_median:.4f}, p90={lstm_p90:.4f}, N={len(lstm_vals)})")
+        else:
+            print(f"  {INFO} LSTM 输出正常 (median={lstm_median:.4f}, p90={lstm_p90:.4f}, N={len(lstm_vals)})")
+    else:
+        print(f"  {WARN} LSTM 无可用输出")
+
+    if stacking_flags:
+        active = sum(1 for x in stacking_flags if x)
+        ratio = active / len(stacking_flags)
+        if ratio == 0:
+            print(f"  {FAIL} Stacking 未激活 (0/{len(stacking_flags)})")
+            if disabled_reasons:
+                reason_counts = defaultdict(int)
+                for r in disabled_reasons:
+                    reason_counts[r] += 1
+                top_reason, top_count = sorted(reason_counts.items(), key=lambda x: -x[1])[0]
+                print(f"       主要原因: {top_reason} ({top_count} 次)")
+        else:
+            print(f"  {INFO} Stacking 激活率: {active}/{len(stacking_flags)} ({ratio:.1%})")
+    else:
+        print(f"  {WARN} 无法判断 Stacking 是否激活 (缺少 ml_stacking_mode 字段)")
+
 
 def analyze_regime(signals):
     """统计 regime 分类分布"""
@@ -162,15 +235,17 @@ def analyze_regime(signals):
 
 def analyze_ml_errors(signals):
     """分析 ML 错误信息"""
-    error_sigs = [s for s in signals
-                  if 'ml_error' in s.get('data', {}).get('components', {})]
+    error_sigs = []
+    for s in signals:
+        err = str(s.get('data', {}).get('components', {}).get('ml_error', '')).strip()
+        if err:
+            error_sigs.append((s, err))
     if not error_sigs:
         return
 
     print(f"\n── ML 错误分析 ({len(error_sigs)} 条) ───────────")
     error_counts = defaultdict(int)
-    for s in error_sigs:
-        err = s['data']['components'].get('ml_error', '?')
+    for _, err in error_sigs:
         # 取错误前60字符作为 key
         error_counts[err[:60]] += 1
     for err, cnt in sorted(error_counts.items(), key=lambda x: -x[1]):
@@ -211,8 +286,11 @@ def print_deployment_advice(signals):
 
     ml_sigs = [s for s in signals
                if 'ml_bull_prob' in s.get('data', {}).get('components', {})]
-    error_sigs = [s for s in signals
-                  if 'ml_error' in s.get('data', {}).get('components', {})]
+    error_sigs = []
+    for s in signals:
+        err = str(s.get('data', {}).get('components', {}).get('ml_error', '')).strip()
+        if err:
+            error_sigs.append(s)
 
     print(f"\n── 部署建议 ─────────────────────────────────")
     pct = len(ml_sigs) / total * 100

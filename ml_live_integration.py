@@ -814,9 +814,7 @@ class MLSignalEnhancer:
                 hidden_dim = int(self._lstm_meta.get('hidden_dim', state['lstm.weight_hh_l0'].shape[1]))
                 num_layers = int(self._lstm_meta.get('num_layers', 2))
                 dropout = float(self._lstm_meta.get('dropout', 0.3))
-                multi_horizon = bool(self._lstm_meta.get('multi_horizon', False)) or any(
-                    k.startswith('head_5h') for k in state.keys()
-                )
+                multi_horizon = any('head_5h' in k for k in state.keys())
                 best_head = str(self._lstm_meta.get('best_head', '5h')).lower()
                 if best_head not in ('5h', '12h', '24h'):
                     best_head = '5h'

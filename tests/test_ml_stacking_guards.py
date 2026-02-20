@@ -74,6 +74,25 @@ def test_stacking_quality_gate_relative_blocks_low_val_auc():
     assert "stacking_underperforms_lgb" in reason
 
 
+def test_stacking_quality_gate_rejects_insufficient_oof_samples():
+    enhancer = MLSignalEnhancer()
+    enhancer.stacking_min_oof_samples = 20000
+    ok, reason = enhancer._stacking_quality_gate(
+        {
+            "timeframe": "1h",
+            "val_auc": 0.57,
+            "test_auc": 0.56,
+            "oof_meta_auc": 0.58,
+            "n_oof_samples": 4200,
+            "base_models": ["lgb", "xgboost", "lstm", "tft", "cross_asset_lgb"],
+            "extra_features": ["hvol_20"],
+            "meta_input_dim": 6,
+        }
+    )
+    assert ok is False
+    assert "insufficient_oof_samples" in reason
+
+
 def test_load_model_skips_low_quality_stacking(tmp_path):
     cfg = {
         "timeframe": "1h",
