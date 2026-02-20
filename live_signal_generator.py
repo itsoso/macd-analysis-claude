@@ -408,10 +408,6 @@ class LiveSignalGenerator:
                     if self.logger:
                         # v5: 记录完整 ML 决策信息
                         _bull = _ml_info.get('bull_prob', '-')
-                        _lgb = _ml_info.get('lgb_bull_prob', '-')
-                        _lstm = _ml_info.get('lstm_bull_prob', '-')
-                        _tft = _ml_info.get('tft_bull_prob', '-')
-                        _ca = _ml_info.get('ca_bull_prob', '-')
                         _dir_act = _ml_info.get('direction_action', '-')
                         _regime = _ml_info.get('regime', '?')
                         _conf = _ml_info.get('trade_confidence', 0)
@@ -427,9 +423,26 @@ class LiveSignalGenerator:
                         _cov94 = _ml_info.get('stacking_feature_coverage_94', '-')
                         _ca_cov = _ml_info.get('ca_feature_coverage', '-')
                         _remote = _ml_info.get('remote_inference', False)
+                        # Stacking 路径: 显示各基模型概率; 加权路径: 显示独立模型概率
+                        if _ml_info.get('stacking_mode', False):
+                            _stk_lgb = _ml_info.get('stacking_lgb_prob', '-')
+                            _stk_xgb = _ml_info.get('stacking_xgb_prob', '-')
+                            _stk_lstm = _ml_info.get('stacking_lstm_prob', '-')
+                            _stk_tft = _ml_info.get('stacking_tft_prob', '-')
+                            _stk_cross = _ml_info.get('stacking_cross_lgb_prob', '-')
+                            _model_detail = (
+                                f"stk: lgb={_stk_lgb} xgb={_stk_xgb} "
+                                f"lstm={_stk_lstm} tft={_stk_tft} cross={_stk_cross}"
+                            )
+                        else:
+                            _lgb = _ml_info.get('lgb_bull_prob', '-')
+                            _lstm = _ml_info.get('lstm_bull_prob', '-')
+                            _tft = _ml_info.get('tft_bull_prob', '-')
+                            _ca = _ml_info.get('ca_bull_prob', '-')
+                            _model_detail = f"LGB={_lgb}, LSTM={_lstm}, TFT={_tft}, CA={_ca}"
                         self.logger.info(
                             f"[ML {_mode} {_ver}] bull_prob={_bull} "
-                            f"(LGB={_lgb}, LSTM={_lstm}, TFT={_tft}, CA={_ca}) "
+                            f"({_model_detail}) "
                             f"dir={_dir_act} regime={_regime} "
                             f"conf={_conf:.3f} "
                             f"kelly={_kelly} pos_scale={_pos_scale} "
@@ -508,6 +521,12 @@ class LiveSignalGenerator:
                 components['ml_stacking_cov_73'] = _ml_info.get('stacking_feature_coverage_73', '')
                 components['ml_stacking_cov_94'] = _ml_info.get('stacking_feature_coverage_94', '')
                 components['ml_ca_cov'] = _ml_info.get('ca_feature_coverage', '')
+                # Stacking 基模型概率 (仅在 stacking_mode=True 时有值)
+                if _ml_info.get('stacking_mode', False):
+                    for _sk in ('lgb', 'xgb', 'lstm', 'tft', 'cross_lgb'):
+                        _kv = _ml_info.get(f'stacking_{_sk}_prob')
+                        if _kv is not None:
+                            components[f'ml_stacking_{_sk}_prob'] = _kv
                 components['ml_error'] = _ml_info.get('ml_error', '')
 
             # 构建结果
