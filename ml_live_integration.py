@@ -1190,6 +1190,7 @@ class MLSignalEnhancer:
             meta_X = np.array([[lgb_prob, xgb_prob, lstm_prob, tft_prob]])
 
         # 附加特征 (hvol_20 等)；当模型期望该特征时必须追加，否则维度不匹配
+        # stacking_v3 起对 hvol_20 应用 z-score 标准化 (mean/std 存储于 meta JSON)
         extra_features = cfg.get('extra_features', [])
         if 'hvol_20' in extra_features:
             if 'hvol_20' in features.columns:
@@ -1199,6 +1200,11 @@ class MLSignalEnhancer:
             else:
                 logger.warning("Stacking: hvol_20 不在 features 中，使用 0.0 fallback")
                 hvol = 0.0
+            # v3+ 应用 z-score 标准化（与训练时对齐）
+            if cfg.get('version', 'stacking_v2') >= 'stacking_v3':
+                hvol_mean = float(cfg.get('hvol_extra_mean', 0.0))
+                hvol_std = max(float(cfg.get('hvol_extra_std', 1.0)), 1e-8)
+                hvol = (hvol - hvol_mean) / hvol_std
             meta_X = np.hstack([meta_X, [[hvol]]])
 
         # 元学习器预测

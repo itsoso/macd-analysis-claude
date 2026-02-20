@@ -2798,23 +2798,33 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         if low_var_models:
             log.warning(f"  ⚠️  低方差模型 (std<0.05): {low_var_models} - 考虑移除")
 
-        # 可选附加特征: hvol_20, regime_label
+        # 可选附加特征: hvol_20 (z-score 标准化，防止原始值量纲差异导致系数过大)
         extra_feat_names = []
         oof_extra = []
+        hvol_extra_mean: float = 0.0
+        hvol_extra_std: float = 1.0
         hvol_idx = feat_73_cols.index('hvol_20') if 'hvol_20' in feat_73_cols else -1
         if hvol_idx >= 0:
-            oof_extra.append(feat_73[:train_end][has_oof, hvol_idx:hvol_idx+1])
+            hvol_raw = feat_73[:train_end][has_oof, hvol_idx:hvol_idx+1]
+            hvol_extra_mean = float(np.nanmean(hvol_raw))
+            hvol_extra_std = float(np.nanstd(hvol_raw)) + 1e-8
+            hvol_z = (hvol_raw - hvol_extra_mean) / hvol_extra_std
+            oof_extra.append(hvol_z)
             extra_feat_names.append('hvol_20')
+            log.info(f"  hvol_20 标准化: mean={hvol_extra_mean:.4f} std={hvol_extra_std:.4f}")
 
         if oof_extra:
             oof_X = np.hstack([oof_X] + oof_extra)
             log.info(f"  附加特征: {extra_feat_names} → 元学习器输入 {oof_X.shape[1]} 维")
 
         # ---- C. 训练元学习器 ----
-        log.info(f"\n训练 LogisticRegression 元学习器...")
+        # class_weight='balanced': 修正系统性看空偏差（训练集多空不平衡时调整截距）
+        # C=0.3: 强化 L2 正则化，减少 XGB 与 LGB 高度相关时产生的负系数问题
+        log.info(f"\n训练 LogisticRegression 元学习器 (C=0.3, balanced)...")
 
-        meta_model = LogisticRegression(C=1.0, penalty='l2', solver='lbfgs',
-                                        max_iter=1000, random_state=42)
+        meta_model = LogisticRegression(C=0.3, penalty='l2', solver='lbfgs',
+                                        max_iter=1000, random_state=42,
+                                        class_weight='balanced')
         meta_model.fit(oof_X, oof_y)
 
         # OOF 性能
@@ -2959,6 +2969,8 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             feat_std_73=feat_std_73,
             feat_mean_94=feat_mean_94,
             feat_std_94=feat_std_94,
+            hvol_extra_mean=hvol_extra_mean,
+            hvol_extra_std=hvol_extra_std,
         )
         test_auc = _stacking_evaluate_meta_with_saved_models(
             meta_model=meta_model,
@@ -2975,6 +2987,8 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             feat_std_73=feat_std_73,
             feat_mean_94=feat_mean_94,
             feat_std_94=feat_std_94,
+            hvol_extra_mean=hvol_extra_mean,
+            hvol_extra_std=hvol_extra_std,
         )
         log.info(f"  验证 AUC(最终基模型): {val_auc:.4f}")
         log.info(f"  测试 AUC(最终基模型): {test_auc:.4f}")
@@ -2990,7 +3004,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         meta_intercept = float(meta_model.intercept_[0])
         base_model_names = ['lgb', 'xgboost', 'lstm', 'tft', 'cross_asset_lgb'] + extra_feat_names
         stacking_meta = {
-            'version': 'stacking_v2',
+            'version': 'stacking_v3',
             'timeframe': tf,
             'trained_at': datetime.now().isoformat(),
             'base_models': ['lgb', 'xgboost', 'lstm', 'tft', 'cross_asset_lgb'],
@@ -2998,6 +3012,9 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             'meta_input_dim': len(base_model_names),
             'meta_coefficients': dict(zip(base_model_names, meta_coef)),
             'meta_intercept': meta_intercept,
+            # hvol_20 z-score 标准化参数 (训练时应用，推理时需同步)
+            'hvol_extra_mean': hvol_extra_mean,
+            'hvol_extra_std': hvol_extra_std,
             'oof_meta_auc': round(oof_meta_auc, 4),
             'val_auc': round(val_auc, 4),
             'test_auc': round(test_auc, 4),
@@ -3392,6 +3409,8 @@ def _stacking_evaluate_meta_with_saved_models(
     feat_std_73: np.ndarray,
     feat_mean_94: np.ndarray,
     feat_std_94: np.ndarray,
+    hvol_extra_mean: float = 0.0,
+    hvol_extra_std: float = 1.0,
 ) -> float:
     """使用最终保存的 5 个基模型评估 meta learner。"""
     from sklearn.metrics import roc_auc_score
@@ -3467,10 +3486,11 @@ def _stacking_evaluate_meta_with_saved_models(
 
     meta_X = np.column_stack([lgb_pred, xgb_pred, lstm_pred, tft_pred, lgb_cross_pred])
 
-    # 附加特征
+    # 附加特征 (hvol_20 需与训练时同步 z-score 标准化)
     if hvol_idx >= 0 and 'hvol_20' in extra_feat_names:
         hvol = feat_73[start:end][valid_mask, hvol_idx:hvol_idx + 1]
         hvol = np.nan_to_num(hvol, nan=0.0, posinf=0.0, neginf=0.0)
+        hvol = (hvol - hvol_extra_mean) / max(hvol_extra_std, 1e-8)
         meta_X = np.hstack([meta_X, hvol])
 
     meta_pred = meta_model.predict_proba(meta_X)[:, 1]
@@ -3482,8 +3502,8 @@ def _stacking_evaluate_meta_with_saved_models(
 
 def _stacking_retrain_lstm_full(feat_raw, y_all, full_end, full_valid,
                                 input_dim, tf, feat_mean, feat_std,
-                                seq_len=48, epochs=30):
-    """全量重训 LSTM 用于 stacking 推理"""
+                                seq_len=48, epochs=22):
+    """全量重训 LSTM 用于 stacking 推理 (epochs=22 + label_smooth=0.05 防极端 logit)"""
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
@@ -3545,8 +3565,8 @@ def _stacking_retrain_lstm_full(feat_raw, y_all, full_end, full_valid,
 
 def _stacking_retrain_tft_full(feat_raw, y_all, full_end, full_valid,
                                input_dim, tf, feat_mean, feat_std,
-                               seq_len=96, epochs=25):
-    """全量重训 TFT 用于 stacking 推理"""
+                               seq_len=96, epochs=18):
+    """全量重训 TFT 用于 stacking 推理 (epochs=18 + label_smooth=0.05 防极端 logit)"""
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
