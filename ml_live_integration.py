@@ -45,8 +45,10 @@ class MLSignalEnhancer:
       4. 综合输出: 增强/抑制规则信号
     """
 
-    def __init__(self, model_dir: str = MODEL_DIR):
+    def __init__(self, model_dir: str = MODEL_DIR, gpu_inference_url: str = ""):
         self.model_dir = model_dir
+        self.gpu_inference_url = (gpu_inference_url or "").strip() or os.environ.get("ML_GPU_INFERENCE_URL", "").strip()
+        self.gpu_inference_timeout = int(os.environ.get("ML_GPU_INFERENCE_TIMEOUT", "5"))
         self._regime_model = None
         self._quantile_model = None
         self._direction_model = None  # LGB 方向预测
@@ -483,10 +485,15 @@ class MLSignalEnhancer:
 
     def _predict_stacking(self, df: pd.DataFrame, ml_info: Dict) -> Optional[float]:
         """Stacking ensemble 预测: 4 基模型 → 元学习器 → bull_prob"""
+        features = self._compute_direction_features(df)
+        if features is None or len(features) == 0:
+            return None
+        return self._predict_stacking_from_features(features, ml_info)
+
+    def _predict_stacking_from_features(self, features: pd.DataFrame, ml_info: Dict) -> Optional[float]:
+        """Stacking 预测，使用已计算好的 features（供 GPU 推理 API 复用）"""
         if self._stacking_meta_model is None or self._stacking_config is None:
             return None
-
-        features = self._compute_direction_features(df)
         if features is None or len(features) == 0:
             return None
 
@@ -561,6 +568,114 @@ class MLSignalEnhancer:
         ml_info['stacking_bull_prob'] = round(bull_prob, 4)
         ml_info['stacking_mode'] = True
         return bull_prob
+
+    def predict_direction_from_features(self, features: pd.DataFrame) -> Tuple[Optional[float], Dict]:
+        """
+        仅做方向预测，输入为已计算好的 features（供 GPU 推理 API 与 ECS 远程调用复用）。
+        返回 (bull_prob, ml_info)，ml_info 仅含方向相关键。
+        """
+        ml_info: Dict = {}
+        if features is None or len(features) == 0:
+            return None, ml_info
+
+        bull_prob = None
+        if self._stacking_meta_model is not None:
+            try:
+                bull_prob = self._predict_stacking_from_features(features, ml_info)
+            except Exception as e:
+                logger.warning(f"Stacking 预测失败: {e}")
+
+        if bull_prob is None:
+            has_direction = (
+                self._direction_model is not None or self._lstm_meta is not None
+                or self._tft_meta is not None or self._cross_asset_model is not None
+            )
+            if has_direction:
+                try:
+                    lgb_prob = self._predict_direction_lgb(features)
+                    lstm_prob = self._predict_direction_lstm(features)
+                    tft_prob = self._predict_direction_tft(features)
+                    ca_prob = self._predict_direction_cross_asset(features)
+                    probs, weights = [], []
+                    if lgb_prob is not None:
+                        probs.append(lgb_prob)
+                        weights.append(self.lgb_weight)
+                        ml_info['lgb_bull_prob'] = round(lgb_prob, 4)
+                    if lstm_prob is not None:
+                        probs.append(lstm_prob)
+                        weights.append(self.lstm_weight)
+                        ml_info['lstm_bull_prob'] = round(lstm_prob, 4)
+                    if tft_prob is not None:
+                        probs.append(tft_prob)
+                        weights.append(self.tft_weight)
+                        ml_info['tft_bull_prob'] = round(tft_prob, 4)
+                    if ca_prob is not None:
+                        probs.append(ca_prob)
+                        weights.append(self.cross_asset_weight)
+                        ml_info['ca_bull_prob'] = round(ca_prob, 4)
+                    if probs:
+                        total_w = sum(weights)
+                        bull_prob = sum(p * w for p, w in zip(probs, weights)) / total_w
+                except Exception as e:
+                    logger.warning(f"方向预测计算异常: {e}")
+
+        if bull_prob is not None:
+            ml_info['bull_prob'] = round(bull_prob, 4)
+        return bull_prob, ml_info
+
+    # 远程 GPU 推理：发送特征行数（满足 TFT 96 / LSTM 48）
+    FEATURE_ROWS_FOR_REMOTE = 96
+
+    def _request_remote_direction(
+        self, features: pd.DataFrame, sell_score: float, buy_score: float
+    ) -> Tuple[Optional[float], Optional[Dict]]:
+        """
+        请求远程 GPU 推理 API 获取 bull_prob。失败返回 (None, None)。
+        """
+        if not self.gpu_inference_url or features is None or len(features) == 0:
+            return None, None
+        try:
+            import requests
+        except ImportError:
+            logger.warning("requests 未安装，无法使用远程 GPU 推理")
+            return None, None
+
+        # 取最后 FEATURE_ROWS_FOR_REMOTE 行
+        tail = features.tail(self.FEATURE_ROWS_FOR_REMOTE)
+        payload = {
+            "sell_score": float(sell_score),
+            "buy_score": float(buy_score),
+            "features": json.loads(tail.to_json(orient="split")),
+        }
+        try:
+            r = requests.post(
+                self.gpu_inference_url.rstrip("/") + "/predict",
+                json=payload,
+                timeout=self.gpu_inference_timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            r.raise_for_status()
+            data = r.json()
+            if not data.get("success"):
+                logger.warning("远程推理返回 success=false: %s", data.get("error", ""))
+                return None, None
+            bull = data.get("bull_prob")
+            if bull is None:
+                return None, None
+            bull = float(bull)
+            ml_info = {k: v for k, v in data.items() if k not in ("success", "bull_prob")}
+            ml_info["bull_prob"] = round(bull, 4)
+            ml_info["remote_inference"] = True
+            return bull, ml_info
+        except requests.exceptions.Timeout:
+            logger.warning("远程 GPU 推理超时 (%ss)，回退本地", self.gpu_inference_timeout)
+            return None, None
+        except requests.exceptions.RequestException as e:
+            logger.warning("远程 GPU 推理请求失败: %s，回退本地", e)
+            return None, None
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning("远程推理响应解析失败: %s，回退本地", e)
+            return None, None
 
     def _predict_stacking_lstm(self, features: pd.DataFrame, cfg: Dict) -> Optional[float]:
         """Stacking 专用 LSTM 推理"""
@@ -719,10 +834,19 @@ class MLSignalEnhancer:
         enhanced_buy = buy_score
         enhanced_sell = sell_score
 
-        # 0. 方向预测: Stacking(优先) → 多模型加权(fallback)
+        # 0. 方向预测: 优先远程 GPU API → 否则本地 Stacking(优先) → 多模型加权(fallback)
         bull_prob = None
 
-        if self._stacking_meta_model is not None:
+        if self.gpu_inference_url:
+            features_for_remote = self._compute_direction_features(df)
+            if features_for_remote is not None and len(features_for_remote) >= 1:
+                bull_prob, remote_ml = self._request_remote_direction(
+                    features_for_remote, sell_score, buy_score
+                )
+                if bull_prob is not None and remote_ml:
+                    ml_info.update(remote_ml)
+
+        if bull_prob is None and self._stacking_meta_model is not None:
             # Stacking ensemble — 4 基模型 → 元学习器
             try:
                 bull_prob = self._predict_stacking(df, ml_info)

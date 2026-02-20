@@ -323,7 +323,8 @@ class LiveSignalGenerator:
                 try:
                     if self._ml_enhancer is None:
                         from ml_live_integration import MLSignalEnhancer
-                        self._ml_enhancer = MLSignalEnhancer()
+                        gpu_url = getattr(self.config, "ml_gpu_inference_url", "") or ""
+                        self._ml_enhancer = MLSignalEnhancer(gpu_inference_url=gpu_url)
                     _ml_ss, _ml_bs, _ml_info = self._ml_enhancer.enhance_signal(
                         sell_score, buy_score, df
                     )

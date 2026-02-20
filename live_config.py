@@ -557,6 +557,7 @@ class StrategyConfig:
     ml_use_kelly_position: bool = False           # Kelly 公式计算仓位 (半Kelly, 0.1~1.0)
     ml_use_dynamic_sl: bool = False               # 分位数驱动动态止损 (q05/q95, 1%~8%)
     ml_use_neural_fusion: bool = False            # MTF Fusion MLP 替代规则加权共识
+    ml_gpu_inference_url: str = ""                 # 远程 GPU 推理 API（如 http://10.x.x.x:5001），为空则本地 CPU
     # 融合模式
     fusion_mode: str = "c6_veto_4"
     veto_threshold: float = 25
