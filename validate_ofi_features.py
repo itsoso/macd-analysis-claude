@@ -83,18 +83,34 @@ def main():
 
     df = add_all_indicators(df)
     df = add_moving_averages(df)
-    feats = compute_ml_features(df)
-
-    # 加载 funding / OI
+    # 合并 funding / OI 到 df (在计算特征之前)，让 compute_ml_features 内部处理 ffill
     fp = f'data/funding_rates/ETHUSDT_funding.parquet'
     if os.path.exists(fp):
         fund = pd.read_parquet(fp)
         if fund.index.tz is not None:
             fund.index = fund.index.tz_localize(None)
-        feats = feats.join(fund[['funding_rate']].rename(columns={'funding_rate': '_fr_raw'}), how='left')
-        if '_fr_raw' in feats.columns:
-            feats['funding_rate'] = feats.get('funding_rate', feats['_fr_raw'])
-            feats.drop(columns=['_fr_raw'], inplace=True, errors='ignore')
+        fund = fund[~fund.index.duplicated(keep='last')].sort_index()
+        if 'funding_rate' in fund.columns:
+            df = df.join(fund[['funding_rate']], how='left')
+            df['funding_rate'] = df['funding_rate'].ffill()
+
+    oi_fp = f'data/open_interest/ETHUSDT/1h.parquet'
+    if os.path.exists(oi_fp):
+        oi = pd.read_parquet(oi_fp)
+        if oi.index.tz is not None:
+            oi.index = oi.index.tz_localize(None)
+        oi = oi[~oi.index.duplicated(keep='first')].sort_index()
+        if 'open_interest_value' in oi.columns:
+            df = df.join(oi[['open_interest_value']], how='left')
+            df['open_interest_value'] = df['open_interest_value'].ffill()
+
+    feats = compute_ml_features(df)
+
+    # 稀疏列 (OI 仅 ~30 天覆盖) 填 0，与 train_gpu.py 保持一致
+    sparse_cols = [c for c in feats.columns if feats[c].isna().mean() > 0.5]
+    if sparse_cols:
+        print(f"  稀疏列填0: {sparse_cols}")
+        feats[sparse_cols] = feats[sparse_cols].fillna(0)
 
     labels = compute_profit_labels(df, horizons=[5], cost_pct=0.0015)
     valid = feats.notna().all(axis=1) & labels['profitable_long_5'].notna()

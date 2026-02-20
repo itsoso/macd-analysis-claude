@@ -1,0 +1,36 @@
+{
+  "data_years": 2.0,
+  "n_samples": 17442,
+  "n_folds": 5,
+  "baseline_auc": 0.5496,
+  "baseline_std": 0.0047,
+  "baseline_aucs": [
+    0.5529,
+    0.5476,
+    0.5522,
+    0.5413,
+    0.5539
+  ],
+  "improved_auc": 0.558,
+  "improved_std": 0.0108,
+  "improved_aucs": [
+    0.5598,
+    0.5574,
+    0.5727,
+    0.5392,
+    0.5609
+  ],
+  "delta_auc": 0.0084,
+  "delta_pct": 1.54,
+  "n_base_features": 73,
+  "n_improved_features": 80,
+  "micro_features_found": [
+    "ofi",
+    "ofi_ma5",
+    "ofi_std5",
+    "cum_ofi",
+    "cum_ofi_slope",
+    "large_trade_ratio",
+    "buy_sell_pressure"
+  ]
+}
