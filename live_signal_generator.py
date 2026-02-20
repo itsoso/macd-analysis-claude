@@ -519,8 +519,13 @@ class LiveSignalGenerator:
             result.components = components
             result.regime_label = regime_label
             result.bar_index = idx
-            result.conflict = (sell_score > 15 and buy_score > 15 and
-                              abs(sell_score - buy_score) < 10)
+            # 冲突: 两方向都活跃 且 差距不足以形成主导 且 绝对分值未达到强信号
+            # 差距阈值从 10 收紧为 8，并增加最大分值上限 45 避免强信号误判为冲突
+            result.conflict = (
+                sell_score > 15 and buy_score > 15 and
+                abs(sell_score - buy_score) < 8 and
+                max(sell_score, buy_score) < 45
+            )
 
             # 计算 ATR 百分比 (14 bar ATR / 当前价格)
             atr_period = 14
@@ -1046,9 +1051,11 @@ class LiveSignalGenerator:
                 if r.get("timestamp"):
                     tf_timestamps[r["tf"]] = r["timestamp"]
 
-        # ── TF 时间戳对齐校验: 各周期最新 K 线时间差超过自身周期的 10% 时告警 ──
+        # ── TF 时间戳对齐校验: 相对最新 bar 超过各自 TF 周期 2 倍时排除该 TF ──
+        # 修复：旧逻辑用最小周期作为全局阈值，会把 24h/4h 正常早于 1h 的 bar 误判为滞后
+        # 新逻辑：以各 TF 自身周期 * 2 为容忍度，超出则从共识中排除该 TF
         _TF_MINUTES = {'15m': 15, '30m': 30, '1h': 60, '4h': 240, '8h': 480, '24h': 1440}
-        if len(tf_timestamps) >= 2 and self.logger:
+        if len(tf_timestamps) >= 2:
             import pandas as _pd
             _ts_parsed = {}
             for _tf, _ts in tf_timestamps.items():
@@ -1057,19 +1064,24 @@ class LiveSignalGenerator:
                 except Exception:
                     pass
             if len(_ts_parsed) >= 2:
-                _ts_vals = sorted(_ts_parsed.values())
-                _max_gap_minutes = (_ts_vals[-1] - _ts_vals[0]).total_seconds() / 60
-                # 以最小参与周期作为容忍阈值
-                _min_tf_min = min(_TF_MINUTES.get(tf, 60) for tf in _ts_parsed)
-                _tolerance = _min_tf_min * 1.5
-                if _max_gap_minutes > _tolerance:
-                    _stale_tfs = [tf for tf, ts in _ts_parsed.items()
-                                  if (_ts_vals[-1] - ts).total_seconds() / 60 > _tolerance]
-                    self.logger.warning(
-                        f"[多周期对齐] TF 时间戳偏差 {_max_gap_minutes:.0f}min "
-                        f"(容忍 {_tolerance:.0f}min)，滞后 TF: {_stale_tfs}。"
-                        "共识决策可能基于过时数据。"
-                    )
+                # 参考时间: 所有 TF 中最新的 bar 时间戳
+                _ref_ts = max(_ts_parsed.values())
+                _stale_tfs = []
+                _stale_reasons = []
+                for _tf, _ts in _ts_parsed.items():
+                    _tf_period = _TF_MINUTES.get(_tf, 60)
+                    _tolerance = _tf_period * 2  # 允许 2 个周期的自然延迟
+                    _lag_min = (_ref_ts - _ts).total_seconds() / 60
+                    if _lag_min > _tolerance:
+                        _stale_tfs.append(_tf)
+                        _stale_reasons.append(f"{_tf}:{_lag_min:.0f}>{_tolerance:.0f}min")
+                if _stale_tfs:
+                    if self.logger:
+                        self.logger.warning(
+                            f"[多周期对齐] 滞后 TF 已从共识排除: {_stale_reasons}"
+                        )
+                    for _stale_tf in _stale_tfs:
+                        tf_scores.pop(_stale_tf, None)
 
         # ── 用统一融合算法计算共识 (与回测一致) ──
         fuse_config = {
