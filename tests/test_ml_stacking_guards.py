@@ -171,6 +171,34 @@ def test_predict_stacking_from_features_skips_on_low_coverage():
     assert "stacking_skipped_reason" in ml_info
 
 
+def test_stacking_runs_with_partial_94_coverage():
+    """73维覆盖率良好但 94维覆盖率低时，Stacking 应继续运行（不因跨资产缺失而整体中止）。"""
+    enhancer = MLSignalEnhancer()
+    enhancer._stacking_meta_model = FakeMetaModel()
+    enhancer._stacking_config = {
+        "feature_names_73": ["f1", "f2", "f3", "f4"],
+        "feature_names_94": ["f1", "f2", "f3", "f4", "ca1", "ca2", "ca3"],  # 3 cross-asset missing
+        "feat_mean_73": [0.0, 0.0, 0.0, 0.0],
+        "feat_std_73": [1.0, 1.0, 1.0, 1.0],
+        "feat_mean_94": [0.0] * 7,
+        "feat_std_94": [1.0] * 7,
+        "model_files": {},
+        "extra_features": [],
+    }
+
+    # 全部 73维特征都在，跨资产 (ca1/ca2/ca3) 缺失 → 94维覆盖率 4/7 ≈ 0.57 < 0.80
+    features = pd.DataFrame(np.random.randn(120, 4), columns=["f1", "f2", "f3", "f4"])
+    ml_info = {}
+    bull_prob = enhancer._predict_stacking_from_features(features, ml_info)
+
+    # 73维覆盖率 1.0 ≥ 0.90 → 不应跳过 Stacking
+    assert "stacking_skipped_reason" not in ml_info, f"不应跳过: {ml_info}"
+    # 94维低覆盖率应记录到 stacking_partial_94_coverage
+    assert "stacking_partial_94_coverage" in ml_info
+    # FakeMetaModel 返回 [[0.4, 0.6]], 结果应为有效值
+    assert bull_prob is not None
+
+
 def test_can_use_cross_asset_reports_low_coverage():
     enhancer = MLSignalEnhancer()
     enhancer._cross_asset_model = object()

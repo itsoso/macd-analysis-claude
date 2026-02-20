@@ -89,6 +89,7 @@ class MLSignalEnhancer:
         self._stacking_lstm = None        # stacking 专用 LSTM
         self._stacking_tft = None         # stacking 专用 TFT
         self._cross_asset_close_cache = {}  # {(symbol, interval): (mtime, close_series)}
+        self._cross_api_warned_symbols: set = set()  # 已 warning 过的失败符号，避免重复告警
 
         # 方向预测参数
         self._direction_meta = None
@@ -360,9 +361,16 @@ class MLSignalEnhancer:
                 return None
             self._cross_asset_close_cache[api_key] = (now, series)
             logger.info(f"跨资产实时拉取完成 {symbol}/{interval}: {len(series)} bars (缓存 {self._CROSS_API_CACHE_TTL_SEC//3600}h)")
+            # 成功后清除失败告警记录，下次失败时重新告警
+            self._cross_api_warned_symbols.discard(f"{symbol}/{interval}")
             return series
         except Exception as e:
-            logger.debug(f"跨资产实时拉取失败 {symbol}/{interval}: {e}")
+            warn_key = f"{symbol}/{interval}"
+            if warn_key not in self._cross_api_warned_symbols:
+                logger.warning(f"跨资产实时拉取失败 {warn_key}: {type(e).__name__}: {e}")
+                self._cross_api_warned_symbols.add(warn_key)
+            else:
+                logger.debug(f"跨资产实时拉取失败 {warn_key}: {e}")
             return None
 
     def _load_cross_close_series(self, symbol: str, interval: str) -> Optional[pd.Series]:
@@ -1081,12 +1089,17 @@ class MLSignalEnhancer:
         present_94, total_94, cov_94 = self._feature_coverage(features, feat_names_94)
         ml_info['stacking_feature_coverage_73'] = round(cov_73, 3)
         ml_info['stacking_feature_coverage_94'] = round(cov_94, 3)
-        if cov_73 < self.stacking_min_feature_coverage_73 or cov_94 < self.stacking_min_feature_coverage_94:
+        # 73维门控：LGB/XGB/LSTM 基模型均依赖 73维；低于阈值时整体 Stacking 不可用。
+        # 94维不做门控：TFT/跨资产LGB 内部已对缺失列用 0 填充，低覆盖率时仍可运行，
+        # 仅记录以供调试，不中止 Stacking 流程。
+        if cov_73 < self.stacking_min_feature_coverage_73:
             ml_info['stacking_skipped_reason'] = (
                 "low_feature_coverage("
                 f"73:{present_73}/{total_73},94:{present_94}/{total_94})"
             )
             return None
+        if cov_94 < self.stacking_min_feature_coverage_94:
+            ml_info['stacking_partial_94_coverage'] = round(cov_94, 3)
 
         # 对齐 73 维特征
         latest = features.iloc[[-1]]
