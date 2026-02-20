@@ -416,6 +416,7 @@ class LiveSignalGenerator:
                 components['ml_stacking_cov_73'] = _ml_info.get('stacking_feature_coverage_73', '')
                 components['ml_stacking_cov_94'] = _ml_info.get('stacking_feature_coverage_94', '')
                 components['ml_ca_cov'] = _ml_info.get('ca_feature_coverage', '')
+                components['ml_error'] = _ml_info.get('ml_error', '')
 
             # 构建结果
             result = SignalResult()

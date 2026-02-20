@@ -3,13 +3,16 @@ ML 模型健康检查脚本
 
 在部署新模型到服务器后、或重启服务前运行此脚本，验证：
 1. 所有模型文件是否存在并能成功加载
-2. 特征计算管线是否正常
-3. enhance_signal() 端到端推理是否无报错
-4. Stacking / LGB / LSTM / TFT 各层是否独立可用
+2. 运行配置中的 ML 开关是否启用
+3. 特征计算管线是否正常
+4. enhance_signal() 端到端推理是否无报错
+5. 最新 live 日志 SIGNAL 是否携带 ml_* 字段
 
 用法:
     python check_ml_health.py                    # 用本地 data/klines 数据测试
     python check_ml_health.py --verbose          # 显示详细特征/预测值
+    python check_ml_health.py --timeframe 4h     # 指定 stacking 目标周期
+    python check_ml_health.py --skip-live-check  # 跳过 live 日志检查
 """
 
 import os
@@ -18,15 +21,17 @@ import json
 import time
 import argparse
 import traceback
+from datetime import datetime
+from glob import glob
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), 'data', 'ml_models')
+LIVE_LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs', 'live')
 
 # 期望存在的模型文件 (必须 / 可选)
-REQUIRED_FILES = [
-    'lgb_direction_model.txt',
-    'lgb_direction_model.txt.meta.json',
+REQUIRED_FILE_GROUPS = [
+    ('lgb_direction_model_1h.txt', 'lgb_direction_model.txt'),
 ]
 OPTIONAL_FILES = [
     'lstm_1h.pt',
@@ -42,6 +47,12 @@ OPTIONAL_FILES = [
     'quantile_config.json',
     'stacking_meta.json',
     'stacking_meta.pkl',
+    'stacking_meta_1h.json',
+    'stacking_meta_1h.pkl',
+    'stacking_meta_4h.json',
+    'stacking_meta_4h.pkl',
+    'stacking_meta_24h.json',
+    'stacking_meta_24h.pkl',
     'ensemble_config.json',
 ]
 
@@ -55,14 +66,18 @@ def check_files():
     """检查模型文件是否存在"""
     print("\n── 模型文件检查 ─────────────────────────────")
     ok = True
-    for f in REQUIRED_FILES:
-        path = os.path.join(MODEL_DIR, f)
-        if os.path.exists(path):
-            size = os.path.getsize(path)
-            mtime = time.strftime('%Y-%m-%d %H:%M', time.localtime(os.path.getmtime(path)))
-            print(f"  {PASS} {f}  ({size//1024}KB, {mtime})")
-        else:
-            print(f"  {FAIL} {f}  [缺失 — 必须文件]")
+    for group in REQUIRED_FILE_GROUPS:
+        found = None
+        for f in group:
+            path = os.path.join(MODEL_DIR, f)
+            if os.path.exists(path):
+                found = f
+                size = os.path.getsize(path)
+                mtime = time.strftime('%Y-%m-%d %H:%M', time.localtime(os.path.getmtime(path)))
+                print(f"  {PASS} {f}  ({size//1024}KB, {mtime})")
+                break
+        if not found:
+            print(f"  {FAIL} {' / '.join(group)}  [缺失 — 必须文件组]")
             ok = False
 
     missing_optional = []
@@ -80,13 +95,123 @@ def check_files():
     return ok
 
 
-def check_model_loading(verbose=False):
+def check_runtime_config():
+    """检查 DB/配置中的运行时 ML 开关"""
+    print("\n── 运行配置检查 ─────────────────────────────")
+    try:
+        from live_config import LiveTradingConfig
+        cfg = LiveTradingConfig.load_from_db()
+        s = cfg.strategy
+        print(f"  {INFO} phase={cfg.phase.value} symbol={s.symbol} timeframe={s.timeframe}")
+        print(f"  {INFO} use_ml_enhancement={getattr(s, 'use_ml_enhancement', False)}")
+        print(f"  {INFO} ml_enhancement_shadow_mode={getattr(s, 'ml_enhancement_shadow_mode', True)}")
+        print(f"  {INFO} ml_gpu_inference_url={bool(getattr(s, 'ml_gpu_inference_url', ''))}")
+        return True, s.timeframe, bool(getattr(s, 'use_ml_enhancement', False))
+    except Exception as e:
+        print(f"  {WARN} 读取运行配置失败: {e}")
+        return False, "1h", False
+
+
+def check_stacking_artifacts(target_tf="1h"):
+    """检查 stacking 候选与指标门槛"""
+    print("\n── Stacking 工件检查 ─────────────────────────")
+    metas = sorted(glob(os.path.join(MODEL_DIR, "stacking_meta*.json")))
+    if not metas:
+        print(f"  {WARN} 未发现 stacking_meta*.json")
+        return False
+
+    selected = None
+    for p in metas:
+        name = os.path.basename(p)
+        try:
+            d = json.load(open(p))
+        except Exception as e:
+            print(f"  {FAIL} {name}: 读取失败 {e}")
+            continue
+
+        tf = d.get("timeframe", "?")
+        val = d.get("val_auc")
+        test = d.get("test_auc")
+        oof = d.get("oof_meta_auc")
+        pkl = (d.get("model_files") or {}).get("meta", name.replace(".json", ".pkl"))
+        pkl_ok = os.path.exists(os.path.join(MODEL_DIR, pkl))
+        print(f"  {INFO} {name}: tf={tf} val={val} test={test} oof={oof} pkl={'Y' if pkl_ok else 'N'}")
+        if tf == target_tf and pkl_ok and selected is None:
+            selected = name
+
+    if selected:
+        print(f"  {PASS} 建议候选: {selected} (target_tf={target_tf})")
+        return True
+    print(f"  {WARN} 未找到与 target_tf={target_tf} 匹配且可用的 stacking 候选")
+    return False
+
+
+def check_latest_live_signal():
+    """检查最新 live SIGNAL 的 ML 字段与时间新鲜度"""
+    print("\n── Live 日志检查 ─────────────────────────────")
+    files = sorted(glob(os.path.join(LIVE_LOG_DIR, "trade_*.jsonl")))
+    if not files:
+        print(f"  {WARN} 无 trade_*.jsonl 日志")
+        return False
+
+    latest_file = files[-1]
+    latest_signal = None
+    try:
+        with open(latest_file) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("level") == "SIGNAL":
+                    latest_signal = rec
+    except Exception as e:
+        print(f"  {FAIL} 读取日志失败: {e}")
+        return False
+
+    print(f"  {INFO} 文件: {os.path.basename(latest_file)}")
+    if latest_signal is None:
+        print(f"  {WARN} 未找到 SIGNAL 记录")
+        return False
+
+    ts = latest_signal.get("timestamp")
+    data = latest_signal.get("data", {})
+    sig_bar = data.get("timestamp")
+    comps = data.get("components", {}) or {}
+    ml_keys = [k for k in comps.keys() if k.startswith("ml_")]
+    print(f"  {INFO} 最新记录时间: {ts}")
+    print(f"  {INFO} 信号bar时间: {sig_bar}")
+    print(f"  {INFO} ml_* 字段数: {len(ml_keys)}")
+
+    if not ml_keys:
+        print(f"  {FAIL} 最新 SIGNAL 没有 ml_* 字段，ML 分支未生效")
+        return False
+
+    ml_err = comps.get("ml_error", "")
+    if ml_err:
+        print(f"  {FAIL} ml_error: {ml_err}")
+        return False
+
+    try:
+        now_dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S,%f")
+        bar_dt = datetime.strptime(sig_bar, "%Y-%m-%d %H:%M:%S")
+        lag_h = (now_dt - bar_dt).total_seconds() / 3600.0
+        print(f"  {INFO} signal_lag={lag_h:.1f}h")
+        if lag_h > 24:
+            print(f"  {WARN} 信号bar滞后超过24h，请检查数据刷新/网络")
+    except Exception:
+        pass
+    print(f"  {PASS} 最新 SIGNAL 已携带 ML 字段")
+    return True
+
+
+def check_model_loading(target_tf="1h", verbose=False):
     """测试 MLSignalEnhancer 加载"""
     print("\n── 模型加载检查 ─────────────────────────────")
     try:
         from ml_live_integration import MLSignalEnhancer
         t0 = time.time()
-        enhancer = MLSignalEnhancer()
+        enhancer = MLSignalEnhancer(stacking_timeframe=target_tf)
         result = enhancer.load_model()
         elapsed = time.time() - t0
 
@@ -99,6 +224,7 @@ def check_model_loading(verbose=False):
             '分位数': enhancer._quantile_model is not None,
             'Stacking': enhancer._stacking_meta_model is not None,
         }
+        core_loaded = checks['LGB 方向'] or checks['Stacking']
         any_loaded = any(checks.values())
         for name, loaded in checks.items():
             icon = PASS if loaded else WARN
@@ -111,11 +237,15 @@ def check_model_loading(verbose=False):
             print(f"  {INFO} Stacking 详情: tf={tf}, val_auc={va}, test_auc={ta}")
         elif getattr(enhancer, "_stacking_disabled_reason", None):
             print(f"  {WARN} Stacking 禁用原因: {enhancer._stacking_disabled_reason}")
+        if verbose:
+            print(f"  {INFO} Stacking 候选: {list(enhancer._iter_stacking_candidates())}")
 
         print(f"  {INFO} 加载耗时: {elapsed:.2f}s")
         if enhancer._stacking_meta_model is None:
-            print(f"  {WARN} Stacking 未加载: 需要先运行 train_gpu.py --mode stacking --tf 1h")
-        return enhancer, any_loaded
+            print(f"  {WARN} Stacking 未加载: 需要先运行 train_gpu.py --mode stacking --tf {target_tf}")
+        if not core_loaded:
+            print(f"  {FAIL} 核心方向模型未加载 (需 LGB 或 Stacking 至少一个可用)")
+        return enhancer, core_loaded
     except ImportError as e:
         print(f"  {FAIL} 导入失败: {e}")
         print("       请确认 lightgbm/torch 已安装: pip install lightgbm torch")
@@ -176,7 +306,7 @@ def check_feature_pipeline(verbose=False):
         return False
 
 
-def check_end_to_end(enhancer, verbose=False):
+def check_end_to_end(enhancer, target_tf="1h", verbose=False):
     """端到端推理测试"""
     print("\n── 端到端推理检查 ───────────────────────────")
     if enhancer is None:
@@ -205,7 +335,7 @@ def check_end_to_end(enhancer, verbose=False):
             'open_interest': rng.exponential(500000, n),
         }, index=idx)
         df = add_all_indicators(df)
-        add_moving_averages(df, timeframe='1h')
+        add_moving_averages(df, timeframe=target_tf)
 
         t0 = time.time()
         ml_ss, ml_bs, ml_info = enhancer.enhance_signal(30.0, 25.0, df)
@@ -257,6 +387,8 @@ def print_summary(results):
 def main():
     parser = argparse.ArgumentParser(description='ML 模型健康检查')
     parser.add_argument('--verbose', '-v', action='store_true', help='显示详细输出')
+    parser.add_argument('--timeframe', type=str, default='', help='Stacking 目标周期 (默认从DB读取)')
+    parser.add_argument('--skip-live-check', action='store_true', help='跳过 live 日志检查')
     args = parser.parse_args()
 
     print("=" * 52)
@@ -265,11 +397,19 @@ def main():
     print("=" * 52)
 
     results = {}
+    cfg_ok, cfg_tf, cfg_ml = check_runtime_config()
+    target_tf = (args.timeframe or cfg_tf or '1h').strip()
+    results['运行配置'] = cfg_ok
     results['文件完整性'] = check_files()
-    enhancer, loaded = check_model_loading(args.verbose)
+    results['Stacking工件'] = check_stacking_artifacts(target_tf)
+    enhancer, loaded = check_model_loading(target_tf, args.verbose)
     results['模型加载'] = loaded
     results['特征管线'] = check_feature_pipeline(args.verbose)
-    results['端到端推理'] = check_end_to_end(enhancer, args.verbose)
+    results['端到端推理'] = check_end_to_end(enhancer, target_tf, args.verbose)
+    if not args.skip_live_check:
+        results['Live日志ML字段'] = check_latest_live_signal()
+    elif cfg_ml:
+        print(f"\n  {INFO} 已跳过 live 日志检查 (--skip-live-check)")
     print_summary(results)
 
 

@@ -137,6 +137,7 @@ class MLSignalEnhancer:
         self.stacking_min_test_auc = float(os.environ.get("ML_STACKING_MIN_TEST_AUC", "0.52"))
         self.stacking_min_oof_auc = float(os.environ.get("ML_STACKING_MIN_OOF_AUC", "0.53"))
         self.stacking_max_oof_test_gap = float(os.environ.get("ML_STACKING_MAX_OOF_TEST_GAP", "0.10"))
+        self.stacking_min_oof_samples = int(os.environ.get("ML_STACKING_MIN_OOF_SAMPLES", "20000"))
         self.stacking_min_feature_coverage_73 = _clamp01(
             float(os.environ.get("ML_STACKING_MIN_FEATURE_COVERAGE_73", "0.90"))
         )
@@ -242,6 +243,11 @@ class MLSignalEnhancer:
         val_auc = _to_float(cfg.get("val_auc"))
         test_auc = _to_float(cfg.get("test_auc"))
         oof_auc = _to_float(cfg.get("oof_meta_auc"))
+        n_oof_samples = cfg.get("n_oof_samples")
+        try:
+            n_oof_samples = int(n_oof_samples) if n_oof_samples is not None else None
+        except Exception:
+            n_oof_samples = None
 
         if val_auc is not None and val_auc < self.stacking_min_val_auc:
             return False, f"val_auc_too_low({val_auc:.4f}<{self.stacking_min_val_auc:.4f})"
@@ -249,6 +255,8 @@ class MLSignalEnhancer:
             return False, f"test_auc_too_low({test_auc:.4f}<{self.stacking_min_test_auc:.4f})"
         if oof_auc is not None and oof_auc < self.stacking_min_oof_auc:
             return False, f"oof_auc_too_low({oof_auc:.4f}<{self.stacking_min_oof_auc:.4f})"
+        if self.stacking_min_oof_samples > 0 and n_oof_samples is not None and n_oof_samples < self.stacking_min_oof_samples:
+            return False, f"insufficient_oof_samples({n_oof_samples}<{self.stacking_min_oof_samples})"
         if oof_auc is not None and test_auc is not None:
             gap = oof_auc - test_auc
             if gap > self.stacking_max_oof_test_gap:
@@ -441,7 +449,20 @@ class MLSignalEnhancer:
             lstm_path = os.path.join(self.model_dir, 'lstm_1h.pt')
             if os.path.exists(lstm_path):
                 self._lstm_meta = {'model_path': lstm_path}
-                logger.info("LSTM 方向预测模型路径已注册 (延迟加载)")
+                lstm_meta_path = os.path.join(self.model_dir, 'lstm_1h_meta.json')
+                if os.path.exists(lstm_meta_path):
+                    try:
+                        with open(lstm_meta_path) as f:
+                            meta_obj = json.load(f)
+                        if isinstance(meta_obj, dict):
+                            self._lstm_meta.update(meta_obj)
+                    except Exception as meta_err:
+                        logger.warning(f"LSTM meta 读取失败，将使用默认配置: {meta_err}")
+                logger.info(
+                    "LSTM 方向预测模型路径已注册 (multi_horizon=%s, best_head=%s, 延迟加载)",
+                    bool(self._lstm_meta.get('multi_horizon', False)),
+                    self._lstm_meta.get('best_head', '5h'),
+                )
                 loaded_any = True
         except Exception as e:
             logger.warning(f"LSTM 方向预测模型注册失败: {e}")
@@ -687,20 +708,32 @@ class MLSignalEnhancer:
             if not os.path.exists(model_path):
                 return None
 
-            # 需要至少 48 根K线的序列
-            SEQ_LEN = 48
+            # 需要至少 SEQ_LEN 根K线的序列
+            SEQ_LEN = int(self._lstm_meta.get('seq_len', 48))
             if len(features) < SEQ_LEN:
                 return None
 
-            # lstm_1h.pt 用 stacking feature_names_73 (80维) 训练；优先用该特征集和配套标准化
-            if self._stacking_config and self._stacking_config.get('feature_names_73'):
+            # 优先使用 lstm meta 的特征与标准化；其次回退 stacking meta；最后回退 direction meta。
+            if (
+                self._lstm_meta.get('feature_names')
+                and self._lstm_meta.get('feat_mean')
+                and self._lstm_meta.get('feat_std')
+            ):
+                feat_names = list(self._lstm_meta.get('feature_names', []))
+                feat_mean_arr = np.array(self._lstm_meta.get('feat_mean', []), dtype=np.float32)
+                feat_std_arr = np.array(self._lstm_meta.get('feat_std', []), dtype=np.float32)
+                use_lstm_meta_norm = len(feat_names) == len(feat_mean_arr) == len(feat_std_arr) and len(feat_names) > 0
+                use_stacking_norm = False
+            elif self._stacking_config and self._stacking_config.get('feature_names_73'):
                 feat_names = self._stacking_config['feature_names_73']
                 feat_mean_arr = np.array(self._stacking_config.get('feat_mean_73', [0.0] * len(feat_names)), dtype=np.float32)
                 feat_std_arr  = np.array(self._stacking_config.get('feat_std_73',  [1.0] * len(feat_names)), dtype=np.float32)
                 use_stacking_norm = True
+                use_lstm_meta_norm = False
             else:
                 feat_names = self._direction_meta.get('feature_names', []) if self._direction_meta else list(features.columns)
                 use_stacking_norm = False
+                use_lstm_meta_norm = False
 
             # 对齐特征
             X_df = pd.DataFrame(0.0, index=features.index, columns=feat_names)
@@ -711,7 +744,9 @@ class MLSignalEnhancer:
             feat_values = X_df.values.astype(np.float32)
 
             # 标准化
-            if use_stacking_norm:
+            if use_lstm_meta_norm:
+                feat_values = (feat_values - feat_mean_arr) / np.maximum(feat_std_arr, 1e-8)
+            elif use_stacking_norm:
                 feat_values = (feat_values - feat_mean_arr) / np.maximum(feat_std_arr, 1e-8)
             elif self._direction_meta and isinstance(self._direction_meta.get('feat_mean'), dict):
                 mean_dict = self._direction_meta['feat_mean']
@@ -741,7 +776,22 @@ class MLSignalEnhancer:
                             onnx_path, providers=['CPUExecutionProvider'])
                         logger.info(f"LSTM ONNX 加载完成 (seq={SEQ_LEN}, features={seq.shape[-1]})")
                     ort_input = {self._lstm_onnx_session.get_inputs()[0].name: seq[np.newaxis].astype(np.float32)}
-                    logit = float(self._lstm_onnx_session.run(None, ort_input)[0][0, 0])
+                    outputs = self._lstm_onnx_session.run(None, ort_input)
+                    best_head = str(self._lstm_meta.get('best_head', '5h')).lower()
+                    head_idx = {'5h': 0, '12h': 1, '24h': 2}.get(best_head, 0)
+                    # 兼容三种导出形态:
+                    # 1) 单输出单头 (1,1)
+                    # 2) 单输出多头向量 (1,3)
+                    # 3) 多输出三头 [out_5h, out_12h, out_24h]
+                    if len(outputs) >= 3 and self._lstm_meta.get('multi_horizon', False):
+                        out_arr = np.asarray(outputs[head_idx]).reshape(-1)
+                        logit = float(out_arr[0])
+                    else:
+                        out_arr = np.asarray(outputs[0])
+                        if out_arr.ndim >= 2 and out_arr.shape[-1] >= 3 and self._lstm_meta.get('multi_horizon', False):
+                            logit = float(out_arr.reshape(-1, out_arr.shape[-1])[0, head_idx])
+                        else:
+                            logit = float(out_arr.reshape(-1)[0])
                     # logit 合理范围检查：超出 ±10 视为模型推理异常（特征维度不匹配或归一化错误）
                     if abs(logit) > 10:
                         logger.warning(f"LSTM ONNX logit={logit:.2f} 超出正常范围 (±10)，返回 None")
@@ -760,15 +810,28 @@ class MLSignalEnhancer:
             # 延迟加载 LSTM 模型
             if self._lstm_model is None:
                 input_dim = len(feat_names)
+                state = torch.load(model_path, map_location='cpu', weights_only=True)
+                hidden_dim = int(self._lstm_meta.get('hidden_dim', state['lstm.weight_hh_l0'].shape[1]))
+                num_layers = int(self._lstm_meta.get('num_layers', 2))
+                dropout = float(self._lstm_meta.get('dropout', 0.3))
+                multi_horizon = bool(self._lstm_meta.get('multi_horizon', False)) or any(
+                    k.startswith('head_5h') for k in state.keys()
+                )
+                best_head = str(self._lstm_meta.get('best_head', '5h')).lower()
+                if best_head not in ('5h', '12h', '24h'):
+                    best_head = '5h'
+                self._lstm_meta['best_head'] = best_head
+                self._lstm_meta['multi_horizon'] = multi_horizon
 
                 class LSTMAttention(nn.Module):
-                    def __init__(self, in_dim, hidden_dim=128, num_layers=2, dropout=0.3):
+                    def __init__(self, in_dim, hid_dim=128, layers=2, drop=0.3):
                         super().__init__()
-                        self.lstm = nn.LSTM(in_dim, hidden_dim, num_layers,
-                                            batch_first=True, dropout=dropout, bidirectional=True)
-                        self.attn_fc = nn.Linear(hidden_dim * 2, 1)
+                        self.lstm = nn.LSTM(
+                            in_dim, hid_dim, layers,
+                            batch_first=True, dropout=drop if layers > 1 else 0.0, bidirectional=True)
+                        self.attn_fc = nn.Linear(hid_dim * 2, 1)
                         self.classifier = nn.Sequential(
-                            nn.Linear(hidden_dim * 2, 64),
+                            nn.Linear(hid_dim * 2, 64),
                             nn.GELU(),
                             nn.Dropout(0.2),
                             nn.Linear(64, 1),
@@ -780,15 +843,50 @@ class MLSignalEnhancer:
                         context = (attn_weights * lstm_out).sum(dim=1)
                         return self.classifier(context).squeeze(-1)
 
+                class LSTMMultiHorizon(nn.Module):
+                    def __init__(self, in_dim, hid_dim=128, layers=2, drop=0.3):
+                        super().__init__()
+                        self.lstm = nn.LSTM(
+                            in_dim, hid_dim, layers,
+                            batch_first=True, dropout=drop if layers > 1 else 0.0, bidirectional=True)
+                        self.attn_fc = nn.Linear(hid_dim * 2, 1)
+                        self.head_5h = nn.Sequential(
+                            nn.Linear(hid_dim * 2, 64), nn.GELU(), nn.Dropout(0.2), nn.Linear(64, 1))
+                        self.head_12h = nn.Sequential(
+                            nn.Linear(hid_dim * 2, 64), nn.GELU(), nn.Dropout(0.2), nn.Linear(64, 1))
+                        self.head_24h = nn.Sequential(
+                            nn.Linear(hid_dim * 2, 64), nn.GELU(), nn.Dropout(0.2), nn.Linear(64, 1))
+
+                    def forward(self, x, head='5h'):
+                        lstm_out, _ = self.lstm(x)
+                        attn_weights = torch.softmax(self.attn_fc(lstm_out), dim=1)
+                        context = (attn_weights * lstm_out).sum(dim=1)
+                        if head == '12h':
+                            return self.head_12h(context).squeeze(-1)
+                        if head == '24h':
+                            return self.head_24h(context).squeeze(-1)
+                        return self.head_5h(context).squeeze(-1)
+
                 dev = self._inference_device
-                self._lstm_model = LSTMAttention(input_dim).to(dev)
-                state = torch.load(model_path, map_location=dev, weights_only=True)
+                if multi_horizon:
+                    self._lstm_model = LSTMMultiHorizon(input_dim, hidden_dim, num_layers, dropout).to(dev)
+                else:
+                    self._lstm_model = LSTMAttention(input_dim, hidden_dim, num_layers, dropout).to(dev)
                 self._lstm_model.load_state_dict(state)
                 self._lstm_model.eval()
-                logger.info(f"LSTM 模型加载完成 (input_dim={input_dim}, device={dev})")
+                logger.info(
+                    "LSTM 模型加载完成 (input_dim=%s, hidden=%s, multi_horizon=%s, best_head=%s, device=%s)",
+                    input_dim, hidden_dim, multi_horizon, best_head, dev,
+                )
 
             with torch.no_grad():
-                logit = self._lstm_model(X_tensor.to(self._inference_device))
+                if self._lstm_meta.get('multi_horizon', False):
+                    logit = self._lstm_model(
+                        X_tensor.to(self._inference_device),
+                        head=self._lstm_meta.get('best_head', '5h'),
+                    )
+                else:
+                    logit = self._lstm_model(X_tensor.to(self._inference_device))
                 prob = torch.sigmoid(logit).item()
             return float(np.clip(prob, 0, 1))
 

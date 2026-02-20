@@ -242,7 +242,7 @@ def train_lgb_gpu(timeframes: List[str] = None):
 # 模式 2: LSTM + Attention 深度学习
 # ================================================================
 
-def train_lstm(timeframes: List[str] = None):
+def train_lstm(timeframes: List[str] = None, multi_horizon: bool = True):
     """PyTorch LSTM + Attention 训练"""
     try:
         import torch
@@ -261,12 +261,13 @@ def train_lstm(timeframes: List[str] = None):
     for tf in timeframes:
         log.info(f"\n{'='*60}")
         log.info(f"训练 LSTM — {SYMBOL}/{tf}")
+        log.info(f"配置: multi_horizon={bool(multi_horizon)}")
         log.info(f"{'='*60}")
 
         t0 = time.time()
         features, labels_df = prepare_features(SYMBOL, tf)
 
-        result = _train_lstm_single(features, labels_df, tf, device)
+        result = _train_lstm_single(features, labels_df, tf, device, multi_horizon=multi_horizon)
         result['elapsed_sec'] = round(time.time() - t0, 1)
         all_results[tf] = result
         log.info(f"{tf} 完成: {result}")
@@ -275,7 +276,7 @@ def train_lstm(timeframes: List[str] = None):
     return all_results
 
 
-def _train_lstm_single(features, labels_df, tf, device):
+def _train_lstm_single(features, labels_df, tf, device, multi_horizon: bool = True):
     """单周期 LSTM 训练 (Walk-Forward)"""
     import torch
     import torch.nn as nn
@@ -355,7 +356,7 @@ def _train_lstm_single(features, labels_df, tf, device):
     feat_values = features.values.astype(np.float32)
 
     # Multi-horizon labels
-    use_multi_horizon = True  # H800-New-1: Multi-Horizon LSTM
+    use_multi_horizon = bool(multi_horizon)
     if use_multi_horizon:
         label_5h = labels_df['profitable_long_5'].values.astype(np.float32)
         label_12h = labels_df['profitable_long_12'].values.astype(np.float32)
@@ -442,6 +443,7 @@ def _train_lstm_single(features, labels_df, tf, device):
     best_head_name = '5h'  # Track which head performs best
     patience = 10
     no_improve = 0
+    val_auc_5h = val_auc_12h = val_auc_24h = 0.5
 
     for epoch in range(EPOCHS):
         model.train()
@@ -533,18 +535,31 @@ def _train_lstm_single(features, labels_df, tf, device):
                 os.makedirs(MODEL_DIR, exist_ok=True)
                 torch.save(model.state_dict(),
                            os.path.join(MODEL_DIR, f'lstm_{tf}.pt'))
-                # 保存元数据 (multi-horizon 模式下记录最佳预测头)
+                # 保存元数据（推理端契约）
+                import json
+                meta_path = os.path.join(MODEL_DIR, f'lstm_{tf}_meta.json')
+                meta_payload = {
+                    'multi_horizon': bool(use_multi_horizon),
+                    'best_head': best_head_name if use_multi_horizon else '5h',
+                    'seq_len': SEQ_LEN,
+                    'input_dim': input_dim,
+                    'hidden_dim': HIDDEN_DIM,
+                    'num_layers': NUM_LAYERS,
+                    'dropout': DROPOUT,
+                    'feature_names': list(features.columns),
+                    'feat_mean': feat_mean.tolist(),
+                    'feat_std': feat_std.tolist(),
+                }
                 if use_multi_horizon:
-                    import json
-                    meta_path = os.path.join(MODEL_DIR, f'lstm_{tf}_meta.json')
-                    with open(meta_path, 'w') as f:
-                        json.dump({
-                            'multi_horizon': True,
-                            'best_head': best_head_name,
-                            'val_auc_5h': round(val_auc_5h, 4),
-                            'val_auc_12h': round(val_auc_12h, 4),
-                            'val_auc_24h': round(val_auc_24h, 4),
-                        }, f, indent=2)
+                    meta_payload.update({
+                        'val_auc_5h': round(val_auc_5h, 4),
+                        'val_auc_12h': round(val_auc_12h, 4),
+                        'val_auc_24h': round(val_auc_24h, 4),
+                    })
+                else:
+                    meta_payload['val_auc_5h'] = round(val_auc, 4)
+                with open(meta_path, 'w') as f:
+                    json.dump(meta_payload, f, indent=2)
             else:
                 no_improve += 1
 
@@ -601,6 +616,7 @@ def _train_lstm_single(features, labels_df, tf, device):
         'test_samples': len(X_test) if X_test is not None else 0,
         'epochs_trained': epoch + 1,
         'input_dim': input_dim,
+        'multi_horizon': bool(use_multi_horizon),
         'bf16': use_bf16,
     }
 
@@ -1765,43 +1781,99 @@ def export_onnx_models():
     if os.path.exists(lstm_path):
         try:
             ckpt = torch.load(lstm_path, map_location='cpu', weights_only=False)
+            meta_path = os.path.join(MODEL_DIR, 'lstm_1h_meta.json')
+            lstm_meta = {}
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path) as _mf:
+                        lstm_meta = json.load(_mf)
+                except Exception as meta_err:
+                    log.warning(f"  LSTM meta 读取失败，回退权重推断: {meta_err}")
             # 从 state_dict 推断维度
             if isinstance(ckpt, dict) and 'state_dict' in ckpt:
                 state = ckpt['state_dict']
-                input_dim = ckpt.get('input_dim', state['lstm.weight_ih_l0'].shape[1])
-                hidden_dim = ckpt.get('hidden_dim', state['lstm.weight_hh_l0'].shape[1])
+                input_dim = int(lstm_meta.get('input_dim', ckpt.get('input_dim', state['lstm.weight_ih_l0'].shape[1])))
+                hidden_dim = int(lstm_meta.get('hidden_dim', ckpt.get('hidden_dim', state['lstm.weight_hh_l0'].shape[1])))
             else:
                 state = ckpt  # raw state_dict
-                input_dim = state['lstm.weight_ih_l0'].shape[1]
-                hidden_dim = state['lstm.weight_hh_l0'].shape[1]
+                input_dim = int(lstm_meta.get('input_dim', state['lstm.weight_ih_l0'].shape[1]))
+                hidden_dim = int(lstm_meta.get('hidden_dim', state['lstm.weight_hh_l0'].shape[1]))
+            num_layers = int(lstm_meta.get('num_layers', 2))
+            dropout = float(lstm_meta.get('dropout', 0.3))
+            seq_len = int(lstm_meta.get('seq_len', 48))
 
-            class LSTMDirection(nn.Module):
-                def __init__(self, in_dim, hid_dim):
-                    super().__init__()
-                    self.lstm = nn.LSTM(in_dim, hid_dim, num_layers=2,
-                                       batch_first=True, bidirectional=True, dropout=0.2)
-                    self.attn_fc = nn.Linear(hid_dim * 2, 1)
-                    clf_in = hid_dim * 2
-                    # Infer classifier hidden from state if available
-                    clf_hid = state.get('classifier.0.weight', torch.zeros(64, clf_in)).shape[0]
-                    self.classifier = nn.Sequential(
-                        nn.Linear(clf_in, clf_hid),
-                        nn.GELU(),
-                        nn.Dropout(0.2),
-                        nn.Linear(clf_hid, 1),
-                    )
+            # 检测是否为 Multi-Horizon 模型 (head_5h.* keys vs classifier.* keys)
+            is_multi_horizon = bool(lstm_meta.get('multi_horizon', False)) or any(k.startswith('head_5h.') for k in state)
 
-                def forward(self, x):
-                    out, _ = self.lstm(x)
-                    w = torch.softmax(self.attn_fc(out), dim=1)
-                    ctx = (out * w).sum(dim=1)
-                    return self.classifier(ctx)
+            if is_multi_horizon:
+                # 读取 meta 文件确定最佳预测头
+                best_head = str(lstm_meta.get('best_head', '5h')).lower()
+                if best_head not in ('5h', '12h', '24h'):
+                    best_head = '5h'
+                log.info(f"  检测到 Multi-Horizon LSTM，使用最佳预测头: {best_head}")
 
-            model = LSTMDirection(input_dim, hidden_dim)
-            model.load_state_dict(state)
+                clf_in = hidden_dim * 2
+                clf_hid = state.get(f'head_{best_head}.0.weight',
+                                    torch.zeros(64, clf_in)).shape[0]
+
+                class LSTMDirection(nn.Module):
+                    def __init__(self, in_dim, hid_dim):
+                        super().__init__()
+                        self.lstm = nn.LSTM(
+                            in_dim, hid_dim, num_layers=num_layers,
+                            batch_first=True, bidirectional=True, dropout=dropout if num_layers > 1 else 0.0)
+                        self.attn_fc = nn.Linear(hid_dim * 2, 1)
+                        self.classifier = nn.Sequential(
+                            nn.Linear(hid_dim * 2, clf_hid),
+                            nn.GELU(),
+                            nn.Dropout(0.2),
+                            nn.Linear(clf_hid, 1),
+                        )
+
+                    def forward(self, x):
+                        out, _ = self.lstm(x)
+                        w = torch.softmax(self.attn_fc(out), dim=1)
+                        ctx = (out * w).sum(dim=1)
+                        return self.classifier(ctx)
+
+                # 重映射 state dict: head_{best_head}.* → classifier.*
+                remapped = {}
+                for k, v in state.items():
+                    if k.startswith(f'head_{best_head}.'):
+                        remapped[k.replace(f'head_{best_head}.', 'classifier.')] = v
+                    elif not k.startswith('head_'):
+                        remapped[k] = v
+                model = LSTMDirection(input_dim, hidden_dim)
+                model.load_state_dict(remapped)
+            else:
+                class LSTMDirection(nn.Module):
+                    def __init__(self, in_dim, hid_dim):
+                        super().__init__()
+                        self.lstm = nn.LSTM(
+                            in_dim, hid_dim, num_layers=num_layers,
+                            batch_first=True, bidirectional=True, dropout=dropout if num_layers > 1 else 0.0)
+                        self.attn_fc = nn.Linear(hid_dim * 2, 1)
+                        clf_in = hid_dim * 2
+                        # Infer classifier hidden from state if available
+                        clf_hid = state.get('classifier.0.weight',
+                                            torch.zeros(64, clf_in)).shape[0]
+                        self.classifier = nn.Sequential(
+                            nn.Linear(clf_in, clf_hid),
+                            nn.GELU(),
+                            nn.Dropout(0.2),
+                            nn.Linear(clf_hid, 1),
+                        )
+
+                    def forward(self, x):
+                        out, _ = self.lstm(x)
+                        w = torch.softmax(self.attn_fc(out), dim=1)
+                        ctx = (out * w).sum(dim=1)
+                        return self.classifier(ctx)
+
+                model = LSTMDirection(input_dim, hidden_dim)
+                model.load_state_dict(state)
             model.eval()
 
-            seq_len = ckpt.get('seq_len', 48) if isinstance(ckpt, dict) and 'seq_len' in ckpt else 48
             dummy = torch.randn(1, seq_len, input_dim)
             onnx_path = os.path.join(MODEL_DIR, 'lstm_1h.onnx')
 
@@ -3605,6 +3677,8 @@ def main():
                         help='Optuna 试验次数')
     parser.add_argument('--symbol', type=str, default='ETHUSDT',
                         help='交易对')
+    parser.add_argument('--multi-horizon', type=int, default=1, choices=[0, 1],
+                        help='LSTM 是否启用 Multi-Horizon (1=启用, 0=单头回退)')
     args = parser.parse_args()
 
     global SYMBOL
@@ -3621,7 +3695,7 @@ def main():
         results['lgb'] = train_lgb_gpu(tfs)
 
     if args.mode in ('lstm', 'all'):
-        results['lstm'] = train_lstm(tfs)
+        results['lstm'] = train_lstm(tfs, multi_horizon=bool(args.multi_horizon))
 
     if args.mode in ('optuna', 'all'):
         results['optuna'] = train_optuna(tfs, n_trials=args.trials)

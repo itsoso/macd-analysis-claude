@@ -87,9 +87,17 @@ def analyze_bull_prob(signals):
     probs = [float(s['data']['components']['ml_bull_prob']) for s in ml_sigs]
     directions = [s['data']['components'].get('ml_direction', 'neutral') for s in ml_sigs]
 
-    bull_count = sum(1 for d in directions if d == 'long')
-    bear_count = sum(1 for d in directions if d == 'short')
-    neutral_count = sum(1 for d in directions if d == 'neutral')
+    def _dir_bucket(raw):
+        d = str(raw).lower()
+        if d.startswith('bullish') or d == 'long':
+            return 'bull'
+        if d.startswith('bearish') or d == 'short':
+            return 'bear'
+        return 'neutral'
+
+    bull_count = sum(1 for d in directions if _dir_bucket(d) == 'bull')
+    bear_count = sum(1 for d in directions if _dir_bucket(d) == 'bear')
+    neutral_count = sum(1 for d in directions if _dir_bucket(d) == 'neutral')
 
     import statistics
     print(f"\n── Bull Prob 分析 (N={len(probs)}) ─────────────")
@@ -211,14 +219,18 @@ def print_deployment_advice(signals):
 
     if pct == 0 and not error_sigs:
         print(f"  {FAIL} ML 完全未运行")
-        print(f"       1. 确认服务器已部署 data/ml_models/ (含 lgb_direction_model.txt)")
-        print(f"       2. 确认 live_config.py 中 use_ml_enhancement=True")
-        print(f"       3. 重启服务: systemctl restart macd-analysis")
+        print(f"       1. 确认服务器已部署 data/ml_models/ (含 lgb_direction_model_1h.txt / tft_1h.pt / stacking_meta_1h.*)")
+        print(f"       2. 确认 DB 策略配置 use_ml_enhancement=True")
+        print(f"       3. 重启服务: systemctl restart macd-engine (必要时同时重启 macd-analysis)")
     elif error_sigs:
         err_sample = error_sigs[0]['data']['components'].get('ml_error', '')
-        if 'lightgbm' in err_sample.lower() or 'module' in err_sample.lower():
+        err_l = err_sample.lower()
+        if 'lightgbm' in err_l or 'module' in err_l:
             print(f"  {FAIL} 依赖缺失: {err_sample}")
             print(f"       pip install lightgbm  (服务器上执行)")
+        elif 'sklearn' in err_l:
+            print(f"  {FAIL} 依赖缺失: {err_sample}")
+            print(f"       pip install scikit-learn  (服务器上执行)")
         else:
             print(f"  {WARN} ML 报错，检查具体错误信息")
     elif pct < 50:
