@@ -26,10 +26,19 @@ import json
 import logging
 import datetime
 import glob
+import warnings
 from typing import Dict, Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
+
+# 抑制 sklearn 跨版本序列化警告 (stacking_meta.pkl 在 H800 上用旧版本训练)
+# 实际推理功能不受影响，待下次 H800 重训后此过滤器可删除
+warnings.filterwarnings(
+    "ignore",
+    message=".*Trying to unpickle estimator.*",
+    category=UserWarning,
+)
 
 logger = logging.getLogger(__name__)
 

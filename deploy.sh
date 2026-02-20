@@ -54,9 +54,14 @@ if [ -n "$DIRTY" ] && [ "$1" != "--force" ]; then
 fi
 $SSH_CMD "cd $REMOTE_DIR && git reset --hard HEAD && git pull origin main"
 
-# 3. 同步回测数据
+# 3. 安装/更新 Python 依赖
 echo ""
-echo "[3/6] 同步回测数据..."
+echo "[3/7] 安装 Python 依赖..."
+$SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && pip install --quiet onnxruntime>=1.16.0 'scikit-learn==1.7.2' 2>&1 | tail -3 && echo '  ✅ 依赖已确认 (onnxruntime, scikit-learn==1.7.2)'"
+
+# 4. 同步回测数据
+echo ""
+echo "[4/7] 同步回测数据..."
 $SSH_CMD "mkdir -p $REMOTE_DIR/data/backtests"
 SYNC_FILES=()
 [ -f data/backtests/multi_tf_daily_backtest.db ] && SYNC_FILES+=(data/backtests/multi_tf_daily_backtest.db)
@@ -69,9 +74,9 @@ else
   echo "  ⚠️  本地无 data/backtests/*.db，跳过"
 fi
 
-# 4. 应用 systemd ML 环境变量覆盖（固定 stacking 配置）
+# 5. 应用 systemd ML 环境变量覆盖（固定 stacking 配置）
 echo ""
-echo "[4/6] 更新 systemd ML 环境覆盖..."
+echo "[5/7] 更新 systemd ML 环境覆盖..."
 $SSH_CMD "mkdir -p /etc/systemd/system/macd-analysis.service.d /etc/systemd/system/macd-engine.service.d"
 $SSH_CMD "cat > /etc/systemd/system/macd-analysis.service.d/20-ml-stacking.conf <<'EOF'
 $ML_ENV_OVERRIDE_CONTENT
@@ -81,14 +86,14 @@ $ML_ENV_OVERRIDE_CONTENT
 EOF"
 $SSH_CMD "systemctl daemon-reload && echo '  ✅ 已写入 systemd override (macd-analysis, macd-engine)'"
 
-# 5. 重启 Web 服务
+# 6. 重启 Web 服务
 echo ""
-echo "[5/6] 重启 Web 服务..."
+echo "[6/7] 重启 Web 服务..."
 $SSH_CMD "systemctl restart macd-analysis && sleep 2 && systemctl is-active macd-analysis >/dev/null && echo '  ✅ Web 服务已重启' || echo '  ❌ Web 服务重启失败!'"
 
-# 6. 重启交易引擎 (加载新代码)
+# 7. 重启交易引擎 (加载新代码)
 echo ""
-echo "[6/6] 重启交易引擎..."
+echo "[7/7] 重启交易引擎..."
 $SSH_CMD "rm -f $REMOTE_DIR/data/live/engine.pid; systemctl reset-failed macd-engine 2>/dev/null; systemctl restart macd-engine && sleep 5 && systemctl is-active macd-engine >/dev/null && echo '  ✅ 交易引擎已重启 (paper mode)' || echo '  ❌ 交易引擎重启失败!'"
 
 # 最终确认
