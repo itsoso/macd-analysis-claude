@@ -2529,6 +2529,21 @@ def train_stacking_ensemble(timeframes: List[str] = None):
             else:
                 log.info(f"  {name} OOF: 样本不足")
 
+        # H800-6: OOF 相关性诊断
+        log.info(f"\n[H800-6] OOF 诊断:")
+        oof_mat = oof_filled[has_oof]
+        oof_stds = oof_mat.std(axis=0)
+        log.info(f"  OOF 标准差: {dict(zip(model_names, oof_stds.round(4)))}")
+        log.info(f"  OOF 互相关矩阵:")
+        corr_mat = np.corrcoef(oof_mat.T)
+        for i, name in enumerate(model_names):
+            corr_str = " ".join([f"{c:6.3f}" for c in corr_mat[i]])
+            log.info(f"    {name:15s}: {corr_str}")
+        # 检测近常数模型
+        low_var_models = [model_names[i] for i, std in enumerate(oof_stds) if std < 0.05]
+        if low_var_models:
+            log.warning(f"  ⚠️  低方差模型 (std<0.05): {low_var_models} - 考虑移除")
+
         # 可选附加特征: hvol_20, regime_label
         extra_feat_names = []
         oof_extra = []
