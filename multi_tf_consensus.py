@@ -505,15 +505,15 @@ def fuse_tf_scores(tf_scores, decision_tfs, config=None):
     if best_chain_len >= 3 and best_chain_has_4h:
         chain_boost = 1.0 + best_chain_len * chain_boost_per_tf
         if best_chain_dir == 'short':
-            weighted_ss *= chain_boost
+            weighted_ss = min(100.0, weighted_ss * chain_boost)
         else:
-            weighted_bs *= chain_boost
+            weighted_bs = min(100.0, weighted_bs * chain_boost)
     elif best_chain_len >= 2:
         chain_boost = 1.0 + best_chain_len * chain_boost_weak_per_tf
         if best_chain_dir == 'short':
-            weighted_ss *= chain_boost
+            weighted_ss = min(100.0, weighted_ss * chain_boost)
         else:
-            weighted_bs *= chain_boost
+            weighted_bs = min(100.0, weighted_bs * chain_boost)
 
     # ── 6. Coverage 惩罚 ──
     if coverage < 1.0:
