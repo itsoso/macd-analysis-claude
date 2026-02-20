@@ -278,25 +278,65 @@
     └─────────────────────────┘    └──────────────────────────┘
 ```
 
-### 2.3 核心代码文件
+### 2.3 训练后推理架构示意（本地 / 远程 GPU）
+
+```text
+                  ┌────────────────────────────────────────────┐
+                  │         H800 离线训练 (train_gpu.py)       │
+                  │  lgb/lstm/tft/stacking/tabnet/optuna 等    │
+                  └─────────────────┬──────────────────────────┘
+                                    │ 产出模型文件
+                                    ▼
+                      data/ml_models/*.txt|*.pt|*.json|*.pkl
+                                    │
+               ┌────────────────────┴────────────────────┐
+               │                                         │
+               ▼                                         ▼
+┌──────────────────────────────────┐      ┌──────────────────────────────────┐
+│ 路径A: 本地推理 (默认)            │      │ 路径B: 远程推理 API (可选)       │
+│ ml_live_integration.py           │      │ ml_inference_server.py           │
+│ MLSignalEnhancer.load_model()    │      │ POST /predict                    │
+│ - 方向预测(LGB/LSTM/TFT/CA)      │      │ - 接收 features/sell_score/buy   │
+│ - Stacking(质量门控通过才启用)   │      │ - 调 MLSignalEnhancer 推理        │
+│ - Regime + Quantile              │      │ - 返回 bull_prob + 细项           │
+└─────────────────┬────────────────┘      └─────────────────┬────────────────┘
+                  │                                          │
+                  │                                          │
+                  └──────────────┬───────────────────────────┘
+                                 ▼
+                   live_signal_generator.py / live_runner.py
+                                 ▼
+                         live_trading_engine.py
+                                 ▼
+                          order_manager.py
+```
+
+**推理分流规则（当前实现）**:
+- 若配置 `ML_GPU_INFERENCE_URL`（或 `strategy.ml_gpu_inference_url`），`enhance_signal()` 优先走远程 `/predict`；失败超时回退本地。
+- 本地与远程都复用 `predict_direction_from_features()`，保证方向预测逻辑一致。
+- Stacking 受环境变量与质量门槛控制（`ML_ENABLE_STACKING`、AUC/gap/覆盖率门控）；不满足自动回退加权融合。
+- 推理设备可由 `ML_INFERENCE_DEVICE` 指定（`cpu`/`cuda`），否则自动探测 CUDA。
+
+### 2.4 核心代码文件
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `optimize_six_book.py` | ~4900 | 回测引擎核心: Regime检测、持仓管理、Anti-Squeeze |
-| `live_config.py` | ~977 | 策略参数、版本管理 (v1-v5)、风控配置 |
-| `signal_core.py` | ~978 | 六书信号计算、融合评分（单bar+批量向量化） |
-| `live_signal_generator.py` | ~675 | 实盘信号: 数据获取(含衍生品)、信号计算、交易决策 |
-| `binance_fetcher.py` | ~690 | Binance API: K线+Mark Price+Funding+OI 获取/缓存 |
-| `multi_tf_consensus.py` | ~641 | 多周期共识、TF权重、链式检测 |
+| `optimize_six_book.py` | ~5000 | 回测优化与多周期策略运行核心（Regime、仓位、Anti-Squeeze） |
+| `live_config.py` | ~1180 | 策略参数、版本管理（v1-v6）、风控与阶段配置 |
+| `signal_core.py` | ~940 | 六书信号计算、融合评分（单bar+批量向量化） |
+| `live_signal_generator.py` | ~840 | 实盘信号: 数据获取(含衍生品)、信号计算、共识融合 |
+| `binance_fetcher.py` | ~690 | Binance API: K线+Mark/Funding/OI 获取与本地缓存 |
+| `multi_tf_consensus.py` | ~330 | 多周期共识、TF权重、链式检测 |
 | `live_runner.py` | — | 实盘运行入口、systemd 管理 |
 | `app.py` | — | Flask Web 应用、监控面板 |
 | **ML/GPU 文件** | | |
-| `ml_features.py` | — | 94 维 ML 特征工程 (73 基础 + 21 跨资产) |
+| `ml_features.py` | — | ML 特征工程（含高频微结构特征） |
 | `ml_predictor.py` | — | LightGBM/XGBoost Walk-Forward 预测 |
 | `ml_regime.py` | — | 波动率 regime + 趋势质量分类 |
 | `ml_quantile.py` | — | 收益分位数预测 (q05~q95) |
-| `ml_live_integration.py` | — | ML 信号增强器 (MLSignalEnhancer) |
-| `train_gpu.py` | — | H800 GPU 离线训练入口 (LGB/LSTM/Optuna) |
+| `ml_live_integration.py` | — | ML 信号增强器 (含 Stacking 门控 + 远程推理回退) |
+| `ml_inference_server.py` | — | 独立推理服务（/health, /predict） |
+| `train_gpu.py` | — | H800 GPU 离线训练入口（多模式） |
 | `fetch_5year_data.py` | — | 批量下载 5 年训练数据 (4对×4周期) |
 
 ---
