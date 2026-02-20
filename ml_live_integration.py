@@ -493,7 +493,15 @@ class MLSignalEnhancer:
             if len(features) < SEQ_LEN:
                 return None
 
-            feat_names = self._direction_meta.get('feature_names', []) if self._direction_meta else list(features.columns)
+            # lstm_1h.pt 用 stacking feature_names_73 (80维) 训练；优先用该特征集和配套标准化
+            if self._stacking_config and self._stacking_config.get('feature_names_73'):
+                feat_names = self._stacking_config['feature_names_73']
+                feat_mean_arr = np.array(self._stacking_config.get('feat_mean_73', [0.0] * len(feat_names)), dtype=np.float32)
+                feat_std_arr  = np.array(self._stacking_config.get('feat_std_73',  [1.0] * len(feat_names)), dtype=np.float32)
+                use_stacking_norm = True
+            else:
+                feat_names = self._direction_meta.get('feature_names', []) if self._direction_meta else list(features.columns)
+                use_stacking_norm = False
 
             # 对齐特征
             X_df = pd.DataFrame(0.0, index=features.index, columns=feat_names)
@@ -503,15 +511,9 @@ class MLSignalEnhancer:
             X_df = X_df.replace([np.inf, -np.inf], np.nan).fillna(0)
             feat_values = X_df.values.astype(np.float32)
 
-            # 标准化: 优先用持久化的 mean/std (v6: 从 TFT meta 或 ensemble_config)
-            norm_applied = False
-            norm_source = self._norm_mean or (self._direction_meta or {}).get('feat_mean')
-            if self._norm_mean:
-                for i, col in enumerate(feat_names):
-                    m = self._norm_mean.get(col, 0.0)
-                    s = self._norm_std.get(col, 1.0)
-                    feat_values[:, i] = (feat_values[:, i] - m) / max(s, 1e-8)
-                norm_applied = True
+            # 标准化
+            if use_stacking_norm:
+                feat_values = (feat_values - feat_mean_arr) / np.maximum(feat_std_arr, 1e-8)
             elif self._direction_meta and isinstance(self._direction_meta.get('feat_mean'), dict):
                 mean_dict = self._direction_meta['feat_mean']
                 std_dict = self._direction_meta['feat_std']
@@ -519,8 +521,7 @@ class MLSignalEnhancer:
                     m = mean_dict.get(col, 0.0)
                     s = std_dict.get(col, 1.0)
                     feat_values[:, i] = (feat_values[:, i] - m) / max(s, 1e-8)
-                norm_applied = True
-            if not norm_applied:
+            else:
                 half = len(feat_values) // 2
                 m = np.nanmean(feat_values[:half], axis=0)
                 s = np.nanstd(feat_values[:half], axis=0) + 1e-8
