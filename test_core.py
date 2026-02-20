@@ -219,8 +219,8 @@ class TestFeeConsistency:
         
         notional = margin * lev  # 50000
         expected_fee = notional * 0.0005  # 25
-        expected_slippage = notional * 0.001  # 50
-        actual_entry = price * 1.001  # 2702.7
+        expected_slippage = notional * 0.0015  # 75 (SLIPPAGE=0.0015)
+        actual_entry = price * 1.0015  # 2704.05
         expected_qty = notional / actual_entry
         
         assert eng.total_futures_fees == pytest.approx(expected_fee, rel=0.01)
@@ -240,15 +240,15 @@ class TestFeeConsistency:
         eng.open_long(2700, dt, 10000, 5, "test")
         eng.close_long(2800, dt, "test")
         
-        # 手工计算
+        # 手工计算 (SLIPPAGE=0.0015, FEE=0.0005)
         notional_open = 50000
-        entry = 2700 * 1.001  # 2702.7
+        entry = 2700 * 1.0015  # 2704.05
         qty = notional_open / entry
-        exit_p = 2800 * 0.999  # 2797.2
+        exit_p = 2800 * 0.9985  # 2795.8
         pnl = (exit_p - entry) * qty
         fee_open = notional_open * 0.0005
         fee_close = exit_p * qty * 0.0005
-        
+
         expected_final = initial - fee_open + pnl - fee_close
         assert eng.usdt == pytest.approx(expected_final, rel=1e-4)
 
@@ -259,19 +259,20 @@ class TestFeeConsistency:
         eng.max_margin_total = 100000
         eng.max_lifetime_margin = 500000
         dt = pd.Timestamp('2025-01-01')
-        
+
         initial = eng.usdt
         eng.open_short(2700, dt, 10000, 5, "test")
         eng.close_short(2600, dt, "test")
-        
+
+        # 手工计算 (SLIPPAGE=0.0015, FEE=0.0005)
         notional_open = 50000
-        entry = 2700 * 0.999  # 2697.3
+        entry = 2700 * 0.9985  # 2695.95
         qty = notional_open / entry
-        exit_p = 2600 * 1.001  # 2602.6
+        exit_p = 2600 * 1.0015  # 2603.9
         pnl = (entry - exit_p) * qty
         fee_open = notional_open * 0.0005
         fee_close = exit_p * qty * 0.0005
-        
+
         expected_final = initial - fee_open + pnl - fee_close
         assert eng.usdt == pytest.approx(expected_final, rel=1e-4)
 
