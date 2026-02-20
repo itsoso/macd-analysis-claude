@@ -17,6 +17,7 @@ v6 更新:
 使用:
   1. 训练: python train_gpu.py --mode all_v3 (在 H800 上)
   2. Stacking: python train_gpu.py --mode stacking --tf 1h
+     ⚠ 三轮迭代结论: 小数据集(~4k)下 Stacking 严重过拟合(AUC -13%)，建议样本 20000+ 再训；当前优先用加权 LGB+LSTM+TFT。
   3. 实盘: live_signal_generator.py 自动调用 MLSignalEnhancer.enhance_signal()
 """
 

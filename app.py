@@ -1087,6 +1087,119 @@ def api_ml_status():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+@app.route('/api/ml/shadow/diagnostic')
+def api_ml_shadow_diagnostic():
+    """ML Shadow 日志诊断 — 解析最近N天 JSONL 日志中的 SIGNAL 记录，返回覆盖率/bull_prob/regime/错误统计"""
+    import statistics as _st
+    from collections import defaultdict as _dd
+    from datetime import datetime as _dt, timedelta as _td
+
+    days = request.args.get('days', 7, type=int)
+    log_dir = os.path.join(BASE_DIR, 'logs', 'live')
+    result = {
+        'success': True,
+        'days': days,
+        'log_files': 0,
+        'total_signals': 0,
+        'with_ml': 0,
+        'with_error': 0,
+        'coverage_pct': 0.0,
+        'bull_prob_mean': None,
+        'bull_prob_median': None,
+        'bull_prob_std': None,
+        'direction_counts': {'long': 0, 'short': 0, 'neutral': 0},
+        'regime_counts': {},
+        'error_summary': [],
+        'recent_signals': [],
+    }
+
+    if not os.path.exists(log_dir):
+        result['success'] = False
+        result['message'] = f'日志目录不存在: {log_dir}'
+        return jsonify(result)
+
+    try:
+        cutoff = _dt.now() - _td(days=days)
+        all_files = sorted([
+            os.path.join(log_dir, f) for f in os.listdir(log_dir)
+            if f.endswith('.jsonl')
+        ])
+        log_files = [f for f in all_files
+                     if _dt.fromtimestamp(os.path.getmtime(f)) >= cutoff]
+        result['log_files'] = len(log_files)
+
+        signals = []
+        for path in log_files:
+            try:
+                with open(path) as f:
+                    for line in f:
+                        try:
+                            rec = json.loads(line)
+                            if rec.get('level') == 'SIGNAL':
+                                signals.append(rec)
+                        except json.JSONDecodeError:
+                            pass
+            except Exception:
+                pass
+
+        result['total_signals'] = len(signals)
+        ml_sigs = [s for s in signals
+                   if 'ml_bull_prob' in s.get('data', {}).get('components', {})]
+        err_sigs = [s for s in signals
+                    if 'ml_error' in s.get('data', {}).get('components', {})]
+        result['with_ml'] = len(ml_sigs)
+        result['with_error'] = len(err_sigs)
+        result['coverage_pct'] = round(len(ml_sigs) / max(len(signals), 1) * 100, 1)
+
+        if ml_sigs:
+            probs = [float(s['data']['components']['ml_bull_prob']) for s in ml_sigs]
+            result['bull_prob_mean'] = round(_st.mean(probs), 3)
+            result['bull_prob_median'] = round(_st.median(probs), 3)
+            result['bull_prob_std'] = round(_st.stdev(probs) if len(probs) > 1 else 0, 3)
+            for s in ml_sigs:
+                d = s['data']['components'].get('ml_direction', 'neutral')
+                result['direction_counts'][d] = result['direction_counts'].get(d, 0) + 1
+
+        regime_counts = _dd(int)
+        for s in signals:
+            r = s.get('data', {}).get('components', {}).get('ml_regime')
+            if r:
+                regime_counts[r] += 1
+        result['regime_counts'] = dict(regime_counts)
+
+        error_counts = _dd(int)
+        for s in err_sigs:
+            err = s['data']['components'].get('ml_error', '?')
+            error_counts[err[:80]] += 1
+        result['error_summary'] = [
+            {'error': k, 'count': v}
+            for k, v in sorted(error_counts.items(), key=lambda x: -x[1])[:5]
+        ]
+
+        # 最近20条含ML数据的信号
+        combined = sorted(ml_sigs + err_sigs,
+                          key=lambda s: s.get('ts', s.get('timestamp', '')))[-20:]
+        recent = []
+        for s in combined:
+            c = s.get('data', {}).get('components', {})
+            recent.append({
+                'ts': (s.get('ts') or s.get('timestamp', ''))[:16],
+                'tf': s.get('data', {}).get('timeframe', ''),
+                'bull_prob': c.get('ml_bull_prob', ''),
+                'direction': c.get('ml_direction', ''),
+                'regime': c.get('ml_regime', ''),
+                'kelly': c.get('ml_kelly_fraction', ''),
+                'error': c.get('ml_error', ''),
+            })
+        result['recent_signals'] = recent
+
+    except Exception as e:
+        result['success'] = False
+        result['message'] = str(e)
+
+    return jsonify(result)
+
+
 @app.route('/api/live/test_signal', methods=['POST'])
 def api_live_test_signal():
     """测试信号计算"""

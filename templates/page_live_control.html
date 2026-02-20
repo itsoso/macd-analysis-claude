@@ -739,6 +739,53 @@
         </div>
     </div>
 
+    <div class="ctrl-card" style="margin-bottom: 20px;">
+        <div class="history-toolbar">
+            <h3>🤖 ML Shadow 诊断</h3>
+            <div class="btn-group">
+                <select id="mlDiagDays" class="history-select" onchange="refreshMLDiagnostic()">
+                    <option value="3">最近3天</option>
+                    <option value="7" selected>最近7天</option>
+                    <option value="14">最近14天</option>
+                    <option value="30">最近30天</option>
+                </select>
+                <button class="btn btn-outline btn-sm" onclick="refreshMLDiagnostic()">刷新</button>
+            </div>
+        </div>
+        <div class="history-grid" style="margin-bottom:10px;">
+            <div class="history-metric"><div class="label">日志文件</div><div class="value" id="ml_log_files">--</div></div>
+            <div class="history-metric"><div class="label">信号总数</div><div class="value" id="ml_total_signals">--</div></div>
+            <div class="history-metric"><div class="label">ML 覆盖率</div><div class="value" id="ml_coverage">--</div></div>
+            <div class="history-metric"><div class="label">ML 报错数</div><div class="value" id="ml_errors">--</div></div>
+            <div class="history-metric"><div class="label">Bull Prob 均值</div><div class="value" id="ml_bull_mean">--</div></div>
+            <div class="history-metric"><div class="label">Bull Prob 中位数</div><div class="value" id="ml_bull_median">--</div></div>
+        </div>
+        <div class="history-grid" style="margin-bottom:10px;">
+            <div class="history-metric"><div class="label">看多信号</div><div class="value" id="ml_dir_long">--</div></div>
+            <div class="history-metric"><div class="label">看空信号</div><div class="value" id="ml_dir_short">--</div></div>
+            <div class="history-metric"><div class="label">中性信号</div><div class="value" id="ml_dir_neutral">--</div></div>
+            <div class="history-metric"><div class="label">Regime 分布</div><div class="value" id="ml_regime_dist" style="font-size:12px;">--</div></div>
+        </div>
+        <div id="mlErrorList" style="display:none; margin-bottom:10px;">
+            <div class="history-note" style="color:#e07070;">ML 错误摘要:</div>
+            <div id="mlErrorItems"></div>
+        </div>
+        <div class="history-note" id="mlDiagNote">点击刷新加载数据</div>
+        <div id="mlSignalTableWrap" style="display:none; margin-top:10px;">
+            <div class="history-note">最近 ML 信号（最多20条）</div>
+            <div class="table-wrap">
+                <table class="history-table">
+                    <thead>
+                        <tr>
+                            <th>时间</th><th>周期</th><th>Bull Prob</th><th>方向</th><th>Regime</th><th>Kelly</th><th>状态</th>
+                        </tr>
+                    </thead>
+                    <tbody id="mlSignalTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <div class="grid-1">
         <div class="ctrl-card">
             <h3>📆 逐日盈亏</h3>
@@ -1756,6 +1803,80 @@ function renderLiveHistory(data) {
                 </tr>`;
             }).join('');
         }
+    }
+}
+
+async function refreshMLDiagnostic() {
+    const days = document.getElementById('mlDiagDays')?.value || 7;
+    document.getElementById('mlDiagNote').textContent = '加载中...';
+    try {
+        const data = await apiCall(`/api/ml/shadow/diagnostic?days=${days}`);
+        if (!data.success) {
+            document.getElementById('mlDiagNote').textContent = '错误: ' + (data.message || '未知');
+            return;
+        }
+        document.getElementById('ml_log_files').textContent = data.log_files;
+        document.getElementById('ml_total_signals').textContent = data.total_signals;
+
+        const covEl = document.getElementById('ml_coverage');
+        covEl.textContent = data.coverage_pct + '%';
+        covEl.className = 'value ' + (data.coverage_pct > 80 ? 'green' : data.coverage_pct > 0 ? 'yellow' : '');
+
+        const errEl = document.getElementById('ml_errors');
+        errEl.textContent = data.with_error;
+        errEl.className = 'value ' + (data.with_error > 0 ? 'red' : 'green');
+
+        document.getElementById('ml_bull_mean').textContent =
+            data.bull_prob_mean != null ? data.bull_prob_mean.toFixed(3) : '--';
+        document.getElementById('ml_bull_median').textContent =
+            data.bull_prob_median != null ? data.bull_prob_median.toFixed(3) : '--';
+
+        const dc = data.direction_counts || {};
+        document.getElementById('ml_dir_long').textContent = dc.long || 0;
+        document.getElementById('ml_dir_short').textContent = dc.short || 0;
+        document.getElementById('ml_dir_neutral').textContent = dc.neutral || 0;
+
+        const rc = data.regime_counts || {};
+        const regimeStr = Object.entries(rc)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, v]) => `${k}:${v}`)
+            .join(', ') || '--';
+        document.getElementById('ml_regime_dist').textContent = regimeStr;
+
+        const errList = document.getElementById('mlErrorList');
+        if (data.error_summary && data.error_summary.length > 0) {
+            errList.style.display = 'block';
+            document.getElementById('mlErrorItems').innerHTML = data.error_summary
+                .map(e => `<div style="font-size:12px;color:#ccc;padding:2px 0;">[${e.count}x] ${e.error}</div>`)
+                .join('');
+        } else {
+            errList.style.display = 'none';
+        }
+
+        const tbody = document.getElementById('mlSignalTableBody');
+        if (data.recent_signals && data.recent_signals.length > 0) {
+            document.getElementById('mlSignalTableWrap').style.display = 'block';
+            tbody.innerHTML = data.recent_signals.map(s => {
+                const prob = s.bull_prob !== '' ? Number(s.bull_prob).toFixed(3) : '--';
+                const kelly = s.kelly !== '' ? Number(s.kelly).toFixed(2) : '--';
+                const status = s.error ? `<span style="color:#e07070">${s.error.slice(0, 40)}</span>` : '<span style="color:#6c6">OK</span>';
+                return `<tr><td>${s.ts||'--'}</td><td>${s.tf||'--'}</td><td>${prob}</td><td>${s.direction||'--'}</td><td>${s.regime||'--'}</td><td>${kelly}</td><td>${status}</td></tr>`;
+            }).join('');
+        } else {
+            document.getElementById('mlSignalTableWrap').style.display = 'none';
+        }
+
+        let note;
+        if (data.coverage_pct === 0 && data.with_error === 0) {
+            note = '⚠ ML 未运行 — 确认模型已部署且 use_ml_enhancement=True';
+        } else if (data.coverage_pct < 50) {
+            note = `! ML 覆盖率偏低 (${data.coverage_pct}%)，部分信号无 ML 增强`;
+        } else {
+            note = `✓ ML Shadow 运行正常（覆盖率 ${data.coverage_pct}%）`;
+        }
+        document.getElementById('mlDiagNote').textContent = note;
+    } catch (e) {
+        document.getElementById('mlDiagNote').textContent = '请求失败: ' + e.message;
     }
 }
 
