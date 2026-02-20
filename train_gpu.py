@@ -3035,6 +3035,97 @@ def _stacking_retrain_tft_full(feat_normed, y_all, full_end, full_valid,
 
 
 # ================================================================
+# 模式 13: TabNet 训练 (表格数据专用深度学习)
+# ================================================================
+
+def train_tabnet(timeframes: List[str] = None):
+    """
+    训练 TabNet 模型 — 表格数据专用深度学习
+
+    特点:
+    - 可解释的注意力机制
+    - 稀疏特征选择
+    - 性能优于传统 GBDT (在某些任务上)
+    """
+    try:
+        from ml_tabnet import TabNetPredictor, train_tabnet_walk_forward
+    except ImportError:
+        log.error("ml_tabnet 模块未找到，请确保 ml_tabnet.py 存在")
+        return {}
+
+    timeframes = timeframes or ['1h']
+    all_results = {}
+
+    for tf in timeframes:
+        log.info(f"\n{'='*60}")
+        log.info(f"训练 TabNet — {SYMBOL}/{tf}")
+        log.info(f"{'='*60}")
+
+        t0 = time.time()
+
+        # 准备数据
+        features, labels_df = prepare_features(SYMBOL, tf)
+
+        # 添加跨资产特征
+        features = _add_cross_asset_features(features, tf)
+        log.info(f"含跨资产特征: {features.shape[1]} 维")
+
+        # 使用利润化标签
+        target_col = 'profitable_long_5'
+        if target_col not in labels_df.columns:
+            log.warning(f"{target_col} 不存在，使用 fwd_dir_5")
+            target_col = 'fwd_dir_5'
+
+        # Walk-Forward 训练
+        log.info("开始 Walk-Forward 训练...")
+        model, wf_results = train_tabnet_walk_forward(
+            df=pd.DataFrame(index=features.index),
+            features=features,
+            labels=labels_df,
+            target_col=target_col,
+            train_window=2000,
+            test_window=500,
+            step=250,
+            n_d=64,
+            n_a=64,
+            n_steps=5,
+            gamma=1.5,
+            lambda_sparse=1e-3,
+            mask_type='entmax',
+        )
+
+        # 保存模型
+        model_path = os.path.join(MODEL_DIR, f'tabnet_{tf}.zip')
+        model.save(model_path)
+
+        # 获取特征重要性
+        feat_imp = model.get_feature_importance()
+        log.info(f"\nTop 10 重要特征:")
+        for idx, row in feat_imp.head(10).iterrows():
+            log.info(f"  {row['feature']}: {row['importance']:.4f}")
+
+        result = {
+            'timeframe': tf,
+            'n_features': features.shape[1],
+            'n_samples': len(features),
+            'mean_auc': wf_results['mean_auc'],
+            'std_auc': wf_results['std_auc'],
+            'n_folds': wf_results['n_folds'],
+            'model_path': model_path,
+            'elapsed_sec': round(time.time() - t0, 1),
+            'top_features': feat_imp.head(20).to_dict('records'),
+        }
+
+        all_results[tf] = result
+        log.info(f"\n{tf} TabNet 完成:")
+        log.info(f"  AUC: {result['mean_auc']:.4f} ± {result['std_auc']:.4f}")
+        log.info(f"  耗时: {result['elapsed_sec']}s")
+
+    save_results('tabnet_training', all_results)
+    return all_results
+
+
+# ================================================================
 # Main
 # ================================================================
 
@@ -3043,7 +3134,7 @@ def main():
     parser.add_argument('--mode', type=str, default='lgb',
                         choices=['lgb', 'lstm', 'optuna', 'backtest', 'tft',
                                  'cross_asset', 'incr_wf', 'mtf_fusion',
-                                 'ppo', 'onnx', 'retrain', 'stacking',
+                                 'ppo', 'onnx', 'retrain', 'stacking', 'tabnet',
                                  'all', 'all_v2', 'all_v3', 'all_v4'],
                         help='训练模式')
     parser.add_argument('--tf', type=str, default=None,
@@ -3099,6 +3190,9 @@ def main():
 
     if args.mode in ('stacking', 'all_v4'):
         results['stacking'] = train_stacking_ensemble(tfs)
+
+    if args.mode == 'tabnet':
+        results['tabnet'] = train_tabnet(tfs)
 
     total_elapsed = time.time() - t_total
     log.info(f"\n{'='*60}")

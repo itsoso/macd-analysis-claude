@@ -1,0 +1,55 @@
+{
+  "baseline_auc": 0.5690649216840398,
+  "improved_auc": 0.543725954424386,
+  "auc_improvement": -0.02533896725965379,
+  "baseline_acc": 0.6472898664571878,
+  "improved_acc": 0.6103692065985861,
+  "acc_improvement": -0.03692065985860171,
+  "n_features_baseline": 76,
+  "n_features_improved": 94,
+  "n_new_features": 18,
+  "n_samples_train": 2968,
+  "n_samples_test": 1273,
+  "top_new_features": [
+    {
+      "feature": "hvol_percentile",
+      "importance": 189.02634954452515
+    },
+    {
+      "feature": "ofi_ewm",
+      "importance": 116.77960109710693
+    },
+    {
+      "feature": "ret_1_skew10",
+      "importance": 71.51533126831055
+    },
+    {
+      "feature": "ret_1_kurt10",
+      "importance": 64.97611999511719
+    },
+    {
+      "feature": "trend_slope_10",
+      "importance": 64.15377902984619
+    },
+    {
+      "feature": "ofi_ret_interaction",
+      "importance": 58.32505941390991
+    },
+    {
+      "feature": "trend_slope_20",
+      "importance": 45.553019523620605
+    },
+    {
+      "feature": "rsi_diff",
+      "importance": 35.06996965408325
+    },
+    {
+      "feature": "ret_1_ma5",
+      "importance": 31.335299491882324
+    },
+    {
+      "feature": "ret_1_std5",
+      "importance": 26.920599937438965
+    }
+  ]
+}

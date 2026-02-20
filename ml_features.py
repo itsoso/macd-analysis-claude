@@ -188,6 +188,39 @@ def compute_ml_features(df: pd.DataFrame, lookback: int = 60) -> pd.DataFrame:
         tbv = df['taker_buy_base'].astype(float)
         feat['taker_buy_ratio'] = tbv / volume.replace(0, np.nan)
 
+        # Order Flow Imbalance (OFI) - 高频微结构特征
+        taker_sell = volume - tbv
+        feat['ofi'] = (tbv - taker_sell) / volume.replace(0, np.nan)
+        feat['ofi_ma5'] = feat['ofi'].rolling(5).mean()
+        feat['ofi_std5'] = feat['ofi'].rolling(5).std()
+
+        # 累积 OFI (类似 OBV 但基于买卖单不平衡)
+        feat['cum_ofi'] = feat['ofi'].cumsum()
+        feat['cum_ofi_slope'] = feat['cum_ofi'].pct_change(5)
+
+        # 大单占比 (假设 volume > 平均的 2 倍为大单)
+        vol_ma = volume.rolling(20).mean()
+        is_large_trade = (volume > vol_ma * 2).astype(float)
+        feat['large_trade_ratio'] = is_large_trade.rolling(10).mean()
+
+        # 买卖压力不平衡度
+        buy_pressure = tbv.rolling(5).sum()
+        sell_pressure = taker_sell.rolling(5).sum()
+        feat['buy_sell_pressure'] = (buy_pressure - sell_pressure) / (buy_pressure + sell_pressure).replace(0, np.nan)
+
+    # VWAP 增强特征
+    if 'vwap' in df.columns:
+        vwap = df['vwap'].astype(float)
+        # VWAP 偏离度的变化率
+        vwap_dist = (close - vwap) / close
+        feat['vwap_dist_change'] = vwap_dist.diff()
+        feat['vwap_dist_ma5'] = vwap_dist.rolling(5).mean()
+
+        # 价格在 VWAP 上方/下方的持续时间
+        above_vwap = (close > vwap).astype(int)
+        feat['above_vwap_streak'] = above_vwap.groupby((above_vwap != above_vwap.shift()).cumsum()).cumcount() + 1
+        feat['above_vwap_streak'] = feat['above_vwap_streak'] * above_vwap
+
     # ================================================================
     # 6. 微结构 (蜡烛) 特征
     # ================================================================

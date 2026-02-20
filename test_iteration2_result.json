@@ -1,0 +1,12 @@
+{
+  "lgb_auc": 0.5690649216840398,
+  "lgb_acc": 0.6472898664571878,
+  "catboost_auc": 0.545046748435325,
+  "catboost_acc": 0.6417910447761194,
+  "stacking_auc": 0.4931000843992853,
+  "stacking_acc": 0.6355066771406127,
+  "auc_improvement_catboost": -0.024018173248714803,
+  "auc_improvement_stacking": -0.07596483728475445,
+  "n_samples_train": 2968,
+  "n_samples_test": 1273
+}

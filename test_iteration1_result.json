@@ -1,0 +1,42 @@
+{
+  "baseline_auc": 0.5496955597207152,
+  "improved_auc": 0.5690649216840398,
+  "auc_improvement": 0.019369361963324616,
+  "baseline_acc": 0.648075412411626,
+  "improved_acc": 0.6472898664571878,
+  "acc_improvement": -0.0007855459544382493,
+  "n_features_baseline": 69,
+  "n_features_improved": 76,
+  "n_samples_train": 2968,
+  "n_samples_test": 1273,
+  "microstructure_features": [
+    {
+      "feature": "cum_ofi",
+      "importance": 117.84930038452148
+    },
+    {
+      "feature": "ofi_std5",
+      "importance": 97.6098108291626
+    },
+    {
+      "feature": "ofi_ma5",
+      "importance": 51.04637050628662
+    },
+    {
+      "feature": "buy_sell_pressure",
+      "importance": 44.613600730895996
+    },
+    {
+      "feature": "large_trade_ratio",
+      "importance": 18.584630012512207
+    },
+    {
+      "feature": "cum_ofi_slope",
+      "importance": 8.485219955444336
+    },
+    {
+      "feature": "ofi",
+      "importance": 8.446330070495605
+    }
+  ]
+}
