@@ -218,6 +218,74 @@ def analyze_bull_prob(signals):
         print(f"  {WARN} 无法判断 Stacking 是否激活 (缺少 ml_stacking_mode 字段)")
 
 
+def analyze_stacking_detail(signals):
+    """分析 Stacking 基模型概率分布"""
+    stk_sigs = [s for s in signals
+                if s.get('data', {}).get('components', {}).get('ml_stacking_mode') is True]
+    if not stk_sigs:
+        return
+
+    def _to_float(v):
+        try:
+            return float(v) if v not in (None, '-', '') else None
+        except Exception:
+            return None
+
+    models = {
+        'lgb':      'ml_stacking_lgb_prob',
+        'xgb':      'ml_stacking_xgb_prob',
+        'lstm':     'ml_stacking_lstm_prob',
+        'tft':      'ml_stacking_tft_prob',
+        'cross_lgb':'ml_stacking_cross_lgb_prob',
+    }
+
+    print(f"\n── Stacking 基模型概率 (N={len(stk_sigs)}) ──────")
+    for model_name, key in models.items():
+        vals = [_to_float(s['data']['components'].get(key)) for s in stk_sigs]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            import statistics
+            mean_v = statistics.mean(vals)
+            med_v = statistics.median(vals)
+            bull_pct = sum(1 for v in vals if v > 0.5) / len(vals) * 100
+            print(f"  {INFO} {model_name:10s} mean={mean_v:.3f}  median={med_v:.3f}  bull%={bull_pct:.0f}%  (N={len(vals)})")
+        else:
+            print(f"  {WARN} {model_name:10s} 无数据")
+
+
+def analyze_consensus(signals):
+    """分析多周期共识数据（需 fused_ss/fused_bs 字段）"""
+    consensus_sigs = [s for s in signals
+                      if s.get('data', {}).get('fused_ss') is not None]
+    if not consensus_sigs:
+        return
+
+    def _to_float(v):
+        try:
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+
+    fused_ss = [_to_float(s['data'].get('fused_ss')) for s in consensus_sigs]
+    fused_bs = [_to_float(s['data'].get('fused_bs')) for s in consensus_sigs]
+    fused_ss = [v for v in fused_ss if v is not None]
+    fused_bs = [v for v in fused_bs if v is not None]
+
+    labels = defaultdict(int)
+    for s in consensus_sigs:
+        lbl = s['data'].get('consensus_label', '-')
+        labels[lbl] += 1
+
+    print(f"\n── 多周期共识 (N={len(consensus_sigs)}) ─────────")
+    if fused_ss:
+        import statistics
+        print(f"  {INFO} fused_SS: mean={statistics.mean(fused_ss):.1f}  max={max(fused_ss):.1f}")
+        print(f"  {INFO} fused_BS: mean={statistics.mean(fused_bs):.1f}  max={max(fused_bs):.1f}")
+    for lbl, cnt in sorted(labels.items(), key=lambda x: -x[1])[:5]:
+        pct = cnt / len(consensus_sigs) * 100
+        print(f"  {INFO} {lbl:25s} {cnt:4d} ({pct:.1f}%)")
+
+
 def analyze_regime(signals):
     """统计 regime 分类分布"""
     ml_sigs = [s for s in signals
@@ -379,6 +447,8 @@ def main():
 
     summarize_coverage(signals)
     analyze_bull_prob(signals)
+    analyze_stacking_detail(signals)
+    analyze_consensus(signals)
     analyze_regime(signals)
     analyze_kelly(signals)
     analyze_ml_errors(signals)
