@@ -282,11 +282,11 @@ def _train_lstm_single(features, labels_df, tf, device):
     from torch.utils.data import TensorDataset, DataLoader
 
     SEQ_LEN = 48
-    HIDDEN_DIM = 128
+    HIDDEN_DIM = 192  # 强化: 128 → 192
     NUM_LAYERS = 2
     DROPOUT = 0.3
     BATCH_SIZE = 256
-    EPOCHS = 50
+    EPOCHS = 50  # 已经是 50
     LR = 1e-3
 
     class LSTMAttention(nn.Module):
