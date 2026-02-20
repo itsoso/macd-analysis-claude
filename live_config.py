@@ -552,7 +552,7 @@ class StrategyConfig:
     # ML 增强: LGB+LSTM+Regime+分位数+TFT+跨资产 五层 ML 预测融入信号
     # 模型来源: H800 GPU 训练 (v5_gpu_ensemble, 2026-02-19)
     use_ml_enhancement: bool = True
-    ml_enhancement_shadow_mode: bool = True       # shadow 模式: 只记录不实际修改分数 (先观察再开启实际增强)
+    ml_enhancement_shadow_mode: bool = False      # shadow 模式已关闭: 实际修改信号分数 (2026-02-20 开启)
     # GPU ML 子功能开关 (shadow 模式关闭后才生效)
     ml_use_kelly_position: bool = False           # Kelly 公式计算仓位 (半Kelly, 0.1~1.0)
     ml_use_dynamic_sl: bool = False               # 分位数驱动动态止损 (q05/q95, 1%~8%)
