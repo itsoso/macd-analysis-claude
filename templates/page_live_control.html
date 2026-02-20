@@ -399,6 +399,7 @@
                 <span id="signalMultiTimer" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>
             </div>
             <div id="signalCacheHint" style="display:none;font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
+            <div id="signalMultiHealth" style="font-size:12px;color:var(--text-muted);margin-top:4px;">🟡 状态: 空闲</div>
 
             <div id="signalMultiResult" style="display:none;margin-top:16px;">
                 <table class="multi-result-table">
@@ -904,11 +905,24 @@ function setLoading(btnId, loading) {
     }
 }
 
-async function apiCall(url, options = {}) {
-    const resp = await fetch(url, {
-        headers: { 'Content-Type': 'application/json' },
-        ...options
-    });
+async function apiCall(url, options = {}, timeoutMs = 30000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let resp;
+    try {
+        resp = await fetch(url, {
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            ...options
+        });
+    } catch (e) {
+        if (e && e.name === 'AbortError') {
+            throw new Error(`请求超时 (${Math.round(timeoutMs / 1000)}s)`);
+        }
+        throw e;
+    } finally {
+        clearTimeout(timer);
+    }
     // 会话过期 → 自动跳转登录
     if (resp.status === 401) {
         window.location.href = '/login?next=' + encodeURIComponent(window.location.pathname);
@@ -933,6 +947,37 @@ const LS_KEY_RESULT = 'lc_last_result';
 const LS_KEY_TAB = 'lc_active_tab';
 const LS_KEY_AUTO = 'lc_auto_detect';
 const LS_KEY_AUTO_INTERVAL = 'lc_auto_interval';
+let _lastSignalTsEpoch = 0;
+let _signalMultiFailCount = 0;
+let _signalMultiLastOkAt = 0;
+
+function _fmtAgo(secAgo) {
+    if (secAgo < 60) return `${secAgo}秒前`;
+    if (secAgo < 3600) return `${Math.floor(secAgo / 60)}分钟前`;
+    return `${Math.floor(secAgo / 3600)}小时前`;
+}
+
+function updateSignalHealth(state, detail = '') {
+    const el = document.getElementById('signalMultiHealth');
+    if (!el) return;
+    const now = Math.floor(Date.now() / 1000);
+    const okAgo = _signalMultiLastOkAt ? _fmtAgo(Math.max(0, now - _signalMultiLastOkAt)) : '暂无';
+    const failText = _signalMultiFailCount > 0 ? ` · 连续失败 ${_signalMultiFailCount} 次` : '';
+    const suffix = detail ? ` · ${detail}` : '';
+    if (state === 'running') {
+        el.textContent = `🟡 状态: 检测中${failText}${suffix}`;
+        el.style.color = 'var(--text-muted)';
+    } else if (state === 'ok') {
+        el.textContent = `🟢 状态: 正常 · 上次成功 ${okAgo}${failText}${suffix}`;
+        el.style.color = 'var(--accent-green)';
+    } else if (state === 'fail') {
+        el.textContent = `🔴 状态: 异常 · 上次成功 ${okAgo}${failText}${suffix}`;
+        el.style.color = 'var(--accent-red)';
+    } else {
+        el.textContent = `🟡 状态: 空闲 · 上次成功 ${okAgo}${failText}${suffix}`;
+        el.style.color = 'var(--text-muted)';
+    }
+}
 
 function saveTFSelection() {
     const tfs = [];
@@ -976,6 +1021,8 @@ async function restoreLastResult() {
             if (cache.age_sec < 7200) {
                 renderMultiSignalResult(cache.data);
                 _showCacheHint(`📌 服务器缓存 (${cache.age_text})`, cache.timeframes);
+                _lastSignalTsEpoch = Number(cache.ts_epoch || 0) || Math.floor(Date.now() / 1000);
+                _signalMultiLastOkAt = _lastSignalTsEpoch;
                 // 同步到 localStorage
                 saveLastResult(cache.data);
                 restored = true;
@@ -992,11 +1039,14 @@ async function restoreLastResult() {
             if (!data || !data.results) return;
             if (Date.now() - ts > 2 * 60 * 60 * 1000) return;
             renderMultiSignalResult(data);
+            _lastSignalTsEpoch = Math.floor((Number(ts) || Date.now()) / 1000);
+            _signalMultiLastOkAt = _lastSignalTsEpoch;
             const ago = Math.round((Date.now() - ts) / 1000);
             const agoText = ago < 60 ? `${ago}秒前` : `${Math.round(ago/60)}分钟前`;
             _showCacheHint(`📌 浏览器缓存 (${agoText})`);
         } catch(e) {}
     }
+    updateSignalHealth('idle');
 }
 
 function _showCacheHint(text, timeframes) {
@@ -1114,6 +1164,11 @@ function restoreAutoDetect() {
             }
         }
         _startAutoDetect(interval);
+        // 恢复后若上次结果过旧(超过设定间隔)或无历史结果，立即补跑一次
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (!_signalMultiRunning && (!_lastSignalTsEpoch || (nowSec - _lastSignalTsEpoch) >= interval)) {
+            testSignalMulti();
+        }
     } catch(e) {}
 }
 
@@ -1159,6 +1214,7 @@ async function testSignalMulti() {
     if (tfs.length === 0) { alert('请至少选择一个时间框架'); return; }
 
     _signalMultiRunning = true;
+    updateSignalHealth('running');
     setLoading('signalMultiBtnText', true);
     // 同时禁用全选/全不选按钮，避免检测中修改TF
     document.querySelectorAll('#tfCheckboxes .tf-chip').forEach(l => l.style.pointerEvents = 'none');
@@ -1173,7 +1229,7 @@ async function testSignalMulti() {
         const data = await apiCall('/api/live/test_signal_multi', {
             method: 'POST',
             body: JSON.stringify({ timeframes: tfs })
-        });
+        }, 330000);
 
         clearInterval(timer);
         timerEl.textContent = '';
@@ -1187,17 +1243,25 @@ async function testSignalMulti() {
                 hint.innerHTML = `✅ 刚刚检测完成 · ${new Date().toLocaleTimeString('zh-CN')}`;
                 hint.style.display = 'block';
             }
+            _lastSignalTsEpoch = Math.floor(Date.now() / 1000);
+            _signalMultiLastOkAt = _lastSignalTsEpoch;
+            _signalMultiFailCount = 0;
+            updateSignalHealth('ok', '检测完成');
         }
         // 同时显示文本输出（可折叠）
         if (data.output) {
             showOutput('signalOutput', data.output);
         } else if (data.error) {
             showOutput('signalOutput', data.error);
+            _signalMultiFailCount += 1;
+            updateSignalHealth('fail', data.error);
         }
     } catch(e) {
         clearInterval(timer);
         timerEl.textContent = '';
         showOutput('signalOutput', '请求失败: ' + e.message);
+        _signalMultiFailCount += 1;
+        updateSignalHealth('fail', e.message);
     }
     setLoading('signalMultiBtnText', false);
     document.querySelectorAll('#tfCheckboxes .tf-chip').forEach(l => l.style.pointerEvents = '');
@@ -2408,14 +2472,17 @@ async function saveV11Toggles() {
 }
 
 // 初始加载: 恢复持久化状态
-restoreTFSelection();
-restoreLastResult();   // async, 优先从服务器读缓存
-restoreActiveTab();
-restoreAutoDetect();   // 恢复自动检测开关
-loadMonitorRules();
-loadV11Toggles();      // 加载 v11 开关状态
-refreshStatus();
-startAutoLogRefresh(); // 默认启动日志自动刷新
-setInterval(refreshStatus, 30000); // 每30秒刷新状态
+async function initLiveControlPage() {
+    restoreTFSelection();
+    await restoreLastResult();   // 优先从服务器读缓存，再决定是否自动补跑
+    restoreActiveTab();
+    restoreAutoDetect();         // 恢复自动检测开关
+    loadMonitorRules();
+    loadV11Toggles();            // 加载 v11 开关状态
+    refreshStatus();
+    startAutoLogRefresh();       // 默认启动日志自动刷新
+    setInterval(refreshStatus, 30000); // 每30秒刷新状态
+}
+initLiveControlPage();
 </script>
 {% endblock %}
