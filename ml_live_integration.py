@@ -83,6 +83,7 @@ class MLSignalEnhancer:
         self._stacking_config = None      # stacking_meta.json 配置
         self._stacking_lgb = None         # stacking 专用 LGB
         self._stacking_xgb = None         # stacking 专用 XGBoost
+        self._stacking_cross_lgb = None   # stacking 专用跨资产 LGB（第5基模型）
         self._stacking_lstm = None        # stacking 专用 LSTM
         self._stacking_tft = None         # stacking 专用 TFT
 
@@ -391,6 +392,14 @@ class MLSignalEnhancer:
                         import xgboost as xgb_lib
                         self._stacking_xgb = xgb_lib.Booster()
                         self._stacking_xgb.load_model(xgb_stk_path)
+
+                    # 加载 stacking 专用跨资产 LGB（第5基模型，可选）
+                    cross_lgb_file = model_files.get('cross_asset_lgb', '')
+                    cross_lgb_path = os.path.join(self.model_dir, cross_lgb_file)
+                    if cross_lgb_file and os.path.exists(cross_lgb_path):
+                        import lightgbm as lgb_lib
+                        self._stacking_cross_lgb = lgb_lib.Booster(model_file=cross_lgb_path)
+                        logger.info(f"Stacking 跨资产 LGB 加载完成: {cross_lgb_file}")
 
                     logger.info(
                         "Stacking 元学习器加载成功 "
@@ -795,8 +804,32 @@ class MLSignalEnhancer:
         except Exception as e:
             logger.warning(f"Stacking TFT 失败: {e}")
 
-        # 组装元特征
-        meta_X = np.array([[lgb_prob, xgb_prob, lstm_prob, tft_prob]])
+        # 基模型 5: 跨资产 LGB（可选，仅当 meta 含 cross_asset_lgb 时使用）
+        base_models = cfg.get('base_models', [])
+        cross_lgb_prob = 0.5
+        if 'cross_asset_lgb' in base_models and self._stacking_cross_lgb is not None:
+            try:
+                # 跨资产 LGB 用 94 维特征
+                X_94 = pd.DataFrame(0.0, index=latest.index, columns=feat_names_94)
+                for col in feat_names_94:
+                    if col in features.columns:
+                        X_94[col] = features[col].iloc[-1]
+                X_94 = X_94.replace([np.inf, -np.inf], np.nan).fillna(0).values.astype(np.float32)
+                cross_lgb_prob = float(np.clip(self._stacking_cross_lgb.predict(X_94)[0], 0, 1))
+                ml_info['stacking_cross_lgb_prob'] = round(cross_lgb_prob, 4)
+            except Exception as e:
+                logger.warning(f"Stacking 跨资产 LGB 失败: {e}")
+
+        # 组装元特征（按 base_models 顺序）
+        probs_map = {
+            'lgb': lgb_prob, 'xgboost': xgb_prob,
+            'lstm': lstm_prob, 'tft': tft_prob,
+            'cross_asset_lgb': cross_lgb_prob,
+        }
+        if base_models:
+            meta_X = np.array([[probs_map.get(m, 0.5) for m in base_models]])
+        else:
+            meta_X = np.array([[lgb_prob, xgb_prob, lstm_prob, tft_prob]])
 
         # 附加特征 (hvol_20 等)
         extra_features = cfg.get('extra_features', [])
