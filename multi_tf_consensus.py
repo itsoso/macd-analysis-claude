@@ -646,6 +646,7 @@ def _empty_consensus(decision_tfs, coverage):
 
 _mtf_fusion_model = None
 _mtf_fusion_loaded = False
+_mtf_fusion_onnx = None    # onnxruntime InferenceSession（优先，CPU 友好）
 
 
 def neural_fuse_tf_scores(tf_scores, decision_tfs, config=None):
@@ -655,7 +656,7 @@ def neural_fuse_tf_scores(tf_scores, decision_tfs, config=None):
 
     返回与 fuse_tf_scores 相同结构的 dict，额外添加 neural_prob 字段。
     """
-    global _mtf_fusion_model, _mtf_fusion_loaded
+    global _mtf_fusion_model, _mtf_fusion_loaded, _mtf_fusion_onnx
     import os
     import json as _json
 
@@ -666,7 +667,25 @@ def neural_fuse_tf_scores(tf_scores, decision_tfs, config=None):
     # 懒加载
     if not _mtf_fusion_loaded:
         _mtf_fusion_loaded = True
-        if os.path.exists(model_path):
+        onnx_path = model_path.replace('.pt', '.onnx')
+        # 优先尝试 ONNX（CPU 友好，无需 PyTorch）
+        if os.path.exists(onnx_path):
+            try:
+                import onnxruntime as ort
+                import torch as _torch_meta
+                ckpt = _torch_meta.load(model_path, map_location='cpu', weights_only=False)
+                _mtf_fusion_onnx = ort.InferenceSession(
+                    onnx_path, providers=['CPUExecutionProvider'])
+                _mtf_fusion_model = {
+                    'feature_cols': ckpt['feature_cols'],
+                    'available_tfs': ckpt['available_tfs'],
+                    'mean': ckpt['mean'],
+                    'std': ckpt['std'],
+                }
+            except Exception:
+                pass
+        # fallback: PyTorch
+        if _mtf_fusion_model is None and os.path.exists(model_path):
             try:
                 import torch
                 ckpt = torch.load(model_path, map_location='cpu', weights_only=False)
@@ -776,9 +795,15 @@ def neural_fuse_tf_scores(tf_scores, decision_tfs, config=None):
         std = np.array(info['std'], dtype=np.float32)
         x_norm = (x - mean) / std
 
-        with torch.no_grad():
-            logit = info['model'](torch.tensor(x_norm).unsqueeze(0))
-            prob = torch.sigmoid(logit).item()
+        if _mtf_fusion_onnx is not None:
+            # ONNX 推理（CPU 友好，无需 PyTorch）
+            ort_input = {_mtf_fusion_onnx.get_inputs()[0].name: x_norm[np.newaxis]}
+            logit = float(_mtf_fusion_onnx.run(None, ort_input)[0][0])
+            prob = 1.0 / (1.0 + np.exp(-logit))
+        else:
+            with torch.no_grad():
+                logit = info['model'](torch.tensor(x_norm).unsqueeze(0))
+                prob = torch.sigmoid(logit).item()
 
         result['neural_prob'] = round(prob, 4)
         result['neural_direction'] = 'long' if prob > 0.55 else ('short' if prob < 0.45 else 'hold')
