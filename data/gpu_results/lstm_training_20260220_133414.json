@@ -1,0 +1,21 @@
+{
+  "1h": {
+    "best_val_auc": 0.5273,
+    "test_auc": 0.5393,
+    "train_samples": 26213,
+    "val_samples": 4369,
+    "test_samples": 13107,
+    "epochs_trained": 11,
+    "input_dim": 80,
+    "multi_horizon": true,
+    "bf16": true,
+    "best_head": "5h",
+    "val_auc_5h": 0.525,
+    "val_auc_12h": 0.5045,
+    "val_auc_24h": 0.4927,
+    "test_auc_5h": 0.5393,
+    "test_auc_12h": 0.5147,
+    "test_auc_24h": 0.4898,
+    "elapsed_sec": 23.7
+  }
+}

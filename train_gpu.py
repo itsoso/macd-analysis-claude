@@ -533,8 +533,14 @@ def _train_lstm_single(features, labels_df, tf, device, multi_horizon: bool = Tr
                 no_improve = 0
                 # 保存最佳模型
                 os.makedirs(MODEL_DIR, exist_ok=True)
-                torch.save(model.state_dict(),
-                           os.path.join(MODEL_DIR, f'lstm_{tf}.pt'))
+                model_path = os.path.join(MODEL_DIR, f'lstm_{tf}.pt')
+                # 删除旧文件（如果存在且无法写入）
+                if os.path.exists(model_path):
+                    try:
+                        os.remove(model_path)
+                    except PermissionError:
+                        log.warning(f"无法删除旧模型文件 {model_path}，尝试覆盖")
+                torch.save(model.state_dict(), model_path)
                 # 保存元数据（推理端契约）
                 import json
                 meta_path = os.path.join(MODEL_DIR, f'lstm_{tf}_meta.json')
