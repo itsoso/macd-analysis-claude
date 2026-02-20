@@ -281,14 +281,51 @@ def _make_decision(ws, best_chain, large_sig, long_tfs, short_tfs, hold_tfs,
             "actionable": False,
         }
 
-    # ---------- 情况 D: 多空同时存在 → 观望 ----------
+    # ---------- 情况 D: 多空同时存在 ----------
+    # 改进: 计算加权主导比例 — 若单侧权重≥70%, 允许谨慎入场而非强制 HOLD
+    # 典型场景: 24h+4h 看多(权重43) vs 1h+15m 看空(权重11) → 79.6% 多头主导 → 谨慎做多
     if long_tfs and short_tfs:
+        _lw = sum(TF_WEIGHT.get(tf, 5) for tf in long_tfs)
+        _sw = sum(TF_WEIGHT.get(tf, 5) for tf in short_tfs)
+        _total_w = _lw + _sw
+        _long_dom = _lw / _total_w if _total_w > 0 else 0.5
+        _short_dom = _sw / _total_w if _total_w > 0 else 0.5
+
+        _DOMINANT_THRESH = 0.70  # 单侧权重占比 ≥70% 才允许谨慎入场
+
+        if _long_dom >= _DOMINANT_THRESH and net > 0:
+            # 大周期强主导: 允许谨慎做多 (actionable, 但 strength 打折)
+            strength = min(40, 20 + net * 0.4)
+            return {
+                "direction": "long",
+                "label": "📈 权重主导做多 — 小周期分歧",
+                "strength": round(max(strength, 20)),
+                "reason": (f"做多TF({','.join(long_tfs)})权重{_lw:.0f} "
+                           f"占{_long_dom:.0%} vs 做空({','.join(short_tfs)})权重{_sw:.0f}, "
+                           f"净分{net:+.1f}, 大周期主导允许谨慎做多"),
+                "actionable": True,
+            }
+        if _short_dom >= _DOMINANT_THRESH and net < 0:
+            # 大周期强主导: 允许谨慎做空
+            strength = min(40, 20 + abs(net) * 0.4)
+            return {
+                "direction": "short",
+                "label": "📉 权重主导做空 — 小周期分歧",
+                "strength": round(max(strength, 20)),
+                "reason": (f"做空TF({','.join(short_tfs)})权重{_sw:.0f} "
+                           f"占{_short_dom:.0%} vs 做多({','.join(long_tfs)})权重{_lw:.0f}, "
+                           f"净分{net:+.1f}, 大周期主导允许谨慎做空"),
+                "actionable": True,
+            }
+
+        # 真正的多空分歧: 无单侧明显主导 → 观望
         return {
             "direction": "hold",
             "label": "⚠️ 多空分歧 — 观望",
             "strength": round(min(15, abs(net))),
-            "reason": f"做多({','.join(long_tfs)}) vs 做空({','.join(short_tfs)}), "
-                      f"方向不明确, 净分{net:+.1f}, 等待分歧解除",
+            "reason": (f"做多({','.join(long_tfs)})权重{_lw:.0f} vs "
+                       f"做空({','.join(short_tfs)})权重{_sw:.0f}, "
+                       f"方向不明确({_long_dom:.0%}/{_short_dom:.0%}), 净分{net:+.1f}"),
             "actionable": False,
         }
 
