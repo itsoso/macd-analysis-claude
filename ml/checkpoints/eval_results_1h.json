@@ -1,0 +1,41 @@
+{
+  "tft": {
+    "cls": {
+      "accuracy": 0.37580128205128205,
+      "f1_macro": 0.20731954426583274,
+      "f1_weighted": 0.23258987266002953
+    },
+    "trade": {
+      "total_return": 0.0,
+      "buy_hold_return": 25.57931900024414,
+      "sharpe": 0.0,
+      "n_trades": 0
+    }
+  },
+  "lgb": {
+    "cls": {
+      "accuracy": 0.36342592592592593,
+      "f1_macro": 0.17770232031692135,
+      "f1_weighted": 0.19374489090108785
+    },
+    "trade": {
+      "total_return": 0.0,
+      "buy_hold_return": 151.02643817679498,
+      "sharpe": 0.0,
+      "n_trades": 0
+    }
+  },
+  "ensemble": {
+    "cls": {
+      "accuracy": 0.3701923076923077,
+      "f1_macro": 0.18011695906432748,
+      "f1_weighted": 0.20003373819163292
+    },
+    "trade": {
+      "total_return": 0.0,
+      "buy_hold_return": 25.903389534516684,
+      "sharpe": 0.0,
+      "n_trades": 0
+    }
+  }
+}
