@@ -243,8 +243,9 @@ class LiveTradingEngine:
         if self.config.execute_trades:
             self._setup_exchange()
 
-        # 首次加载数据
+        # 首次加载数据，并将下次刷新对齐到K线收盘时间
         self.signal_generator.refresh_data(force=True)
+        self.signal_generator._align_to_next_bar_close()
 
         try:
             while self.running:

@@ -136,6 +136,38 @@ class LiveSignalGenerator:
         # 在K线结束前10秒刷新数据，确保拿到最新收盘数据
         return max(30, minutes * 60 - 10)
 
+    def _align_to_next_bar_close(self):
+        """重置 _last_refresh 使下次刷新对齐到当前周期K线的收盘时间点。
+
+        引擎启动后调用，避免重启时间偏移导致信号延迟最长可达 (interval-10)s。
+        例如 1h 模式下 03:39 重启 → 原本 04:39 才触发，修复后 ~04:00 即触发。
+        """
+        tf = self.timeframe
+        minutes_map = {
+            '1m': 1, '3m': 3, '5m': 5, '10m': 10, '15m': 15,
+            '30m': 30, '1h': 60, '2h': 120, '3h': 180, '4h': 240,
+            '6h': 360, '8h': 480, '12h': 720, '16h': 960, '24h': 1440,
+            '1d': 1440,
+        }
+        minutes = minutes_map.get(tf, 60)
+        interval_sec = minutes * 60
+        now = time.time()
+
+        # 距下一根K线收盘的秒数 (预留10秒缓冲)
+        elapsed_in_cycle = now % interval_sec
+        time_to_close = interval_sec - elapsed_in_cycle - 10
+        if time_to_close < 30:
+            # 当前K线即将收盘，等待下一根
+            time_to_close += interval_sec
+
+        # 调整 _last_refresh 使下次刷新在 time_to_close 秒后触发
+        self._last_refresh = now - (self._refresh_interval - time_to_close)
+        if self.logger:
+            self.logger.info(
+                f"[对齐] 下次信号刷新将在 {time_to_close:.0f}s 后 "
+                f"(对齐到 {tf} K线收盘时间)"
+            )
+
     def _timeframe_minutes(self, tf: Optional[str] = None) -> int:
         """将 timeframe 转为分钟数，未知周期回退 60。"""
         key = (tf or self.timeframe or "1h").strip().lower()

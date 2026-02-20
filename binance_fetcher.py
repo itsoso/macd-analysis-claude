@@ -10,7 +10,7 @@ import json
 import time
 from datetime import datetime, timedelta
 from urllib.request import urlopen, Request
-from urllib.error import URLError
+from urllib.error import URLError, HTTPError
 
 
 BINANCE_KLINE_URL = "https://api.binance.com/api/v3/klines"
@@ -247,12 +247,24 @@ _OI_DIR = os.path.join(_BASE_DIR, 'data', 'open_interest')
 
 
 def _api_get_json(url: str, max_retries: int = 3) -> list:
-    """通用 API GET 请求, 带重试"""
+    """通用 API GET 请求, 带重试。HTTP 4xx 客户端错误不重试(永久失败)。"""
     for attempt in range(max_retries):
         try:
             req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urlopen(req, timeout=20) as response:
                 return json.loads(response.read().decode())
+        except HTTPError as e:
+            # 4xx 客户端错误 (如 400 startTime 超出限制) 无需重试
+            if 400 <= e.code < 500:
+                print(f"  请求最终失败: {e}")
+                return []
+            if attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                print(f"  请求失败 (尝试 {attempt+1}/{max_retries}): {e}, {wait}s 后重试...")
+                time.sleep(wait)
+            else:
+                print(f"  请求最终失败: {e}")
+                return []
         except Exception as e:
             if attempt < max_retries - 1:
                 wait = 2 ** (attempt + 1)
