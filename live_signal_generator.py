@@ -331,11 +331,10 @@ class LiveSignalGenerator:
                             stacking_timeframe=self.timeframe,
                         )
                         if self.logger:
+                            _shd = getattr(self.config, 'ml_enhancement_shadow_mode', True)
+                            _gpu = bool(gpu_url)
                             self.logger.info(
-                                "[ML CONFIG] enabled=True shadow=%s tf=%s gpu_url=%s",
-                                getattr(self.config, 'ml_enhancement_shadow_mode', True),
-                                self.timeframe,
-                                bool(gpu_url),
+                                f"[ML CONFIG] enabled=True shadow={_shd} tf={self.timeframe} gpu_url={_gpu}"
                             )
                     _ml_ss, _ml_bs, _ml_info = self._ml_enhancer.enhance_signal(
                         sell_score, buy_score, df
@@ -412,6 +411,7 @@ class LiveSignalGenerator:
                 components['ml_remote_inference'] = _ml_info.get('remote_inference', False)
                 components['ml_stacking_disabled_reason'] = _ml_info.get('stacking_disabled_reason', '')
                 components['ml_stacking_skipped_reason'] = _ml_info.get('stacking_skipped_reason', '')
+                components['ml_stacking_mode'] = _ml_info.get('stacking_mode', False)
                 components['ml_ca_skipped_reason'] = _ml_info.get('ca_skipped_reason', '')
                 components['ml_stacking_cov_73'] = _ml_info.get('stacking_feature_coverage_73', '')
                 components['ml_stacking_cov_94'] = _ml_info.get('stacking_feature_coverage_94', '')
