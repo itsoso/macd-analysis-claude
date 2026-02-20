@@ -35,6 +35,18 @@ logger = logging.getLogger(__name__)
 MODEL_DIR = os.path.join('data', 'ml_models')
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    """解析布尔环境变量。"""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on", "y")
+
+
+def _clamp01(v: float) -> float:
+    return max(0.0, min(1.0, float(v)))
+
+
 class MLSignalEnhancer:
     """
     ML 信号增强器 v6 — 8 模型矩阵集成 + Stacking Ensemble
@@ -60,6 +72,7 @@ class MLSignalEnhancer:
         self._direction_model = None  # LGB 方向预测
         self._lstm_model = None       # LSTM 方向预测
         self._tft_model = None        # v6: TFT 方向预测
+        self._tft_onnx_session = None  # v6: TFT ONNX 推理会话（可选加速）
         self._cross_asset_model = None  # v6: 跨资产 LGB
         self._cross_asset_meta = None
         self._loaded = False
@@ -108,6 +121,28 @@ class MLSignalEnhancer:
         self.tft_weight = 0.10            # v6: TFT 权重
         self.cross_asset_weight = 0.10    # v6: 跨资产权重
 
+        # Stacking / 跨资产门控参数
+        self.stacking_enabled = _env_flag("ML_ENABLE_STACKING", True)
+        self.stacking_target_timeframe = (
+            os.environ.get("ML_STACKING_TIMEFRAME")
+            or os.environ.get("ML_TIMEFRAME")
+            or "1h"
+        ).strip()
+        self.stacking_min_val_auc = float(os.environ.get("ML_STACKING_MIN_VAL_AUC", "0.53"))
+        self.stacking_min_test_auc = float(os.environ.get("ML_STACKING_MIN_TEST_AUC", "0.52"))
+        self.stacking_min_oof_auc = float(os.environ.get("ML_STACKING_MIN_OOF_AUC", "0.53"))
+        self.stacking_max_oof_test_gap = float(os.environ.get("ML_STACKING_MAX_OOF_TEST_GAP", "0.10"))
+        self.stacking_min_feature_coverage_73 = _clamp01(
+            float(os.environ.get("ML_STACKING_MIN_FEATURE_COVERAGE_73", "0.90"))
+        )
+        self.stacking_min_feature_coverage_94 = _clamp01(
+            float(os.environ.get("ML_STACKING_MIN_FEATURE_COVERAGE_94", "0.80"))
+        )
+        self.cross_asset_min_feature_coverage = _clamp01(
+            float(os.environ.get("ML_CROSS_ASSET_MIN_FEATURE_COVERAGE", "0.80"))
+        )
+        self._stacking_disabled_reason = None
+
         # Regime 增强参数
         self.high_conf_threshold = 0.55
         self.low_conf_threshold = 0.35
@@ -118,6 +153,75 @@ class MLSignalEnhancer:
         # 分位数风控参数
         self.cost_threshold = 0.003
         self.risk_dampen_q05 = -0.03
+
+    @staticmethod
+    def _feature_coverage(features: pd.DataFrame, required_cols) -> Tuple[int, int, float]:
+        """返回 (命中特征数, 需要特征数, 覆盖率)。"""
+        cols = list(required_cols or [])
+        total = len(cols)
+        if total == 0:
+            return 0, 0, 1.0
+        present = sum(1 for c in cols if c in features.columns)
+        return present, total, present / total
+
+    def _iter_stacking_candidates(self):
+        """按优先级返回可尝试的 stacking 配置文件名。"""
+        candidates = []
+        tf = (self.stacking_target_timeframe or "").strip()
+        if tf:
+            candidates.append((f"stacking_meta_{tf}.json", f"stacking_meta_{tf}.pkl"))
+        candidates.append(("stacking_meta.json", "stacking_meta.pkl"))
+
+        seen = set()
+        for pair in candidates:
+            if pair not in seen:
+                seen.add(pair)
+                yield pair
+
+    def _stacking_quality_gate(self, cfg: Dict) -> Tuple[bool, str]:
+        """检查 stacking 模型是否达到上线质量门槛。"""
+        if not self.stacking_enabled:
+            return False, "disabled_by_env"
+
+        tf_cfg = str(cfg.get("timeframe", "")).strip()
+        if self.stacking_target_timeframe and tf_cfg and tf_cfg != self.stacking_target_timeframe:
+            return False, f"timeframe_mismatch({tf_cfg}!={self.stacking_target_timeframe})"
+
+        def _to_float(v):
+            try:
+                return float(v)
+            except Exception:
+                return None
+
+        val_auc = _to_float(cfg.get("val_auc"))
+        test_auc = _to_float(cfg.get("test_auc"))
+        oof_auc = _to_float(cfg.get("oof_meta_auc"))
+
+        if val_auc is not None and val_auc < self.stacking_min_val_auc:
+            return False, f"val_auc_too_low({val_auc:.4f}<{self.stacking_min_val_auc:.4f})"
+        if test_auc is not None and test_auc < self.stacking_min_test_auc:
+            return False, f"test_auc_too_low({test_auc:.4f}<{self.stacking_min_test_auc:.4f})"
+        if oof_auc is not None and oof_auc < self.stacking_min_oof_auc:
+            return False, f"oof_auc_too_low({oof_auc:.4f}<{self.stacking_min_oof_auc:.4f})"
+        if oof_auc is not None and test_auc is not None:
+            gap = oof_auc - test_auc
+            if gap > self.stacking_max_oof_test_gap:
+                return False, f"overfit_gap_too_large({gap:.4f}>{self.stacking_max_oof_test_gap:.4f})"
+        return True, ""
+
+    def _can_use_cross_asset(self, features: pd.DataFrame, ml_info: Optional[Dict] = None) -> bool:
+        """跨资产分支特征覆盖检查，覆盖率不足则跳过。"""
+        if self._cross_asset_model is None or self._cross_asset_meta is None:
+            return False
+        feat_names = self._cross_asset_meta.get('feature_names', [])
+        present, total, coverage = self._feature_coverage(features, feat_names)
+        if ml_info is not None:
+            ml_info['ca_feature_coverage'] = round(coverage, 3)
+        if coverage < self.cross_asset_min_feature_coverage:
+            if ml_info is not None:
+                ml_info['ca_skipped_reason'] = f'low_feature_coverage({present}/{total})'
+            return False
+        return True
 
     def load_model(self) -> bool:
         """加载所有可用模型"""
@@ -139,7 +243,8 @@ class MLSignalEnhancer:
                     thresholds = self._direction_meta.get('thresholds', {})
                     self.direction_long_threshold = thresholds.get('long_threshold', 0.58)
                     self.direction_short_threshold = thresholds.get('short_threshold', 0.42)
-                logger.info(f"LGB 方向预测模型加载成功 ({len(self._direction_meta.get('feature_names', []))} 特征)")
+                feat_cnt = len((self._direction_meta or {}).get('feature_names', []))
+                logger.info(f"LGB 方向预测模型加载成功 ({feat_cnt} 特征)")
                 loaded_any = True
         except Exception as e:
             logger.warning(f"LGB 方向预测模型加载失败: {e}")
@@ -183,7 +288,8 @@ class MLSignalEnhancer:
                 if os.path.exists(ca_meta_path):
                     with open(ca_meta_path) as f:
                         self._cross_asset_meta = json.load(f)
-                logger.info(f"跨资产 LGB 加载成功 ({len(self._cross_asset_meta.get('feature_names', []))} 特征)")
+                feat_cnt = len((self._cross_asset_meta or {}).get('feature_names', []))
+                logger.info(f"跨资产 LGB 加载成功 ({feat_cnt} 特征)")
                 loaded_any = True
         except Exception as e:
             logger.warning(f"跨资产 LGB 加载失败: {e}")
@@ -236,38 +342,70 @@ class MLSignalEnhancer:
         except Exception as e:
             logger.warning(f"集成配置加载失败: {e}")
 
-        # Stacking ensemble 元学习器
+        # Stacking ensemble 元学习器（含 timeframe / 质量门控）
         try:
-            stacking_meta_path = os.path.join(self.model_dir, 'stacking_meta.json')
-            stacking_pkl_path = os.path.join(self.model_dir, 'stacking_meta.pkl')
-            if os.path.exists(stacking_meta_path) and os.path.exists(stacking_pkl_path):
-                with open(stacking_meta_path) as f:
-                    self._stacking_config = json.load(f)
+            if not self.stacking_enabled:
+                self._stacking_disabled_reason = "disabled_by_env"
+                logger.info("Stacking 已禁用 (ML_ENABLE_STACKING=0)")
+            else:
+                for meta_name, fallback_pkl_name in self._iter_stacking_candidates():
+                    stacking_meta_path = os.path.join(self.model_dir, meta_name)
+                    if not os.path.exists(stacking_meta_path):
+                        continue
 
-                import pickle
-                with open(stacking_pkl_path, 'rb') as f:
-                    self._stacking_meta_model = pickle.load(f)
+                    with open(stacking_meta_path) as f:
+                        cfg = json.load(f)
 
-                # 加载 stacking 专用 LGB
-                lgb_file = self._stacking_config.get('model_files', {}).get('lgb', '')
-                lgb_stk_path = os.path.join(self.model_dir, lgb_file)
-                if lgb_file and os.path.exists(lgb_stk_path):
-                    import lightgbm as lgb_lib
-                    self._stacking_lgb = lgb_lib.Booster(model_file=lgb_stk_path)
+                    model_files = cfg.get('model_files', {}) or {}
+                    pkl_name = model_files.get('meta', fallback_pkl_name) or fallback_pkl_name
+                    stacking_pkl_path = os.path.join(self.model_dir, pkl_name)
+                    if not os.path.exists(stacking_pkl_path):
+                        logger.warning(f"Stacking 配置存在但元学习器文件缺失: {stacking_pkl_path}")
+                        self._stacking_disabled_reason = "meta_model_missing"
+                        continue
 
-                # 加载 stacking 专用 XGBoost
-                xgb_file = self._stacking_config.get('model_files', {}).get('xgboost', '')
-                xgb_stk_path = os.path.join(self.model_dir, xgb_file)
-                if xgb_file and os.path.exists(xgb_stk_path):
-                    import xgboost as xgb_lib
-                    self._stacking_xgb = xgb_lib.Booster()
-                    self._stacking_xgb.load_model(xgb_stk_path)
+                    quality_ok, reason = self._stacking_quality_gate(cfg)
+                    if not quality_ok:
+                        self._stacking_disabled_reason = reason
+                        logger.warning(f"跳过 Stacking ({meta_name}): {reason}")
+                        continue
 
-                # LSTM/TFT 延迟加载 (需要 torch)
-                logger.info(f"Stacking 元学习器加载成功 "
-                            f"(AUC={self._stacking_config.get('val_auc', '?')})")
-                loaded_any = True
+                    import pickle
+                    with open(stacking_pkl_path, 'rb') as f:
+                        self._stacking_meta_model = pickle.load(f)
+                    self._stacking_config = cfg
+                    self._stacking_disabled_reason = None
+
+                    # 加载 stacking 专用 LGB
+                    lgb_file = model_files.get('lgb', '')
+                    lgb_stk_path = os.path.join(self.model_dir, lgb_file)
+                    if lgb_file and os.path.exists(lgb_stk_path):
+                        import lightgbm as lgb_lib
+                        self._stacking_lgb = lgb_lib.Booster(model_file=lgb_stk_path)
+
+                    # 加载 stacking 专用 XGBoost
+                    xgb_file = model_files.get('xgboost', '')
+                    xgb_stk_path = os.path.join(self.model_dir, xgb_file)
+                    if xgb_file and os.path.exists(xgb_stk_path):
+                        import xgboost as xgb_lib
+                        self._stacking_xgb = xgb_lib.Booster()
+                        self._stacking_xgb.load_model(xgb_stk_path)
+
+                    logger.info(
+                        "Stacking 元学习器加载成功 "
+                        "(tf=%s, val_auc=%s, test_auc=%s, source=%s)",
+                        cfg.get('timeframe', '?'),
+                        cfg.get('val_auc', '?'),
+                        cfg.get('test_auc', '?'),
+                        meta_name,
+                    )
+                    loaded_any = True
+                    break
+
+                if self._stacking_meta_model is None and self._stacking_disabled_reason is None:
+                    self._stacking_disabled_reason = "artifact_not_found"
         except Exception as e:
+            self._stacking_disabled_reason = f"load_error:{e}"
             logger.warning(f"Stacking 元学习器加载失败: {e}")
 
         # 日志汇总
@@ -281,8 +419,33 @@ class MLSignalEnhancer:
         if self._stacking_meta_model: model_list.append('Stacking')
         logger.info(f"ML 模型加载完成: {len(model_list)} 个 [{', '.join(model_list)}]")
 
+        # 预热 Stacking LSTM/TFT（避免首次推理延迟加载失败）
+        if self._stacking_meta_model is not None and self._stacking_config is not None:
+            self._warmup_stacking_submodels()
+
         self._loaded = loaded_any
         return loaded_any
+
+    def _warmup_stacking_submodels(self) -> None:
+        """预热 Stacking LSTM/TFT 子模型，避免首次推理延迟加载失败"""
+        if self._stacking_meta_model is None or self._stacking_config is None:
+            return
+        cfg = self._stacking_config
+        feat_names_73 = cfg.get('feature_names_73', [])
+        feat_names_94 = cfg.get('feature_names_94', [])
+        all_cols = list(dict.fromkeys(feat_names_73 + feat_names_94))
+        n_rows = 96  # TFT 最长序列
+        fake_df = pd.DataFrame(0.0, index=range(n_rows), columns=all_cols)
+        try:
+            self._predict_stacking_lstm(fake_df)
+            logger.info("Stacking LSTM 预热完成")
+        except Exception as e:
+            logger.warning(f"Stacking LSTM 预热失败 (仍用延迟加载): {e}")
+        try:
+            self._predict_stacking_tft(fake_df)
+            logger.info("Stacking TFT 预热完成")
+        except Exception as e:
+            logger.warning(f"Stacking TFT 预热失败 (仍用延迟加载): {e}")
 
     def _compute_direction_features(self, df: pd.DataFrame) -> Optional[pd.DataFrame]:
         """计算方向预测所需特征 (复用 ml_features.py)"""
@@ -441,6 +604,24 @@ class MLSignalEnhancer:
 
             vals = np.nan_to_num(vals, nan=0.0, posinf=3.0, neginf=-3.0)
             seq = vals[-seq_len:]
+
+            # 优先尝试 ONNX 推理（CPU 友好，无需 PyTorch）
+            onnx_path = model_path.replace('.pt', '.onnx')
+            if os.path.exists(onnx_path):
+                try:
+                    import onnxruntime as ort
+                    if self._tft_onnx_session is None:
+                        self._tft_onnx_session = ort.InferenceSession(
+                            onnx_path, providers=['CPUExecutionProvider'])
+                        logger.info(f"TFT ONNX 加载完成 (seq={seq_len}, features={seq.shape[-1]})")
+                    ort_input = {self._tft_onnx_session.get_inputs()[0].name: seq[np.newaxis].astype(np.float32)}
+                    logit = float(self._tft_onnx_session.run(None, ort_input)[0][0, 0])
+                    prob = 1.0 / (1.0 + np.exp(-logit))  # sigmoid
+                    return float(np.clip(prob, 0, 1))
+                except Exception as onnx_err:
+                    logger.debug(f"TFT ONNX 推理失败，回退 PyTorch: {onnx_err}")
+                    self._tft_onnx_session = None  # 清除，下次重试
+
             X_tensor = torch.FloatTensor(seq).unsqueeze(0)
 
             if self._tft_model is None:
@@ -498,7 +679,7 @@ class MLSignalEnhancer:
 
     def _predict_direction_cross_asset(self, features: pd.DataFrame) -> Optional[float]:
         """跨资产 LGB 方向预测 (94 维含 BTC/SOL/BNB)"""
-        if self._cross_asset_model is None or self._cross_asset_meta is None:
+        if not self._can_use_cross_asset(features):
             return None
         try:
             feat_names = self._cross_asset_meta.get('feature_names', [])
@@ -531,6 +712,17 @@ class MLSignalEnhancer:
         cfg = self._stacking_config
         feat_names_73 = cfg.get('feature_names_73', [])
         feat_names_94 = cfg.get('feature_names_94', [])
+
+        present_73, total_73, cov_73 = self._feature_coverage(features, feat_names_73)
+        present_94, total_94, cov_94 = self._feature_coverage(features, feat_names_94)
+        ml_info['stacking_feature_coverage_73'] = round(cov_73, 3)
+        ml_info['stacking_feature_coverage_94'] = round(cov_94, 3)
+        if cov_73 < self.stacking_min_feature_coverage_73 or cov_94 < self.stacking_min_feature_coverage_94:
+            ml_info['stacking_skipped_reason'] = (
+                "low_feature_coverage("
+                f"73:{present_73}/{total_73},94:{present_94}/{total_94})"
+            )
+            return None
 
         # 对齐 73 维特征
         latest = features.iloc[[-1]]
@@ -610,6 +802,9 @@ class MLSignalEnhancer:
             return None, ml_info
 
         bull_prob = None
+        if self._stacking_meta_model is None and self._stacking_disabled_reason:
+            ml_info['stacking_disabled_reason'] = self._stacking_disabled_reason
+
         if self._stacking_meta_model is not None:
             try:
                 bull_prob = self._predict_stacking_from_features(features, ml_info)
@@ -626,7 +821,9 @@ class MLSignalEnhancer:
                     lgb_prob = self._predict_direction_lgb(features)
                     lstm_prob = self._predict_direction_lstm(features)
                     tft_prob = self._predict_direction_tft(features)
-                    ca_prob = self._predict_direction_cross_asset(features)
+                    ca_prob = None
+                    if self._can_use_cross_asset(features, ml_info):
+                        ca_prob = self._predict_direction_cross_asset(features)
                     probs, weights = [], []
                     if lgb_prob is not None:
                         probs.append(lgb_prob)
@@ -664,6 +861,8 @@ class MLSignalEnhancer:
         请求远程 GPU 推理 API 获取 bull_prob。失败返回 (None, None)。
         """
         if not self.gpu_inference_url or features is None or len(features) == 0:
+            return None, None
+        if len(features) < self.FEATURE_ROWS_FOR_REMOTE:
             return None, None
         try:
             import requests
@@ -864,6 +1063,8 @@ class MLSignalEnhancer:
                 return sell_score, buy_score, {'ml_available': False}
 
         ml_info = {'ml_available': True, 'ml_version': 'v6'}
+        if self._stacking_meta_model is None and self._stacking_disabled_reason:
+            ml_info['stacking_disabled_reason'] = self._stacking_disabled_reason
         enhanced_buy = buy_score
         enhanced_sell = sell_score
 
@@ -901,7 +1102,9 @@ class MLSignalEnhancer:
                     lgb_prob = self._predict_direction_lgb(direction_features)
                     lstm_prob = self._predict_direction_lstm(direction_features)
                     tft_prob = self._predict_direction_tft(direction_features)
-                    ca_prob = self._predict_direction_cross_asset(direction_features)
+                    ca_prob = None
+                    if self._can_use_cross_asset(direction_features, ml_info):
+                        ca_prob = self._predict_direction_cross_asset(direction_features)
 
                     probs = []
                     weights = []
