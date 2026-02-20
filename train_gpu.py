@@ -309,9 +309,60 @@ def _train_lstm_single(features, labels_df, tf, device):
             context = (attn_weights * lstm_out).sum(dim=1)
             return self.classifier(context).squeeze(-1)  # 输出 logits
 
+    class LSTMMultiHorizon(nn.Module):
+        """Multi-Horizon LSTM: 3 classification heads for 5h/12h/24h predictions"""
+        def __init__(self, input_dim, hidden_dim, num_layers, dropout):
+            super().__init__()
+            self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers,
+                                batch_first=True, dropout=dropout, bidirectional=True)
+            self.attn_fc = nn.Linear(hidden_dim * 2, 1)
+
+            # 3 separate classification heads
+            self.head_5h = nn.Sequential(
+                nn.Linear(hidden_dim * 2, 64),
+                nn.GELU(),
+                nn.Dropout(0.2),
+                nn.Linear(64, 1),
+            )
+            self.head_12h = nn.Sequential(
+                nn.Linear(hidden_dim * 2, 64),
+                nn.GELU(),
+                nn.Dropout(0.2),
+                nn.Linear(64, 1),
+            )
+            self.head_24h = nn.Sequential(
+                nn.Linear(hidden_dim * 2, 64),
+                nn.GELU(),
+                nn.Dropout(0.2),
+                nn.Linear(64, 1),
+            )
+
+        def forward(self, x, return_all=False):
+            lstm_out, _ = self.lstm(x)
+            attn_weights = torch.softmax(self.attn_fc(lstm_out), dim=1)
+            context = (attn_weights * lstm_out).sum(dim=1)
+
+            out_5h = self.head_5h(context).squeeze(-1)
+            out_12h = self.head_12h(context).squeeze(-1)
+            out_24h = self.head_24h(context).squeeze(-1)
+
+            if return_all:
+                return out_5h, out_12h, out_24h
+            # Default: return best head (determined during training)
+            return out_5h
+
     # 准备序列数据
     feat_values = features.values.astype(np.float32)
-    label_values = labels_df['profitable_long_5'].values.astype(np.float32)
+
+    # Multi-horizon labels
+    use_multi_horizon = True  # H800-New-1: Multi-Horizon LSTM
+    if use_multi_horizon:
+        label_5h = labels_df['profitable_long_5'].values.astype(np.float32)
+        label_12h = labels_df['profitable_long_12'].values.astype(np.float32)
+        label_24h = labels_df['profitable_long_24'].values.astype(np.float32)
+        log.info(f"[Multi-Horizon] 使用 3 个预测头: 5h/12h/24h")
+    else:
+        label_values = labels_df['profitable_long_5'].values.astype(np.float32)
 
     # 标准化 (逐特征)
     feat_mean = np.nanmean(feat_values[:len(feat_values)//2], axis=0)
@@ -328,20 +379,34 @@ def _train_lstm_single(features, labels_df, tf, device):
     val_end = int(n * 0.7)
 
     def make_sequences(start, end):
-        X, y = [], []
+        X, y_5h, y_12h, y_24h = [], [], [], []
         for i in range(start, min(end, n)):
             seq = feat_values[i:i + SEQ_LEN]
-            lbl = label_values[i + SEQ_LEN]
-            if not np.isnan(lbl):
-                X.append(seq)
-                y.append(lbl)
+            if use_multi_horizon:
+                lbl_5 = label_5h[i + SEQ_LEN]
+                lbl_12 = label_12h[i + SEQ_LEN]
+                lbl_24 = label_24h[i + SEQ_LEN]
+                if not (np.isnan(lbl_5) or np.isnan(lbl_12) or np.isnan(lbl_24)):
+                    X.append(seq)
+                    y_5h.append(lbl_5)
+                    y_12h.append(lbl_12)
+                    y_24h.append(lbl_24)
+            else:
+                lbl = label_values[i + SEQ_LEN]
+                if not np.isnan(lbl):
+                    X.append(seq)
+                    y_5h.append(lbl)
         if not X:
-            return None, None
-        return torch.tensor(np.array(X)), torch.tensor(np.array(y))
+            return None, None, None, None
+        X_tensor = torch.tensor(np.array(X))
+        if use_multi_horizon:
+            return X_tensor, torch.tensor(np.array(y_5h)), torch.tensor(np.array(y_12h)), torch.tensor(np.array(y_24h))
+        else:
+            return X_tensor, torch.tensor(np.array(y_5h)), None, None
 
-    X_train, y_train = make_sequences(0, train_end)
-    X_val, y_val = make_sequences(train_end, val_end)
-    X_test, y_test = make_sequences(val_end, n)
+    X_train, y_train_5h, y_train_12h, y_train_24h = make_sequences(0, train_end)
+    X_val, y_val_5h, y_val_12h, y_val_24h = make_sequences(train_end, val_end)
+    X_test, y_test_5h, y_test_12h, y_test_24h = make_sequences(val_end, n)
 
     if X_train is None or len(X_train) < 100:
         return {'error': '训练数据不足', 'train_samples': 0}
@@ -350,7 +415,10 @@ def _train_lstm_single(features, labels_df, tf, device):
              f"test={len(X_test) if X_test is not None else 0}")
 
     # 模型
-    model = LSTMAttention(input_dim, HIDDEN_DIM, NUM_LAYERS, DROPOUT).to(device)
+    if use_multi_horizon:
+        model = LSTMMultiHorizon(input_dim, HIDDEN_DIM, NUM_LAYERS, DROPOUT).to(device)
+    else:
+        model = LSTMAttention(input_dim, HIDDEN_DIM, NUM_LAYERS, DROPOUT).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     criterion = nn.BCEWithLogitsLoss()
@@ -359,26 +427,45 @@ def _train_lstm_single(features, labels_df, tf, device):
     scaler = torch.amp.GradScaler('cuda') if device.type == 'cuda' and not use_bf16 else None
     autocast_dtype = torch.bfloat16 if use_bf16 else torch.float16
 
-    train_loader = DataLoader(
-        TensorDataset(X_train, y_train),
-        batch_size=BATCH_SIZE, shuffle=True, pin_memory=(device.type == 'cuda'),
-    )
+    if use_multi_horizon:
+        train_loader = DataLoader(
+            TensorDataset(X_train, y_train_5h, y_train_12h, y_train_24h),
+            batch_size=BATCH_SIZE, shuffle=True, pin_memory=(device.type == 'cuda'),
+        )
+    else:
+        train_loader = DataLoader(
+            TensorDataset(X_train, y_train_5h),
+            batch_size=BATCH_SIZE, shuffle=True, pin_memory=(device.type == 'cuda'),
+        )
 
     best_val_auc = 0
+    best_head_name = '5h'  # Track which head performs best
     patience = 10
     no_improve = 0
 
     for epoch in range(EPOCHS):
         model.train()
         epoch_loss = 0
-        for xb, yb in train_loader:
-            xb, yb = xb.to(device), yb.to(device)
+        for batch in train_loader:
+            if use_multi_horizon:
+                xb, yb_5h, yb_12h, yb_24h = batch
+                xb = xb.to(device)
+                yb_5h, yb_12h, yb_24h = yb_5h.to(device), yb_12h.to(device), yb_24h.to(device)
+            else:
+                xb, yb = batch
+                xb, yb = xb.to(device), yb.to(device)
             optimizer.zero_grad()
 
             if device.type == 'cuda':
                 with torch.amp.autocast('cuda', dtype=autocast_dtype):
-                    pred = model(xb)
-                    loss = criterion(pred, yb)
+                    if use_multi_horizon:
+                        pred_5h, pred_12h, pred_24h = model(xb, return_all=True)
+                        loss = (criterion(pred_5h, yb_5h) +
+                                criterion(pred_12h, yb_12h) +
+                                criterion(pred_24h, yb_24h)) / 3.0
+                    else:
+                        pred = model(xb)
+                        loss = criterion(pred, yb)
                 if scaler:
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
@@ -390,8 +477,14 @@ def _train_lstm_single(features, labels_df, tf, device):
                     nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
             else:
-                pred = model(xb)
-                loss = criterion(pred, yb)
+                if use_multi_horizon:
+                    pred_5h, pred_12h, pred_24h = model(xb, return_all=True)
+                    loss = (criterion(pred_5h, yb_5h) +
+                            criterion(pred_12h, yb_12h) +
+                            criterion(pred_24h, yb_24h)) / 3.0
+                else:
+                    pred = model(xb)
+                    loss = criterion(pred, yb)
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
@@ -404,11 +497,32 @@ def _train_lstm_single(features, labels_df, tf, device):
         if X_val is not None and len(X_val) > 0:
             model.eval()
             with torch.no_grad():
-                val_pred = torch.sigmoid(model(X_val.to(device))).cpu().numpy()
-                val_true = y_val.numpy()
+                if use_multi_horizon:
+                    val_pred_5h, val_pred_12h, val_pred_24h = model(X_val.to(device), return_all=True)
+                    val_pred_5h = torch.sigmoid(val_pred_5h).cpu().numpy()
+                    val_pred_12h = torch.sigmoid(val_pred_12h).cpu().numpy()
+                    val_pred_24h = torch.sigmoid(val_pred_24h).cpu().numpy()
+                    val_true_5h = y_val_5h.numpy()
+                    val_true_12h = y_val_12h.numpy()
+                    val_true_24h = y_val_24h.numpy()
+                else:
+                    val_pred = torch.sigmoid(model(X_val.to(device))).cpu().numpy()
+                    val_true = y_val_5h.numpy()
             try:
                 from sklearn.metrics import roc_auc_score
-                val_auc = roc_auc_score(val_true, val_pred)
+                if use_multi_horizon:
+                    val_auc_5h = roc_auc_score(val_true_5h, val_pred_5h)
+                    val_auc_12h = roc_auc_score(val_true_12h, val_pred_12h)
+                    val_auc_24h = roc_auc_score(val_true_24h, val_pred_24h)
+                    val_auc = max(val_auc_5h, val_auc_12h, val_auc_24h)  # Use best head
+                    if val_auc == val_auc_5h:
+                        best_head_name = '5h'
+                    elif val_auc == val_auc_12h:
+                        best_head_name = '12h'
+                    else:
+                        best_head_name = '24h'
+                else:
+                    val_auc = roc_auc_score(val_true, val_pred)
             except Exception:
                 val_auc = 0.5
 
@@ -419,12 +533,29 @@ def _train_lstm_single(features, labels_df, tf, device):
                 os.makedirs(MODEL_DIR, exist_ok=True)
                 torch.save(model.state_dict(),
                            os.path.join(MODEL_DIR, f'lstm_{tf}.pt'))
+                # 保存元数据 (multi-horizon 模式下记录最佳预测头)
+                if use_multi_horizon:
+                    import json
+                    meta_path = os.path.join(MODEL_DIR, f'lstm_{tf}_meta.json')
+                    with open(meta_path, 'w') as f:
+                        json.dump({
+                            'multi_horizon': True,
+                            'best_head': best_head_name,
+                            'val_auc_5h': round(val_auc_5h, 4),
+                            'val_auc_12h': round(val_auc_12h, 4),
+                            'val_auc_24h': round(val_auc_24h, 4),
+                        }, f, indent=2)
             else:
                 no_improve += 1
 
             if epoch % 5 == 0 or no_improve == 0:
-                log.info(f"  Epoch {epoch:3d}: loss={epoch_loss/len(train_loader):.4f} "
-                         f"val_AUC={val_auc:.4f} best={best_val_auc:.4f}")
+                if use_multi_horizon:
+                    log.info(f"  Epoch {epoch:3d}: loss={epoch_loss/len(train_loader):.4f} "
+                             f"val_AUC: 5h={val_auc_5h:.4f} 12h={val_auc_12h:.4f} 24h={val_auc_24h:.4f} "
+                             f"best={best_val_auc:.4f} ({best_head_name})")
+                else:
+                    log.info(f"  Epoch {epoch:3d}: loss={epoch_loss/len(train_loader):.4f} "
+                             f"val_AUC={val_auc:.4f} best={best_val_auc:.4f}")
 
             if no_improve >= patience:
                 log.info(f"  Early stopping at epoch {epoch}")
@@ -432,21 +563,37 @@ def _train_lstm_single(features, labels_df, tf, device):
 
     # 测试集评估
     test_auc = 0.5
+    test_auc_5h = test_auc_12h = test_auc_24h = 0.5
     if X_test is not None and len(X_test) > 0:
         best_path = os.path.join(MODEL_DIR, f'lstm_{tf}.pt')
         if os.path.exists(best_path):
             model.load_state_dict(torch.load(best_path, weights_only=True))
         model.eval()
         with torch.no_grad():
-            test_pred = torch.sigmoid(model(X_test.to(device))).cpu().numpy()
-            test_true = y_test.numpy()
+            if use_multi_horizon:
+                test_pred_5h, test_pred_12h, test_pred_24h = model(X_test.to(device), return_all=True)
+                test_pred_5h = torch.sigmoid(test_pred_5h).cpu().numpy()
+                test_pred_12h = torch.sigmoid(test_pred_12h).cpu().numpy()
+                test_pred_24h = torch.sigmoid(test_pred_24h).cpu().numpy()
+                test_true_5h = y_test_5h.numpy()
+                test_true_12h = y_test_12h.numpy()
+                test_true_24h = y_test_24h.numpy()
+            else:
+                test_pred = torch.sigmoid(model(X_test.to(device))).cpu().numpy()
+                test_true = y_test_5h.numpy()
         try:
             from sklearn.metrics import roc_auc_score
-            test_auc = roc_auc_score(test_true, test_pred)
+            if use_multi_horizon:
+                test_auc_5h = roc_auc_score(test_true_5h, test_pred_5h)
+                test_auc_12h = roc_auc_score(test_true_12h, test_pred_12h)
+                test_auc_24h = roc_auc_score(test_true_24h, test_pred_24h)
+                test_auc = max(test_auc_5h, test_auc_12h, test_auc_24h)
+            else:
+                test_auc = roc_auc_score(test_true, test_pred)
         except Exception:
             pass
 
-    return {
+    result = {
         'best_val_auc': round(best_val_auc, 4),
         'test_auc': round(test_auc, 4),
         'train_samples': len(X_train),
@@ -456,6 +603,22 @@ def _train_lstm_single(features, labels_df, tf, device):
         'input_dim': input_dim,
         'bf16': use_bf16,
     }
+
+    if use_multi_horizon:
+        result.update({
+            'best_head': best_head_name,
+            'val_auc_5h': round(val_auc_5h, 4),
+            'val_auc_12h': round(val_auc_12h, 4),
+            'val_auc_24h': round(val_auc_24h, 4),
+            'test_auc_5h': round(test_auc_5h, 4),
+            'test_auc_12h': round(test_auc_12h, 4),
+            'test_auc_24h': round(test_auc_24h, 4),
+        })
+        log.info(f"\n[Multi-Horizon] 最佳预测头: {best_head_name}")
+        log.info(f"  验证 AUC: 5h={val_auc_5h:.4f}, 12h={val_auc_12h:.4f}, 24h={val_auc_24h:.4f}")
+        log.info(f"  测试 AUC: 5h={test_auc_5h:.4f}, 12h={test_auc_12h:.4f}, 24h={test_auc_24h:.4f}")
+
+    return result
 
 
 # ================================================================
