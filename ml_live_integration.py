@@ -328,11 +328,49 @@ class MLSignalEnhancer:
         tf = (self.stacking_target_timeframe or "").strip()
         return tf if tf else "1h"
 
+    # 实时 API 跨资产缓存 TTL: 2小时（比 1h 信号间隔略长，避免频繁拉取）
+    _CROSS_API_CACHE_TTL_SEC = 7200
+
+    def _fetch_cross_close_from_api(self, symbol: str, interval: str) -> Optional[pd.Series]:
+        """实时从 Binance API 拉取跨资产收盘价序列，内存缓存 2h。
+
+        当本地 Parquet 不存在时作为回退，使服务器无需预先存储 BTC/SOL/BNB 数据。
+        """
+        import time as _time
+        api_key = f'_api_{symbol}_{interval}'
+        cached = self._cross_asset_close_cache.get(api_key)
+        now = _time.time()
+        if cached is not None and isinstance(cached[0], float) and (now - cached[0]) < self._CROSS_API_CACHE_TTL_SEC:
+            return cached[1]
+        try:
+            from binance_fetcher import fetch_binance_klines as _fetch_klines
+            df = _fetch_klines(symbol, interval=interval, days=60, force_api=True)
+            if df is None or len(df) < 50 or 'close' not in df.columns:
+                return None
+            if not isinstance(df.index, pd.DatetimeIndex):
+                return None
+            series = pd.to_numeric(df['close'], errors='coerce')
+            series = pd.Series(series.values, index=df.index)
+            if getattr(series.index, 'tz', None) is not None:
+                series.index = series.index.tz_localize(None)
+            series = series[~series.index.isna()]
+            series = series[~series.index.duplicated(keep='last')].sort_index().ffill()
+            if len(series) == 0:
+                return None
+            self._cross_asset_close_cache[api_key] = (now, series)
+            logger.info(f"跨资产实时拉取完成 {symbol}/{interval}: {len(series)} bars (缓存 {self._CROSS_API_CACHE_TTL_SEC//3600}h)")
+            return series
+        except Exception as e:
+            logger.debug(f"跨资产实时拉取失败 {symbol}/{interval}: {e}")
+            return None
+
     def _load_cross_close_series(self, symbol: str, interval: str) -> Optional[pd.Series]:
-        """从本地 parquet 加载 cross asset close 序列，并做简单缓存。"""
+        """从本地 parquet 加载 cross asset close 序列，并做简单缓存。
+        如本地 Parquet 不存在，自动降级为 Binance API 实时拉取（内存缓存 2h）。
+        """
         path = os.path.join("data", "klines", symbol, f"{interval}.parquet")
         if not os.path.exists(path):
-            return None
+            return self._fetch_cross_close_from_api(symbol, interval)
         key = (symbol, interval)
         mtime = os.path.getmtime(path)
         cached = self._cross_asset_close_cache.get(key)
