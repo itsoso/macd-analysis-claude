@@ -2568,24 +2568,13 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         oof_meta_auc = roc_auc_score(oof_y, oof_meta_pred)
         log.info(f"  Meta OOF AUC: {oof_meta_auc:.4f}")
 
-        # 验证集评估
+        # 验证/测试切分（最终评估放到全量基模型保存后，避免估计偏差）
         val_start = train_end + purge
         val_mask = ~np.isnan(y_all[val_start:val_end])
         test_start = val_end + purge
         test_mask = ~np.isnan(y_all[test_start:])
-
-        val_auc = _stacking_evaluate_meta(
-            meta_model, feat_73, feat_94,
-            y_all, val_start, val_end, val_mask, feat_73.shape[1], feat_94.shape[1],
-            hvol_idx, extra_feat_names)
-
-        test_auc = _stacking_evaluate_meta(
-            meta_model, feat_73, feat_94,
-            y_all, test_start, len(y_all), test_mask, feat_73.shape[1], feat_94.shape[1],
-            hvol_idx, extra_feat_names)
-
-        log.info(f"  验证 AUC: {val_auc:.4f}")
-        log.info(f"  测试 AUC: {test_auc:.4f}")
+        val_auc = 0.5
+        test_auc = 0.5
 
         # ---- D. 全量重训基模型 + 保存 ----
         log.info(f"\n全量重训基模型 (train+val)...")
@@ -2673,6 +2662,42 @@ def train_stacking_ensemble(timeframes: List[str] = None):
             log.info("  Cross-Asset LGB 保存完成")
         except Exception as e:
             log.warning(f"  Cross-Asset LGB 全量训练失败: {e}")
+
+        # ---- E. 用最终保存的 5 个基模型评估元学习器 ----
+        val_auc = _stacking_evaluate_meta_with_saved_models(
+            meta_model=meta_model,
+            tf=tf,
+            feat_73=feat_73,
+            feat_94=feat_94,
+            y_all=y_all,
+            start=val_start,
+            end=val_end,
+            valid_mask=val_mask,
+            hvol_idx=hvol_idx,
+            extra_feat_names=extra_feat_names,
+            feat_mean_73=feat_mean_73,
+            feat_std_73=feat_std_73,
+            feat_mean_94=feat_mean_94,
+            feat_std_94=feat_std_94,
+        )
+        test_auc = _stacking_evaluate_meta_with_saved_models(
+            meta_model=meta_model,
+            tf=tf,
+            feat_73=feat_73,
+            feat_94=feat_94,
+            y_all=y_all,
+            start=test_start,
+            end=len(y_all),
+            valid_mask=test_mask,
+            hvol_idx=hvol_idx,
+            extra_feat_names=extra_feat_names,
+            feat_mean_73=feat_mean_73,
+            feat_std_73=feat_std_73,
+            feat_mean_94=feat_mean_94,
+            feat_std_94=feat_std_94,
+        )
+        log.info(f"  验证 AUC(最终基模型): {val_auc:.4f}")
+        log.info(f"  测试 AUC(最终基模型): {test_auc:.4f}")
 
         # 保存元学习器 (周期特定文件名)
         meta_file = f'stacking_meta_{tf}.pkl'
@@ -2935,69 +2960,242 @@ def _stacking_train_tft_fold(feat_raw, y_all, tr_end, fold_start, fold_end,
     return result
 
 
-def _stacking_evaluate_meta(meta_model, feat_73, feat_94,
-                            y_all, start, end, valid_mask, dim_73, dim_94,
-                            hvol_idx, extra_feat_names):
-    """用已训练的基模型在指定区间评估元学习器"""
+def _stacking_predict_lstm_saved(feat_raw, start, end, valid_mask, model_path,
+                                 input_dim, feat_mean, feat_std, seq_len=48):
+    """用已保存的 Stacking LSTM 模型做区间预测。"""
+    result = np.full(int(valid_mask.sum()), 0.5, dtype=np.float32)
+    if result.size == 0 or not os.path.exists(model_path):
+        return result
+    try:
+        import torch
+        import torch.nn as nn
+    except Exception:
+        return result
+
+    class LSTMAttention(nn.Module):
+        def __init__(self, in_dim, hidden=128, layers=2, drop=0.3):
+            super().__init__()
+            self.lstm = nn.LSTM(in_dim, hidden, layers,
+                                batch_first=True, dropout=drop, bidirectional=True)
+            self.attn_fc = nn.Linear(hidden * 2, 1)
+            self.classifier = nn.Sequential(
+                nn.Linear(hidden * 2, 64), nn.GELU(), nn.Dropout(0.2),
+                nn.Linear(64, 1))
+
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            w = torch.softmax(self.attn_fc(out), dim=1)
+            ctx = (w * out).sum(dim=1)
+            return self.classifier(ctx).squeeze(-1)
+
+    try:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = LSTMAttention(input_dim).to(device)
+        state = torch.load(model_path, map_location=device, weights_only=True)
+        model.load_state_dict(state)
+        model.eval()
+
+        feat_mean = np.asarray(feat_mean, dtype=np.float32)
+        feat_std = np.asarray(feat_std, dtype=np.float32)
+        seqs, rel_idx = [], []
+        for i in range(start, end):
+            rel = i - start
+            if valid_mask[rel] and i >= seq_len:
+                seq = _stacking_normalize_seq(feat_raw[i - seq_len:i], feat_mean, feat_std)
+                seqs.append(seq)
+                rel_idx.append(rel)
+        if not seqs:
+            return result
+
+        with torch.no_grad():
+            logits = model(torch.FloatTensor(np.array(seqs)).to(device))
+            probs = torch.sigmoid(logits).cpu().numpy()
+
+        valid_positions = np.where(valid_mask)[0]
+        pos_map = {v: idx for idx, v in enumerate(valid_positions)}
+        for rel, prob in zip(rel_idx, probs):
+            pos = pos_map.get(rel)
+            if pos is not None:
+                result[pos] = float(np.asarray(prob).reshape(-1)[0])
+    except Exception as e:
+        log.warning(f"  LSTM 区间评估失败: {e}")
+    return result
+
+
+def _stacking_predict_tft_saved(feat_raw, start, end, valid_mask, model_path,
+                                input_dim, feat_mean, feat_std, seq_len=96):
+    """用已保存的 Stacking TFT 模型做区间预测。"""
+    result = np.full(int(valid_mask.sum()), 0.5, dtype=np.float32)
+    if result.size == 0 or not os.path.exists(model_path):
+        return result
+    try:
+        import torch
+        import torch.nn as nn
+    except Exception:
+        return result
+
+    class EfficientTFT(nn.Module):
+        def __init__(self, in_dim, d_model=64, n_heads=4, d_ff=128, n_layers=2, drop=0.15):
+            super().__init__()
+            self.input_proj = nn.Sequential(
+                nn.Linear(in_dim, d_model), nn.LayerNorm(d_model),
+                nn.GELU(), nn.Dropout(drop))
+            self.lstm = nn.LSTM(d_model, d_model, n_layers,
+                                batch_first=True, dropout=drop if n_layers > 1 else 0)
+            self.lstm_norm = nn.LayerNorm(d_model)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model, nhead=n_heads, dim_feedforward=d_ff,
+                dropout=drop, activation='gelu', batch_first=True)
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
+            self.transformer_norm = nn.LayerNorm(d_model)
+            self.attn_pool = nn.Linear(d_model, 1)
+            self.classifier = nn.Sequential(
+                nn.Linear(d_model, d_ff), nn.GELU(), nn.Dropout(drop),
+                nn.Linear(d_ff, 1))
+
+        def forward(self, x):
+            h = self.input_proj(x)
+            lstm_out, _ = self.lstm(h)
+            h = self.lstm_norm(lstm_out + h)
+            h = self.transformer(h)
+            h = self.transformer_norm(h)
+            w = torch.softmax(self.attn_pool(h), dim=1)
+            ctx = (w * h).sum(dim=1)
+            return self.classifier(ctx).squeeze(-1)
+
+    try:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = EfficientTFT(input_dim).to(device)
+        state = torch.load(model_path, map_location=device, weights_only=True)
+        model.load_state_dict(state)
+        model.eval()
+
+        feat_mean = np.asarray(feat_mean, dtype=np.float32)
+        feat_std = np.asarray(feat_std, dtype=np.float32)
+        seqs, rel_idx = [], []
+        for i in range(start, end):
+            rel = i - start
+            if valid_mask[rel] and i >= seq_len:
+                seq = _stacking_normalize_seq(feat_raw[i - seq_len:i], feat_mean, feat_std)
+                seqs.append(seq)
+                rel_idx.append(rel)
+        if not seqs:
+            return result
+
+        with torch.no_grad():
+            logits = model(torch.FloatTensor(np.array(seqs)).to(device))
+            probs = torch.sigmoid(logits).cpu().numpy()
+
+        valid_positions = np.where(valid_mask)[0]
+        pos_map = {v: idx for idx, v in enumerate(valid_positions)}
+        for rel, prob in zip(rel_idx, probs):
+            pos = pos_map.get(rel)
+            if pos is not None:
+                result[pos] = float(np.asarray(prob).reshape(-1)[0])
+    except Exception as e:
+        log.warning(f"  TFT 区间评估失败: {e}")
+    return result
+
+
+def _stacking_evaluate_meta_with_saved_models(
+    meta_model,
+    tf: str,
+    feat_73: np.ndarray,
+    feat_94: np.ndarray,
+    y_all: np.ndarray,
+    start: int,
+    end: int,
+    valid_mask: np.ndarray,
+    hvol_idx: int,
+    extra_feat_names: List[str],
+    feat_mean_73: np.ndarray,
+    feat_std_73: np.ndarray,
+    feat_mean_94: np.ndarray,
+    feat_std_94: np.ndarray,
+) -> float:
+    """使用最终保存的 5 个基模型评估 meta learner。"""
     from sklearn.metrics import roc_auc_score
 
     if valid_mask.sum() < 20:
         return 0.5
 
     X_73 = feat_73[start:end][valid_mask]
+    X_94 = feat_94[start:end][valid_mask]
     y_true = y_all[start:end][valid_mask]
 
-    # LGB 预测
+    # 1) LGB
+    lgb_pred = np.full(len(X_73), 0.5, dtype=np.float32)
     try:
         import lightgbm as lgb
-        lgb_path = os.path.join(MODEL_DIR, 'stacking_lgb_tmp.txt')
-        # 使用最后一个 fold 训练的模型 (近似; 全量模型在后面训练)
-        # 这里简单重训一个 LGB 作为评估用
-        tr_valid = ~np.isnan(y_all[:start])
-        dtrain = lgb.Dataset(feat_73[:start][tr_valid], label=y_all[:start][tr_valid])
-        lgb_params = {
-            'objective': 'binary', 'metric': 'auc', 'boosting_type': 'gbdt',
-            'num_leaves': 34, 'learning_rate': 0.0102, 'feature_fraction': 0.573,
-            'bagging_fraction': 0.513, 'bagging_freq': 3, 'min_child_samples': 56,
-            'lambda_l1': 0.0114, 'lambda_l2': 0.2146, 'verbose': -1, 'seed': 42,
-        }
-        lgb_model = lgb.train(lgb_params, dtrain, num_boost_round=400)
-        lgb_pred = lgb_model.predict(X_73)
-    except Exception:
-        lgb_pred = np.full(len(X_73), 0.5)
+        lgb_path = os.path.join(MODEL_DIR, f'stacking_lgb_{tf}.txt')
+        if os.path.exists(lgb_path):
+            lgb_model = lgb.Booster(model_file=lgb_path)
+            lgb_pred = lgb_model.predict(X_73).astype(np.float32)
+    except Exception as e:
+        log.warning(f"  LGB 评估失败: {e}")
 
-    # XGBoost 预测
+    # 2) XGBoost
+    xgb_pred = np.full(len(X_73), 0.5, dtype=np.float32)
     try:
         import xgboost as xgb
-        tr_valid = ~np.isnan(y_all[:start])
-        xgb_params = {
-            'objective': 'binary:logistic', 'eval_metric': 'auc', 'max_depth': 5,
-            'learning_rate': 0.01, 'subsample': 0.7, 'colsample_bytree': 0.7,
-            'min_child_weight': 10, 'reg_alpha': 0.01, 'reg_lambda': 1.0,
-            'seed': 42, 'verbosity': 0,
-        }
-        dmat_tr = xgb.DMatrix(feat_73[:start][tr_valid], label=y_all[:start][tr_valid])
-        dmat_eval = xgb.DMatrix(X_73)
-        xgb_model = xgb.train(xgb_params, dmat_tr, num_boost_round=400)
-        xgb_pred = xgb_model.predict(dmat_eval)
-    except Exception:
-        xgb_pred = np.full(len(X_73), 0.5)
+        xgb_path = os.path.join(MODEL_DIR, f'stacking_xgb_{tf}.json')
+        if os.path.exists(xgb_path):
+            xgb_model = xgb.Booster()
+            xgb_model.load_model(xgb_path)
+            xgb_pred = xgb_model.predict(xgb.DMatrix(X_73)).astype(np.float32)
+    except Exception as e:
+        log.warning(f"  XGBoost 评估失败: {e}")
 
-    # LSTM/TFT/CrossAssetLGB: 简化为 0.5 (全量基模型评估需要大量计算)
-    lstm_pred = np.full(len(X_73), 0.5)
-    tft_pred = np.full(len(X_73), 0.5)
-    lgb_cross_pred = np.full(len(X_73), 0.5)
+    # 3) LSTM
+    lstm_path = os.path.join(MODEL_DIR, f'stacking_lstm_{tf}.pt')
+    lstm_pred = _stacking_predict_lstm_saved(
+        feat_raw=feat_73,
+        start=start,
+        end=end,
+        valid_mask=valid_mask,
+        model_path=lstm_path,
+        input_dim=feat_73.shape[1],
+        feat_mean=feat_mean_73,
+        feat_std=feat_std_73,
+        seq_len=48,
+    )
+
+    # 4) TFT
+    tft_path = os.path.join(MODEL_DIR, f'stacking_tft_{tf}.pt')
+    tft_pred = _stacking_predict_tft_saved(
+        feat_raw=feat_94,
+        start=start,
+        end=end,
+        valid_mask=valid_mask,
+        model_path=tft_path,
+        input_dim=feat_94.shape[1],
+        feat_mean=feat_mean_94,
+        feat_std=feat_std_94,
+        seq_len=96,
+    )
+
+    # 5) Cross-Asset LGB
+    lgb_cross_pred = np.full(len(X_73), 0.5, dtype=np.float32)
+    try:
+        import lightgbm as lgb
+        cross_path = os.path.join(MODEL_DIR, f'stacking_lgb_cross_{tf}.txt')
+        if os.path.exists(cross_path):
+            cross_model = lgb.Booster(model_file=cross_path)
+            lgb_cross_pred = cross_model.predict(X_94).astype(np.float32)
+    except Exception as e:
+        log.warning(f"  CrossAsset LGB 评估失败: {e}")
 
     meta_X = np.column_stack([lgb_pred, xgb_pred, lstm_pred, tft_pred, lgb_cross_pred])
 
     # 附加特征
     if hvol_idx >= 0 and 'hvol_20' in extra_feat_names:
-        hvol = feat_73[start:end][valid_mask, hvol_idx:hvol_idx+1]
+        hvol = feat_73[start:end][valid_mask, hvol_idx:hvol_idx + 1]
+        hvol = np.nan_to_num(hvol, nan=0.0, posinf=0.0, neginf=0.0)
         meta_X = np.hstack([meta_X, hvol])
 
     meta_pred = meta_model.predict_proba(meta_X)[:, 1]
     try:
-        return roc_auc_score(y_true, meta_pred)
+        return float(roc_auc_score(y_true, meta_pred))
     except Exception:
         return 0.5
 

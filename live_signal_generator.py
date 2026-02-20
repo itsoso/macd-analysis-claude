@@ -115,6 +115,7 @@ class LiveSignalGenerator:
 
         # ML 增强器 (懒加载)
         self._ml_enhancer = None
+        self._ml_status_logged = False
 
     def _calc_refresh_interval(self) -> float:
         """根据时间框架计算数据刷新间隔(秒)"""
@@ -319,12 +320,23 @@ class LiveSignalGenerator:
 
             # ── ML 增强 (第七维度, 可选) ──
             _ml_info = {}
-            if getattr(self.config, 'use_ml_enhancement', False):
+            _ml_enabled = bool(getattr(self.config, 'use_ml_enhancement', False))
+            if _ml_enabled:
                 try:
                     if self._ml_enhancer is None:
                         from ml_live_integration import MLSignalEnhancer
                         gpu_url = getattr(self.config, "ml_gpu_inference_url", "") or ""
-                        self._ml_enhancer = MLSignalEnhancer(gpu_inference_url=gpu_url)
+                        self._ml_enhancer = MLSignalEnhancer(
+                            gpu_inference_url=gpu_url,
+                            stacking_timeframe=self.timeframe,
+                        )
+                        if self.logger:
+                            self.logger.info(
+                                "[ML CONFIG] enabled=True shadow=%s tf=%s gpu_url=%s",
+                                getattr(self.config, 'ml_enhancement_shadow_mode', True),
+                                self.timeframe,
+                                bool(gpu_url),
+                            )
                     _ml_ss, _ml_bs, _ml_info = self._ml_enhancer.enhance_signal(
                         sell_score, buy_score, df
                     )
@@ -371,6 +383,9 @@ class LiveSignalGenerator:
                     if self.logger:
                         self.logger.warning(f"ML 增强失败: {_ml_err}")
                     _ml_info = {'ml_error': str(_ml_err)[:120]}
+            elif self.logger and not self._ml_status_logged:
+                self.logger.info("[ML CONFIG] enabled=False (use_ml_enhancement=False)")
+                self._ml_status_logged = True
 
             # 提取各维度分数
             components = self._extract_components(signals, idx, dt)

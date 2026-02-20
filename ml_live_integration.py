@@ -25,7 +25,8 @@ import os
 import json
 import logging
 import datetime
-from typing import Dict, Optional, Tuple
+import glob
+from typing import Dict, Optional, Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -63,6 +64,7 @@ class MLSignalEnhancer:
         model_dir: str = MODEL_DIR,
         gpu_inference_url: str = "",
         inference_device: str = "",
+        stacking_timeframe: str = "",
     ):
         self.model_dir = model_dir
         self.gpu_inference_url = (gpu_inference_url or "").strip() or os.environ.get("ML_GPU_INFERENCE_URL", "").strip()
@@ -86,6 +88,7 @@ class MLSignalEnhancer:
         self._stacking_cross_lgb = None   # stacking 专用跨资产 LGB（第5基模型）
         self._stacking_lstm = None        # stacking 专用 LSTM
         self._stacking_tft = None         # stacking 专用 TFT
+        self._cross_asset_close_cache = {}  # {(symbol, interval): (mtime, close_series)}
 
         # 方向预测参数
         self._direction_meta = None
@@ -144,6 +147,14 @@ class MLSignalEnhancer:
             float(os.environ.get("ML_CROSS_ASSET_MIN_FEATURE_COVERAGE", "0.80"))
         )
         self._stacking_disabled_reason = None
+        # 极端神经网络输出保护：避免 LSTM/TFT 输出长期贴边时拖垮加权集成
+        self.drop_extreme_neural_probs = _env_flag("ML_DROP_EXTREME_NEURAL_PROBS", True)
+        self.extreme_neural_prob = _clamp01(
+            float(os.environ.get("ML_EXTREME_NEURAL_PROB", "0.02"))
+        )
+
+        if stacking_timeframe and not os.environ.get("ML_STACKING_TIMEFRAME"):
+            self.stacking_target_timeframe = stacking_timeframe.strip()
 
         # Regime 增强参数
         self.high_conf_threshold = 0.55
@@ -172,6 +183,14 @@ class MLSignalEnhancer:
         tf = (self.stacking_target_timeframe or "").strip()
         if tf:
             candidates.append((f"stacking_meta_{tf}.json", f"stacking_meta_{tf}.pkl"))
+
+        # 自动发现所有按周期命名的 stacking meta，避免默认别名指向错误周期。
+        for path in sorted(glob.glob(os.path.join(self.model_dir, "stacking_meta_*.json"))):
+            name = os.path.basename(path)
+            pkl_name = name.replace(".json", ".pkl")
+            candidates.append((name, pkl_name))
+
+        # 最后再尝试默认别名
         candidates.append(("stacking_meta.json", "stacking_meta.pkl"))
 
         seen = set()
@@ -179,6 +198,31 @@ class MLSignalEnhancer:
             if pair not in seen:
                 seen.add(pair)
                 yield pair
+
+    def _sanitize_neural_prob(
+        self, prob: Optional[float], model_key: str, ml_info: Optional[Dict] = None
+    ) -> Optional[float]:
+        """校验神经网络输出概率，必要时剔除异常贴边值。"""
+        if prob is None:
+            return None
+        try:
+            p = float(prob)
+        except Exception:
+            if ml_info is not None:
+                ml_info[f"{model_key}_skipped_reason"] = "non_numeric"
+            return None
+        if not np.isfinite(p):
+            if ml_info is not None:
+                ml_info[f"{model_key}_skipped_reason"] = "non_finite"
+            return None
+        p = float(np.clip(p, 0, 1))
+        edge = self.extreme_neural_prob
+        if 0 < edge < 0.5 and (p <= edge or p >= 1.0 - edge):
+            if ml_info is not None:
+                ml_info[f"{model_key}_skipped_reason"] = f"extreme_prob({p:.4f})"
+            if self.drop_extreme_neural_probs:
+                return None
+        return p
 
     def _stacking_quality_gate(self, cfg: Dict) -> Tuple[bool, str]:
         """检查 stacking 模型是否达到上线质量门槛。"""
@@ -217,13 +261,20 @@ class MLSignalEnhancer:
             if expected_dim > 0 and declared_dim != expected_dim:
                 return False, f"meta_dim_mismatch(declared={declared_dim},computed={expected_dim})"
 
-        # 相对门控：Stacking val_auc 不得低于 LGB direction test_auc - margin
-        # 避免系数失衡的 Stacking 劣于单模型 LGB
-        if val_auc is not None and self._direction_meta:
+        # 相对门控：Stacking val_auc 基于 5 折 OOF（~24k 样本，统计更可靠）
+        # test_auc 为单次 holdout（方差大）；用 val_auc 做相对比较更公平。
+        # 无 val 时回退 test_auc。
+        if self._direction_meta:
+            stk_auc = val_auc if val_auc is not None else test_auc
             lgb_auc = _to_float(self._direction_meta.get('test_auc'))
+            if lgb_auc is None:
+                lgb_auc = _to_float(self._direction_meta.get('val_auc'))
             margin = float(os.environ.get("ML_STACKING_MIN_RELATIVE_MARGIN", "-0.01"))
-            if lgb_auc is not None and val_auc < lgb_auc + margin:
-                return False, f"stacking_underperforms_lgb(stk={val_auc:.4f}<lgb={lgb_auc:.4f}+margin={margin})"
+            if stk_auc is not None and lgb_auc is not None and stk_auc < lgb_auc + margin:
+                return False, (
+                    f"stacking_underperforms_lgb(stk={stk_auc:.4f}<"
+                    f"lgb={lgb_auc:.4f}+margin={margin})"
+                )
 
         return True, ""
 
@@ -240,6 +291,124 @@ class MLSignalEnhancer:
                 ml_info['ca_skipped_reason'] = f'low_feature_coverage({present}/{total})'
             return False
         return True
+
+    def _infer_interval_from_df(self, df: pd.DataFrame) -> str:
+        """根据时间索引推断K线周期，失败时回退到 stacking 目标周期。"""
+        try:
+            if not isinstance(df.index, pd.DatetimeIndex) or len(df.index) < 3:
+                raise ValueError("index_not_datetime")
+            diffs = pd.Series(df.index).diff().dropna().dt.total_seconds().values
+            if len(diffs) == 0:
+                raise ValueError("no_diffs")
+            sec = float(np.median(diffs[-200:]))
+            minute = sec / 60.0
+            candidates = {
+                15: "15m",
+                30: "30m",
+                60: "1h",
+                120: "2h",
+                240: "4h",
+                480: "8h",
+                720: "12h",
+                1440: "24h",
+            }
+            best = min(candidates.keys(), key=lambda x: abs(x - minute))
+            if abs(best - minute) <= max(2.0, best * 0.1):
+                return candidates[best]
+        except Exception:
+            pass
+        tf = (self.stacking_target_timeframe or "").strip()
+        return tf if tf else "1h"
+
+    def _load_cross_close_series(self, symbol: str, interval: str) -> Optional[pd.Series]:
+        """从本地 parquet 加载 cross asset close 序列，并做简单缓存。"""
+        path = os.path.join("data", "klines", symbol, f"{interval}.parquet")
+        if not os.path.exists(path):
+            return None
+        key = (symbol, interval)
+        mtime = os.path.getmtime(path)
+        cached = self._cross_asset_close_cache.get(key)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+
+        try:
+            df = pd.read_parquet(path)
+            if 'close' not in df.columns:
+                return None
+            if isinstance(df.index, pd.DatetimeIndex):
+                idx = pd.DatetimeIndex(df.index)
+            elif 'open_time' in df.columns:
+                ts = pd.to_numeric(df['open_time'], errors='coerce')
+                if ts.notna().sum() == 0:
+                    return None
+                unit = 'ms' if float(ts.dropna().iloc[-1]) > 1e12 else 's'
+                idx = pd.to_datetime(ts, unit=unit, errors='coerce')
+            elif 'date' in df.columns:
+                idx = pd.to_datetime(df['date'], errors='coerce')
+            else:
+                return None
+
+            if getattr(idx, 'tz', None) is not None:
+                idx = idx.tz_localize(None)
+
+            close = pd.to_numeric(df['close'], errors='coerce')
+            series = pd.Series(close.values, index=idx)
+            series = series[~series.index.isna()]
+            series = series[~series.index.duplicated(keep='last')].sort_index().ffill()
+            if len(series) == 0:
+                return None
+            self._cross_asset_close_cache[key] = (mtime, series)
+            return series
+        except Exception as e:
+            logger.debug(f"读取跨资产数据失败 {symbol}/{interval}: {e}")
+            return None
+
+    def _augment_cross_asset_features(self, features: pd.DataFrame, interval: str) -> pd.DataFrame:
+        """为推理特征补齐跨资产列，确保与训练特征schema一致。"""
+        out = features.copy()
+        cross_symbols = ['BTCUSDT', 'SOLUSDT', 'BNBUSDT']
+        added_cols: List[str] = []
+        for sym in cross_symbols:
+            prefix = sym[:3].lower()
+            close_cross = self._load_cross_close_series(sym, interval)
+            if close_cross is None:
+                continue
+            close_cross = close_cross.reindex(out.index, method='ffill')
+
+            # 1) 收益率
+            for p in [1, 5, 21]:
+                col = f'{prefix}_ret_{p}'
+                out[col] = close_cross.pct_change(p)
+                added_cols.append(col)
+
+            # 2) 与 ETH 的滚动相关性
+            if 'ret_1' in out.columns:
+                eth_ret = out['ret_1']
+                cross_ret = close_cross.pct_change(1)
+                for w in [20, 60]:
+                    col = f'{prefix}_eth_corr_{w}'
+                    out[col] = eth_ret.rolling(w).corr(cross_ret)
+                    added_cols.append(col)
+
+            # 3) 相对强度
+            col = f'{prefix}_rel_strength'
+            if 'ret_5' in out.columns:
+                out[col] = out['ret_5'] - close_cross.pct_change(5)
+            else:
+                out[col] = -close_cross.pct_change(5)
+            added_cols.append(col)
+
+            # 4) 波动率比
+            if 'hvol_20' in out.columns:
+                col = f'{prefix}_vol_ratio'
+                cross_vol = close_cross.pct_change(1).rolling(20).std()
+                out[col] = out['hvol_20'] / (cross_vol + 1e-10)
+                added_cols.append(col)
+
+        if added_cols:
+            uniq = sorted(set(added_cols))
+            out[uniq] = out[uniq].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        return out
 
     def load_model(self) -> bool:
         """加载所有可用模型"""
@@ -477,7 +646,14 @@ class MLSignalEnhancer:
         """计算方向预测所需特征 (复用 ml_features.py)"""
         try:
             from ml_features import compute_ml_features
-            features = compute_ml_features(df)
+            work_df = df.copy()
+            # 兼容字段别名，尽量对齐训练时使用的列名。
+            if 'open_interest_value' not in work_df.columns and 'open_interest' in work_df.columns:
+                work_df['open_interest_value'] = work_df['open_interest']
+            features = compute_ml_features(work_df)
+            # 推理阶段补齐跨资产特征，避免与训练 schema 漂移。
+            interval = self._infer_interval_from_df(work_df)
+            features = self._augment_cross_asset_features(features, interval)
             return features
         except Exception as e:
             logger.warning(f"方向特征计算失败: {e}")
@@ -566,6 +742,10 @@ class MLSignalEnhancer:
                         logger.info(f"LSTM ONNX 加载完成 (seq={SEQ_LEN}, features={seq.shape[-1]})")
                     ort_input = {self._lstm_onnx_session.get_inputs()[0].name: seq[np.newaxis].astype(np.float32)}
                     logit = float(self._lstm_onnx_session.run(None, ort_input)[0][0, 0])
+                    # logit 合理范围检查：超出 ±10 视为模型推理异常（特征维度不匹配或归一化错误）
+                    if abs(logit) > 10:
+                        logger.warning(f"LSTM ONNX logit={logit:.2f} 超出正常范围 (±10)，返回 None")
+                        return None
                     prob = 1.0 / (1.0 + np.exp(-logit))  # sigmoid
                     return float(np.clip(prob, 0, 1))
                 except Exception as onnx_err:
@@ -658,6 +838,10 @@ class MLSignalEnhancer:
                         logger.info(f"TFT ONNX 加载完成 (seq={seq_len}, features={seq.shape[-1]})")
                     ort_input = {self._tft_onnx_session.get_inputs()[0].name: seq[np.newaxis].astype(np.float32)}
                     logit = float(self._tft_onnx_session.run(None, ort_input)[0][0, 0])
+                    # logit 合理范围检查：超出 ±10 视为模型推理异常（非法预测）
+                    if abs(logit) > 10:
+                        logger.warning(f"TFT ONNX logit={logit:.2f} 超出正常范围 (±10)，返回 None")
+                        return None
                     prob = 1.0 / (1.0 + np.exp(-logit))  # sigmoid
                     return float(np.clip(prob, 0, 1))
                 except Exception as onnx_err:
@@ -801,6 +985,7 @@ class MLSignalEnhancer:
         lstm_prob = 0.5
         try:
             lstm_prob = self._predict_stacking_lstm(features, cfg)
+            lstm_prob = self._sanitize_neural_prob(lstm_prob, "stacking_lstm", ml_info)
             if lstm_prob is not None:
                 ml_info['stacking_lstm_prob'] = round(lstm_prob, 4)
             else:
@@ -812,6 +997,7 @@ class MLSignalEnhancer:
         tft_prob = 0.5
         try:
             tft_prob = self._predict_stacking_tft(features, cfg)
+            tft_prob = self._sanitize_neural_prob(tft_prob, "stacking_tft", ml_info)
             if tft_prob is not None:
                 ml_info['stacking_tft_prob'] = round(tft_prob, 4)
             else:
@@ -888,8 +1074,12 @@ class MLSignalEnhancer:
             if has_direction:
                 try:
                     lgb_prob = self._predict_direction_lgb(features)
-                    lstm_prob = self._predict_direction_lstm(features)
-                    tft_prob = self._predict_direction_tft(features)
+                    lstm_prob = self._sanitize_neural_prob(
+                        self._predict_direction_lstm(features), "lstm", ml_info
+                    )
+                    tft_prob = self._sanitize_neural_prob(
+                        self._predict_direction_tft(features), "tft", ml_info
+                    )
                     ca_prob = None
                     if self._can_use_cross_asset(features, ml_info):
                         ca_prob = self._predict_direction_cross_asset(features)
@@ -1169,8 +1359,12 @@ class MLSignalEnhancer:
             if len(direction_features) > 0:
                 try:
                     lgb_prob = self._predict_direction_lgb(direction_features)
-                    lstm_prob = self._predict_direction_lstm(direction_features)
-                    tft_prob = self._predict_direction_tft(direction_features)
+                    lstm_prob = self._sanitize_neural_prob(
+                        self._predict_direction_lstm(direction_features), "lstm", ml_info
+                    )
+                    tft_prob = self._sanitize_neural_prob(
+                        self._predict_direction_tft(direction_features), "tft", ml_info
+                    )
                     ca_prob = None
                     if self._can_use_cross_asset(direction_features, ml_info):
                         ca_prob = self._predict_direction_cross_asset(direction_features)
