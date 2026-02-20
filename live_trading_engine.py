@@ -217,12 +217,10 @@ class LiveTradingEngine:
         self.logger.info(f"  初始资金: ${self.config.initial_capital:.2f}")
         self.logger.info(f"  杠杆: {self.config.strategy.leverage}x")
         self.logger.info(f"  融合模式: {self.config.strategy.fusion_mode}")
-        self.logger.info(
-            "  ML增强: %s (shadow=%s, gpu_url=%s)",
-            getattr(self.config.strategy, "use_ml_enhancement", False),
-            getattr(self.config.strategy, "ml_enhancement_shadow_mode", True),
-            bool(getattr(self.config.strategy, "ml_gpu_inference_url", "")),
-        )
+        _ml_on = getattr(self.config.strategy, "use_ml_enhancement", False)
+        _ml_shd = getattr(self.config.strategy, "ml_enhancement_shadow_mode", True)
+        _ml_gpu = bool(getattr(self.config.strategy, "ml_gpu_inference_url", ""))
+        self.logger.info(f"  ML增强: {_ml_on} (shadow={_ml_shd}, gpu_url={_ml_gpu})")
         self.logger.info("=" * 60)
 
         # 通知启动
