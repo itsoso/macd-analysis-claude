@@ -2650,7 +2650,7 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         except Exception as e:
             log.warning(f"  Cross-Asset LGB 全量训练失败: {e}")
 
-        # 保存元学习器（按 timeframe 隔离，避免多周期互相覆盖）
+        # 保存元学习器 (周期特定文件名)
         meta_file = f'stacking_meta_{tf}.pkl'
         meta_path = os.path.join(MODEL_DIR, meta_file)
         with open(meta_path, 'wb') as f:
@@ -2659,12 +2659,12 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         # 保存元数据 (含系数，便于 ONNX 导出和 debug)
         meta_coef = meta_model.coef_[0].tolist()
         meta_intercept = float(meta_model.intercept_[0])
-        base_model_names = ['lgb', 'xgboost', 'lstm', 'tft'] + extra_feat_names
+        base_model_names = ['lgb', 'xgboost', 'lstm', 'tft', 'cross_asset_lgb'] + extra_feat_names
         stacking_meta = {
-            'version': 'stacking_v1',
+            'version': 'stacking_v2',
             'timeframe': tf,
             'trained_at': datetime.now().isoformat(),
-            'base_models': ['lgb', 'xgboost', 'lstm', 'tft'],
+            'base_models': ['lgb', 'xgboost', 'lstm', 'tft', 'cross_asset_lgb'],
             'extra_features': extra_feat_names,
             'meta_input_dim': len(base_model_names),
             'meta_coefficients': dict(zip(base_model_names, meta_coef)),
@@ -2685,6 +2685,7 @@ def train_stacking_ensemble(timeframes: List[str] = None):
                 'xgboost': f'stacking_xgb_{tf}.json',
                 'lstm': f'stacking_lstm_{tf}.pt',
                 'tft': f'stacking_tft_{tf}.pt',
+                'cross_asset_lgb': f'stacking_lgb_cross_{tf}.txt',
                 'meta': meta_file,
             },
             'thresholds': {

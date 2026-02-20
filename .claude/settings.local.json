@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Edit(*)",
+      "Write(*)",
+      "Read(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "NotebookEdit(*)",
+      "Task(*)",
+      "mcp__*",
+      "Bash(ssh:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(pip3 install:*)",
+      "Bash(kill:*)",
+      "Bash(python3:*)",
+      "Bash(tar:*)",
+      "Bash(nvcc:*)",
+      "Bash(cmake:*)",
+      "Bash(python:*)",
+      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(ls:*)",
+      "Bash(done)",
+      "Bash(pip install:*)",
+      "Bash(git pull:*)",
+      "Bash(git checkout:*)",
+      "Bash(GIT_EDITOR=true git rebase:*)"
+    ]
+  }
+}
