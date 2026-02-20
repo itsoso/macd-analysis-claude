@@ -1,4 +1,4 @@
-# ETH/USDT 六书融合量化交易策略 v10.2+ML — 完整技术规格书
+# ETH/USDT 六书融合量化交易策略 v10.2+ML — 完整技术规格书（2026-02-20 更新）
 
 **交易标的**: ETH/USDT 永续合约 (Binance Futures)
 **主时间框架**: 1h K线
@@ -7,19 +7,36 @@
 **OOS验证区间**: 2024-01 ~ 2024-12 (12个月)
 **Walk-Forward验证**: 6窗口滚动 (2024Q1 ~ 2025Q4)
 **初始资金**: $100,000 USDT
-**策略版本**: v10.2+ML — 六书融合 + ML 预测子系统 + H800 GPU 训练
-**生产配置版本**: v5 (`STRATEGY_VERSION=v5`)
-**GPU训练**: H800 离线训练 (LightGBM CUDA / LSTM BF16 / Optuna TPE / Stacking Ensemble)
+**策略版本**: v10.2+ML — 六书融合 + ML 预测子系统 + H800 离线训练
+**生产配置版本**: v6（`STRATEGY_VERSION` 默认 `v6`，可环境变量切换）
+**GPU训练**: H800 离线训练（本地 Parquet 数据管线，LSTM/TFT/PPO/TabNet/Stacking 等模式）
 
-> **v10.2+ML 架构升级摘要** (2026-02-19):
-> **ML 预测子系统**: 方向预测层 **Stacking Ensemble 优先** — 4 基模型 (LGB/XGBoost/LSTM/TFT) 5-Fold OOF → LogisticRegression 元学习器；无 Stacking 时回退至 LGB+LSTM+TFT+跨资产 LGB 加权。94 维特征、Regime 分类、分位数回归、MLSignalEnhancer 五层架构，shadow 模式运行中。
-> **H800 GPU 离线训练**: 12 种模式 (含 `--mode stacking`、`--mode all_v4`)，三机协作 (本机→H800→生产)，完整离线数据管线 (5年K线 + Mark Price + Funding + OI)。
+> **最新架构与代码结构摘要** (2026-02-20):
+> 1. **信号计算单源**：`signal_core.py` 是回测与实盘共用核心，统一计算六书评分与融合分数，避免信号漂移。  
+> 2. **实盘链路模块化**：`live_runner.py`（入口）→ `live_trading_engine.py`（编排）→ `live_signal_generator.py`（信号）→ `order_manager.py`/`risk_manager.py`（执行与风控）。  
+> 3. **ML 增强层**：`ml_live_integration.py` 支持方向预测、Regime、分位数与可选 Stacking；并新增远程 GPU 推理 API 回退机制（`ML_GPU_INFERENCE_URL`）。  
+> 4. **Stacking 上线门控**：Stacking 由环境变量与质量门槛联合控制（val/test/oof AUC、过拟合 gap、特征覆盖率）；不满足时自动回退加权 LGB+LSTM+TFT+跨资产 LGB。  
+> 5. **H800 训练入口统一**：`train_gpu.py` 集中管理多模式训练与导出（`lgb/lstm/optuna/tft/cross_asset/incr_wf/mtf_fusion/ppo/onnx/retrain/stacking/tabnet`）。  
+> 6. **文档渲染链路**：`/strategy/tech-doc` 页面直接渲染 `docs/strategy_tech_doc.md`，是线上技术文档单一来源。
 
-**近期改动摘要 (代码/运维)**:
-- **Stacking Ensemble** (2026-02-19): `train_gpu.py --mode stacking` 产出 4 基模型 OOF + 元学习器；`ml_live_integration.py` 方向预测优先使用 Stacking，缺失时回退 LGB+LSTM+TFT+跨资产 LGB 加权；`ensemble_config.json` 支持 `stacking.priority=highest`。
-- **部署与运维**: `macd-engine` 与 `macd-analysis` 通过 systemd `PartOf` 绑定，重启 Web 时引擎自动重启；`deploy.sh` 部署前清理 `engine.pid`、重启双服务；实盘控制面板日志 Tab 默认 5 秒自动刷新。
-- **TFT 推理对齐** (2026-02-19): `EfficientTFT` 与训练端 LSTM+Transformer+AttnPool 架构一致，修复 state_dict 加载。
-- **ML v6 集成**: TFT、跨资产 LGB、LSTM 标准化 (TFT meta/ensemble_config 持久化 mean/std)、components 打印兼容字符串 ML 字段。
+**最新代码结构（顶层）**:
+- `app.py`: Flask 主应用与文档/API 页面入口
+- `web_routes/`: 页面与结果 API 子路由
+- `templates/`: 控制台/文档/回测页面模板
+- `signal_core.py`: 六书信号与融合核心
+- `optimize_six_book.py`: 回测优化与多周期策略运行
+- `strategy_futures.py`: 合约回测执行引擎
+- `live_*.py`: 实盘入口、信号生成、交易编排
+- `ml_*.py` + `ml/`: ML 特征、推理集成、训练与评估
+- `train_gpu.py`: H800 离线训练总入口
+- `data/`: klines、ml_models、backtests、live 状态
+- `tests/` + `test_*.py`: 单元/集成/策略一致性测试
+
+**近期改动摘要（架构/运维）**:
+- 新增独立推理服务 `ml_inference_server.py`，支持 `/health`、`/predict`，ECS 侧可远程调用并失败回退本地推理。
+- `ml_live_integration.py` 增加推理设备选择（`ML_INFERENCE_DEVICE`）、Stacking 质量门控、远程推理调用分支。
+- 实控面板多周期检测增强：自动检测恢复补跑、请求超时控制、检测健康状态指示（检测中/正常/异常）。
+- 部署脚本 `deploy.sh` / `deploy_local.sh` 维持双服务重启与健康检查流程。
 
 >
 > **v10.2 Phase 2 改造** (2026-02-15):
