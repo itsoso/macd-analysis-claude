@@ -41,3 +41,8 @@ candlestick_result.json
 
 # 实盘配置 (服务器本地, 已同步到DB)
 live_trading_config.json
+
+# 大文件 (训练数据/模型压缩包/checkpoint)
+*.tar.gz
+ml/checkpoints/
+catboost_info/
