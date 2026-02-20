@@ -437,12 +437,12 @@ class MLSignalEnhancer:
         n_rows = 96  # TFT 最长序列
         fake_df = pd.DataFrame(0.0, index=range(n_rows), columns=all_cols)
         try:
-            self._predict_stacking_lstm(fake_df)
+            self._predict_stacking_lstm(fake_df, cfg)
             logger.info("Stacking LSTM 预热完成")
         except Exception as e:
             logger.warning(f"Stacking LSTM 预热失败 (仍用延迟加载): {e}")
         try:
-            self._predict_stacking_tft(fake_df)
+            self._predict_stacking_tft(fake_df, cfg)
             logger.info("Stacking TFT 预热完成")
         except Exception as e:
             logger.warning(f"Stacking TFT 预热失败 (仍用延迟加载): {e}")
