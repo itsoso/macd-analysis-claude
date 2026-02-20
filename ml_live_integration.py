@@ -1415,7 +1415,10 @@ class MLSignalEnhancer:
         """
         if not self._loaded:
             if not self.load_model():
-                return sell_score, buy_score, {'ml_available': False}
+                info = {'ml_available': False, 'ml_version': 'v6', 'ml_reason': 'load_model_failed'}
+                if self._stacking_disabled_reason:
+                    info['stacking_disabled_reason'] = self._stacking_disabled_reason
+                return sell_score, buy_score, info
 
         ml_info = {'ml_available': True, 'ml_version': 'v6'}
         if self._stacking_meta_model is None and self._stacking_disabled_reason:
@@ -1512,6 +1515,16 @@ class MLSignalEnhancer:
                 ml_info['direction_action'] = f'bearish(SS*{ss_mult:.2f},BS*{bs_mult:.2f})'
             else:
                 ml_info['direction_action'] = 'neutral'
+        else:
+            ml_info['ml_available'] = False
+            if direction_features is None:
+                ml_info['ml_reason'] = 'direction_features_unavailable'
+            elif len(direction_features) == 0:
+                ml_info['ml_reason'] = 'empty_direction_features'
+            elif not has_direction and self._stacking_meta_model is None and not self.gpu_inference_url:
+                ml_info['ml_reason'] = 'no_direction_models_loaded'
+            else:
+                ml_info['ml_reason'] = 'no_valid_model_prediction'
 
         # 1. Regime 过滤
         if self._regime_model:

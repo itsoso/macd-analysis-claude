@@ -14,6 +14,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 TIMEFRAMES="${TIMEFRAMES:-1h,4h,24h}"
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
+ALIAS_TF="${STACKING_ALIAS_TF:-${ML_STACKING_TIMEFRAME:-1h}}"
 
 INSTALL_DEPS=1
 VERIFY_DATA=1
@@ -95,6 +96,7 @@ echo "=========================================="
 echo "[INFO] Root: ${ROOT_DIR}"
 echo "[INFO] Python: ${PYTHON_BIN}"
 echo "[INFO] Timeframes: ${TIMEFRAMES}"
+echo "[INFO] Stacking alias timeframe: ${ALIAS_TF}"
 
 if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   echo "[ERROR] Python not found: ${PYTHON_BIN}" >&2
@@ -185,6 +187,9 @@ done
 [[ -f data/ml_models/stacking_meta.json ]] || { echo "[ERROR] Missing data/ml_models/stacking_meta.json" >&2; exit 1; }
 [[ -f data/ml_models/stacking_meta.pkl ]] || { echo "[ERROR] Missing data/ml_models/stacking_meta.pkl" >&2; exit 1; }
 echo "[OK] 默认别名 data/ml_models/stacking_meta.json/.pkl"
+
+echo "[INFO] 同步默认别名到目标周期: ${ALIAS_TF}"
+"${PYTHON_BIN}" scripts/sync_stacking_alias.py --tf "${ALIAS_TF}"
 
 "${PYTHON_BIN}" - <<'PY'
 import glob, json

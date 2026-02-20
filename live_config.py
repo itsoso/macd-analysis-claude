@@ -582,6 +582,10 @@ class StrategyConfig:
     div_bottom_trend_mult: float = 1.20
     # 数据参数
     lookback_days: int = 60
+    # 数据新鲜度保护:
+    # 当最新K线与当前时间相差超过阈值时，拒绝产出新信号（避免用陈旧数据交易）
+    allow_stale_klines: bool = False
+    max_kline_lag_hours: float = 6.0
     # 最大持仓K线数
     short_max_hold: int = field(default_factory=lambda: _resolve_param("short_max_hold", 48))
     long_max_hold: int = 72

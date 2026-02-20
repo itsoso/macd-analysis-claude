@@ -117,6 +117,12 @@ class LiveSignalGenerator:
         self._ml_enhancer = None
         self._ml_status_logged = False
 
+        # 数据新鲜度状态
+        self._data_stale = False
+        self._data_lag_hours = 0.0
+        self._data_max_lag_hours = 0.0
+        self._latest_bar_ts: Optional[pd.Timestamp] = None
+
     def _calc_refresh_interval(self) -> float:
         """根据时间框架计算数据刷新间隔(秒)"""
         tf = self.timeframe
@@ -129,6 +135,42 @@ class LiveSignalGenerator:
         minutes = minutes_map.get(tf, 60)
         # 在K线结束前10秒刷新数据，确保拿到最新收盘数据
         return max(30, minutes * 60 - 10)
+
+    def _timeframe_minutes(self, tf: Optional[str] = None) -> int:
+        """将 timeframe 转为分钟数，未知周期回退 60。"""
+        key = (tf or self.timeframe or "1h").strip().lower()
+        if key.endswith('m'):
+            try:
+                return max(1, int(float(key[:-1])))
+            except Exception:
+                return 60
+        if key.endswith('h'):
+            try:
+                return max(1, int(float(key[:-1]) * 60))
+            except Exception:
+                return 60
+        if key.endswith('d'):
+            try:
+                return max(1, int(float(key[:-1]) * 1440))
+            except Exception:
+                return 1440
+        return 60
+
+    def _check_data_freshness(self, latest_ts: pd.Timestamp, tf: Optional[str] = None) -> Tuple[bool, float, float]:
+        """
+        返回 (is_stale, lag_hours, max_allowed_lag_hours)。
+        默认门槛: max(2*bar周期, 6小时)；可由配置 max_kline_lag_hours 覆盖下限。
+        """
+        now_ts = pd.Timestamp.now(tz='UTC').tz_localize(None)
+        ts = pd.Timestamp(latest_ts)
+        if ts.tzinfo is not None:
+            ts = ts.tz_convert('UTC').tz_localize(None)
+
+        lag_hours = max(0.0, (now_ts - ts).total_seconds() / 3600.0)
+        tf_hours = self._timeframe_minutes(tf) / 60.0
+        cfg_max = float(getattr(self.config, 'max_kline_lag_hours', 6.0) or 6.0)
+        max_lag_hours = max(cfg_max, tf_hours * 2.0)
+        return lag_hours > max_lag_hours, lag_hours, max_lag_hours
 
     def _build_runtime_config_dict(self) -> Dict:
         """将 StrategyConfig 转为 dict，供 regime/fusion 共用。"""
@@ -236,6 +278,27 @@ class LiveSignalGenerator:
                 if self.logger:
                     self.logger.info(f"衍生品数据已合并: {_perp_cols}")
 
+            # 数据新鲜度保护：bar 过旧时拒绝产出新信号
+            latest_bar = pd.Timestamp(df.index[-1])
+            if latest_bar.tzinfo is not None:
+                latest_bar = latest_bar.tz_convert('UTC').tz_localize(None)
+            self._latest_bar_ts = latest_bar
+            stale, lag_h, max_lag_h = self._check_data_freshness(latest_bar, self.timeframe)
+            self._data_stale = stale
+            self._data_lag_hours = lag_h
+            self._data_max_lag_hours = max_lag_h
+            allow_stale = bool(getattr(self.config, 'allow_stale_klines', False))
+            if stale and not allow_stale:
+                self._df = df
+                self._signals = None
+                self._data_all[self.timeframe] = df
+                if self.logger:
+                    self.logger.warning(
+                        f"数据滞后，跳过信号: latest={latest_bar} lag={lag_h:.1f}h "
+                        f"(max={max_lag_h:.1f}h, tf={self.timeframe})"
+                    )
+                return False
+
             # 计算指标
             df = add_all_indicators(df)
             add_moving_averages(df, timeframe=self.timeframe)
@@ -339,6 +402,7 @@ class LiveSignalGenerator:
                     _ml_ss, _ml_bs, _ml_info = self._ml_enhancer.enhance_signal(
                         sell_score, buy_score, df
                     )
+                    _ml_info['ml_enabled'] = True
                     _ml_shadow = getattr(self.config, 'ml_enhancement_shadow_mode', True)
                     _ml_info['shadow_mode'] = _ml_shadow
                     if self.logger:
@@ -381,10 +445,30 @@ class LiveSignalGenerator:
                 except Exception as _ml_err:
                     if self.logger:
                         self.logger.warning(f"ML 增强失败: {_ml_err}")
-                    _ml_info = {'ml_error': str(_ml_err)[:120]}
+                    _ml_info = {
+                        'ml_enabled': True,
+                        'ml_available': False,
+                        'ml_reason': 'enhance_signal_exception',
+                        'ml_error': str(_ml_err)[:120],
+                    }
             elif self.logger and not self._ml_status_logged:
                 self.logger.info("[ML CONFIG] enabled=False (use_ml_enhancement=False)")
                 self._ml_status_logged = True
+                _ml_info = {
+                    'ml_enabled': False,
+                    'ml_available': False,
+                    'ml_reason': 'disabled_by_config',
+                    'ml_version': 'v6',
+                    'shadow_mode': bool(getattr(self.config, 'ml_enhancement_shadow_mode', True)),
+                }
+            else:
+                _ml_info = {
+                    'ml_enabled': False,
+                    'ml_available': False,
+                    'ml_reason': 'disabled_by_config',
+                    'ml_version': 'v6',
+                    'shadow_mode': bool(getattr(self.config, 'ml_enhancement_shadow_mode', True)),
+                }
 
             # 提取各维度分数
             components = self._extract_components(signals, idx, dt)
@@ -392,14 +476,22 @@ class LiveSignalGenerator:
                 components['antisq_long_penalty'] = _antisq_info.get('long_penalty', 0)
                 components['antisq_short_penalty'] = _antisq_info.get('short_penalty', 0)
             if _ml_info:
-                components['ml_bull_prob'] = _ml_info.get('bull_prob', 0.5)
-                components['ml_lgb_prob'] = _ml_info.get('lgb_bull_prob', '-')
-                components['ml_lstm_prob'] = _ml_info.get('lstm_bull_prob', '-')
-                components['ml_tft_prob'] = _ml_info.get('tft_bull_prob', '-')
-                components['ml_ca_prob'] = _ml_info.get('ca_bull_prob', '-')
+                if 'bull_prob' in _ml_info:
+                    components['ml_bull_prob'] = _ml_info.get('bull_prob')
+                if 'lgb_bull_prob' in _ml_info:
+                    components['ml_lgb_prob'] = _ml_info.get('lgb_bull_prob')
+                if 'lstm_bull_prob' in _ml_info:
+                    components['ml_lstm_prob'] = _ml_info.get('lstm_bull_prob')
+                if 'tft_bull_prob' in _ml_info:
+                    components['ml_tft_prob'] = _ml_info.get('tft_bull_prob')
+                if 'ca_bull_prob' in _ml_info:
+                    components['ml_ca_prob'] = _ml_info.get('ca_bull_prob')
                 components['ml_direction'] = _ml_info.get('direction_action', 'neutral')
                 components['ml_regime'] = _ml_info.get('regime', '-')
                 components['ml_confidence'] = _ml_info.get('trade_confidence', 0)
+                components['ml_enabled'] = _ml_info.get('ml_enabled', _ml_enabled)
+                components['ml_available'] = _ml_info.get('ml_available', ('bull_prob' in _ml_info))
+                components['ml_reason'] = _ml_info.get('ml_reason', '')
                 components['ml_shadow'] = _ml_info.get('shadow_mode', True)
                 components['ml_version'] = _ml_info.get('ml_version', '-')
                 # v5: Kelly 仓位 + 动态止损
@@ -807,12 +899,16 @@ class LiveSignalGenerator:
 
         df = self._df
         return {
-            "status": "ok",
+            "status": "stale" if self._data_stale else "ok",
             "symbol": self.symbol,
             "timeframe": self.timeframe,
             "total_bars": len(df),
             "latest_bar": str(df.index[-1]),
             "latest_close": float(df['close'].iloc[-1]),
+            "data_stale": bool(self._data_stale),
+            "data_lag_hours": round(float(self._data_lag_hours), 3),
+            "max_allowed_lag_hours": round(float(self._data_max_lag_hours), 3),
+            "latest_bar_ts": str(self._latest_bar_ts) if self._latest_bar_ts is not None else None,
             "last_refresh": datetime.fromtimestamp(
                 self._last_refresh).isoformat() if self._last_refresh else None,
             "refresh_interval_sec": self._refresh_interval,
@@ -840,6 +936,18 @@ class LiveSignalGenerator:
             df = fetch_binance_klines(self.symbol, interval=tf, days=lookback)
             if df is None or len(df) < 50:
                 return {"tf": tf, "ok": False, "error": f"数据不足({len(df) if df is not None else 0} bars)"}
+
+            latest_bar = pd.Timestamp(df.index[-1])
+            if latest_bar.tzinfo is not None:
+                latest_bar = latest_bar.tz_convert('UTC').tz_localize(None)
+            stale, lag_h, max_lag_h = self._check_data_freshness(latest_bar, tf)
+            if stale and not bool(getattr(self.config, 'allow_stale_klines', False)):
+                return {
+                    "tf": tf,
+                    "ok": False,
+                    "error": f"stale_data(lag={lag_h:.1f}h,max={max_lag_h:.1f}h)",
+                    "latest_bar": str(latest_bar),
+                }
 
             # 计算指标
             df = add_all_indicators(df)

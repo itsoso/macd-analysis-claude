@@ -161,6 +161,7 @@ class LiveTradingEngine:
         self._last_balance_log = 0
         self._last_daily_summary = ""
         self._cumulative_funding = 0.0
+        self._last_stale_data_warn_ts = 0.0
 
         # --- 多周期共识状态 ---
         self._last_consensus: Optional[dict] = None
@@ -260,6 +261,19 @@ class LiveTradingEngine:
         try:
             # 1. 检查是否需要刷新数据 (新K线收盘)
             data_refreshed = self.signal_generator.refresh_data()
+            if not data_refreshed:
+                data_info = self.signal_generator.get_current_data_info()
+                if data_info.get("data_stale"):
+                    now_ts = time.time()
+                    # 每15分钟最多提示一次，避免日志刷屏
+                    if now_ts - self._last_stale_data_warn_ts >= 900:
+                        self._last_stale_data_warn_ts = now_ts
+                        self.logger.warning(
+                            f"数据滞后: latest_bar={data_info.get('latest_bar')} "
+                            f"lag={data_info.get('data_lag_hours')}h "
+                            f"(max={data_info.get('max_allowed_lag_hours')}h) "
+                            "已暂停生成新信号"
+                        )
 
             if data_refreshed:
                 self.total_bars += 1

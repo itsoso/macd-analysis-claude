@@ -54,11 +54,14 @@ def summarize_coverage(signals):
     """统计 ML shadow 覆盖率"""
     total = len(signals)
     with_ml = 0
+    ml_enabled_count = 0
     with_error = 0
     no_ml = 0
     for s in signals:
         c = s.get('data', {}).get('components', {})
         has_ml = 'ml_bull_prob' in c
+        if c.get('ml_enabled', False):
+            ml_enabled_count += 1
         err = str(c.get('ml_error', '')).strip()
         has_error = bool(err)
         if has_ml:
@@ -77,6 +80,8 @@ def summarize_coverage(signals):
     pct_err = with_error / total * 100
     icon_ml = PASS if pct_ml > 80 else (WARN if pct_ml > 0 else FAIL)
     print(f"  {icon_ml} 含 ML 预测: {with_ml}/{total} ({pct_ml:.1f}%)")
+    if ml_enabled_count:
+        print(f"  {INFO} ML 分支执行: {ml_enabled_count}/{total} ({ml_enabled_count/total*100:.1f}%)")
     if with_error:
         print(f"  {FAIL} ML 报错: {with_error}/{total} ({pct_err:.1f}%)")
     if no_ml and not with_error:

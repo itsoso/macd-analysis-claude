@@ -12,6 +12,7 @@ ML 模型健康检查脚本
     python check_ml_health.py                    # 用本地 data/klines 数据测试
     python check_ml_health.py --verbose          # 显示详细特征/预测值
     python check_ml_health.py --timeframe 4h     # 指定 stacking 目标周期
+    python check_ml_health.py --fix-stacking-alias  # 自动修复 stacking 默认别名到目标周期
     python check_ml_health.py --skip-live-check  # 跳过 live 日志检查
 """
 
@@ -21,6 +22,7 @@ import json
 import time
 import argparse
 import traceback
+import subprocess
 from datetime import datetime
 from glob import glob
 
@@ -102,14 +104,49 @@ def check_runtime_config():
         from live_config import LiveTradingConfig
         cfg = LiveTradingConfig.load_from_db()
         s = cfg.strategy
+        shadow_raw = getattr(s, 'ml_enhancement_shadow_mode', None)
+        shadow_mode = None if shadow_raw is None else bool(shadow_raw)
         print(f"  {INFO} phase={cfg.phase.value} symbol={s.symbol} timeframe={s.timeframe}")
         print(f"  {INFO} use_ml_enhancement={getattr(s, 'use_ml_enhancement', False)}")
-        print(f"  {INFO} ml_enhancement_shadow_mode={getattr(s, 'ml_enhancement_shadow_mode', True)}")
+        print(f"  {INFO} ml_enhancement_shadow_mode={shadow_mode if shadow_mode is not None else 'unknown'}")
         print(f"  {INFO} ml_gpu_inference_url={bool(getattr(s, 'ml_gpu_inference_url', ''))}")
-        return True, s.timeframe, bool(getattr(s, 'use_ml_enhancement', False))
+        return (
+            True,
+            s.timeframe,
+            bool(getattr(s, 'use_ml_enhancement', False)),
+            shadow_mode,
+        )
     except Exception as e:
         print(f"  {WARN} 读取运行配置失败: {e}")
-        return False, "1h", False
+        return False, "1h", False, None
+
+
+def check_stacking_alias_consistency(target_tf="1h", auto_fix=False):
+    """调用 scripts/sync_stacking_alias.py 做别名一致性检查/修复。"""
+    print("\n── Stacking 别名一致性检查 ─────────────────")
+    script = os.path.join(os.path.dirname(__file__), "scripts", "sync_stacking_alias.py")
+    if not os.path.exists(script):
+        print(f"  {FAIL} 脚本缺失: {script}")
+        return False
+
+    cmd = [sys.executable, script, "--tf", target_tf]
+    if not auto_fix:
+        cmd.append("--check-only")
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        output = (proc.stdout or "") + (proc.stderr or "")
+        for line in output.splitlines():
+            if line.strip():
+                print(f"  {line}")
+
+        if proc.returncode == 0:
+            return True
+        # check-only 模式下 returncode=1 表示发现不一致
+        return False
+    except Exception as e:
+        print(f"  {FAIL} 执行失败: {e}")
+        return False
 
 
 def check_stacking_artifacts(target_tf="1h"):
@@ -186,6 +223,14 @@ def check_latest_live_signal():
     if not ml_keys:
         print(f"  {FAIL} 最新 SIGNAL 没有 ml_* 字段，ML 分支未生效")
         return False
+
+    ml_enabled = comps.get("ml_enabled")
+    ml_available = comps.get("ml_available")
+    ml_reason = comps.get("ml_reason", "")
+    print(f"  {INFO} ml_enabled={ml_enabled} ml_available={ml_available} reason={ml_reason}")
+
+    if "ml_bull_prob" not in comps and bool(ml_enabled):
+        print(f"  {WARN} ML 已启用但未产出 bull_prob，请检查模型加载/特征覆盖")
 
     ml_err = comps.get("ml_error", "")
     if ml_err:
@@ -306,7 +351,7 @@ def check_feature_pipeline(verbose=False):
         return False
 
 
-def check_end_to_end(enhancer, target_tf="1h", verbose=False):
+def check_end_to_end(enhancer, target_tf="1h", verbose=False, runtime_shadow_mode=None):
     """端到端推理测试"""
     print("\n── 端到端推理检查 ───────────────────────────")
     if enhancer is None:
@@ -348,22 +393,34 @@ def check_end_to_end(enhancer, target_tf="1h", verbose=False):
         bull_prob = ml_info.get('bull_prob', '?')
         regime = ml_info.get('regime', '?')
         direction = ml_info.get('direction_action', '?')
-        shadow = ml_info.get('shadow_mode', True)
+        # shadow 状态优先以运行配置为准。若两侧都缺失则标记 unknown，避免误报。
+        shadow_from_info = ml_info.get('shadow_mode')
+        if runtime_shadow_mode is not None:
+            shadow = bool(runtime_shadow_mode)
+            shadow_src = "runtime_config"
+        elif shadow_from_info is not None:
+            shadow = bool(shadow_from_info)
+            shadow_src = "ml_info"
+        else:
+            shadow = None
+            shadow_src = "unknown"
         ml_ver = ml_info.get('ml_version', '?')
 
         print(f"  {PASS} enhance_signal 完成 ({elapsed:.2f}s)")
         print(f"  {INFO} bull_prob={bull_prob}  regime={regime}  direction={direction}")
         print(f"  {INFO} SS: 30.0 → {ml_ss:.2f},  BS: 25.0 → {ml_bs:.2f}")
-        print(f"  {INFO} shadow_mode={shadow}  ml_version={ml_ver}")
+        print(f"  {INFO} shadow_mode={shadow if shadow is not None else 'unknown'} ({shadow_src})  ml_version={ml_ver}")
 
         if verbose:
             for k, v in ml_info.items():
                 if k not in ('shadow_mode', 'ml_version'):
                     print(f"       {k}: {v}")
 
-        if shadow:
+        if shadow is True:
             print(f"  {WARN} 当前为 shadow 模式，ML 不影响实际信号")
             print(f"       启用方法: live_config.py → ml_enhancement_shadow_mode=False")
+        elif shadow is None:
+            print(f"  {WARN} 无法判定 shadow 状态（配置与 ml_info 均未提供）")
         return True
     except Exception as e:
         print(f"  {FAIL} 端到端测试失败: {e}")
@@ -389,6 +446,7 @@ def main():
     parser.add_argument('--verbose', '-v', action='store_true', help='显示详细输出')
     parser.add_argument('--timeframe', type=str, default='', help='Stacking 目标周期 (默认从DB读取)')
     parser.add_argument('--skip-live-check', action='store_true', help='跳过 live 日志检查')
+    parser.add_argument('--fix-stacking-alias', action='store_true', help='若别名不一致则自动修复到目标周期')
     args = parser.parse_args()
 
     print("=" * 52)
@@ -397,15 +455,20 @@ def main():
     print("=" * 52)
 
     results = {}
-    cfg_ok, cfg_tf, cfg_ml = check_runtime_config()
+    cfg_ok, cfg_tf, cfg_ml, cfg_shadow = check_runtime_config()
     target_tf = (args.timeframe or cfg_tf or '1h').strip()
     results['运行配置'] = cfg_ok
+    results['Stacking别名'] = check_stacking_alias_consistency(
+        target_tf, auto_fix=bool(args.fix_stacking_alias)
+    )
     results['文件完整性'] = check_files()
     results['Stacking工件'] = check_stacking_artifacts(target_tf)
     enhancer, loaded = check_model_loading(target_tf, args.verbose)
     results['模型加载'] = loaded
     results['特征管线'] = check_feature_pipeline(args.verbose)
-    results['端到端推理'] = check_end_to_end(enhancer, target_tf, args.verbose)
+    results['端到端推理'] = check_end_to_end(
+        enhancer, target_tf, args.verbose, runtime_shadow_mode=cfg_shadow
+    )
     if not args.skip_live_check:
         results['Live日志ML字段'] = check_latest_live_signal()
     elif cfg_ml:

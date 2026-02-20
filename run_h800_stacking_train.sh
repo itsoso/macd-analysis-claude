@@ -38,11 +38,13 @@ fi
 
 # 默认训练周期
 TIMEFRAMES="${1:-1h,4h,24h}"
+ALIAS_TF="${STACKING_ALIAS_TF:-${ML_STACKING_TIMEFRAME:-1h}}"
 
 echo -e "${GREEN}[1/4] 环境检查${NC}"
 echo "  Python: $PYTHON_CMD"
 echo "  GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
 echo "  训练周期: $TIMEFRAMES"
+echo "  Stacking 别名周期: $ALIAS_TF"
 echo ""
 
 echo -e "${GREEN}[2/4] 检查现有模型${NC}"
@@ -75,6 +77,15 @@ if [ $? -eq 0 ]; then
     echo ""
     echo -e "${GREEN}[4/4] 训练完成 ✓${NC}"
     echo "  耗时: ${ELAPSED}s ($((ELAPSED / 60))分钟)"
+    echo ""
+
+    # 同步默认别名到指定周期
+    if [ -f "scripts/sync_stacking_alias.py" ]; then
+        echo -e "${GREEN}同步 Stacking 默认别名 → ${ALIAS_TF}${NC}"
+        $PYTHON_CMD scripts/sync_stacking_alias.py --tf "$ALIAS_TF"
+    else
+        echo -e "${YELLOW}警告: scripts/sync_stacking_alias.py 不存在，跳过别名同步${NC}"
+    fi
     echo ""
 
     # 显示训练结果
