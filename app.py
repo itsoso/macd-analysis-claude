@@ -1109,6 +1109,10 @@ def api_ml_shadow_diagnostic():
         'bull_prob_std': None,
         'direction_counts': {'long': 0, 'short': 0, 'neutral': 0},
         'regime_counts': {},
+        'remote_inference_count': 0,
+        'stacking_disabled_summary': [],
+        'stacking_skipped_summary': [],
+        'ca_skipped_summary': [],
         'error_summary': [],
         'recent_signals': [],
     }
@@ -1156,9 +1160,40 @@ def api_ml_shadow_diagnostic():
             result['bull_prob_mean'] = round(_st.mean(probs), 3)
             result['bull_prob_median'] = round(_st.median(probs), 3)
             result['bull_prob_std'] = round(_st.stdev(probs) if len(probs) > 1 else 0, 3)
+
+            stacking_disabled_counts = _dd(int)
+            stacking_skipped_counts = _dd(int)
+            ca_skipped_counts = _dd(int)
+            remote_cnt = 0
             for s in ml_sigs:
-                d = s['data']['components'].get('ml_direction', 'neutral')
+                comp = s['data']['components']
+                d = comp.get('ml_direction', 'neutral')
                 result['direction_counts'][d] = result['direction_counts'].get(d, 0) + 1
+                if bool(comp.get('ml_remote_inference', False)):
+                    remote_cnt += 1
+                sd = str(comp.get('ml_stacking_disabled_reason', '') or '').strip()
+                ss = str(comp.get('ml_stacking_skipped_reason', '') or '').strip()
+                cs = str(comp.get('ml_ca_skipped_reason', '') or '').strip()
+                if sd:
+                    stacking_disabled_counts[sd[:120]] += 1
+                if ss:
+                    stacking_skipped_counts[ss[:120]] += 1
+                if cs:
+                    ca_skipped_counts[cs[:120]] += 1
+
+            result['remote_inference_count'] = remote_cnt
+            result['stacking_disabled_summary'] = [
+                {'reason': k, 'count': v}
+                for k, v in sorted(stacking_disabled_counts.items(), key=lambda x: -x[1])[:5]
+            ]
+            result['stacking_skipped_summary'] = [
+                {'reason': k, 'count': v}
+                for k, v in sorted(stacking_skipped_counts.items(), key=lambda x: -x[1])[:5]
+            ]
+            result['ca_skipped_summary'] = [
+                {'reason': k, 'count': v}
+                for k, v in sorted(ca_skipped_counts.items(), key=lambda x: -x[1])[:5]
+            ]
 
         regime_counts = _dd(int)
         for s in signals:
@@ -1189,6 +1224,10 @@ def api_ml_shadow_diagnostic():
                 'direction': c.get('ml_direction', ''),
                 'regime': c.get('ml_regime', ''),
                 'kelly': c.get('ml_kelly_fraction', ''),
+                'remote': c.get('ml_remote_inference', False),
+                'stacking_disabled': c.get('ml_stacking_disabled_reason', ''),
+                'stacking_skipped': c.get('ml_stacking_skipped_reason', ''),
+                'ca_skipped': c.get('ml_ca_skipped_reason', ''),
                 'error': c.get('ml_error', ''),
             })
         result['recent_signals'] = recent

@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import time
+import shutil
 import logging
 import argparse
 from datetime import datetime
@@ -2343,6 +2344,7 @@ def train_stacking_ensemble(timeframes: List[str] = None):
     from sklearn.metrics import roc_auc_score
 
     timeframes = timeframes or ['1h']
+    primary_tf = timeframes[0]
     all_results = {}
 
     for tf in timeframes:
@@ -2612,8 +2614,9 @@ def train_stacking_ensemble(timeframes: List[str] = None):
         except Exception as e:
             log.warning(f"  TFT 全量训练失败: {e}")
 
-        # 保存元学习器
-        meta_path = os.path.join(MODEL_DIR, 'stacking_meta.pkl')
+        # 保存元学习器（按 timeframe 隔离，避免多周期互相覆盖）
+        meta_file = f'stacking_meta_{tf}.pkl'
+        meta_path = os.path.join(MODEL_DIR, meta_file)
         with open(meta_path, 'wb') as f:
             pickle.dump(meta_model, f)
 
@@ -2646,16 +2649,22 @@ def train_stacking_ensemble(timeframes: List[str] = None):
                 'xgboost': f'stacking_xgb_{tf}.json',
                 'lstm': f'stacking_lstm_{tf}.pt',
                 'tft': f'stacking_tft_{tf}.pt',
-                'meta': 'stacking_meta.pkl',
+                'meta': meta_file,
             },
             'thresholds': {
                 'long_threshold': 0.58,
                 'short_threshold': 0.42,
             },
         }
-        meta_json_path = os.path.join(MODEL_DIR, 'stacking_meta.json')
+        meta_json_path = os.path.join(MODEL_DIR, f'stacking_meta_{tf}.json')
         with open(meta_json_path, 'w') as f:
             json.dump(stacking_meta, f, indent=2, default=str)
+
+        # 兼容旧推理逻辑：将主周期复制为默认文件名
+        if tf == primary_tf:
+            shutil.copyfile(meta_path, os.path.join(MODEL_DIR, 'stacking_meta.pkl'))
+            shutil.copyfile(meta_json_path, os.path.join(MODEL_DIR, 'stacking_meta.json'))
+            log.info(f"  主周期别名已更新: {primary_tf} -> stacking_meta.json/.pkl")
 
         elapsed = time.time() - t0
         result = {

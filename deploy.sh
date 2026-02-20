@@ -19,9 +19,20 @@ echo "=========================================="
 echo "  部署到服务器 $SERVER:$PORT"
 echo "=========================================="
 
+ML_ENV_OVERRIDE_CONTENT='[Service]
+Environment=ML_ENABLE_STACKING=1
+Environment=ML_STACKING_TIMEFRAME=1h
+Environment=ML_STACKING_MIN_VAL_AUC=0.53
+Environment=ML_STACKING_MIN_TEST_AUC=0.52
+Environment=ML_STACKING_MIN_OOF_AUC=0.53
+Environment=ML_STACKING_MAX_OOF_TEST_GAP=0.10
+Environment=ML_STACKING_MIN_FEATURE_COVERAGE_73=0.90
+Environment=ML_STACKING_MIN_FEATURE_COVERAGE_94=0.80
+Environment=ML_CROSS_ASSET_MIN_FEATURE_COVERAGE=0.80'
+
 # 1. 检查交易引擎状态 (通过 systemd)
 echo ""
-echo "[1/5] 检查服务状态..."
+echo "[1/6] 检查服务状态..."
 ENGINE_ACTIVE=$($SSH_CMD "systemctl is-active macd-engine 2>/dev/null || echo inactive")
 WEB_ACTIVE=$($SSH_CMD "systemctl is-active macd-analysis 2>/dev/null || echo inactive")
 echo "  Web 服务:    $WEB_ACTIVE"
@@ -32,7 +43,7 @@ fi
 
 # 2. 拉取最新代码
 echo ""
-echo "[2/5] 拉取最新代码..."
+echo "[2/6] 拉取最新代码..."
 DIRTY=$($SSH_CMD "cd $REMOTE_DIR && git status --porcelain" 2>/dev/null || true)
 if [ -n "$DIRTY" ] && [ "$1" != "--force" ]; then
     echo "  ⚠️  服务器存在未提交修改，直接 reset 将永久丢失："
@@ -44,7 +55,7 @@ $SSH_CMD "cd $REMOTE_DIR && git reset --hard HEAD && git pull origin main"
 
 # 3. 同步回测数据
 echo ""
-echo "[3/5] 同步回测数据..."
+echo "[3/6] 同步回测数据..."
 $SSH_CMD "mkdir -p $REMOTE_DIR/data/backtests"
 SYNC_FILES=()
 [ -f data/backtests/multi_tf_daily_backtest.db ] && SYNC_FILES+=(data/backtests/multi_tf_daily_backtest.db)
@@ -57,14 +68,26 @@ else
   echo "  ⚠️  本地无 data/backtests/*.db，跳过"
 fi
 
-# 4. 重启 Web 服务
+# 4. 应用 systemd ML 环境变量覆盖（固定 stacking 配置）
 echo ""
-echo "[4/5] 重启 Web 服务..."
+echo "[4/6] 更新 systemd ML 环境覆盖..."
+$SSH_CMD "mkdir -p /etc/systemd/system/macd-analysis.service.d /etc/systemd/system/macd-engine.service.d"
+$SSH_CMD "cat > /etc/systemd/system/macd-analysis.service.d/20-ml-stacking.conf <<'EOF'
+$ML_ENV_OVERRIDE_CONTENT
+EOF"
+$SSH_CMD "cat > /etc/systemd/system/macd-engine.service.d/20-ml-stacking.conf <<'EOF'
+$ML_ENV_OVERRIDE_CONTENT
+EOF"
+$SSH_CMD "systemctl daemon-reload && echo '  ✅ 已写入 systemd override (macd-analysis, macd-engine)'"
+
+# 5. 重启 Web 服务
+echo ""
+echo "[5/6] 重启 Web 服务..."
 $SSH_CMD "systemctl restart macd-analysis && sleep 2 && systemctl is-active macd-analysis >/dev/null && echo '  ✅ Web 服务已重启' || echo '  ❌ Web 服务重启失败!'"
 
-# 5. 重启交易引擎 (加载新代码)
+# 6. 重启交易引擎 (加载新代码)
 echo ""
-echo "[5/5] 重启交易引擎..."
+echo "[6/6] 重启交易引擎..."
 $SSH_CMD "rm -f $REMOTE_DIR/data/live/engine.pid; systemctl reset-failed macd-engine 2>/dev/null; systemctl restart macd-engine && sleep 5 && systemctl is-active macd-engine >/dev/null && echo '  ✅ 交易引擎已重启 (paper mode)' || echo '  ❌ 交易引擎重启失败!'"
 
 # 最终确认

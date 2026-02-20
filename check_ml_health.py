@@ -104,6 +104,14 @@ def check_model_loading(verbose=False):
             icon = PASS if loaded else WARN
             print(f"  {icon} {name}: {'已加载' if loaded else '未加载 (降级)'}")
 
+        if enhancer._stacking_meta_model is not None:
+            tf = (enhancer._stacking_config or {}).get('timeframe', '?')
+            va = (enhancer._stacking_config or {}).get('val_auc', '?')
+            ta = (enhancer._stacking_config or {}).get('test_auc', '?')
+            print(f"  {INFO} Stacking 详情: tf={tf}, val_auc={va}, test_auc={ta}")
+        elif getattr(enhancer, "_stacking_disabled_reason", None):
+            print(f"  {WARN} Stacking 禁用原因: {enhancer._stacking_disabled_reason}")
+
         print(f"  {INFO} 加载耗时: {elapsed:.2f}s")
         if enhancer._stacking_meta_model is None:
             print(f"  {WARN} Stacking 未加载: 需要先运行 train_gpu.py --mode stacking --tf 1h")

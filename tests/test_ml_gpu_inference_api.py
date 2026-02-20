@@ -144,6 +144,39 @@ def test_inference_server_predict_payload(monkeypatch, minimal_features_df):
     assert 0 <= data["bull_prob"] <= 1
 
 
+def test_inference_server_predict_rejects_short_features(monkeypatch):
+    """特征行数不足 96 时返回 400"""
+    import ml_live_integration
+    from ml_inference_server import build_app, FEATURE_MIN_ROWS
+
+    class FakeEnhancer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def load_model(self):
+            return True
+
+        def predict_direction_from_features(self, features):
+            return 0.61, {"mocked": True}
+
+    monkeypatch.setattr(ml_live_integration, "MLSignalEnhancer", FakeEnhancer)
+
+    app = build_app(device="cpu")
+    client = app.test_client()
+    n = FEATURE_MIN_ROWS - 1
+    short_df = pd.DataFrame(np.random.randn(n, 4), columns=["a", "b", "c", "d"])
+    payload = {
+        "sell_score": 50.0,
+        "buy_score": 45.0,
+        "features": json.loads(short_df.to_json(orient="split")),
+    }
+    resp = client.post("/predict", data=json.dumps(payload), content_type="application/json")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["success"] is False
+    assert str(FEATURE_MIN_ROWS) in data["error"]
+
+
 def test_inference_server_health():
     """GET /health 返回 ok"""
     from ml_inference_server import build_app

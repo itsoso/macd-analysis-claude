@@ -6,6 +6,17 @@
 
 cd /opt/macd-analysis
 
+ML_ENV_OVERRIDE_CONTENT='[Service]
+Environment=ML_ENABLE_STACKING=1
+Environment=ML_STACKING_TIMEFRAME=1h
+Environment=ML_STACKING_MIN_VAL_AUC=0.53
+Environment=ML_STACKING_MIN_TEST_AUC=0.52
+Environment=ML_STACKING_MIN_OOF_AUC=0.53
+Environment=ML_STACKING_MAX_OOF_TEST_GAP=0.10
+Environment=ML_STACKING_MIN_FEATURE_COVERAGE_73=0.90
+Environment=ML_STACKING_MIN_FEATURE_COVERAGE_94=0.80
+Environment=ML_CROSS_ASSET_MIN_FEATURE_COVERAGE=0.80'
+
 echo "=========================================="
 echo "  本机部署 ($(date '+%Y-%m-%d %H:%M:%S'))"
 echo "=========================================="
@@ -18,19 +29,18 @@ LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
 if [ "$LOCAL" = "$REMOTE" ]; then
     echo "  已是最新版本: $(git log --oneline -1)"
-    echo "  无需部署"
-    exit 0
+else
+    echo "  本地:  $(git log --oneline -1)"
+    git pull origin main
+    echo "  更新到: $(git log --oneline -1)"
+    echo "  新增 commits:"
+    git log --oneline $LOCAL..HEAD | sed 's/^/    /'
 fi
-echo "  本地:  $(git log --oneline -1)"
-git pull origin main
-echo "  更新到: $(git log --oneline -1)"
-echo "  新增 commits:"
-git log --oneline $LOCAL..HEAD | sed 's/^/    /'
 
 # 2. 安装依赖 (如有变化)
 echo ""
 echo "[2/4] 检查依赖..."
-if git diff $LOCAL..HEAD --name-only | grep -q "requirements"; then
+if [ "$LOCAL" != "$REMOTE" ] && git diff $LOCAL..HEAD --name-only | grep -q "requirements"; then
     echo "  requirements 有变更，安装依赖..."
     /opt/macd-analysis/venv/bin/pip install -r requirements.txt -q
     echo "  依赖已更新"
@@ -38,9 +48,22 @@ else
     echo "  依赖无变化，跳过"
 fi
 
-# 3. 重启服务
+# 3. 更新 systemd ML 环境覆盖
 echo ""
-echo "[3/4] 重启服务..."
+echo "[3/4] 更新 systemd ML 环境覆盖..."
+mkdir -p /etc/systemd/system/macd-analysis.service.d /etc/systemd/system/macd-engine.service.d
+cat > /etc/systemd/system/macd-analysis.service.d/20-ml-stacking.conf <<EOF
+$ML_ENV_OVERRIDE_CONTENT
+EOF
+cat > /etc/systemd/system/macd-engine.service.d/20-ml-stacking.conf <<EOF
+$ML_ENV_OVERRIDE_CONTENT
+EOF
+systemctl daemon-reload
+echo "  已写入: /etc/systemd/system/*/20-ml-stacking.conf"
+
+# 4. 重启服务
+echo ""
+echo "[4/4] 重启服务..."
 systemctl restart macd-analysis
 sleep 2
 WEB=$(systemctl is-active macd-analysis)
@@ -55,9 +78,9 @@ else
     echo "  交易引擎: 未配置，跳过"
 fi
 
-# 4. 健康检查
+# 健康检查
 echo ""
-echo "[4/4] 健康检查..."
+echo "[检查] 健康检查..."
 HTTP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://localhost:5100/ 2>/dev/null)
 echo "  HTTP: $HTTP"
 

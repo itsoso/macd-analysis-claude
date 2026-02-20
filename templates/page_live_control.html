@@ -765,10 +765,16 @@
             <div class="history-metric"><div class="label">看空信号</div><div class="value" id="ml_dir_short">--</div></div>
             <div class="history-metric"><div class="label">中性信号</div><div class="value" id="ml_dir_neutral">--</div></div>
             <div class="history-metric"><div class="label">Regime 分布</div><div class="value" id="ml_regime_dist" style="font-size:12px;">--</div></div>
+            <div class="history-metric"><div class="label">远程推理命中</div><div class="value" id="ml_remote_count">--</div></div>
+            <div class="history-metric"><div class="label">Stacking禁用/跳过/CA跳过</div><div class="value" id="ml_skip_counts" style="font-size:12px;">--</div></div>
         </div>
         <div id="mlErrorList" style="display:none; margin-bottom:10px;">
             <div class="history-note" style="color:#e07070;">ML 错误摘要:</div>
             <div id="mlErrorItems"></div>
+        </div>
+        <div id="mlStackingList" style="display:none; margin-bottom:10px;">
+            <div class="history-note" style="color:#e0b070;">Stacking/跨资产门控摘要:</div>
+            <div id="mlStackingItems"></div>
         </div>
         <div class="history-note" id="mlDiagNote">点击刷新加载数据</div>
         <div id="mlSignalTableWrap" style="display:none; margin-top:10px;">
@@ -1842,6 +1848,16 @@ async function refreshMLDiagnostic() {
             .map(([k, v]) => `${k}:${v}`)
             .join(', ') || '--';
         document.getElementById('ml_regime_dist').textContent = regimeStr;
+        document.getElementById('ml_remote_count').textContent = data.remote_inference_count || 0;
+
+        const sdSummary = data.stacking_disabled_summary || [];
+        const ssSummary = data.stacking_skipped_summary || [];
+        const caSummary = data.ca_skipped_summary || [];
+        const sumCount = arr => arr.reduce((acc, x) => acc + Number(x.count || 0), 0);
+        const sdCount = sumCount(sdSummary);
+        const ssCount = sumCount(ssSummary);
+        const caCount = sumCount(caSummary);
+        document.getElementById('ml_skip_counts').textContent = `${sdCount}/${ssCount}/${caCount}`;
 
         const errList = document.getElementById('mlErrorList');
         if (data.error_summary && data.error_summary.length > 0) {
@@ -1853,13 +1869,36 @@ async function refreshMLDiagnostic() {
             errList.style.display = 'none';
         }
 
+        const stackingList = document.getElementById('mlStackingList');
+        const stackingItems = document.getElementById('mlStackingItems');
+        const renderReasonGroup = (title, arr, color) => {
+            if (!arr || arr.length === 0) return '';
+            const items = arr
+                .map(e => `<div style="font-size:12px;color:#ccc;padding:1px 0;">[${e.count}x] ${escapeHtml(e.reason || '--')}</div>`)
+                .join('');
+            return `<div style="margin-bottom:6px;"><div style="font-size:12px;color:${color};">${title}</div>${items}</div>`;
+        };
+        const stackingHtml =
+            renderReasonGroup('Stacking 禁用', sdSummary, '#e0b070') +
+            renderReasonGroup('Stacking 跳过', ssSummary, '#d0a0d0') +
+            renderReasonGroup('跨资产跳过', caSummary, '#a0c0e0');
+        if (stackingHtml) {
+            stackingList.style.display = 'block';
+            stackingItems.innerHTML = stackingHtml;
+        } else {
+            stackingList.style.display = 'none';
+        }
+
         const tbody = document.getElementById('mlSignalTableBody');
         if (data.recent_signals && data.recent_signals.length > 0) {
             document.getElementById('mlSignalTableWrap').style.display = 'block';
             tbody.innerHTML = data.recent_signals.map(s => {
                 const prob = s.bull_prob !== '' ? Number(s.bull_prob).toFixed(3) : '--';
                 const kelly = s.kelly !== '' ? Number(s.kelly).toFixed(2) : '--';
-                const status = s.error ? `<span style="color:#e07070">${s.error.slice(0, 40)}</span>` : '<span style="color:#6c6">OK</span>';
+                const statusRaw = s.error || s.stacking_disabled || s.stacking_skipped || s.ca_skipped || '';
+                const status = statusRaw
+                    ? `<span style="color:#e07070">${escapeHtml(String(statusRaw).slice(0, 60))}</span>`
+                    : `<span style="color:#6c6">${s.remote ? 'OK(remote)' : 'OK'}</span>`;
                 return `<tr><td>${s.ts||'--'}</td><td>${s.tf||'--'}</td><td>${prob}</td><td>${s.direction||'--'}</td><td>${s.regime||'--'}</td><td>${kelly}</td><td>${status}</td></tr>`;
             }).join('');
         } else {
@@ -1869,6 +1908,8 @@ async function refreshMLDiagnostic() {
         let note;
         if (data.coverage_pct === 0 && data.with_error === 0) {
             note = '⚠ ML 未运行 — 确认模型已部署且 use_ml_enhancement=True';
+        } else if ((sdCount + ssCount + caCount) > 0) {
+            note = `! 发现门控触发 (禁用:${sdCount} 跳过:${ssCount} CA跳过:${caCount})，请按摘要排查特征覆盖/模型质量`;
         } else if (data.coverage_pct < 50) {
             note = `! ML 覆盖率偏低 (${data.coverage_pct}%)，部分信号无 ML 增强`;
         } else {

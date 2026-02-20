@@ -345,12 +345,22 @@ class LiveSignalGenerator:
                         _pos_scale = _ml_info.get('position_scale', '-')
                         _q_act = _ml_info.get('quantile_action', '-')
                         _ver = _ml_info.get('ml_version', 'v?')
+                        _stk_dis = _ml_info.get('stacking_disabled_reason', '-')
+                        _stk_skip = _ml_info.get('stacking_skipped_reason', '-')
+                        _ca_skip = _ml_info.get('ca_skipped_reason', '-')
+                        _cov73 = _ml_info.get('stacking_feature_coverage_73', '-')
+                        _cov94 = _ml_info.get('stacking_feature_coverage_94', '-')
+                        _ca_cov = _ml_info.get('ca_feature_coverage', '-')
+                        _remote = _ml_info.get('remote_inference', False)
                         self.logger.info(
                             f"[ML {_mode} {_ver}] bull_prob={_bull} "
                             f"(LGB={_lgb}, LSTM={_lstm}, TFT={_tft}, CA={_ca}) "
                             f"dir={_dir_act} regime={_regime} "
                             f"conf={_conf:.3f} "
                             f"kelly={_kelly} pos_scale={_pos_scale} "
+                            f"remote={_remote} "
+                            f"stk_dis={_stk_dis} stk_skip={_stk_skip} "
+                            f"stk_cov=({_cov73},{_cov94}) ca_cov={_ca_cov} ca_skip={_ca_skip} "
                             f"q_act={_q_act} "
                             f"SS {sell_score:.1f}→{_ml_ss:.1f} "
                             f"BS {buy_score:.1f}→{_ml_bs:.1f}"
@@ -384,6 +394,13 @@ class LiveSignalGenerator:
                 components['ml_dynamic_sl_long'] = _ml_info.get('dynamic_sl_long', '-')
                 components['ml_dynamic_sl_short'] = _ml_info.get('dynamic_sl_short', '-')
                 components['ml_quantile_action'] = _ml_info.get('quantile_action', '-')
+                components['ml_remote_inference'] = _ml_info.get('remote_inference', False)
+                components['ml_stacking_disabled_reason'] = _ml_info.get('stacking_disabled_reason', '')
+                components['ml_stacking_skipped_reason'] = _ml_info.get('stacking_skipped_reason', '')
+                components['ml_ca_skipped_reason'] = _ml_info.get('ca_skipped_reason', '')
+                components['ml_stacking_cov_73'] = _ml_info.get('stacking_feature_coverage_73', '')
+                components['ml_stacking_cov_94'] = _ml_info.get('stacking_feature_coverage_94', '')
+                components['ml_ca_cov'] = _ml_info.get('ca_feature_coverage', '')
 
             # 构建结果
             result = SignalResult()

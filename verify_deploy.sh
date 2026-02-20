@@ -25,7 +25,7 @@ check() {
 
 # 1. Git 版本
 echo ""
-echo "[1/6] Git 版本..."
+echo "[1/7] Git 版本..."
 LATEST=$(git log --oneline -1)
 echo "  $LATEST"
 git log --oneline -5 | grep -q "ml_models\|ML\|ml" 2>/dev/null && RET=0 || RET=1
@@ -33,7 +33,7 @@ check $RET "最近 5 条 commit 包含 ML 相关变更"
 
 # 2. 模型文件
 echo ""
-echo "[2/6] 模型文件..."
+echo "[2/7] 模型文件..."
 MODEL_DIR="data/ml_models"
 EXPECTED_FILES=(
     "lgb_direction_model.txt"
@@ -60,7 +60,7 @@ echo "  模型文件总数: $TOTAL_FILES"
 
 # 3. 关键代码文件
 echo ""
-echo "[3/6] 关键代码文件..."
+echo "[3/7] 关键代码文件..."
 CODE_FILES=(
     "ml_live_integration.py"
     "train_gpu.py"
@@ -75,15 +75,29 @@ done
 
 # 4. ml_live_integration v5
 echo ""
-echo "[4/6] ML 集成版本..."
-grep -q "v5" ml_live_integration.py 2>/dev/null && RET=0 || RET=1
-check $RET "ml_live_integration.py 已升级到 v5"
+echo "[4/7] ML 集成版本..."
+grep -q "v6" ml_live_integration.py 2>/dev/null && RET=0 || RET=1
+check $RET "ml_live_integration.py 已升级到 v6"
 grep -q "direction_model" ml_live_integration.py 2>/dev/null && RET=0 || RET=1
 check $RET "方向预测模型已集成"
 
-# 5. Web 服务
+# 5. systemd ML 环境覆盖（显式固定 stacking 配置）
 echo ""
-echo "[5/6] Web 服务..."
+echo "[5/7] systemd ML 环境..."
+OVR_A="/etc/systemd/system/macd-analysis.service.d/20-ml-stacking.conf"
+OVR_E="/etc/systemd/system/macd-engine.service.d/20-ml-stacking.conf"
+test -f "$OVR_A" && RET=0 || RET=1
+check $RET "macd-analysis override 存在"
+test -f "$OVR_E" && RET=0 || RET=1
+check $RET "macd-engine override 存在"
+grep -q "ML_STACKING_TIMEFRAME=1h" "$OVR_A" 2>/dev/null && RET=0 || RET=1
+check $RET "macd-analysis 固定 ML_STACKING_TIMEFRAME=1h"
+grep -q "ML_STACKING_TIMEFRAME=1h" "$OVR_E" 2>/dev/null && RET=0 || RET=1
+check $RET "macd-engine 固定 ML_STACKING_TIMEFRAME=1h"
+
+# 6. Web 服务
+echo ""
+echo "[6/7] Web 服务..."
 WEB_STATUS=$(systemctl is-active macd-analysis 2>/dev/null || echo "inactive")
 echo "  服务状态: $WEB_STATUS"
 [ "$WEB_STATUS" = "active" ] && RET=0 || RET=1
@@ -94,9 +108,9 @@ echo "  HTTP 状态码: $HTTP_CODE"
 [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ] && RET=0 || RET=1
 check $RET "Web 响应正常 ($HTTP_CODE)"
 
-# 6. Python 导入测试
+# 7. Python 导入测试
 echo ""
-echo "[6/6] Python 模块导入..."
+echo "[7/7] Python 模块导入..."
 cd /opt/macd-analysis
 VENV_PYTHON="/opt/macd-analysis/venv/bin/python"
 [ ! -f "$VENV_PYTHON" ] && VENV_PYTHON="python3"
