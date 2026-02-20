@@ -755,6 +755,56 @@ class LiveSignalGenerator:
     # ============================================================
     # 交易决策
     # ============================================================
+    def _compute_effective_sl(self, signal: SignalResult, direction: str) -> float:
+        """计算实际止损阈值。优先级: MAE > ATR-SL > regime_adaptive > 固定 SL
+
+        与回测 optimize_six_book.py 的止损优先级链对齐:
+          1. MAE-driven (use_mae_driven_sl): 赢单 MAE 分位数, 最精确
+          2. ATR-SL (use_atr_sl): 波动率驱动, 自适应市场环境
+          3. Regime-adaptive (use_regime_adaptive_sl): 固定百分比但分 regime
+          4. 固定 long_sl / short_sl (兜底)
+        """
+        cfg = self.config
+        regime = getattr(signal, 'regime_label', None) or 'neutral'
+
+        # 1. MAE-driven SL (最高优先级)
+        if getattr(cfg, 'use_mae_driven_sl', False):
+            mae_raw = float(getattr(cfg, f'mae_sl_{regime}_{direction}', 0.0))
+            if mae_raw <= 0.0:
+                mae_raw = float(getattr(cfg, f'mae_sl_neutral_{direction}', 0.0))
+            if mae_raw > 0.0:
+                tighten = float(getattr(cfg, 'mae_sl_long_tighten', 0.85)) if direction == 'long' else 1.0
+                sl = -(mae_raw * tighten)
+                floor_ = float(getattr(cfg, 'mae_sl_floor', -0.35))
+                ceil_ = float(getattr(cfg, 'mae_sl_ceil', -0.04))
+                return max(floor_, min(ceil_, sl))
+
+        # 2. ATR-SL (波动率驱动)
+        atr_pct = getattr(signal, 'atr_pct', 0.0)
+        if getattr(cfg, 'use_atr_sl', False) and atr_pct > 0:
+            mult = float(getattr(cfg, 'atr_sl_mult', 3.0))
+            floor_ = float(getattr(cfg, 'atr_sl_floor', -0.25))
+            ceil_ = float(getattr(cfg, 'atr_sl_ceil', -0.06))
+            sl = -(atr_pct * mult)
+            sl = max(floor_, min(ceil_, sl))
+            if direction == 'long':
+                sl = max(float(cfg.long_sl), sl * 0.8)
+            return sl
+
+        # 3. Regime-adaptive SL (仅 short)
+        if direction == 'short' and getattr(cfg, 'use_regime_adaptive_sl', False):
+            _regime_sl_map = {
+                'neutral':       float(getattr(cfg, 'regime_neutral_short_sl', -0.12)),
+                'trend':         float(getattr(cfg, 'regime_trend_short_sl', -0.20)),
+                'low_vol_trend': float(getattr(cfg, 'regime_low_vol_trend_short_sl', -0.20)),
+                'high_vol':      float(getattr(cfg, 'regime_high_vol_short_sl', -0.15)),
+                'high_vol_choppy': float(getattr(cfg, 'regime_high_vol_choppy_short_sl', -0.15)),
+            }
+            return _regime_sl_map.get(regime, float(cfg.short_sl))
+
+        # 4. 固定 SL (兜底)
+        return float(cfg.long_sl) if direction == 'long' else float(cfg.short_sl)
+
     def evaluate_action(self, signal: SignalResult,
                         has_long: bool = False,
                         has_short: bool = False,
@@ -801,10 +851,11 @@ class LiveSignalGenerator:
                 signal.reason = (f"反向信号 BS={bs:.1f} >= {cfg.close_short_bs} "
                                  f"margin={bs - ss:.1f} bars={short_bars}")
                 return signal
-            # 止损
-            if short_pnl_ratio < cfg.short_sl:
+            # 止损 (MAE > ATR-SL > regime_adaptive > fixed)
+            _short_sl = self._compute_effective_sl(signal, 'short')
+            if short_pnl_ratio < _short_sl:
                 signal.action = "CLOSE_SHORT"
-                signal.reason = f"止损 pnl={short_pnl_ratio:.1%} < sl={cfg.short_sl:.1%}"
+                signal.reason = f"止损[{signal.regime_label}] pnl={short_pnl_ratio:.1%} < sl={_short_sl:.1%}"
                 return signal
             # 超时
             if cfg.short_max_hold > 0 and short_bars >= cfg.short_max_hold:
@@ -833,9 +884,11 @@ class LiveSignalGenerator:
                 signal.reason = (f"反向信号 SS={ss:.1f} >= {cfg.close_long_ss} "
                                  f"margin={ss - bs:.1f} bars={long_bars}")
                 return signal
-            if long_pnl_ratio < cfg.long_sl:
+            # 止损 (MAE > ATR-SL > regime_adaptive > fixed)
+            _long_sl = self._compute_effective_sl(signal, 'long')
+            if long_pnl_ratio < _long_sl:
                 signal.action = "CLOSE_LONG"
-                signal.reason = f"止损 pnl={long_pnl_ratio:.1%} < sl={cfg.long_sl:.1%}"
+                signal.reason = f"止损[{signal.regime_label}] pnl={long_pnl_ratio:.1%} < sl={_long_sl:.1%}"
                 return signal
             if cfg.long_max_hold > 0 and long_bars >= cfg.long_max_hold:
                 signal.action = "CLOSE_LONG"
