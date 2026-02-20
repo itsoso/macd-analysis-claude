@@ -540,7 +540,7 @@ class LiveSignalGenerator:
             result.bar_index = idx
             # 冲突: 两方向都活跃 且 差距不足以形成主导 且 绝对分值未达到强信号
             # 差距阈值从 10 收紧为 8，并增加最大分值上限 45 避免强信号误判为冲突
-            result.conflict = (
+            result.conflict = bool(
                 sell_score > 15 and buy_score > 15 and
                 abs(sell_score - buy_score) < 8 and
                 max(sell_score, buy_score) < 45
