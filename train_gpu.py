@@ -1928,6 +1928,15 @@ def train_online_retrain(timeframes: List[str] = None):
     features, labels_df = prepare_features(SYMBOL, tf)
     target = labels_df['profitable_long_5']
 
+    # 如果旧模型存在，使用其特征集（避免维度不匹配）
+    if old_meta and 'feature_names' in old_meta:
+        old_features = old_meta['feature_names']
+        missing = [f for f in old_features if f not in features.columns]
+        if missing:
+            log.warning(f"  缺失特征 ({len(missing)}): {missing[:5]}...")
+        features = features[[f for f in old_features if f in features.columns]]
+        log.info(f"  使用旧模型特征集: {len(features.columns)} 维")
+
     n = len(features)
     n_train = int(n * 0.85)
     n_val = int(n * 0.08)
