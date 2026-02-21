@@ -1,14 +1,14 @@
 {
-  "version": "stacking_v9",
+  "version": "stacking_v10",
   "timeframe": "4h",
   "meta_type": "lgb",
-  "trained_at": "2026-02-21T11:13:23.114017",
+  "trained_at": "2026-02-21T13:45:18.794220",
   "base_models": [
     "lgb",
     "lstm",
     "catboost",
     "tabnet",
-    "ridge"
+    "lgb24h"
   ],
   "extra_features": [
     "hvol_20",
@@ -20,9 +20,9 @@
   "meta_intercept": 0.0,
   "hvol_extra_mean": 0.0641767606139183,
   "hvol_extra_std": 0.032997547404298784,
-  "oof_meta_auc": 0.5864,
-  "val_auc": 0.4807,
-  "test_auc": 0.5241,
+  "oof_meta_auc": 0.5789,
+  "val_auc": 0.743,
+  "test_auc": 0.5348,
   "n_oof_samples": 6685,
   "n_folds": 8,
   "feature_names_73": [
@@ -135,7 +135,6 @@
     "vol_ratio_5_20",
     "vol_price_corr_10",
     "ofi_ma5",
-    "ofi_std5",
     "cum_ofi_slope",
     "buy_sell_pressure",
     "body_ratio",
@@ -145,8 +144,6 @@
     "dow_cos",
     "cum_ret_20_rank",
     "sharpe_20",
-    "funding_rate",
-    "funding_rate_ma",
     "te_hour",
     "te_dow"
   ],
@@ -628,7 +625,7 @@
     "lstm": "stacking_lstm_4h.pt",
     "catboost": "stacking_catboost_4h.cbm",
     "tabnet": "stacking_tabnet_4h.zip",
-    "standalone_lgb": "stacking_ridge_4h.pkl",
+    "standalone_lgb": "stacking_lgb24h_4h.txt",
     "meta": "stacking_meta_4h.pkl"
   },
   "thresholds": {
@@ -636,18 +633,21 @@
     "short_threshold": 0.42
   },
   "platt_calibration": {
-    "A": 3.6674162126979857,
-    "B": 0.6723950378711099,
-    "brier_before": 0.24372572037281776,
-    "brier_after": 0.24062929241882142,
+    "A": 2.9220005644971705,
+    "B": 0.47641400657224237,
+    "brier_before": 0.24392754914199485,
+    "brier_after": 0.24196122218699798,
     "enabled": true
   },
   "adversarial_removed": [
-    "cum_ofi"
+    "ofi_std5",
+    "cum_ofi",
+    "funding_rate",
+    "funding_rate_ma"
   ],
   "target_encoding": [
     "te_hour",
     "te_dow"
   ],
-  "noise_std": 0.02
+  "noise_std": 0.05
 }

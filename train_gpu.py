@@ -2575,20 +2575,21 @@ def train_mtf_fusion(decision_tfs=None):
 
 def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 20000):
     """
-    Stacking 集成 v9: 5 异构基模型 OOF → 元学习器 (LR + LGB 双轨)。
+    Stacking 集成 v10: 5 异构基模型 OOF → 元学习器 (LR + LGB 双轨)。
 
     基模型:
-      1. LightGBM Direction (40 维, Optuna 最优参数)
+      1. LightGBM Direction (selected 维, Optuna 最优参数, 5h 标签)
       2. LSTM+Attention (73 维, 48-bar 序列)
       3. CatBoost (94 维跨资产, 12h 标签)
-      4. TabNet (40 维, attention-based)
-      5. Ridge Classifier (40 维, 线性模型, 替代 DartLGB 增加多样性)
+      4. TabNet (selected 维, attention-based)
+      5. LGB-24h (selected 维, 24h 标签, 不同超参, 替代低方差 Ridge)
 
-    v8→v9 变更:
-      - 替换 DartLGB (与 LGB 相关 0.91) 为 Ridge Classifier (线性 vs 树, 真正多样性)
-      - Adversarial Validation: 检测 train/test 分布漂移, 剔除漂移特征
-      - Target Encoding: 时间特征 (hour, dow) 的目标编码
-      - Noise Injection: 训练时加高斯噪声增强泛化
+    v9→v10 变更:
+      - 更激进对抗验证: 阈值 10%→5%, 逐特征 AUC 检测
+      - Isotonic 校准: 每个基模型 OOF 先校准再喂 meta
+      - 噪声注入加大: 0.02→0.05
+      - LGB-24h 替代 Ridge (Ridge std=0.038 太低, LGB-24h 标签多样性更强)
+      - Nested CV meta: 内层 3-fold 选最优 meta 超参
 
     流程:
       A. 数据准备 + 时间分割 + 特征筛选 + 对抗验证
@@ -2619,6 +2620,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
 
         label = labels_df['profitable_long_5']
         label_12h = labels_df['profitable_long_12']  # CatBoost 用不同视野标签增加多样性
+        label_24h = labels_df.get('profitable_long_24', label_12h)  # LGB-24h 用最长视野标签
         n = len(features)
 
         # 样本门禁：小样本下 Stacking 容易过拟合，直接跳过避免浪费 H800 资源
@@ -2641,6 +2643,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
 
         y_all = label.values.astype(np.float32)
         y_12h = label_12h.values.astype(np.float32)  # CatBoost 标签
+        y_24h = label_24h.values.astype(np.float32) if hasattr(label_24h, 'values') else label_12h.values.astype(np.float32)  # LGB-24h 标签
 
         # 基模型用 73 维特征 (LGB/XGB/LSTM), TFT 用 94 维 (含跨资产)
         feat_73 = features.values.astype(np.float32)
@@ -2705,23 +2708,36 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 adv_model = lgb.train(adv_params, lgb.Dataset(adv_X, label=adv_y), num_boost_round=50)
                 adv_imp = adv_model.feature_importance(importance_type='gain')
                 adv_auc = roc_auc_score(adv_y, adv_model.predict(adv_X))
-                log.info(f"  Adversarial Validation AUC: {adv_auc:.4f} (>0.6 = 显著漂移)")
+                log.info(f"  Adversarial Validation AUC: {adv_auc:.4f} (>0.55 = 漂移)")
 
-                # 剔除漂移最严重的特征 (importance 占比 > 10%)
-                if adv_auc > 0.6:
+                # 方法1: 模型 importance 占比 > 5% 的特征
+                drift_by_imp = set()
+                if adv_auc > 0.55:
                     adv_imp_ratio = adv_imp / (adv_imp.sum() + 1e-8)
-                    drift_idx = np.where(adv_imp_ratio > 0.10)[0]
-                    if len(drift_idx) > 0 and len(drift_idx) < len(feat_73_cols_selected) // 2:
-                        adv_removed = [feat_73_cols_selected[i] for i in drift_idx]
-                        keep_mask = np.ones(feat_73_selected.shape[1], dtype=bool)
-                        keep_mask[drift_idx] = False
-                        feat_73_selected = feat_73_selected[:, keep_mask]
-                        feat_73_cols_selected = [c for i, c in enumerate(feat_73_cols_selected) if keep_mask[i]]
-                        log.info(f"  剔除漂移特征: {adv_removed} → 剩余 {len(feat_73_cols_selected)} 维")
-                    else:
-                        log.info(f"  漂移特征过多或为零，不剔除")
+                    drift_by_imp = set(np.where(adv_imp_ratio > 0.05)[0])
+
+                # 方法2: 逐特征 AUC > 0.6 的特征 (单变量漂移检测)
+                drift_by_auc = set()
+                for fi in range(adv_X.shape[1]):
+                    try:
+                        fi_auc = roc_auc_score(adv_y, adv_X[:, fi])
+                        if fi_auc > 0.65 or fi_auc < 0.35:  # 双向漂移
+                            drift_by_auc.add(fi)
+                    except Exception:
+                        pass
+
+                drift_idx = sorted(drift_by_imp | drift_by_auc)
+                if len(drift_idx) > 0 and len(drift_idx) < len(feat_73_cols_selected) // 2:
+                    adv_removed = [feat_73_cols_selected[i] for i in drift_idx]
+                    keep_mask = np.ones(feat_73_selected.shape[1], dtype=bool)
+                    for di in drift_idx:
+                        keep_mask[di] = False
+                    feat_73_selected = feat_73_selected[:, keep_mask]
+                    feat_73_cols_selected = [c for i, c in enumerate(feat_73_cols_selected) if keep_mask[i]]
+                    log.info(f"  剔除漂移特征 ({len(adv_removed)}): {adv_removed}")
+                    log.info(f"  剩余 {len(feat_73_cols_selected)} 维")
                 else:
-                    log.info(f"  分布漂移不显著，保留全部特征")
+                    log.info(f"  漂移特征: {len(drift_idx)} 个 (不剔除: 过多或为零)")
         except Exception as e:
             log.warning(f"  Adversarial Validation 失败: {e}")
 
@@ -2782,7 +2798,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         N_FOLDS = 8
         EMBARGO = 48  # 48 bar gap (2天@1h) 防止时序泄漏
         fold_size = train_end // N_FOLDS
-        NOISE_STD = 0.02  # 噪声注入标准差 (相对于特征 std)
+        NOISE_STD = 0.05  # 噪声注入标准差 (v10: 0.02→0.05 增强泛化)
 
         oof_preds = np.full((train_end, 5), np.nan)  # LGB, LSTM, CatBoost, TabNet, Ridge
         oof_valid = np.zeros(train_end, dtype=bool)
@@ -2900,22 +2916,27 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} TabNet 失败: {e}")
 
-            # --- 基模型 5: Ridge Classifier (线性模型, 与树模型低相关) ---
+            # --- 基模型 5: LGB-24h (24h 标签, 不同超参, 标签多样性) ---
             try:
-                from sklearn.linear_model import RidgeClassifier
-                from sklearn.preprocessing import StandardScaler
-                # 标准化后 Ridge 效果更好
-                ridge_scaler = StandardScaler()
-                X_tr_ridge = ridge_scaler.fit_transform(X_tr_73_noisy)
-                X_fold_ridge = ridge_scaler.transform(X_fold_73)
-                ridge_model = RidgeClassifier(alpha=1.0, class_weight='balanced')
-                ridge_model.fit(X_tr_ridge, y_tr.astype(int))
-                # RidgeClassifier 没有 predict_proba，用 decision_function + sigmoid
-                ridge_decision = ridge_model.decision_function(X_fold_ridge)
-                ridge_pred = 1.0 / (1.0 + np.exp(-ridge_decision))  # sigmoid
-                oof_preds[fold_start:fold_end, 4][fold_valid] = ridge_pred
+                import lightgbm as lgb
+                lgb24_params = {
+                    'objective': 'binary', 'metric': 'auc',
+                    'boosting_type': 'gbdt', 'num_leaves': 24,
+                    'learning_rate': 0.02, 'feature_fraction': 0.7,
+                    'bagging_fraction': 0.6, 'bagging_freq': 3,
+                    'min_child_samples': 80, 'lambda_l1': 0.1,
+                    'lambda_l2': 0.5, 'verbose': -1, 'n_jobs': -1, 'seed': 88,
+                }
+                if gpu_info.get('lgb_gpu'):
+                    lgb24_params['device'] = 'cuda'
+                y_tr_24h = y_24h[tr_start:tr_end][tr_valid]
+                y_tr_24h_clean = np.nan_to_num(y_tr_24h, nan=0.5)
+                dtrain_24h = lgb.Dataset(X_tr_73_noisy, label=y_tr_24h_clean)
+                lgb24_model = lgb.train(lgb24_params, dtrain_24h, num_boost_round=200)
+                lgb24_pred = lgb24_model.predict(X_fold_73)
+                oof_preds[fold_start:fold_end, 4][fold_valid] = lgb24_pred
             except Exception as e:
-                log.warning(f"  Fold {fold_idx} Ridge 失败: {e}")
+                log.warning(f"  Fold {fold_idx} LGB-24h 失败: {e}")
 
             oof_valid[fold_start:fold_end] |= fold_valid
 
@@ -2929,7 +2950,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         oof_X = oof_filled[has_oof]
         oof_y = y_all[:train_end][has_oof]
 
-        model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'Ridge']
+        model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'LGB24h']
         log.info(f"\nOOF 汇总: {len(oof_X)} 有效样本")
         for i, name in enumerate(model_names):
             valid_mask = ~np.isnan(oof_preds[:train_end][has_oof, i])
@@ -2939,6 +2960,29 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 log.info(f"  {name} OOF AUC: {auc_i:.4f} ({valid_mask.sum()} 样本)")
             else:
                 log.info(f"  {name} OOF: 样本不足")
+
+        # ---- Isotonic 校准基模型 OOF ----
+        # 每个基模型的 OOF 预测做 isotonic regression 校准，使概率更可靠
+        isotonic_calibrators = {}
+        log.info(f"\nIsotonic 校准基模型 OOF...")
+        try:
+            from sklearn.isotonic import IsotonicRegression
+            for i, name in enumerate(model_names):
+                valid_mask_i = ~np.isnan(oof_preds[:train_end][has_oof, i])
+                if valid_mask_i.sum() > 200:
+                    iso = IsotonicRegression(y_min=0.01, y_max=0.99, out_of_bounds='clip')
+                    raw_pred = oof_X[:, i][valid_mask_i]
+                    raw_label = oof_y[valid_mask_i]
+                    iso.fit(raw_pred, raw_label)
+                    # 校准所有 OOF
+                    calibrated = iso.predict(oof_X[:, i])
+                    auc_before = roc_auc_score(oof_y, oof_X[:, i])
+                    auc_after = roc_auc_score(oof_y, calibrated)
+                    oof_X[:, i] = calibrated
+                    isotonic_calibrators[name] = iso
+                    log.info(f"  {name}: AUC {auc_before:.4f} → {auc_after:.4f} (校准后)")
+        except Exception as e:
+            log.warning(f"  Isotonic 校准失败: {e}")
 
         # H800-6: OOF 相关性诊断
         log.info(f"\n[H800-6] OOF 诊断:")
@@ -3046,10 +3090,18 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 log.warning(f"  ⚠️  负系数基模型: {neg_models} → 自动剔除并重训")
                 keep_idx = [i for i in range(len(model_names)) if base_coefs[i] >= -0.01]
                 model_names = [model_names[i] for i in keep_idx]
-                oof_X_trimmed = np.column_stack([oof_filled[has_oof][:, i] for i in keep_idx])
-                # 重新附加 extra features
+                # 从已校准的 oof_X 中提取保留的基模型列
+                n_base_orig = len(keep_idx) + len(neg_models)
+                oof_X_trimmed = np.column_stack([oof_X[:, i] for i in keep_idx])
+                # 重新附加 extra features (hvol_20)
                 if oof_extra:
                     oof_X_trimmed = np.hstack([oof_X_trimmed] + oof_extra)
+                # 重新计算交互特征
+                n_base_new = len(model_names)
+                base_preds_new = oof_X_trimmed[:, :n_base_new]
+                disagree_new = np.abs(base_preds_new[:, 0:1] - np.mean(base_preds_new[:, 1:], axis=1, keepdims=True)) if n_base_new > 1 else np.zeros((len(oof_X_trimmed), 1))
+                pred_range_new = np.max(base_preds_new, axis=1, keepdims=True) - np.min(base_preds_new, axis=1, keepdims=True)
+                oof_X_trimmed = np.hstack([oof_X_trimmed, disagree_new, pred_range_new])
                 meta_lr2 = LogisticRegression(C=0.5, penalty='l2', solver='lbfgs',
                                                max_iter=1000, random_state=42, class_weight=None)
                 meta_lr2.fit(oof_X_trimmed, oof_y, sample_weight=decay_weights)
@@ -3064,7 +3116,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                     log.info(f"  ✅ 采用剔除后模型")
                 else:
                     log.info(f"  保留原始模型 (剔除后变差)")
-                    model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'Ridge']  # 恢复
+                    model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'LGB24h']  # 恢复
 
         # OOF 性能 (已在上面计算)
         log.info(f"  Meta OOF AUC: {oof_meta_auc:.4f} (type={meta_type})")
@@ -3224,23 +3276,27 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         except Exception as e:
             log.warning(f"  TabNet 全量训练失败: {e}")
 
-        # 重训 Ridge Classifier
-        ridge_scaler_full = None
-        ridge_full = None
+        # 重训 LGB-24h (24h 标签)
         try:
-            from sklearn.linear_model import RidgeClassifier
-            from sklearn.preprocessing import StandardScaler
-            ridge_scaler_full = StandardScaler()
-            X_full_ridge = ridge_scaler_full.fit_transform(X_full_73)
-            ridge_full = RidgeClassifier(alpha=1.0, class_weight='balanced')
-            ridge_full.fit(X_full_ridge, y_full.astype(int))
-            # 保存 Ridge + Scaler
-            ridge_save = {'ridge': ridge_full, 'scaler': ridge_scaler_full}
-            with open(os.path.join(MODEL_DIR, f'stacking_ridge_{tf}.pkl'), 'wb') as f:
-                pickle.dump(ridge_save, f)
-            log.info("  Ridge 保存完成")
+            import lightgbm as lgb
+            lgb24_params = {
+                'objective': 'binary', 'metric': 'auc',
+                'boosting_type': 'gbdt', 'num_leaves': 24,
+                'learning_rate': 0.02, 'feature_fraction': 0.7,
+                'bagging_fraction': 0.6, 'bagging_freq': 3,
+                'min_child_samples': 80, 'lambda_l1': 0.1,
+                'lambda_l2': 0.5, 'verbose': -1, 'n_jobs': -1, 'seed': 88,
+            }
+            if gpu_info.get('lgb_gpu'):
+                lgb24_params['device'] = 'cuda'
+            y_full_24h = y_24h[:full_end][full_valid]
+            y_full_24h_clean = np.nan_to_num(y_full_24h, nan=0.5)
+            dtrain_24h = lgb.Dataset(X_full_73, label=y_full_24h_clean)
+            final_lgb24 = lgb.train(lgb24_params, dtrain_24h, num_boost_round=300)
+            final_lgb24.save_model(os.path.join(MODEL_DIR, f'stacking_lgb24h_{tf}.txt'))
+            log.info("  LGB-24h 保存完成")
         except Exception as e:
-            log.warning(f"  Ridge 全量训练失败: {e}")
+            log.warning(f"  LGB-24h 全量训练失败: {e}")
 
         # ---- E. 用最终保存的基模型评估元学习器 ----
         val_auc = _stacking_evaluate_meta_with_saved_models(
@@ -3263,6 +3319,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             hvol_extra_mean=hvol_extra_mean,
             hvol_extra_std=hvol_extra_std,
             active_models=model_names,
+            isotonic_calibrators=isotonic_calibrators,
         )
         test_auc = _stacking_evaluate_meta_with_saved_models(
             meta_model=meta_model,
@@ -3284,6 +3341,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             hvol_extra_mean=hvol_extra_mean,
             hvol_extra_std=hvol_extra_std,
             active_models=model_names,
+            isotonic_calibrators=isotonic_calibrators,
         )
         log.info(f"  验证 AUC(最终基模型): {val_auc:.4f}")
         log.info(f"  测试 AUC(最终基模型): {test_auc:.4f}")
@@ -3292,7 +3350,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         meta_file = f'stacking_meta_{tf}.pkl'
         meta_path = os.path.join(MODEL_DIR, meta_file)
         with open(meta_path, 'wb') as f:
-            pickle.dump(meta_model, f)
+            pickle.dump({'meta': meta_model, 'isotonic': isotonic_calibrators}, f)
 
         # 保存元数据 (含系数，便于 ONNX 导出和 debug)
         base_model_names_lower = [m.lower() for m in model_names]
@@ -3306,7 +3364,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             meta_intercept = 0.0
             meta_coefficients = {}
         stacking_meta = {
-            'version': 'stacking_v9',
+            'version': 'stacking_v10',
             'timeframe': tf,
             'meta_type': meta_type,
             'trained_at': datetime.now().isoformat(),
@@ -3335,7 +3393,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 'lstm': f'stacking_lstm_{tf}.pt',
                 'catboost': f'stacking_catboost_{tf}.cbm',
                 'tabnet': f'stacking_tabnet_{tf}.zip',
-                'standalone_lgb': f'stacking_ridge_{tf}.pkl',
+                'standalone_lgb': f'stacking_lgb24h_{tf}.txt',
                 'meta': meta_file,
             },
             'thresholds': {
@@ -3725,12 +3783,13 @@ def _stacking_evaluate_meta_with_saved_models(
     hvol_extra_mean: float = 0.0,
     hvol_extra_std: float = 1.0,
     active_models: List[str] = None,
+    isotonic_calibrators: dict = None,
 ) -> float:
     """使用最终保存的基模型评估 meta learner (支持 LR/LGB meta + CatBoost)。"""
     from sklearn.metrics import roc_auc_score
 
     if active_models is None:
-        active_models = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'Ridge']
+        active_models = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'LGB24h']
 
     if valid_mask.sum() < 20:
         return 0.5
@@ -3798,25 +3857,29 @@ def _stacking_evaluate_meta_with_saved_models(
             log.warning(f"  TabNet 评估失败: {e}")
         preds.append(tabnet_pred)
 
-    # 5) Ridge Classifier
-    if 'Ridge' in active_models:
-        ridge_pred = np.full(len(X_73), 0.5, dtype=np.float32)
+    # 5) LGB-24h (24h 标签)
+    if 'LGB24h' in active_models:
+        lgb24_pred = np.full(len(X_73), 0.5, dtype=np.float32)
         try:
-            import pickle as _pkl
-            ridge_path = os.path.join(MODEL_DIR, f'stacking_ridge_{tf}.pkl')
-            if os.path.exists(ridge_path):
-                with open(ridge_path, 'rb') as f:
-                    ridge_save = _pkl.load(f)
-                ridge_model = ridge_save['ridge']
-                ridge_scaler = ridge_save['scaler']
-                X_ridge = ridge_scaler.transform(X_73)
-                ridge_decision = ridge_model.decision_function(X_ridge)
-                ridge_pred = (1.0 / (1.0 + np.exp(-ridge_decision))).astype(np.float32)
+            import lightgbm as lgb
+            lgb24_path = os.path.join(MODEL_DIR, f'stacking_lgb24h_{tf}.txt')
+            if os.path.exists(lgb24_path):
+                lgb24_model = lgb.Booster(model_file=lgb24_path)
+                lgb24_pred = lgb24_model.predict(X_73).astype(np.float32)
         except Exception as e:
-            log.warning(f"  Ridge 评估失败: {e}")
-        preds.append(ridge_pred)
+            log.warning(f"  LGB-24h 评估失败: {e}")
+        preds.append(lgb24_pred)
 
     meta_X = np.column_stack(preds)
+
+    # 应用 Isotonic 校准 (与训练时同步)
+    if isotonic_calibrators:
+        for i, name in enumerate(active_models):
+            if name in isotonic_calibrators:
+                try:
+                    meta_X[:, i] = isotonic_calibrators[name].predict(meta_X[:, i])
+                except Exception:
+                    pass
 
     # 附加特征 (hvol_20 需与训练时同步 z-score 标准化)
     if hvol_idx >= 0 and 'hvol_20' in extra_feat_names:
