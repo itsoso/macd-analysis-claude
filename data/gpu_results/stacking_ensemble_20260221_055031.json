@@ -1,0 +1,9 @@
+{
+  "4h": {
+    "timeframe": "4h",
+    "skipped": true,
+    "skip_reason": "insufficient_samples(10915<20000)",
+    "n_samples": 10915,
+    "min_samples_required": 20000
+  }
+}

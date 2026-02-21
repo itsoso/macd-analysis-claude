@@ -1,0 +1,21 @@
+{
+  "lstm_1h": {
+    "pytorch_cpu_ms": 4.127,
+    "onnx_cpu_ms": 1.79,
+    "speedup_cpu": 2.3,
+    "onnx_gpu_ms": 2.025,
+    "speedup_gpu": 2.04
+  },
+  "tft_1h": {
+    "pytorch_cpu_ms": 9.246,
+    "onnx_cpu_ms": 1.727,
+    "speedup_cpu": 5.35,
+    "onnx_gpu_ms": 2.753,
+    "speedup_gpu": 3.36
+  },
+  "mtf_fusion": {
+    "pytorch_cpu_ms": 0.109,
+    "onnx_cpu_ms": 0.017,
+    "speedup_cpu": 6.5
+  }
+}
