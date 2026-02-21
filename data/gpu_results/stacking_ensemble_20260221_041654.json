@@ -1,0 +1,9 @@
+{
+  "1h": {
+    "oof_meta_auc": 0.5893,
+    "val_auc": 0.7434,
+    "test_auc": 0.5422,
+    "n_oof_samples": 24492,
+    "elapsed_sec": 128.1
+  }
+}

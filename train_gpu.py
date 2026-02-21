@@ -2818,13 +2818,13 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             log.info(f"  附加特征: {extra_feat_names} → 元学习器输入 {oof_X.shape[1]} 维")
 
         # ---- C. 训练元学习器 ----
-        # class_weight='balanced': 修正系统性看空偏差（训练集多空不平衡时调整截距）
-        # C=0.3: 强化 L2 正则化，减少 XGB 与 LGB 高度相关时产生的负系数问题
-        log.info(f"\n训练 LogisticRegression 元学习器 (C=0.3, balanced)...")
+        # class_weight=None: 移除 balanced 以修正系统性看多偏差 (pred_mean 0.497 vs label 0.363)
+        # C=0.5: 适度 L2 正则化，平衡过拟合与欠拟合
+        log.info(f"\n训练 LogisticRegression 元学习器 (C=0.5, class_weight=None)...")
 
-        meta_model = LogisticRegression(C=0.3, penalty='l2', solver='lbfgs',
+        meta_model = LogisticRegression(C=0.5, penalty='l2', solver='lbfgs',
                                         max_iter=1000, random_state=42,
-                                        class_weight='balanced')
+                                        class_weight=None)
         meta_model.fit(oof_X, oof_y)
 
         # OOF 性能
@@ -2855,6 +2855,45 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         if abs(oof_pred_mean - label_mean) > 0.05:
             log.warning(f"  ⚠️  元学习器预测存在偏差 ({oof_pred_mean:.3f} vs 标签{label_mean:.3f})，"
                         f"可能导致实盘系统性{'看空' if oof_pred_mean < label_mean else '看多'}")
+
+        # ---- Platt Scaling 概率校准 ----
+        # 即使偏差 < 5%，校准仍可改善概率可靠性 (Brier Score, ECE)
+        log.info(f"\n应用 Platt Scaling 概率校准...")
+        from sklearn.linear_model import LogisticRegression as PlattLR
+
+        # Platt Scaling: 对元学习器输出再做一次 logistic 回归
+        # p_calibrated = sigmoid(A * logit(p_raw) + B)
+        platt_model = PlattLR(C=1e10, solver='lbfgs', max_iter=1000)  # C 极大 → 无正则化
+        oof_meta_pred_logit = np.log(np.clip(oof_meta_pred, 1e-10, 1-1e-10) /
+                                      np.clip(1 - oof_meta_pred, 1e-10, 1-1e-10))
+        platt_model.fit(oof_meta_pred_logit.reshape(-1, 1), oof_y)
+
+        oof_calibrated = platt_model.predict_proba(oof_meta_pred_logit.reshape(-1, 1))[:, 1]
+        calibrated_auc = roc_auc_score(oof_y, oof_calibrated)
+        calibrated_mean = oof_calibrated.mean()
+
+        # Brier Score: 越小越好 (0 = 完美)
+        from sklearn.metrics import brier_score_loss
+        brier_before = brier_score_loss(oof_y, oof_meta_pred)
+        brier_after = brier_score_loss(oof_y, oof_calibrated)
+
+        log.info(f"  校准前: AUC={oof_meta_auc:.4f}, Brier={brier_before:.4f}, 预测均值={oof_pred_mean:.4f}")
+        log.info(f"  校准后: AUC={calibrated_auc:.4f}, Brier={brier_after:.4f}, 预测均值={calibrated_mean:.4f}")
+        log.info(f"  Platt 参数: A={float(platt_model.coef_[0][0]):.4f}, B={float(platt_model.intercept_[0]):.4f}")
+
+        if brier_after < brier_before:
+            log.info(f"  ✅ 校准改善 Brier Score: {brier_before:.4f} → {brier_after:.4f} (-{(brier_before-brier_after):.4f})")
+        else:
+            log.warning(f"  ⚠️  校准未改善 Brier Score，保持原始预测")
+
+        # 保存校准参数到元数据 (后续推理时使用)
+        platt_params = {
+            'A': float(platt_model.coef_[0][0]),
+            'B': float(platt_model.intercept_[0]),
+            'brier_before': float(brier_before),
+            'brier_after': float(brier_after),
+            'enabled': brier_after < brier_before  # 仅当改善时启用
+        }
 
         # 验证/测试切分（最终评估放到全量基模型保存后，避免估计偏差）
         # 注意: val_auc 使用全量重训基模型 (trained on train+val) 在 val 上评估 → 偏高 (in-sample)
@@ -3038,6 +3077,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 'long_threshold': 0.58,
                 'short_threshold': 0.42,
             },
+            'platt_calibration': platt_params,  # Platt Scaling 校准参数
         }
         meta_json_path = os.path.join(MODEL_DIR, f'stacking_meta_{tf}.json')
         with open(meta_json_path, 'w') as f:
