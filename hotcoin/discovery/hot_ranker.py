@@ -74,21 +74,26 @@ class HotRanker:
         # --- 维度 6: 风险惩罚 ---
         s_risk = self._score_risk_penalty(coin)
 
-        # 加权合成: 先归一化正向维度, 再扣减风险惩罚
-        positive_raw = (
-            self.cfg.w_announcement * s_announce
-            + self.cfg.w_social * s_social
-            + self.cfg.w_sentiment * s_sentiment
-            + self.cfg.w_momentum * s_momentum
-            + self.cfg.w_liquidity * s_liquidity
-        )
+        # 加权合成: 仅对有数据的维度加权, 避免零维度稀释评分
+        dims = [
+            (self.cfg.w_announcement, s_announce),
+            (self.cfg.w_social, s_social),
+            (self.cfg.w_sentiment, s_sentiment),
+            (self.cfg.w_momentum, s_momentum),
+            (self.cfg.w_liquidity, s_liquidity),
+        ]
+        # 有效维度: 分数 > 0 或情绪维度(默认50)始终参与
+        active_weight = 0.0
+        positive_raw = 0.0
+        for w, s in dims:
+            positive_raw += w * s
+            if s > 0:
+                active_weight += w
 
-        # 归一化到 0-100
-        total_positive_weight = (
-            self.cfg.w_announcement + self.cfg.w_social + self.cfg.w_sentiment
-            + self.cfg.w_momentum + self.cfg.w_liquidity
-        )
-        positive_score = (positive_raw / total_positive_weight) if total_positive_weight > 0 else 0
+        # 归一化: 按有效维度权重归一化, 保证动量币不被空维度稀释
+        # 最小权重 = momentum + liquidity = 0.45, 避免极端膨胀
+        effective_weight = max(active_weight, self.cfg.w_momentum + self.cfg.w_liquidity)
+        positive_score = (positive_raw / effective_weight) if effective_weight > 0 else 0
 
         # 风险惩罚: w_risk_penalty 直接控制最大扣减幅度
         # e.g. w_risk_penalty=0.10, s_risk=100 → 扣减 10 分

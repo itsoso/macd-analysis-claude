@@ -69,7 +69,7 @@ class DiscoveryConfig:
 
     # 候选池
     pool_max_size: int = 20
-    pool_enter_score: float = 40.0        # 入池最低热度
+    pool_enter_score: float = 30.0        # 信号计算最低热度 (动量币典型 30-55)
     pool_exit_score: float = 20.0         # 出池热度
     pool_exit_hold_sec: int = 600         # 低分持续 N 秒后出池
     pool_cooling_sec: int = 1800          # 止损后冷却时间
