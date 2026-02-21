@@ -64,6 +64,12 @@ class TickerStream:
 
     @property
     def tickers(self) -> Dict[str, MiniTicker]:
+        """返回 tickers 快照副本, 防止外部线程 (Flask) 迭代时被 WS 回调修改。"""
+        return dict(self._tickers)
+
+    @property
+    def tickers_ref(self) -> Dict[str, MiniTicker]:
+        """返回内部引用 (仅同一 asyncio 线程使用, 避免不必要拷贝)。"""
         return self._tickers
 
     async def run(self, shutdown: asyncio.Event):

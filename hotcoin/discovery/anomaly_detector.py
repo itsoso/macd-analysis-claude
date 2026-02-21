@@ -76,11 +76,13 @@ class AnomalyDetector:
             return None
         self._alert_cooldown[symbol] = now
 
-        # 定期清理过期冷却记录
         if len(self._alert_cooldown) > 500:
-            expired = [s for s, t in self._alert_cooldown.items() if now - t > self._cooldown_sec * 5]
-            for s in expired:
-                del self._alert_cooldown[s]
+            try:
+                expired = [s for s, t in self._alert_cooldown.items() if now - t > self._cooldown_sec * 5]
+                for s in expired:
+                    self._alert_cooldown.pop(s, None)
+            except Exception:
+                log.debug("清理告警冷却记录异常", exc_info=True)
 
         signal = AnomalySignal(
             symbol=symbol,

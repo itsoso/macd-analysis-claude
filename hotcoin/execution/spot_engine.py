@@ -65,14 +65,16 @@ class HotCoinSpotEngine:
     def positions(self) -> dict:
         return self.risk.positions
 
-    def process_signals(self, signals: List[TradeSignal], allow_open: bool = True):
-        """处理一批交易信号。"""
+    def process_signals(self, signals: List[TradeSignal], allow_open: bool = True,
+                        current_prices: Optional[Dict[str, float]] = None):
+        """处理一批交易信号。current_prices 可选, 减少重复 API 调用。"""
+        prices = current_prices or {}
         for sig in signals:
             if sig.action == "HOLD":
                 continue
 
             if sig.action == "SELL":
-                self._handle_sell_signal(sig)
+                self._handle_sell_signal(sig, prices)
                 continue
             if not allow_open:
                 log.debug("忽略开仓信号 %s %s: allow_open=False", sig.action, sig.symbol)
@@ -85,9 +87,9 @@ class HotCoinSpotEngine:
                 log.debug("拒绝 %s %s: %s", sig.action, sig.symbol, entry_decision.reason)
                 continue
 
-            self._try_open(sig, coin, entry_decision)
+            self._try_open(sig, coin, entry_decision, prices)
 
-    def _handle_sell_signal(self, sig: TradeSignal):
+    def _handle_sell_signal(self, sig: TradeSignal, prices: Dict[str, float] = None):
         """
         现货模式不支持开空:
         - 若已有 BUY 持仓: 视为平仓信号
@@ -102,18 +104,19 @@ class HotCoinSpotEngine:
             log.warning("忽略 SELL %s: 现货仅支持平 BUY 持仓 (current=%s)", sig.symbol, pos.side)
             return
 
-        price = self.executor.get_current_price(sig.symbol)
+        price = (prices or {}).get(sig.symbol) or self.executor.get_current_price(sig.symbol)
         if price <= 0:
             log.warning("忽略 SELL %s: 无法获取价格", sig.symbol)
             return
         self._close_position(sig.symbol, price, f"SELL signal: {sig.reason or 'signal exit'}")
 
-    def _try_open(self, sig: TradeSignal, coin: Optional[HotCoin], entry_decision):
+    def _try_open(self, sig: TradeSignal, coin: Optional[HotCoin], entry_decision,
+                  prices: Dict[str, float] = None):
         """尝试开仓。"""
         heat_score = coin.heat_score if coin else 50
         liquidity_score = coin.score_liquidity if coin else 50
 
-        current_price = self.executor.get_current_price(sig.symbol) or 0
+        current_price = (prices or {}).get(sig.symbol) or self.executor.get_current_price(sig.symbol) or 0
         if current_price <= 0:
             log.warning("放弃开仓 %s: 无法获取当前价格", sig.symbol)
             return
@@ -154,23 +157,41 @@ class HotCoinSpotEngine:
             "ts": time.time(),
         }, trace_id=tid)
         result = self.executor.spot_market_buy(sig.symbol, alloc, hint_price=current_price)
-        self._emit_event("order_result", {
-            "symbol": sig.symbol,
-            "side": "BUY",
-            "intent": "open",
-            "ok": not bool(result.get("error")),
-            "error": result.get("error"),
-            "error_class": result.get("error_class", ""),
-            "code": result.get("code"),
-            "precheck_code": result.get("precheck_code"),
-            "status": result.get("status"),
-            "ts": time.time(),
-        }, trace_id=tid)
         if result.get("error"):
+            self._emit_event("order_result", {
+                "symbol": sig.symbol,
+                "side": "BUY",
+                "intent": "open",
+                "ok": False,
+                "error": result.get("error"),
+                "error_class": result.get("error_class", ""),
+                "code": result.get("code"),
+                "precheck_code": result.get("precheck_code"),
+                "status": result.get("status"),
+                "executed_price": 0.0,
+                "executed_qty": 0.0,
+                "hint_price": round(float(current_price), 8),
+                "ts": time.time(),
+            }, trace_id=tid)
             log.error("开仓下单失败 %s: %s", sig.symbol, result.get("error"))
             return
 
         price, qty = self._extract_fill_price_qty(sig.symbol, alloc, result)
+        self._emit_event("order_result", {
+            "symbol": sig.symbol,
+            "side": "BUY",
+            "intent": "open",
+            "ok": True,
+            "error": "",
+            "error_class": "",
+            "code": result.get("code"),
+            "precheck_code": result.get("precheck_code"),
+            "status": result.get("status"),
+            "executed_price": round(float(price), 8) if price > 0 else 0.0,
+            "executed_qty": round(float(qty), 8) if qty > 0 else 0.0,
+            "hint_price": round(float(current_price), 8),
+            "ts": time.time(),
+        }, trace_id=tid)
 
         if (not self.config.execution.use_paper_trading
                 and str(result.get("status", "")).upper() not in ("FILLED", "PARTIALLY_FILLED")
@@ -231,6 +252,39 @@ class HotCoinSpotEngine:
 
         return price, qty
 
+    def _extract_result_price_qty(
+        self, symbol: str, result: dict, fallback_price: float = 0.0, fallback_qty: float = 0.0
+    ) -> tuple:
+        """从订单回执中提取成交价/量（卖出或通用场景）。"""
+        qty = self._to_float(result.get("qty"), 0.0)
+        if qty <= 0:
+            qty = self._to_float(result.get("executedQty"), 0.0)
+        if qty <= 0:
+            qty = fallback_qty if fallback_qty > 0 else 0.0
+
+        price = self._to_float(result.get("price"), 0.0)
+        fills = result.get("fills")
+        if price <= 0 and isinstance(fills, list) and fills:
+            total_qty = 0.0
+            total_quote = 0.0
+            for f in fills:
+                p = self._to_float(f.get("price"), 0.0)
+                q = self._to_float(f.get("qty"), 0.0)
+                if p > 0 and q > 0:
+                    total_qty += q
+                    total_quote += p * q
+            if total_qty > 0:
+                price = total_quote / total_qty
+                if qty <= 0:
+                    qty = total_qty
+        if price <= 0 and qty > 0:
+            cum_quote = self._to_float(result.get("cummulativeQuoteQty"), 0.0)
+            if cum_quote > 0:
+                price = cum_quote / qty
+        if price <= 0:
+            price = fallback_price if fallback_price > 0 else self.executor.get_current_price(symbol)
+        return price, qty
+
     def check_positions(self, current_prices: Dict[str, float]):
         """
         持仓巡检: 止盈/止损/时间止损/热度衰退/黑天鹅。
@@ -282,6 +336,9 @@ class HotCoinSpotEngine:
             "ts": time.time(),
         })
         result = self.executor.spot_market_sell(symbol, pos.qty, hint_price=price)
+        exec_price, exec_qty = self._extract_result_price_qty(
+            symbol=symbol, result=result, fallback_price=price, fallback_qty=pos.qty
+        )
         self._emit_event("order_result", {
             "symbol": symbol,
             "side": "SELL",
@@ -292,6 +349,8 @@ class HotCoinSpotEngine:
             "code": result.get("code"),
             "precheck_code": result.get("precheck_code"),
             "status": result.get("status"),
+            "executed_price": round(float(exec_price), 8) if exec_price > 0 else 0.0,
+            "executed_qty": round(float(exec_qty), 8) if exec_qty > 0 else 0.0,
             "reason": reason,
             "ts": time.time(),
         })
@@ -327,6 +386,9 @@ class HotCoinSpotEngine:
             "ts": time.time(),
         })
         result = self.executor.spot_market_sell(symbol, close_qty, hint_price=price)
+        exec_price, exec_qty = self._extract_result_price_qty(
+            symbol=symbol, result=result, fallback_price=price, fallback_qty=close_qty
+        )
         self._emit_event("order_result", {
             "symbol": symbol,
             "side": "SELL",
@@ -337,6 +399,8 @@ class HotCoinSpotEngine:
             "code": result.get("code"),
             "precheck_code": result.get("precheck_code"),
             "status": result.get("status"),
+            "executed_price": round(float(exec_price), 8) if exec_price > 0 else 0.0,
+            "executed_qty": round(float(exec_qty), 8) if exec_qty > 0 else 0.0,
             "reason": reason,
             "ts": time.time(),
         })
@@ -384,6 +448,38 @@ class HotCoinSpotEngine:
         if stale:
             log.info("对账: %d 过期订单, %d 已取消", stale, canceled)
         return {"stale_orders": stale, "canceled": canceled}
+
+    def emergency_close_all(self, reason: str = "emergency_close") -> dict:
+        """紧急全部平仓。返回 {closed: int, failed: int, details: [...]}。"""
+        positions = list(self.risk.positions.items())
+        if not positions:
+            return {"closed": 0, "failed": 0, "details": []}
+
+        log.warning("紧急平仓: %d 个持仓, 原因=%s", len(positions), reason)
+        self._emit_event("emergency_close", {
+            "symbols": [sym for sym, _ in positions],
+            "reason": reason,
+            "ts": time.time(),
+        })
+
+        closed = 0
+        failed = 0
+        details = []
+        for sym, pos in positions:
+            price = self.executor.get_current_price(sym)
+            if price <= 0:
+                price = pos.entry_price
+            try:
+                self._close_position(sym, price, reason)
+                closed += 1
+                details.append({"symbol": sym, "status": "closed", "price": price})
+            except Exception as e:
+                failed += 1
+                details.append({"symbol": sym, "status": "failed", "error": str(e)})
+                log.error("紧急平仓 %s 失败: %s", sym, e)
+
+        log.warning("紧急平仓完成: closed=%d, failed=%d", closed, failed)
+        return {"closed": closed, "failed": failed, "details": details}
 
     def get_status(self) -> dict:
         """返回引擎状态摘要。"""

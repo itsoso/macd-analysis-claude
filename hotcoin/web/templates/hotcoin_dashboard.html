@@ -138,7 +138,96 @@
         .log-area .log-warn { color: var(--accent-yellow); }
         .log-area .log-info { color: var(--accent-blue); }
         .log-area .log-signal { color: var(--accent-green); font-weight: 600; }
+
+        .chart-controls {
+            display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+        .chart-controls select, .chart-controls input {
+            background: var(--bg-secondary); color: var(--text-primary);
+            border: 1px solid var(--border); border-radius: 6px;
+            padding: 6px 10px; font-size: 13px;
+        }
+        .chart-wrap {
+            width: 100%; height: 420px; border: 1px solid var(--border);
+            border-radius: 10px; overflow: hidden; background: #10131c;
+        }
+        .points-table-wrap {
+            margin-top: 12px; max-height: 220px; overflow-y: auto;
+            border: 1px solid var(--border); border-radius: 8px;
+        }
+        .points-table-wrap table { font-size: 12px; }
+        .mini-btn {
+            background: transparent; color: var(--accent-blue); border: 1px solid var(--accent-blue);
+            border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 12px;
+        }
+        .mini-btn:hover { opacity: 0.85; }
+        .event-box {
+            margin-top: 12px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'SF Mono', Consolas, monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.55;
+        }
+        .event-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+            padding: 4px 0;
+        }
+        .event-row:last-child { border-bottom: none; }
+        .event-row span { flex: 1; min-width: 0; }
+        .event-group {
+            margin-bottom: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 6px;
+            padding: 6px 8px;
+            background: rgba(255, 255, 255, 0.015);
+        }
+        .event-group:last-child { margin-bottom: 0; }
+        .event-group-title {
+            font-size: 12px;
+            color: #93a4c6;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .event-json-box {
+            margin-top: 10px;
+            background: #0b0f17;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px;
+            max-height: 260px;
+            overflow: auto;
+            font-family: 'SF Mono', Consolas, monospace;
+            font-size: 12px;
+            color: #c6d0e0;
+            white-space: pre;
+        }
+        .event-actions {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .event-action-status {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .event-action-status.error {
+            color: #ff6a7f;
+        }
     </style>
+    <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
     <a href="/" class="back-link">&larr; 返回主页</a>
@@ -192,10 +281,72 @@
                         <th>量比</th>
                         <th>状态</th>
                         <th>信号</th>
+                        <th>图表</th>
                     </tr>
                 </thead>
                 <tbody id="pool-tbody"></tbody>
             </table>
+        </div>
+
+        <div class="card full-width">
+            <h2>K线与买卖点 <span class="badge" id="chart-badge">-</span></h2>
+            <div class="chart-controls">
+                <label>币种</label>
+                <select id="chart-symbol"></select>
+                <label>周期</label>
+                <select id="chart-interval">
+                    <option value="1m">1m</option>
+                    <option value="5m" selected>5m</option>
+                    <option value="15m">15m</option>
+                    <option value="1h">1h</option>
+                    <option value="4h">4h</option>
+                    <option value="1d">1d</option>
+                </select>
+                <label>天数</label>
+                <select id="chart-days">
+                    <option value="1">1</option>
+                    <option value="3" selected>3</option>
+                    <option value="7">7</option>
+                    <option value="14">14</option>
+                </select>
+                <label>Trace</label>
+                <input id="chart-trace-id" type="text" placeholder="可选 trace_id 过滤" style="min-width:180px" />
+                <button class="refresh-btn" id="chart-refresh-btn">刷新图表</button>
+                <button class="mini-btn" id="chart-trace-clear-btn">清空Trace</button>
+                <button class="mini-btn" id="chart-import-snapshot-btn">导入快照</button>
+                <button class="mini-btn" id="chart-exit-replay-btn" style="display:none">退出回放</button>
+                <button class="mini-btn" id="chart-download-snapshot-btn">下载快照</button>
+                <span id="chart-meta" style="font-size:12px;color:var(--text-muted)"></span>
+            </div>
+            <input id="chart-snapshot-file" type="file" accept=".json,application/json" style="display:none" />
+            <div class="chart-wrap" id="kline-chart"></div>
+            <div class="points-table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>方向</th>
+                            <th>意图</th>
+                            <th>价格</th>
+                            <th>数量</th>
+                            <th>来源</th>
+                            <th>事件</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trade-points-body">
+                        <tr><td colspan="7" style="color:var(--text-muted)">暂无买卖点</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="event-box" id="point-events-box">选择买卖点后显示对应事件链（candidate/signal/order）。</div>
+            <div class="event-actions">
+                <button class="mini-btn" id="event-copy-btn">复制 JSON</button>
+                <button class="mini-btn" id="event-download-btn">下载 JSON</button>
+                <button class="mini-btn" id="event-download-chain-btn">下载事件链</button>
+                <button class="mini-btn" id="event-apply-trace-btn">按当前点Trace过滤</button>
+                <span class="event-action-status" id="event-action-status"></span>
+            </div>
+            <div class="event-json-box" id="point-event-json">选择事件后显示原始JSON。</div>
         </div>
 
         <div class="card">
@@ -215,6 +366,47 @@
 
     <script>
     let autoRefreshTimer = null;
+    let chart = null;
+    let candleSeries = null;
+    let chartResizeObserver = null;
+    let _selectedSymbol = '';
+    let _latestCoins = [];
+    let _chartTradePoints = [];
+    let _currentPointEvents = [];
+    let _currentSelectedPoint = null;
+    let _currentSelectedEvent = null;
+    let _latestChartPayload = null;
+    let _snapshotReplayMode = false;
+    let _snapshotReplayMeta = null;
+
+    function createChartIfNeeded() {
+        if (chart) return;
+        const el = document.getElementById('kline-chart');
+        chart = LightweightCharts.createChart(el, {
+            width: el.clientWidth || 900,
+            height: 420,
+            layout: { backgroundColor: '#10131c', textColor: '#9ea5ba' },
+            grid: { vertLines: { color: '#1f2638' }, horzLines: { color: '#1f2638' } },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            rightPriceScale: { borderColor: '#2a2d3e' },
+            timeScale: { borderColor: '#2a2d3e', timeVisible: true, secondsVisible: false },
+        });
+        candleSeries = chart.addCandlestickSeries({
+            upColor: '#00d68f',
+            downColor: '#ff4d6a',
+            borderDownColor: '#ff4d6a',
+            borderUpColor: '#00d68f',
+            wickDownColor: '#ff4d6a',
+            wickUpColor: '#00d68f',
+        });
+        if (!chartResizeObserver) {
+            chartResizeObserver = new ResizeObserver(() => {
+                if (!chart) return;
+                chart.applyOptions({ width: el.clientWidth || 900, height: 420 });
+            });
+            chartResizeObserver.observe(el);
+        }
+    }
 
     async function refreshData() {
         const btn = document.getElementById('refresh-btn');
@@ -233,6 +425,527 @@
         }
     }
 
+    function ensureSymbolOptions(coins) {
+        const sel = document.getElementById('chart-symbol');
+        const symbols = (coins || []).map(c => c.symbol).filter(Boolean);
+        const prev = _selectedSymbol || sel.value;
+        sel.innerHTML = '';
+        symbols.forEach(sym => {
+            const opt = document.createElement('option');
+            opt.value = sym;
+            opt.textContent = sym;
+            sel.appendChild(opt);
+        });
+        if (!symbols.length) {
+            _selectedSymbol = '';
+            return;
+        }
+        if (symbols.includes(prev)) {
+            sel.value = prev;
+            _selectedSymbol = prev;
+        } else {
+            sel.value = symbols[0];
+            _selectedSymbol = symbols[0];
+        }
+    }
+
+    function escapeHtml(val) {
+        return String(val === null || val === undefined ? '' : val)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function isValidTraceId(traceId) {
+        if (!traceId) return true;
+        return /^[A-Za-z0-9_-]{1,80}$/.test(traceId);
+    }
+
+    function getTraceFilterValue() {
+        const el = document.getElementById('chart-trace-id');
+        return String((el && el.value) || '').trim();
+    }
+
+    function getEventGroupLabel(eventType) {
+        if (eventType === 'candidate_snapshot') return 'Discovery';
+        if (eventType === 'signal_snapshot') return 'Signal';
+        if (eventType === 'order_attempt' || eventType === 'order_result') return 'Execution';
+        return 'Other';
+    }
+
+    function setReplayMode(enabled, replayMeta = null) {
+        _snapshotReplayMode = Boolean(enabled);
+        _snapshotReplayMeta = _snapshotReplayMode ? (replayMeta || {}) : null;
+        const exitBtn = document.getElementById('chart-exit-replay-btn');
+        if (exitBtn) exitBtn.style.display = _snapshotReplayMode ? 'inline-block' : 'none';
+    }
+
+    function renderTradePoints(points) {
+        const body = document.getElementById('trade-points-body');
+        const rows = Array.isArray(points) ? points : [];
+        const viewRows = rows.slice(-50).reverse();
+        setEventActionStatus('');
+        _chartTradePoints = viewRows;
+        if (!viewRows.length) {
+            body.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted)">暂无买卖点</td></tr>';
+            document.getElementById('point-events-box').textContent = '暂无事件。';
+            document.getElementById('point-event-json').textContent = '暂无事件JSON。';
+            _currentSelectedPoint = null;
+            _currentSelectedEvent = null;
+            _currentPointEvents = [];
+            return;
+        }
+        body.innerHTML = viewRows.map((p, idx) => `
+            <tr>
+                <td>${p.time_text || '-'}</td>
+                <td class="${p.side === 'BUY' ? 'chg-pos' : 'chg-neg'}">${p.side || '-'}</td>
+                <td>${p.intent || '-'}</td>
+                <td>${p.price ? Number(p.price).toFixed(6) : '-'}</td>
+                <td>${p.qty ? Number(p.qty).toFixed(6) : '-'}</td>
+                <td>${p.source || '-'}</td>
+                <td><button class="mini-btn" data-point-idx="${idx}">查看事件</button></td>
+            </tr>
+        `).join('');
+        body.querySelectorAll('button[data-point-idx]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = Number(btn.getAttribute('data-point-idx') || -1);
+                const point = idx >= 0 ? _chartTradePoints[idx] : null;
+                renderPointEvents(point || null);
+            });
+        });
+        renderPointEvents(viewRows[0] || null);
+    }
+
+    function renderEventJson(eventItem) {
+        const pre = document.getElementById('point-event-json');
+        _currentSelectedEvent = eventItem || null;
+        if (!eventItem) {
+            pre.textContent = '暂无事件JSON。';
+            return;
+        }
+        const raw = (eventItem && typeof eventItem.raw === 'object' && eventItem.raw !== null)
+            ? eventItem.raw
+            : eventItem;
+        try {
+            const pretty = JSON.stringify(raw, null, 2);
+            const maxChars = 120000;
+            if (pretty.length > maxChars) {
+                pre.textContent = `${pretty.slice(0, maxChars)}\n\n... [TRUNCATED ${pretty.length - maxChars} chars for UI]`;
+            } else {
+                pre.textContent = pretty;
+            }
+        } catch (_e) {
+            pre.textContent = String(raw);
+        }
+    }
+
+    function renderPointEvents(point) {
+        const box = document.getElementById('point-events-box');
+        _currentSelectedPoint = point || null;
+        setEventActionStatus('');
+        if (!point) {
+            box.textContent = '暂无事件。';
+            document.getElementById('point-event-json').textContent = '暂无事件JSON。';
+            _currentPointEvents = [];
+            _currentSelectedEvent = null;
+            return;
+        }
+        const events = Array.isArray(point.related_events) ? point.related_events : [];
+        _currentPointEvents = events;
+        if (!events.length) {
+            box.textContent = `点位 ${point.time_text || '-'} (${point.side || '-'}/${point.intent || '-'}) 未关联 trace 事件。`;
+            document.getElementById('point-event-json').textContent = '该点位暂无原始事件JSON。';
+            _currentSelectedEvent = null;
+            return;
+        }
+        const groupDefs = [
+            { key: 'Discovery', idxs: [] },
+            { key: 'Signal', idxs: [] },
+            { key: 'Execution', idxs: [] },
+            { key: 'Other', idxs: [] },
+        ];
+        const groupMap = {};
+        groupDefs.forEach(g => { groupMap[g.key] = g; });
+        events.forEach((e, idx) => {
+            const key = getEventGroupLabel(String(e.event_type || ''));
+            const grp = groupMap[key] || groupMap.Other;
+            grp.idxs.push(idx);
+        });
+        box.innerHTML = groupDefs
+            .filter(g => g.idxs.length > 0)
+            .map(g => {
+                const rows = g.idxs.map((idx) => {
+                    const e = events[idx] || {};
+                    const t = escapeHtml(e.time_text || '-');
+                    const et = escapeHtml(e.event_type || '-');
+                    const summary = escapeHtml(e.summary || '');
+                    return `
+                        <div class="event-row">
+                            <span>[${t}] ${et} | ${summary}</span>
+                            <button class="mini-btn" data-event-idx="${idx}">查看JSON</button>
+                        </div>
+                    `;
+                }).join('');
+                return `<div class="event-group"><div class="event-group-title">${g.key} (${g.idxs.length})</div>${rows}</div>`;
+            }).join('');
+        box.querySelectorAll('button[data-event-idx]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = Number(btn.getAttribute('data-event-idx') || -1);
+                renderEventJson(idx >= 0 ? _currentPointEvents[idx] : null);
+            });
+        });
+        renderEventJson(events[events.length - 1] || events[0] || null);
+    }
+
+    function getCurrentEventRaw() {
+        if (!_currentSelectedEvent) return null;
+        if (_currentSelectedEvent.raw && typeof _currentSelectedEvent.raw === 'object') return _currentSelectedEvent.raw;
+        return _currentSelectedEvent;
+    }
+
+    function getCurrentPointChain() {
+        const point = _currentSelectedPoint;
+        const chain = _currentPointEvents || [];
+        if (!point || !Array.isArray(chain) || !chain.length) return null;
+        return {
+            symbol: document.getElementById('chart-symbol').value || '',
+            point: {
+                time: point.time || null,
+                time_text: point.time_text || '',
+                side: point.side || '',
+                intent: point.intent || '',
+                price: point.price || null,
+                qty: point.qty || null,
+                source: point.source || '',
+                trace_id: point.trace_id || '',
+            },
+            events: chain.map(e => (e.raw && typeof e.raw === 'object') ? e.raw : e),
+        };
+    }
+
+    function getCurrentChartSnapshot() {
+        if (!_latestChartPayload || typeof _latestChartPayload !== 'object') return null;
+        const traceFilter = getTraceFilterValue();
+        return {
+            snapshot_ts: Date.now() / 1000,
+            symbol: _latestChartPayload.symbol || (document.getElementById('chart-symbol').value || ''),
+            interval: _latestChartPayload.interval || (document.getElementById('chart-interval').value || ''),
+            days: _latestChartPayload.days || Number(document.getElementById('chart-days').value || 0),
+            trace_id_filter: _latestChartPayload.trace_id_filter || traceFilter || '',
+            kline_count: Array.isArray(_latestChartPayload.klines) ? _latestChartPayload.klines.length : 0,
+            marker_count: Array.isArray(_latestChartPayload.markers) ? _latestChartPayload.markers.length : 0,
+            trade_point_count: Array.isArray(_latestChartPayload.trade_points) ? _latestChartPayload.trade_points.length : 0,
+            selected_point: _currentSelectedPoint || null,
+            selected_event: getCurrentEventRaw(),
+            selected_point_chain: getCurrentPointChain(),
+            replay_mode: _snapshotReplayMode,
+            replay_meta: _snapshotReplayMeta,
+            chart_payload: _latestChartPayload,
+        };
+    }
+
+    function eventFilename(prefix) {
+        const symbol = (document.getElementById('chart-symbol').value || 'UNKNOWN').toUpperCase();
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const ts = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+        return `${prefix}_${symbol}_${ts}.json`;
+    }
+
+    function setEventActionStatus(msg, isError = false) {
+        const el = document.getElementById('event-action-status');
+        if (!el) return;
+        el.textContent = msg || '';
+        el.classList.toggle('error', Boolean(isError));
+    }
+
+    function downloadJsonObject(filename, data) {
+        const text = JSON.stringify(data, null, 2);
+        const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    async function copyCurrentEventJson() {
+        const raw = getCurrentEventRaw();
+        if (!raw) {
+            setEventActionStatus('当前无可复制的事件 JSON', true);
+            return;
+        }
+        const text = JSON.stringify(raw, null, 2);
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            }
+            setEventActionStatus('已复制事件 JSON');
+        } catch (e) {
+            setEventActionStatus(`复制失败: ${e.message || e}`, true);
+        }
+    }
+
+    function downloadCurrentEventJson() {
+        const raw = getCurrentEventRaw();
+        if (!raw) {
+            setEventActionStatus('当前无可下载的事件 JSON', true);
+            return;
+        }
+        downloadJsonObject(eventFilename('hotcoin_event'), raw);
+        setEventActionStatus('已下载事件 JSON');
+    }
+
+    function downloadCurrentPointChain() {
+        const chain = getCurrentPointChain();
+        if (!chain) {
+            setEventActionStatus('当前点位无可下载事件链', true);
+            return;
+        }
+        downloadJsonObject(eventFilename('hotcoin_event_chain'), chain);
+        setEventActionStatus('已下载事件链 JSON');
+    }
+
+    async function sha256Hex(text) {
+        if (!(window.crypto && window.crypto.subtle && window.TextEncoder)) return '';
+        const bytes = new TextEncoder().encode(text);
+        const hashBuffer = await window.crypto.subtle.digest('SHA-256', bytes);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function downloadCurrentSnapshot() {
+        const snap = getCurrentChartSnapshot();
+        if (!snap) {
+            setEventActionStatus('当前无可下载图表快照', true);
+            return;
+        }
+        let digest = '';
+        try {
+            digest = await sha256Hex(JSON.stringify(snap));
+        } catch (_e) {
+            digest = '';
+        }
+        const payload = {
+            meta: {
+                schema_version: 'hotcoin.snapshot.v1',
+                exported_at: new Date().toISOString(),
+                content_sha256: digest || null,
+            },
+            snapshot: snap,
+        };
+        downloadJsonObject(eventFilename('hotcoin_snapshot'), payload);
+        setEventActionStatus(digest ? `已下载图表快照 JSON (sha256:${digest.slice(0, 12)}...)` : '已下载图表快照 JSON');
+    }
+
+    function clearTraceFilterAndReload() {
+        const el = document.getElementById('chart-trace-id');
+        if (!el) return;
+        if (!el.value.trim()) {
+            setEventActionStatus('当前未设置 Trace 过滤');
+            return;
+        }
+        el.value = '';
+        loadChart(true);
+        setEventActionStatus('已清空 Trace 过滤');
+    }
+
+    function applyCurrentPointTraceFilter() {
+        const point = _currentSelectedPoint || {};
+        const traceId = String(point.trace_id || '').trim();
+        if (!traceId) {
+            setEventActionStatus('当前点位无 trace_id，无法过滤', true);
+            return;
+        }
+        const el = document.getElementById('chart-trace-id');
+        if (!el) return;
+        el.value = traceId;
+        loadChart(true);
+        setEventActionStatus(`已按 trace 过滤: ${traceId}`);
+    }
+
+    function normalizeSnapshotDocument(doc) {
+        if (!doc || typeof doc !== 'object') return null;
+        const meta = (doc.meta && typeof doc.meta === 'object') ? doc.meta : {};
+        const snap = (doc.snapshot && typeof doc.snapshot === 'object') ? doc.snapshot : doc;
+        const payload = (snap.chart_payload && typeof snap.chart_payload === 'object') ? snap.chart_payload : snap;
+        if (!payload || typeof payload !== 'object' || !Array.isArray(payload.klines)) return null;
+        const traceFilter = String(
+            payload.trace_id_filter || snap.trace_id_filter || ''
+        ).trim();
+        return {
+            meta: meta,
+            payload: payload,
+            selected_point: snap.selected_point || null,
+            selected_event: snap.selected_event || null,
+            trace_id_filter: traceFilter,
+        };
+    }
+
+    function applySnapshotReplay(normalized) {
+        if (!normalized || !normalized.payload) return false;
+        const payload = normalized.payload;
+        createChartIfNeeded();
+        _latestChartPayload = payload;
+
+        const symbol = String(payload.symbol || '').trim();
+        const interval = String(payload.interval || '').trim();
+        const days = String(payload.days || '').trim();
+        const traceFilter = String(normalized.trace_id_filter || '').trim();
+
+        const symbolSel = document.getElementById('chart-symbol');
+        if (symbol && symbolSel) {
+            if (![...symbolSel.options].some(opt => opt.value === symbol)) {
+                const opt = document.createElement('option');
+                opt.value = symbol;
+                opt.textContent = symbol;
+                symbolSel.appendChild(opt);
+            }
+            symbolSel.value = symbol;
+            _selectedSymbol = symbol;
+        }
+        const intervalSel = document.getElementById('chart-interval');
+        if (intervalSel && interval && [...intervalSel.options].some(opt => opt.value === interval)) {
+            intervalSel.value = interval;
+        }
+        const daySel = document.getElementById('chart-days');
+        if (daySel && days && [...daySel.options].some(opt => opt.value === days)) {
+            daySel.value = days;
+        }
+        const traceEl = document.getElementById('chart-trace-id');
+        if (traceEl) traceEl.value = traceFilter;
+
+        const klines = Array.isArray(payload.klines) ? payload.klines : [];
+        const markers = Array.isArray(payload.markers) ? payload.markers : [];
+        const points = Array.isArray(payload.trade_points) ? payload.trade_points : [];
+        candleSeries.setData(klines);
+        candleSeries.setMarkers(markers);
+        candleSeries._lastLoadedSymbol = symbol || candleSeries._lastLoadedSymbol;
+        chart.timeScale().fitContent();
+        renderTradePoints(points);
+
+        const replayMeta = {
+            schema_version: normalized.meta.schema_version || '',
+            exported_at: normalized.meta.exported_at || '',
+            content_sha256: normalized.meta.content_sha256 || '',
+        };
+        setReplayMode(true, replayMeta);
+        const tag = replayMeta.exported_at ? ` @${replayMeta.exported_at}` : '';
+        const digest = replayMeta.content_sha256 ? ` sha256=${String(replayMeta.content_sha256).slice(0, 12)}...` : '';
+        document.getElementById('chart-badge').textContent = `${symbol || '-'} ${interval || '-'} [REPLAY]`;
+        document.getElementById('chart-meta').textContent = `回放 K线 ${klines.length} 根 | 买卖点 ${points.length} 个${tag}${digest}`;
+
+        if (normalized.selected_point && typeof normalized.selected_point === 'object') {
+            const tgtTs = Number(normalized.selected_point.time || 0);
+            const idx = _chartTradePoints.findIndex(p => Number(p.time || 0) === tgtTs);
+            if (idx >= 0) {
+                renderPointEvents(_chartTradePoints[idx]);
+            }
+        }
+        if (normalized.selected_event && typeof normalized.selected_event === 'object') {
+            renderEventJson({ raw: normalized.selected_event });
+        }
+        setEventActionStatus('已进入快照回放模式');
+        return true;
+    }
+
+    async function importSnapshotFromFile(file) {
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const parsed = JSON.parse(text);
+            const normalized = normalizeSnapshotDocument(parsed);
+            if (!normalized) {
+                setEventActionStatus('快照格式无效：缺少 chart_payload/klines', true);
+                return;
+            }
+            const ok = applySnapshotReplay(normalized);
+            if (!ok) {
+                setEventActionStatus('快照回放失败', true);
+            }
+        } catch (e) {
+            setEventActionStatus(`导入快照失败: ${e.message || e}`, true);
+        }
+    }
+
+    function exitReplayModeAndReload() {
+        if (!_snapshotReplayMode) {
+            setEventActionStatus('当前不是回放模式');
+            return;
+        }
+        setReplayMode(false, null);
+        loadChart(true);
+        setEventActionStatus('已退出回放，恢复实时数据');
+    }
+
+    async function loadChart(force = false) {
+        createChartIfNeeded();
+        const symbol = document.getElementById('chart-symbol').value;
+        if (!symbol) return;
+        if (!force && symbol === _selectedSymbol && candleSeries && candleSeries._lastLoadedSymbol === symbol) {
+            // 保持手动刷新语义，避免每轮状态刷新都拉K线
+            return;
+        }
+        _selectedSymbol = symbol;
+        if (_snapshotReplayMode) {
+            setReplayMode(false, null);
+        }
+        const interval = document.getElementById('chart-interval').value;
+        const days = document.getElementById('chart-days').value;
+        const traceId = getTraceFilterValue();
+        if (!isValidTraceId(traceId)) {
+            document.getElementById('chart-meta').textContent = 'trace_id 格式无效（仅字母/数字/_/-）';
+            return;
+        }
+        const btn = document.getElementById('chart-refresh-btn');
+        btn.disabled = true;
+        btn.textContent = '图表加载中...';
+        try {
+            const qs = new URLSearchParams({
+                symbol: symbol,
+                interval: interval,
+                days: String(days),
+            });
+            if (traceId) qs.set('trace_id', traceId);
+            const resp = await fetch(`/hotcoin/api/chart?${qs.toString()}`);
+            if (!resp.ok) throw new Error(resp.statusText);
+            const data = await resp.json();
+            _latestChartPayload = data;
+            const traceInput = document.getElementById('chart-trace-id');
+            if (traceInput) traceInput.value = data.trace_id_filter || '';
+            const klines = data.klines || [];
+            const markers = data.markers || [];
+            candleSeries.setData(klines);
+            candleSeries.setMarkers(markers);
+            candleSeries._lastLoadedSymbol = symbol;
+            chart.timeScale().fitContent();
+            document.getElementById('chart-badge').textContent = `${symbol} ${interval}`;
+            const traceInfo = data.trace_id_filter ? ` | trace=${data.trace_id_filter}` : '';
+            document.getElementById('chart-meta').textContent = `K线 ${klines.length} 根 | 买卖点 ${markers.length} 个${traceInfo}`;
+            renderTradePoints(data.trade_points || []);
+        } catch (e) {
+            document.getElementById('chart-meta').textContent = `图表加载失败: ${e.message}`;
+            console.error('图表加载失败', e);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '刷新图表';
+        }
+    }
+
     function renderData(data) {
         // Stats
         document.getElementById('stat-pool').textContent = data.pool_size || 0;
@@ -248,7 +961,9 @@
         // Pool table
         const tbody = document.getElementById('pool-tbody');
         const coins = data.candidates || [];
+        _latestCoins = coins;
         document.getElementById('pool-badge').textContent = coins.length;
+        ensureSymbolOptions(coins);
         tbody.innerHTML = '';
         coins.forEach((c, i) => {
             const row = document.createElement('tr');
@@ -274,8 +989,18 @@
                 <td>${c.volume_surge_ratio ? c.volume_surge_ratio.toFixed(1)+'x' : '-'}</td>
                 <td>${c.status}</td>
                 <td class="${sigClass}">${c.signal || 'HOLD'}</td>
+                <td><button class="mini-btn" data-symbol="${c.symbol}">查看</button></td>
             `;
             tbody.appendChild(row);
+        });
+
+        tbody.querySelectorAll('button[data-symbol]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const symbol = btn.getAttribute('data-symbol');
+                document.getElementById('chart-symbol').value = symbol;
+                _selectedSymbol = symbol;
+                loadChart(true);
+            });
         });
 
         // Anomaly log
@@ -296,10 +1021,71 @@
                 return `<div class="${cls}">${ts} ${s.action} ${s.symbol} strength=${s.strength} ${s.reason||''}</div>`;
             }).join('');
         }
+
+        if (_snapshotReplayMode) {
+            // 回放模式只刷新表格统计，不自动覆盖图表
+            return;
+        }
+        if (_selectedSymbol && coins.some(c => c.symbol === _selectedSymbol)) {
+            // 不自动重复拉取，除首次之外由手动刷新或切换触发
+        } else if (coins.length > 0) {
+            _selectedSymbol = coins[0].symbol;
+            document.getElementById('chart-symbol').value = _selectedSymbol;
+            loadChart(true);
+        }
+    }
+
+    function bindChartControls() {
+        document.getElementById('chart-refresh-btn').addEventListener('click', () => loadChart(true));
+        document.getElementById('chart-symbol').addEventListener('change', () => {
+            _selectedSymbol = document.getElementById('chart-symbol').value;
+            loadChart(true);
+        });
+        document.getElementById('chart-interval').addEventListener('change', () => loadChart(true));
+        document.getElementById('chart-days').addEventListener('change', () => loadChart(true));
+        document.getElementById('chart-trace-id').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                loadChart(true);
+            }
+        });
+        document.getElementById('chart-trace-clear-btn').addEventListener('click', () => {
+            clearTraceFilterAndReload();
+        });
+        document.getElementById('chart-import-snapshot-btn').addEventListener('click', () => {
+            const input = document.getElementById('chart-snapshot-file');
+            if (!input) return;
+            input.value = '';
+            input.click();
+        });
+        document.getElementById('chart-snapshot-file').addEventListener('change', (e) => {
+            const file = (e.target && e.target.files && e.target.files[0]) ? e.target.files[0] : null;
+            importSnapshotFromFile(file);
+        });
+        document.getElementById('chart-exit-replay-btn').addEventListener('click', () => {
+            exitReplayModeAndReload();
+        });
+        document.getElementById('chart-download-snapshot-btn').addEventListener('click', () => {
+            downloadCurrentSnapshot();
+        });
+        document.getElementById('event-copy-btn').addEventListener('click', () => {
+            copyCurrentEventJson();
+        });
+        document.getElementById('event-download-btn').addEventListener('click', () => {
+            downloadCurrentEventJson();
+        });
+        document.getElementById('event-download-chain-btn').addEventListener('click', () => {
+            downloadCurrentPointChain();
+        });
+        document.getElementById('event-apply-trace-btn').addEventListener('click', () => {
+            applyCurrentPointTraceFilter();
+        });
     }
 
     // Auto-refresh every 10s
     function startAutoRefresh() {
+        createChartIfNeeded();
+        bindChartControls();
         refreshData();
         autoRefreshTimer = setInterval(refreshData, 10000);
     }

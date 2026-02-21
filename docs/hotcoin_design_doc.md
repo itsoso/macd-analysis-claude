@@ -300,6 +300,9 @@ curl -s http://127.0.0.1:5000/hotcoin/api/precheck_stats | jq .
 # 执行错误率/去重拒绝率（5m）
 curl -s http://127.0.0.1:5000/hotcoin/api/execution_metrics | jq .
 
+# 单币K线 + 买卖点（含时间）
+curl -s "http://127.0.0.1:5000/hotcoin/api/chart?symbol=ETHUSDT&interval=5m&days=3" | jq .
+
 # 健康聚合
 curl -s http://127.0.0.1:5000/hotcoin/health | jq .
 
@@ -321,6 +324,7 @@ python3 scripts/replay_hotcoin_events.py --event-type order_result --symbol ETHU
 
 ## 7. 版本记录
 
+- `2026-02-21 v7`：仪表盘新增热点币 K 线图与买卖点时间标注；新增 `/hotcoin/api/chart`（K线+订单事件/交易记录标记）。
 - `2026-02-21 v6`：N1 收口：状态恢复滞后（hysteresis）上线，新增状态机恢复单测与事件日志轮转单测。
 - `2026-02-21 v5`：N1 持续推进：`/hotcoin/health` 聚合健康端点 + `hotcoin_events.jsonl` 自动轮转归档（含保留窗口）。
 - `2026-02-21 v4`：完成 Phase A/B/C 收口：运行状态机 + 执行指标 + 事件回放 + 训练治理产物（runtime_contract/promotion_decision）。

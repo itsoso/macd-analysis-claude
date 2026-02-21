@@ -6,7 +6,7 @@
 
 **目标**: 在热点币的爆发初期介入，通过多维信号确认降低假突破风险，结合五层风控保护资金安全。
 
-**当前状态**: Phase 1 完成 + R1-R5 + Phase A/B (~7400 行代码, 43 个文件, 102 单测全绿)，paper 模式可运行。
+**当前状态**: Phase 1 完成 + R1-R7 (~8200 行代码, 47 个文件, 142 单测全绿)，paper 模式可运行。
 
 ## 2. 系统架构
 
@@ -309,6 +309,12 @@ hotcoin/data/
 | A-2 | listing_monitor | 无 rate limit 退避 | Phase A (429/418 指数退避) |
 | A-3 | runner + web | 缺 /hotcoin/health | Codex + Phase A (去重) |
 | A-4 | runner | 缺状态机 | Codex (_compute_engine_state) |
+| R7-1 | ticker_stream | tickers 属性无线程安全 | R7 (快照副本 + tickers_ref 内部引用) |
+| R7-2 | anomaly_detector | _alert_cooldown 清理可能异常 | R7 (try/except + pop) |
+| R7-3 | spot_engine | 缺紧急全平功能 | R7 (emergency_close_all) |
+| R7-4 | order_executor | 缺资产查询 | R7 (query_account_balances) |
+| R7-5 | web/routes | _runner TOCTOU 竞态 | R7 (_get_runner local binding) |
+| R7-6 | web/routes | 缺紧急平仓/余额 API | R7 (/api/emergency_close + /api/balances) |
 
 </details>
 

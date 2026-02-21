@@ -6,10 +6,12 @@
     app.register_blueprint(hotcoin_bp)
 """
 
+import gzip
 import os
+import re
 import time
 import json
-from flask import Blueprint, render_template, jsonify
+from flask import Blueprint, render_template, jsonify, request
 
 hotcoin_bp = Blueprint(
     "hotcoin",
@@ -21,6 +23,9 @@ hotcoin_bp = Blueprint(
 # 全局引用, runner 启动后注入
 _runner = None
 _STATUS_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "hotcoin_runtime_status.json")
+_EVENTS_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "hotcoin_events.jsonl")
+_TRADES_GLOB_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+_VALID_CHART_INTERVALS = {"1m", "5m", "15m", "1h", "4h", "1d"}
 
 
 def set_runner(runner):
@@ -37,6 +42,356 @@ def _read_runtime_status_file():
             return json.load(f)
     except Exception:
         return None
+
+
+def _sanitize_symbol(raw: str) -> str:
+    symbol = str(raw or "").strip().upper()
+    if not symbol or not re.fullmatch(r"[A-Z0-9]{5,20}", symbol):
+        return ""
+    return symbol
+
+
+def _sanitize_trace_id(raw: str) -> str:
+    trace_id = str(raw or "").strip()
+    if not trace_id:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", trace_id):
+        return ""
+    return trace_id
+
+
+def _parse_int_arg(name: str, default: int, min_v: int, max_v: int) -> int:
+    raw = request.args.get(name, "")
+    try:
+        val = int(raw) if raw else int(default)
+    except Exception:
+        val = int(default)
+    return max(min_v, min(max_v, val))
+
+
+def _iter_jsonl_file(path: str):
+    if not os.path.exists(path):
+        return
+    opener = gzip.open if path.endswith(".gz") else open
+    try:
+        with opener(path, "rt", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                s = line.strip()
+                if not s:
+                    continue
+                try:
+                    obj = json.loads(s)
+                except Exception:
+                    continue
+                if isinstance(obj, dict):
+                    yield obj
+    except Exception:
+        return
+
+
+def _event_related_to_symbol(event_type: str, payload: dict, symbol: str) -> bool:
+    et = str(event_type or "")
+    sym = str(payload.get("symbol", "")).upper()
+    if et in ("order_attempt", "order_result"):
+        return sym == symbol
+    if et == "signal_snapshot":
+        signals = payload.get("signals", [])
+        if isinstance(signals, list):
+            for s in signals:
+                if isinstance(s, dict) and str(s.get("symbol", "")).upper() == symbol:
+                    return True
+        return False
+    if et == "candidate_snapshot":
+        tops = payload.get("top_symbols", [])
+        if isinstance(tops, list):
+            return symbol in [str(x).upper() for x in tops]
+        return False
+    return False
+
+
+def _summarize_event(event_type: str, payload: dict, symbol: str) -> str:
+    et = str(event_type or "")
+    if et == "candidate_snapshot":
+        return (
+            f"candidate_snapshot pool={payload.get('pool_size', '-')}"
+            f" candidates={payload.get('candidate_count', '-')}"
+        )
+    if et == "signal_snapshot":
+        sigs = payload.get("signals", [])
+        action = "-"
+        strength = "-"
+        if isinstance(sigs, list):
+            for s in sigs:
+                if isinstance(s, dict) and str(s.get("symbol", "")).upper() == symbol:
+                    action = s.get("action", "-")
+                    strength = s.get("strength", "-")
+                    break
+        return (
+            f"signal_snapshot action={action} strength={strength}"
+            f" actionable={payload.get('actionable_count', '-')}"
+        )
+    if et == "order_attempt":
+        side = payload.get("side", "-")
+        intent = payload.get("intent", "-")
+        qty = payload.get("qty", payload.get("quote_amount", "-"))
+        return f"order_attempt {side} {intent} qty={qty}"
+    if et == "order_result":
+        side = payload.get("side", "-")
+        intent = payload.get("intent", "-")
+        ok = bool(payload.get("ok"))
+        status = payload.get("status", "-")
+        price = payload.get("executed_price", payload.get("hint_price", "-"))
+        return f"order_result {side} {intent} ok={ok} status={status} price={price}"
+    return et
+
+
+def _list_related_event_logs(base_file: str, keep_latest: int = 8):
+    base_file = base_file or _EVENTS_FILE
+    directory = os.path.dirname(base_file) or "."
+    filename = os.path.basename(base_file)
+    stem = filename[:-6] if filename.endswith(".jsonl") else filename
+    out = []
+    if os.path.exists(base_file):
+        out.append(base_file)
+    try:
+        for name in os.listdir(directory):
+            if not name.startswith(stem + "."):
+                continue
+            if not (name.endswith(".jsonl") or name.endswith(".jsonl.gz")):
+                continue
+            full = os.path.join(directory, name)
+            if os.path.abspath(full) == os.path.abspath(base_file):
+                continue
+            out.append(full)
+    except Exception:
+        pass
+    out.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0.0, reverse=True)
+    return out[: max(1, int(keep_latest))]
+
+
+def _load_chart_klines(symbol: str, interval: str, days: int, bars_limit: int = 800):
+    from binance_fetcher import fetch_binance_klines
+
+    df = fetch_binance_klines(symbol=symbol, interval=interval, days=days)
+    if df is None or df.empty:
+        return []
+    required_cols = {"open", "high", "low", "close"}
+    if not required_cols.issubset(set(df.columns)):
+        return []
+
+    out = []
+    for ts, row in df.tail(max(50, bars_limit)).iterrows():
+        try:
+            t_sec = int(ts.timestamp())
+            out.append(
+                {
+                    "time": t_sec,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": float(row.get("volume", 0.0) or 0.0),
+                }
+            )
+        except Exception:
+            continue
+    return out
+
+
+def _load_trade_markers_from_pnl(symbol: str, since_ts: float, until_ts: float, limit: int = 200):
+    import glob
+
+    markers = []
+    points = []
+    pattern = os.path.join(_TRADES_GLOB_DIR, "hotcoin_trades_*.jsonl")
+    files = sorted(glob.glob(pattern), reverse=True)[:14]
+    for path in files:
+        for obj in _iter_jsonl_file(path):
+            if str(obj.get("symbol", "")).upper() != symbol:
+                continue
+            try:
+                entry_ts = float(obj.get("entry_time", 0) or 0)
+                exit_ts = float(obj.get("exit_time", 0) or 0)
+                entry_price = float(obj.get("entry_price", 0) or 0)
+                exit_price = float(obj.get("exit_price", 0) or 0)
+            except Exception:
+                continue
+            if since_ts <= entry_ts <= until_ts:
+                markers.append(
+                    {
+                        "time": int(entry_ts),
+                        "position": "belowBar",
+                        "color": "#00d68f",
+                        "shape": "arrowUp",
+                        "text": f"BUY {time.strftime('%H:%M', time.localtime(entry_ts))} @{entry_price:.6g}",
+                    }
+                )
+                points.append(
+                    {
+                        "time": entry_ts,
+                        "time_text": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry_ts)),
+                        "side": "BUY",
+                        "intent": "open",
+                        "price": entry_price,
+                        "qty": float(obj.get("qty", 0) or 0),
+                        "source": "pnl",
+                    }
+                )
+            if since_ts <= exit_ts <= until_ts:
+                markers.append(
+                    {
+                        "time": int(exit_ts),
+                        "position": "aboveBar",
+                        "color": "#ff4d6a",
+                        "shape": "arrowDown",
+                        "text": f"SELL {time.strftime('%H:%M', time.localtime(exit_ts))} @{exit_price:.6g}",
+                    }
+                )
+                points.append(
+                    {
+                        "time": exit_ts,
+                        "time_text": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(exit_ts)),
+                        "side": "SELL",
+                        "intent": "close",
+                        "price": exit_price,
+                        "qty": float(obj.get("qty", 0) or 0),
+                        "source": "pnl",
+                    }
+                )
+    points.sort(key=lambda x: float(x.get("time", 0)))
+    markers.sort(key=lambda x: int(x.get("time", 0)))
+    return markers[-limit:], points[-limit:]
+
+
+def _load_order_markers(
+    symbol: str,
+    since_ts: float,
+    until_ts: float,
+    limit: int = 200,
+    trace_id_filter: str = "",
+):
+    cached = _read_runtime_status_file()
+    events_file = _EVENTS_FILE
+    r = _get_runner()
+    if r is not None and hasattr(r, "_events_file"):
+        events_file = getattr(r, "_events_file") or events_file
+    elif isinstance(cached, dict):
+        events_file = str(cached.get("event_log_file") or events_file)
+
+    markers = []
+    points = []
+    trace_events = {}
+    symbol_events = []
+    related_types = ("candidate_snapshot", "signal_snapshot", "order_attempt", "order_result")
+    files = _list_related_event_logs(events_file, keep_latest=8)
+    for path in files:
+        for obj in _iter_jsonl_file(path):
+            event_type = str(obj.get("event_type", ""))
+            payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+            ts = obj.get("ts", payload.get("ts"))
+            try:
+                ts = float(ts)
+            except Exception:
+                continue
+            if ts < since_ts or ts > until_ts:
+                continue
+            trace_id = str(obj.get("trace_id", "") or "")
+            if trace_id_filter and trace_id != trace_id_filter:
+                continue
+            if event_type in related_types and _event_related_to_symbol(event_type, payload, symbol):
+                raw_event = {
+                    "ts": ts,
+                    "event_type": event_type,
+                    "trace_id": trace_id,
+                    "payload": payload,
+                }
+                item = {
+                    "ts": ts,
+                    "time_text": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
+                    "event_type": event_type,
+                    "summary": _summarize_event(event_type, payload, symbol),
+                    "trace_id": trace_id,
+                    "raw": raw_event,
+                }
+                symbol_events.append(item)
+                if trace_id:
+                    trace_events.setdefault(trace_id, []).append(item)
+
+            if event_type != "order_result":
+                continue
+            if str(payload.get("symbol", "")).upper() != symbol:
+                continue
+            if bool(payload.get("ok")) is not True:
+                continue
+
+            side = str(payload.get("side", "")).upper()
+            intent = str(payload.get("intent", "order"))
+            try:
+                price = float(
+                    payload.get("executed_price", payload.get("fill_price", payload.get("hint_price", 0.0))) or 0.0
+                )
+            except Exception:
+                price = 0.0
+            try:
+                qty = float(payload.get("executed_qty", payload.get("fill_qty", payload.get("qty", 0.0))) or 0.0)
+            except Exception:
+                qty = 0.0
+
+            is_buy = side == "BUY"
+            markers.append(
+                {
+                    "time": int(ts),
+                    "position": "belowBar" if is_buy else "aboveBar",
+                    "color": "#00d68f" if is_buy else "#ff4d6a",
+                    "shape": "arrowUp" if is_buy else "arrowDown",
+                    "text": f"{side} {intent} {time.strftime('%H:%M', time.localtime(ts))}" + (
+                        f" @{price:.6g}" if price > 0 else ""
+                    ),
+                }
+            )
+            points.append(
+                {
+                    "time": ts,
+                    "time_text": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
+                    "side": side,
+                    "intent": intent,
+                    "price": price,
+                    "qty": qty,
+                    "trace_id": trace_id,
+                    "source": "events",
+                }
+            )
+    if not points:
+        if trace_id_filter:
+            return [], []
+        return _load_trade_markers_from_pnl(symbol, since_ts, until_ts, limit=limit)
+
+    symbol_events = sorted(symbol_events, key=lambda x: float(x.get("ts", 0)))
+    for p in points:
+        tid = str(p.get("trace_id", "") or "")
+        evs = sorted(trace_events.get(tid, []), key=lambda x: float(x.get("ts", 0))) if tid else []
+        if not evs and not trace_id_filter:
+            # 向后兼容：老事件无 trace_id 时，按时间窗做符号内关联，避免“有点位无事件”。
+            try:
+                point_ts = float(p.get("time", 0) or 0)
+            except Exception:
+                point_ts = 0.0
+            window_sec = 180.0
+            evs = [e for e in symbol_events if abs(float(e.get("ts", 0) or 0.0) - point_ts) <= window_sec]
+        p["related_events"] = [
+            {
+                "ts": e.get("ts"),
+                "time_text": e.get("time_text"),
+                "event_type": e.get("event_type"),
+                "summary": e.get("summary"),
+                "raw": e.get("raw"),
+            }
+            for e in evs[-12:]
+        ]
+
+    points.sort(key=lambda x: float(x.get("time", 0)))
+    markers.sort(key=lambda x: int(x.get("time", 0)))
+    return markers[-limit:], points[-limit:]
 
 
 def _default_precheck_stats():
@@ -94,9 +449,10 @@ def _normalize_precheck_stats(raw):
 
 
 def _read_runner_precheck_stats():
-    if _runner is None:
+    r = _get_runner()
+    if r is None:
         return None
-    engine = getattr(_runner, "spot_engine", None)
+    engine = getattr(r, "spot_engine", None)
     executor = getattr(engine, "executor", None) if engine is not None else None
     if executor is None or not hasattr(executor, "get_precheck_stats"):
         return None
@@ -108,9 +464,10 @@ def _read_runner_precheck_stats():
 
 
 def _read_runner_execution_metrics():
-    if _runner is None:
+    r = _get_runner()
+    if r is None:
         return None
-    engine = getattr(_runner, "spot_engine", None)
+    engine = getattr(r, "spot_engine", None)
     executor = getattr(engine, "executor", None) if engine is not None else None
     if executor is None or not hasattr(executor, "get_runtime_metrics"):
         return None
@@ -122,9 +479,10 @@ def _read_runner_execution_metrics():
 
 
 def _read_runner_risk_summary():
-    if _runner is None:
+    r = _get_runner()
+    if r is None:
         return None
-    engine = getattr(_runner, "spot_engine", None)
+    engine = getattr(r, "spot_engine", None)
     risk = getattr(engine, "risk", None) if engine is not None else None
     if risk is None or not hasattr(risk, "get_summary"):
         return None
@@ -136,9 +494,10 @@ def _read_runner_risk_summary():
 
 
 def _read_runner_ws_connected():
-    if _runner is None:
+    r = _get_runner()
+    if r is None:
         return None
-    stream = getattr(_runner, "ticker_stream", None)
+    stream = getattr(r, "ticker_stream", None)
     tickers = getattr(stream, "tickers", None) if stream is not None else None
     if isinstance(tickers, dict):
         return bool(tickers)
@@ -208,11 +567,17 @@ def dashboard():
     return render_template("hotcoin_dashboard.html")
 
 
+def _get_runner():
+    """获取 runner 本地引用, 避免 TOCTOU 竞争。"""
+    return _runner
+
+
 @hotcoin_bp.route("/api/status")
 def api_status():
     """候选池状态 + 最近信号 (JSON)。"""
     cached = _read_runtime_status_file()
-    if _runner is None:
+    runner = _get_runner()
+    if runner is None:
         if cached:
             if "precheck_stats" not in cached:
                 cached["precheck_stats"] = _default_precheck_stats()
@@ -253,10 +618,10 @@ def api_status():
         ts = float(cached.get("ts", 0) or 0)
         if ts > 0 and (time.time() - ts) < 180:
             merged = dict(cached)
-            merged["paper"] = _runner.config.execution.use_paper_trading
-            merged["execution_enabled"] = bool(getattr(_runner.config.execution, "enable_order_execution", False))
-            merged["ws_connected"] = hasattr(_runner, "ticker_stream") and bool(_runner.ticker_stream.tickers)
-            engine = getattr(_runner, "spot_engine", None)
+            merged["paper"] = runner.config.execution.use_paper_trading
+            merged["execution_enabled"] = bool(getattr(runner.config.execution, "enable_order_execution", False))
+            merged["ws_connected"] = hasattr(runner, "ticker_stream") and bool(runner.ticker_stream.tickers)
+            engine = getattr(runner, "spot_engine", None)
             if engine:
                 merged["positions"] = engine.num_positions
             merged["precheck_stats"] = _normalize_precheck_stats(merged.get("precheck_stats"))
@@ -272,7 +637,7 @@ def api_status():
             merged["freshness"] = merged.get("freshness", {}) or {}
             return jsonify(merged)
 
-    pool = _runner.pool
+    pool = runner.pool
     candidates = pool.get_top(n=20, min_score=0)
 
     candidate_list = []
@@ -293,9 +658,9 @@ def api_status():
             "signal": "",  # filled from recent signals cache
         })
 
-    engine = getattr(_runner, "spot_engine", None)
+    engine = getattr(runner, "spot_engine", None)
     positions = engine.num_positions if engine else 0
-    execution_enabled = bool(getattr(_runner.config.execution, "enable_order_execution", False))
+    execution_enabled = bool(getattr(runner.config.execution, "enable_order_execution", False))
     cached_recent_signals = []
     cached_recent_anomalies = []
     if isinstance(cached, dict):
@@ -325,8 +690,8 @@ def api_status():
     return jsonify({
         "pool_size": pool.size,
         "candidates": candidate_list,
-        "ws_connected": hasattr(_runner, "ticker_stream") and bool(_runner.ticker_stream.tickers),
-        "paper": _runner.config.execution.use_paper_trading,
+        "ws_connected": hasattr(runner, "ticker_stream") and bool(runner.ticker_stream.tickers),
+        "paper": runner.config.execution.use_paper_trading,
         "execution_enabled": execution_enabled,
         "anomaly_count": len([c for c in candidates if c.source in ("momentum", "mixed")]),
         "active_signals": len(cached_recent_signals),
@@ -391,6 +756,67 @@ def api_execution_metrics():
     return jsonify(out)
 
 
+@hotcoin_bp.route("/api/chart")
+def api_chart():
+    """热点币K线 + 买卖点（基于事件日志/交易记录）。"""
+    symbol = _sanitize_symbol(request.args.get("symbol", ""))
+    if not symbol:
+        return jsonify({"error": "invalid_symbol", "message": "symbol 参数必填且需为有效交易对"}), 400
+    interval = str(request.args.get("interval", "5m")).strip()
+    if interval not in _VALID_CHART_INTERVALS:
+        return jsonify(
+            {
+                "error": "invalid_interval",
+                "message": f"interval 仅支持: {','.join(sorted(_VALID_CHART_INTERVALS))}",
+            }
+        ), 400
+    days = _parse_int_arg("days", default=3, min_v=1, max_v=30)
+    bars_limit = _parse_int_arg("bars_limit", default=800, min_v=100, max_v=2000)
+    raw_trace_id = request.args.get("trace_id", "")
+    trace_id_filter = _sanitize_trace_id(raw_trace_id)
+    if str(raw_trace_id or "").strip() and not trace_id_filter:
+        return jsonify({"error": "invalid_trace_id", "message": "trace_id 仅允许字母、数字、下划线和短横线"}), 400
+
+    klines = _load_chart_klines(symbol=symbol, interval=interval, days=days, bars_limit=bars_limit)
+    if not klines:
+        return jsonify(
+            {
+                "symbol": symbol,
+                "interval": interval,
+                "days": days,
+                "trace_id_filter": trace_id_filter,
+                "klines": [],
+                "markers": [],
+                "trade_points": [],
+                "ts": time.time(),
+                "message": "无可用K线数据",
+            }
+        )
+
+    since_ts = float(klines[0]["time"])
+    until_ts = float(klines[-1]["time"]) + 3600.0
+    markers, points = _load_order_markers(
+        symbol=symbol,
+        since_ts=since_ts,
+        until_ts=until_ts,
+        limit=200,
+        trace_id_filter=trace_id_filter,
+    )
+
+    return jsonify(
+        {
+            "symbol": symbol,
+            "interval": interval,
+            "days": days,
+            "trace_id_filter": trace_id_filter,
+            "klines": klines,
+            "markers": markers,
+            "trade_points": points,
+            "ts": time.time(),
+        }
+    )
+
+
 @hotcoin_bp.route("/health")
 def health():
     """热点币系统健康聚合接口。"""
@@ -400,7 +826,7 @@ def health():
         cached.get("execution_metrics") if isinstance(cached, dict) else None
     )
 
-    runner_attached = _runner is not None
+    runner_attached = _get_runner() is not None
     ts = float(cached.get("ts", 0) or 0) if isinstance(cached, dict) else 0.0
     status_age_sec = (now - ts) if ts > 0 else None
     status_snapshot_fresh = bool(ts > 0 and status_age_sec is not None and status_age_sec < 180)
@@ -464,9 +890,10 @@ def health():
 @hotcoin_bp.route("/api/pool")
 def api_pool():
     """完整候选池数据。"""
-    if _runner is None:
+    r = _get_runner()
+    if r is None:
         return jsonify({"coins": []})
-    coins = _runner.pool.get_all()
+    coins = r.pool.get_all()
     return jsonify({
         "coins": [
             {
@@ -496,11 +923,11 @@ def api_hot_posts():
     """最近社交热帖 (币安广场 + Twitter)。"""
     now = time.time()
 
-    # 优先从 runner 直接读取
-    if _runner is not None:
+    r = _get_runner()
+    if r is not None:
         posts = []
-        sq = getattr(_runner, "square_monitor", None)
-        tw = getattr(_runner, "twitter_monitor", None)
+        sq = getattr(r, "square_monitor", None)
+        tw = getattr(r, "twitter_monitor", None)
         if sq and hasattr(sq, "get_recent_posts"):
             try:
                 posts.extend(sq.get_recent_posts(30))
@@ -524,3 +951,36 @@ def api_hot_posts():
         })
 
     return jsonify({"posts": [], "ts": now, "source": "none"})
+
+
+@hotcoin_bp.route("/api/emergency_close", methods=["POST"])
+def api_emergency_close():
+    """紧急全部平仓。需要 confirm=yes 参数防止误操作。"""
+    r = _get_runner()
+    if r is None:
+        return jsonify({"error": "runner 未启动"}), 503
+
+    body = request.get_json(silent=True) or {}
+    confirm = body.get("confirm", "")
+    if confirm != "yes":
+        return jsonify({"error": "需要 confirm=yes 确认"}), 400
+
+    reason = body.get("reason", "manual_emergency_close")
+    try:
+        result = r.spot_engine.emergency_close_all(reason=reason)
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@hotcoin_bp.route("/api/balances")
+def api_balances():
+    """查询 Binance 现货账户余额。"""
+    r = _get_runner()
+    if r is None:
+        return jsonify({"error": "runner 未启动"}), 503
+    try:
+        balances = r.spot_engine.executor.query_account_balances()
+        return jsonify({"ok": True, "balances": balances, "ts": time.time()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500

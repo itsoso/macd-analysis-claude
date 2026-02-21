@@ -279,3 +279,240 @@ def test_health_blocked_when_risk_halted(tmp_path, monkeypatch):
     assert data["can_trade"] is False
     assert data["risk_halted"] is True
     assert "risk_halted" in data["reasons"]
+
+
+def test_chart_requires_symbol(tmp_path, monkeypatch):
+    client, _ = _build_client(tmp_path, monkeypatch)
+    resp = client.get("/hotcoin/api/chart")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["error"] == "invalid_symbol"
+
+
+def test_chart_rejects_invalid_interval(tmp_path, monkeypatch):
+    client, _ = _build_client(tmp_path, monkeypatch)
+    resp = client.get("/hotcoin/api/chart?symbol=ETHUSDT&interval=10m")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["error"] == "invalid_interval"
+
+
+def test_chart_returns_klines_and_markers(tmp_path, monkeypatch):
+    client, _ = _build_client(tmp_path, monkeypatch)
+
+    monkeypatch.setattr(
+        routes,
+        "_load_chart_klines",
+        lambda symbol, interval, days, bars_limit=800: [
+            {"time": 1700000000, "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1, "volume": 100.0},
+            {"time": 1700000060, "open": 1.1, "high": 1.3, "low": 1.0, "close": 1.25, "volume": 120.0},
+        ],
+    )
+    monkeypatch.setattr(
+        routes,
+        "_load_order_markers",
+        lambda symbol, since_ts, until_ts, limit=200, trace_id_filter="": (
+            [
+                {
+                    "time": 1700000000,
+                    "position": "belowBar",
+                    "color": "#00d68f",
+                    "shape": "arrowUp",
+                    "text": "BUY open 10:00 @1.1",
+                }
+            ],
+            [
+                {
+                    "time": 1700000000,
+                    "time_text": "2023-11-14 10:00:00",
+                    "side": "BUY",
+                    "intent": "open",
+                    "price": 1.1,
+                    "qty": 10.0,
+                    "source": "events",
+                }
+            ],
+        ),
+    )
+
+    resp = client.get("/hotcoin/api/chart?symbol=ETHUSDT&interval=5m&days=3")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["symbol"] == "ETHUSDT"
+    assert data["interval"] == "5m"
+    assert len(data["klines"]) == 2
+    assert len(data["markers"]) == 1
+    assert len(data["trade_points"]) == 1
+
+
+def test_chart_invalid_trace_id(tmp_path, monkeypatch):
+    client, _ = _build_client(tmp_path, monkeypatch)
+    resp = client.get("/hotcoin/api/chart?symbol=ETHUSDT&trace_id=bad*trace")
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data["error"] == "invalid_trace_id"
+
+
+def test_chart_passes_trace_id_filter_to_loader(tmp_path, monkeypatch):
+    client, _ = _build_client(tmp_path, monkeypatch)
+    captured = {"trace_id_filter": None}
+
+    monkeypatch.setattr(
+        routes,
+        "_load_chart_klines",
+        lambda symbol, interval, days, bars_limit=800: [
+            {"time": 1700000000, "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1, "volume": 100.0},
+            {"time": 1700000060, "open": 1.1, "high": 1.3, "low": 1.0, "close": 1.25, "volume": 120.0},
+        ],
+    )
+
+    def _fake_load_order_markers(symbol, since_ts, until_ts, limit=200, trace_id_filter=""):
+        captured["trace_id_filter"] = trace_id_filter
+        return [], []
+
+    monkeypatch.setattr(routes, "_load_order_markers", _fake_load_order_markers)
+
+    resp = client.get("/hotcoin/api/chart?symbol=ETHUSDT&interval=5m&days=3&trace_id=cycle_001")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["trace_id_filter"] == "cycle_001"
+    assert captured["trace_id_filter"] == "cycle_001"
+
+
+def test_load_order_markers_links_related_events_by_trace_id(tmp_path, monkeypatch):
+    events_file = tmp_path / "hotcoin_events.jsonl"
+    status_file = tmp_path / "hotcoin_runtime_status.json"
+    t0 = 1700000000.0
+    trace_id = "cycle123"
+    events = [
+        {
+            "ts": t0 - 30,
+            "trace_id": trace_id,
+            "event_type": "candidate_snapshot",
+            "payload": {"top_symbols": ["ETHUSDT", "SOLUSDT"], "pool_size": 20, "candidate_count": 5},
+        },
+        {
+            "ts": t0 - 20,
+            "trace_id": trace_id,
+            "event_type": "signal_snapshot",
+            "payload": {
+                "signals": [{"symbol": "ETHUSDT", "action": "BUY", "strength": 4}],
+                "actionable_count": 1,
+            },
+        },
+        {
+            "ts": t0 - 10,
+            "trace_id": trace_id,
+            "event_type": "order_attempt",
+            "payload": {"symbol": "ETHUSDT", "side": "BUY", "intent": "open", "qty": 1.2},
+        },
+        {
+            "ts": t0,
+            "trace_id": trace_id,
+            "event_type": "order_result",
+            "payload": {"symbol": "ETHUSDT", "side": "BUY", "intent": "open", "ok": True, "executed_price": 2010.5},
+        },
+        {
+            "ts": t0 + 5,
+            "trace_id": trace_id,
+            "event_type": "order_result",
+            "payload": {"symbol": "BTCUSDT", "side": "BUY", "intent": "open", "ok": True, "executed_price": 50000.0},
+        },
+    ]
+    events_file.write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(routes, "_EVENTS_FILE", str(events_file))
+    monkeypatch.setattr(routes, "_STATUS_FILE", str(status_file))
+    monkeypatch.setattr(routes, "_runner", None)
+
+    markers, points = routes._load_order_markers("ETHUSDT", t0 - 120, t0 + 120, limit=20)
+    assert len(markers) == 1
+    assert len(points) == 1
+    p = points[0]
+    assert p["trace_id"] == trace_id
+    rel_types = [e["event_type"] for e in p["related_events"]]
+    assert rel_types == ["candidate_snapshot", "signal_snapshot", "order_attempt", "order_result"]
+    for e in p["related_events"]:
+        assert isinstance(e.get("raw"), dict)
+        assert e["raw"]["event_type"] == e["event_type"]
+
+
+def test_load_order_markers_fallback_to_time_window_when_trace_missing(tmp_path, monkeypatch):
+    events_file = tmp_path / "hotcoin_events.jsonl"
+    status_file = tmp_path / "hotcoin_runtime_status.json"
+    t0 = 1700001000.0
+    events = [
+        {
+            "ts": t0 - 20,
+            "event_type": "candidate_snapshot",
+            "payload": {"top_symbols": ["ETHUSDT"], "pool_size": 12, "candidate_count": 3},
+        },
+        {
+            "ts": t0 - 10,
+            "event_type": "signal_snapshot",
+            "payload": {
+                "signals": [{"symbol": "ETHUSDT", "action": "BUY", "strength": 3}],
+                "actionable_count": 1,
+            },
+        },
+        {
+            "ts": t0 - 3,
+            "event_type": "order_attempt",
+            "payload": {"symbol": "ETHUSDT", "side": "BUY", "intent": "open", "qty": 0.8},
+        },
+        {
+            "ts": t0,
+            "event_type": "order_result",
+            "payload": {"symbol": "ETHUSDT", "side": "BUY", "intent": "open", "ok": True, "executed_price": 2021.2},
+        },
+    ]
+    events_file.write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(routes, "_EVENTS_FILE", str(events_file))
+    monkeypatch.setattr(routes, "_STATUS_FILE", str(status_file))
+    monkeypatch.setattr(routes, "_runner", None)
+
+    markers, points = routes._load_order_markers("ETHUSDT", t0 - 120, t0 + 120, limit=20)
+    assert len(markers) == 1
+    assert len(points) == 1
+    p = points[0]
+    assert p["trace_id"] == ""
+    rel_types = [e["event_type"] for e in p["related_events"]]
+    assert "order_result" in rel_types
+    assert "signal_snapshot" in rel_types
+    assert any(isinstance(e.get("raw"), dict) and "payload" in e["raw"] for e in p["related_events"])
+
+
+def test_load_order_markers_trace_id_filter_only_keeps_target_trace(tmp_path, monkeypatch):
+    events_file = tmp_path / "hotcoin_events.jsonl"
+    status_file = tmp_path / "hotcoin_runtime_status.json"
+    t0 = 1700002000.0
+    events = [
+        {
+            "ts": t0 - 10,
+            "trace_id": "target_trace",
+            "event_type": "order_result",
+            "payload": {"symbol": "ETHUSDT", "side": "BUY", "intent": "open", "ok": True, "executed_price": 2100.0},
+        },
+        {
+            "ts": t0,
+            "trace_id": "other_trace",
+            "event_type": "order_result",
+            "payload": {"symbol": "ETHUSDT", "side": "BUY", "intent": "open", "ok": True, "executed_price": 2200.0},
+        },
+    ]
+    events_file.write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\n", encoding="utf-8")
+    monkeypatch.setattr(routes, "_EVENTS_FILE", str(events_file))
+    monkeypatch.setattr(routes, "_STATUS_FILE", str(status_file))
+    monkeypatch.setattr(routes, "_runner", None)
+
+    markers, points = routes._load_order_markers(
+        "ETHUSDT",
+        t0 - 120,
+        t0 + 120,
+        limit=20,
+        trace_id_filter="target_trace",
+    )
+    assert len(markers) == 1
+    assert len(points) == 1
+    assert points[0]["trace_id"] == "target_trace"

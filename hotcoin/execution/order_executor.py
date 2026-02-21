@@ -193,6 +193,7 @@ class OrderExecutor:
         self._precheck_failures: Dict[str, int] = {}
         self._precheck_failures_by_symbol: Dict[str, Dict[str, int]] = {}
         self._precheck_symbol_last_seen: Dict[str, float] = {}
+        self._metrics_lock = threading.Lock()
         self._runtime_events: Dict[str, deque] = {
             "order_attempt": deque(),
             "order_success": deque(),
@@ -236,16 +237,17 @@ class OrderExecutor:
             self._precheck_symbol_last_seen.pop(sym, None)
 
     def _record_runtime_event(self, event_type: str, ts: Optional[float] = None):
-        q = self._runtime_events.get(event_type)
-        if q is None:
-            return
-        now = ts if ts is not None else time.time()
-        q.append(now)
-        cutoff = now - self.METRICS_WINDOW_SEC
-        while q and q[0] < cutoff:
-            q.popleft()
-        while len(q) > self.METRICS_EVENT_LIMIT:
-            q.popleft()
+        with self._metrics_lock:
+            q = self._runtime_events.get(event_type)
+            if q is None:
+                return
+            now = ts if ts is not None else time.time()
+            q.append(now)
+            cutoff = now - self.METRICS_WINDOW_SEC
+            while q and q[0] < cutoff:
+                q.popleft()
+            while len(q) > self.METRICS_EVENT_LIMIT:
+                q.popleft()
 
     def _count_runtime_events(self, event_type: str, window_sec: int, now: Optional[float] = None) -> int:
         q = self._runtime_events.get(event_type)
@@ -258,12 +260,13 @@ class OrderExecutor:
         return len(q)
 
     def get_runtime_metrics(self, window_sec: int = 300) -> dict:
-        now = time.time()
-        attempts = self._count_runtime_events("order_attempt", window_sec, now)
-        precheck_failed = self._count_runtime_events("precheck_failed", window_sec, now)
-        dedup_rejected = self._count_runtime_events("dedup_rejected", window_sec, now)
-        order_error = self._count_runtime_events("order_error", window_sec, now)
-        order_success = self._count_runtime_events("order_success", window_sec, now)
+        with self._metrics_lock:
+            now = time.time()
+            attempts = self._count_runtime_events("order_attempt", window_sec, now)
+            precheck_failed = self._count_runtime_events("precheck_failed", window_sec, now)
+            dedup_rejected = self._count_runtime_events("dedup_rejected", window_sec, now)
+            order_error = self._count_runtime_events("order_error", window_sec, now)
+            order_success = self._count_runtime_events("order_success", window_sec, now)
         precheck_fail_rate = (precheck_failed / attempts) if attempts > 0 else 0.0
         order_error_rate = (order_error / attempts) if attempts > 0 else 0.0
         return {
@@ -526,8 +529,11 @@ class OrderExecutor:
             )
             if resp.status_code == 200:
                 return float(resp.json().get("price", 0))
+            log.warning("get_current_price %s: HTTP %d", symbol, resp.status_code)
+        except requests.exceptions.Timeout:
+            log.warning("get_current_price %s: timeout", symbol)
         except Exception:
-            pass
+            log.debug("get_current_price %s 异常", symbol, exc_info=True)
         return 0.0
 
     def get_avg_price(self, symbol: str) -> float:
@@ -540,8 +546,11 @@ class OrderExecutor:
             )
             if resp.status_code == 200:
                 return float(resp.json().get("price", 0))
+            log.warning("get_avg_price %s: HTTP %d", symbol, resp.status_code)
+        except requests.exceptions.Timeout:
+            log.warning("get_avg_price %s: timeout", symbol)
         except Exception:
-            pass
+            log.debug("get_avg_price %s 异常", symbol, exc_info=True)
         return 0.0
 
     # Binance error codes that are retryable (transient)
@@ -590,6 +599,8 @@ class OrderExecutor:
                 log.info("下单成功: %s %s %s", params.get("symbol"),
                          params.get("side"), params.get("type"))
                 self._order_history.append(result)
+                if len(self._order_history) > self._max_history:
+                    self._order_history = self._order_history[-self._max_history:]
                 self._record_runtime_event("order_success")
             else:
                 api_code = int(result.get("code", 0))
@@ -671,6 +682,43 @@ class OrderExecutor:
         except Exception as e:
             log.exception("取消订单异常: %s #%d", symbol, order_id)
             return {"error": str(e)}
+
+    def query_account_balances(self, min_value_usd: float = 1.0) -> list:
+        """查询 Binance 现货账户余额, 返回非零资产列表。paper 模式返回空。"""
+        if self.paper:
+            return []
+        params = {"timestamp": int(time.time() * 1000), "recvWindow": 5000}
+        query = urlencode(sorted(params.items()))
+        signature = hmac.new(
+            self._api_secret.encode(), query.encode(), hashlib.sha256
+        ).hexdigest()
+        headers = {"X-MBX-APIKEY": self._api_key}
+        try:
+            resp = requests.get(
+                f"{BASE_REST_URL}/api/v3/account",
+                params=query + "&signature=" + signature,
+                headers=headers, timeout=10,
+            )
+            if resp.status_code != 200:
+                log.warning("查询账户余额失败: HTTP %d", resp.status_code)
+                return []
+            data = resp.json()
+            balances = []
+            for b in data.get("balances", []):
+                free = float(b.get("free", 0))
+                locked = float(b.get("locked", 0))
+                total = free + locked
+                if total > 0:
+                    balances.append({
+                        "asset": b.get("asset", ""),
+                        "free": round(free, 8),
+                        "locked": round(locked, 8),
+                        "total": round(total, 8),
+                    })
+            return balances
+        except Exception:
+            log.exception("查询账户余额异常")
+            return []
 
     def _paper_order(self, symbol: str, side: str,
                      qty: float = 0, quote_qty: float = 0,
