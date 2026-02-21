@@ -1,8 +1,8 @@
 {
-  "version": "stacking_v10",
+  "version": "stacking_v11",
   "timeframe": "4h",
-  "meta_type": "lgb",
-  "trained_at": "2026-02-21T13:45:18.794220",
+  "meta_type": "blend",
+  "trained_at": "2026-02-21T14:23:49.036559",
   "base_models": [
     "lgb",
     "lstm",
@@ -16,13 +16,16 @@
     "pred_range"
   ],
   "meta_input_dim": 8,
-  "meta_coefficients": {},
+  "meta_coefficients": {
+    "blend_w_lr": 0.39758587840574866,
+    "blend_w_lgb": 0.6024141215942513
+  },
   "meta_intercept": 0.0,
   "hvol_extra_mean": 0.0641767606139183,
   "hvol_extra_std": 0.032997547404298784,
-  "oof_meta_auc": 0.5789,
-  "val_auc": 0.743,
-  "test_auc": 0.5348,
+  "oof_meta_auc": 0.5736,
+  "val_auc": 0.7726,
+  "test_auc": 0.5229,
   "n_oof_samples": 6685,
   "n_folds": 8,
   "feature_names_73": [
@@ -633,10 +636,10 @@
     "short_threshold": 0.42
   },
   "platt_calibration": {
-    "A": 2.9220005644971705,
-    "B": 0.47641400657224237,
-    "brier_before": 0.24392754914199485,
-    "brier_after": 0.24196122218699798,
+    "A": 2.5376624997412667,
+    "B": 0.38037546529535876,
+    "brier_before": 0.24399951204595627,
+    "brier_after": 0.24257582429692318,
     "enabled": true
   },
   "adversarial_removed": [
