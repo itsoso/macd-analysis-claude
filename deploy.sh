@@ -14,6 +14,7 @@ SERVER="root@47.237.191.17"
 PORT=22222
 REMOTE_DIR="/opt/macd-analysis"
 SSH_CMD="ssh -p $PORT $SERVER"
+ML_ENABLE_STACKING_DEFAULT=1
 
 echo "=========================================="
 echo "  部署到服务器 $SERVER:$PORT"
@@ -54,15 +55,37 @@ if [ -n "$DIRTY" ] && [ "$1" != "--force" ]; then
 fi
 $SSH_CMD "cd $REMOTE_DIR && git reset --hard HEAD && git pull origin main"
 
-# 3. 安装/更新 Python 依赖
+# 3. 安装/校验 Python 依赖
 echo ""
-echo "[3/8] 安装 Python 依赖..."
-$SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && pip install --quiet 'onnxruntime>=1.16.0' 'scikit-learn==1.7.2' 2>&1 | tail -3 && echo '  ✅ 依赖已确认 (onnxruntime, scikit-learn==1.7.2)'"
+echo "[3/8] 安装/校验 Python 依赖..."
+$SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && pip install --quiet 'lightgbm>=4.0.0' 'xgboost>=1.7.0' 'onnxruntime>=1.16.0' 'scikit-learn==1.7.2' 2>&1 | tail -5"
+$SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && DEPLOY_STACKING_ON=$ML_ENABLE_STACKING_DEFAULT python3 - <<'PY'
+import importlib.util
+import os
+import subprocess
+import sys
 
-# 4. 部署前 ML 健康检查
+required = ['lightgbm', 'xgboost', 'onnxruntime', 'sklearn']
+missing = [m for m in required if importlib.util.find_spec(m) is None]
+if missing:
+    raise SystemExit(f'缺少基础依赖: {missing}')
+
+stacking_on = os.environ.get('DEPLOY_STACKING_ON', '0') == '1'
+if stacking_on and importlib.util.find_spec('torch') is None:
+    print('  [WARN] Stacking 已启用但 torch 缺失，尝试自动安装 torch>=2.2.0 ...')
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--quiet', 'torch>=2.2.0'])
+
+if stacking_on and importlib.util.find_spec('torch') is None:
+    raise SystemExit('Stacking 启用但 torch 仍缺失，部署中止')
+
+mods = required + (['torch'] if stacking_on else [])
+print(f'  ✅ 依赖校验通过: {mods}')
+PY" 2>&1
+
+# 4. 部署前 ML 健康检查（按目标上线配置执行门禁）
 echo ""
 echo "[4/8] 部署前 ML 健康检查..."
-$SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && python3 check_ml_health.py --skip-live-check --timeframe 1h --fix-stacking-alias"
+$SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && ML_ENABLE_STACKING=$ML_ENABLE_STACKING_DEFAULT python3 check_ml_health.py --skip-live-check --timeframe 1h --fix-stacking-alias"
 
 # 5. 同步回测数据
 echo ""
@@ -79,7 +102,7 @@ else
   echo "  ⚠️  本地无 data/backtests/*.db，跳过"
 fi
 
-# 6. 应用 systemd ML 环境变量覆盖（默认关闭 stacking，达标后再打开）
+# 6. 应用 systemd ML 环境变量覆盖（默认开启 stacking）
 echo ""
 echo "[6/8] 更新 systemd ML 环境覆盖..."
 $SSH_CMD "mkdir -p /etc/systemd/system/macd-analysis.service.d /etc/systemd/system/macd-engine.service.d"

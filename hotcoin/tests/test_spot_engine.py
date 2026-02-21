@@ -88,7 +88,7 @@ def test_sell_signal_closes_existing_buy_position(engine, monkeypatch):
     def _fake_get_price(_symbol):
         return 1990.0
 
-    def _fake_sell(_symbol, _qty):
+    def _fake_sell(_symbol, _qty, **kwargs):
         sold["n"] += 1
         return {"price": 1990.0, "qty": _qty}
 
@@ -100,4 +100,18 @@ def test_sell_signal_closes_existing_buy_position(engine, monkeypatch):
     ])
 
     assert sold["n"] == 1
+    assert engine.num_positions == 0
+
+
+def test_buy_order_failure_does_not_open_position(engine, monkeypatch):
+    def _fake_buy(_symbol, _quote, **kwargs):
+        return {"error": "mock exchange reject"}
+
+    monkeypatch.setattr(engine.executor, "spot_market_buy", _fake_buy)
+    monkeypatch.setattr(engine.executor, "get_current_price", lambda _symbol: 2000.0)
+
+    engine.process_signals([
+        TradeSignal(symbol="ETHUSDT", action="BUY", strength=50, confidence=0.9, reason="entry"),
+    ])
+
     assert engine.num_positions == 0

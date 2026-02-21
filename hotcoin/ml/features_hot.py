@@ -86,19 +86,25 @@ def compute_base_features(df: pd.DataFrame) -> pd.DataFrame:
     features["vol_ratio_5_20"] = v.rolling(5).mean() / v.rolling(20).mean().clip(lower=1)
     features["vol_change"] = v.pct_change()
 
-    # MACD
-    if "macd_hist" in df.columns:
-        features["macd_hist"] = df["macd_hist"]
-        features["macd_hist_diff"] = df["macd_hist"].diff()
+    # MACD (indicators.py outputs "MACD_BAR")
+    for macd_col in ["MACD_BAR", "macd_hist"]:
+        if macd_col in df.columns:
+            features["macd_hist"] = df[macd_col]
+            features["macd_hist_diff"] = df[macd_col].diff()
+            break
 
-    # RSI
-    if "rsi" in df.columns:
-        features["rsi"] = df["rsi"]
+    # RSI (indicators.py outputs "RSI6" / "RSI12")
+    for rsi_col in ["RSI6", "RSI12", "rsi"]:
+        if rsi_col in df.columns:
+            features["rsi"] = df[rsi_col]
+            break
 
-    # KDJ
-    for col in ["k", "d", "j"]:
-        if col in df.columns:
-            features[col] = df[col]
+    # KDJ (indicators.py outputs uppercase "K", "D", "J")
+    for col_upper, col_lower in [("K", "k"), ("D", "d"), ("J", "j")]:
+        for col in [col_upper, col_lower]:
+            if col in df.columns:
+                features[col_lower] = df[col]
+                break
 
     # 布林带
     if "bb_upper" in df.columns and "bb_lower" in df.columns:
@@ -187,20 +193,16 @@ def make_trade_labels(df: pd.DataFrame, forward_window: int = 30,
     """
     交易标签: 未来 forward_window 根K线内最大收益 >= min_return。
 
-    需要 quote_volume_24h 列用于流动性约束。
+    使用向量化 rolling max, 避免 O(N * forward_window) 循环。
     """
     close = df["close"]
-    n = len(close)
-    labels = pd.Series(0, index=df.index)
+    future_max = close[::-1].rolling(forward_window, min_periods=1).max()[::-1].shift(-1)
+    max_ret = (future_max - close) / close.clip(lower=1e-10)
 
-    for i in range(n - forward_window):
-        future_max = close.iloc[i + 1: i + forward_window + 1].max()
-        max_ret = (future_max - close.iloc[i]) / close.iloc[i]
-        if max_ret >= min_return:
-            if "quote_volume_24h" in df.columns:
-                if df["quote_volume_24h"].iloc[i] >= min_volume_24h:
-                    labels.iloc[i] = 1
-            else:
-                labels.iloc[i] = 1
+    labels = (max_ret >= min_return).astype(int)
 
-    return labels
+    if "quote_volume_24h" in df.columns:
+        labels = labels & (df["quote_volume_24h"] >= min_volume_24h)
+
+    labels.iloc[-forward_window:] = 0
+    return labels.astype(int)

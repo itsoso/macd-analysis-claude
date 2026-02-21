@@ -29,14 +29,13 @@ class HotRanker:
         self.cfg = config
 
     def update_scores(self, pool):
-        """对候选池中所有币种重新评分。"""
+        """对候选池中所有币种重新评分 (单次批量 commit)。"""
         coins = pool.get_all()
         for coin in coins:
             self._compute_score(coin)
-            pool.update_coin(coin)
+        pool.update_coins_batch(coins)
+        for coin in coins:
             pool.record_heat_history(coin)
-
-        pool.remove_expired()
 
     def _compute_score(self, coin):
         """计算六维热度评分, 0-100 范围。"""
@@ -68,14 +67,13 @@ class HotRanker:
         # --- 维度 6: 风险惩罚 ---
         s_risk = self._score_risk_penalty(coin)
 
-        # 加权合成
-        raw = (
+        # 加权合成: 先归一化正向维度, 再扣减风险惩罚
+        positive_raw = (
             self.cfg.w_announcement * s_announce
             + self.cfg.w_social * s_social
             + self.cfg.w_sentiment * s_sentiment
             + self.cfg.w_momentum * s_momentum
             + self.cfg.w_liquidity * s_liquidity
-            - self.cfg.w_risk_penalty * s_risk
         )
 
         # 归一化到 0-100
@@ -83,7 +81,11 @@ class HotRanker:
             self.cfg.w_announcement + self.cfg.w_social + self.cfg.w_sentiment
             + self.cfg.w_momentum + self.cfg.w_liquidity
         )
-        score = max(0, min(100, raw / total_positive_weight)) if total_positive_weight > 0 else 0
+        positive_score = (positive_raw / total_positive_weight) if total_positive_weight > 0 else 0
+
+        # 风险惩罚: w_risk_penalty 直接控制最大扣减幅度
+        # e.g. w_risk_penalty=0.10, s_risk=100 → 扣减 10 分
+        score = max(0, min(100, positive_score - s_risk * self.cfg.w_risk_penalty))
 
         coin.score_announcement = s_announce
         coin.score_social = s_social

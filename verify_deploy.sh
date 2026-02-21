@@ -35,9 +35,33 @@ check $RET "最近 5 条 commit 包含 ML 相关变更"
 echo ""
 echo "[2/7] 模型文件..."
 MODEL_DIR="data/ml_models"
-EXPECTED_FILES=(
-    "lgb_direction_model.txt"
-    "lgb_direction_model.txt.meta.json"
+REQUIRED_FILE_GROUPS=(
+    "lgb_direction_model.txt|lgb_direction_model_1h.txt"
+    "lgb_direction_model.txt.meta.json|lgb_direction_model_1h.txt.meta.json"
+    "stacking_meta.json|stacking_meta_1h.json"
+    "stacking_meta.pkl|stacking_meta_1h.pkl"
+)
+
+for group in "${REQUIRED_FILE_GROUPS[@]}"; do
+    IFS='|' read -r -a candidates <<< "$group"
+    found=""
+    for f in "${candidates[@]}"; do
+        if [ -f "$MODEL_DIR/$f" ]; then
+            found="$f"
+            break
+        fi
+    done
+    if [ -n "$found" ]; then
+        SIZE=$(du -h "$MODEL_DIR/$found" | cut -f1)
+        echo "  [OK] ${group//|/ 或 } ($SIZE, 命中: $found)"
+        PASS=$((PASS+1))
+    else
+        echo "  [FAIL] ${group//|/ 或 } 缺失"
+        FAIL=$((FAIL+1))
+    fi
+done
+
+OPTIONAL_FILES=(
     "lstm_1h.pt"
     "ensemble_config.json"
     "training_meta.json"
@@ -45,14 +69,13 @@ EXPECTED_FILES=(
     "vol_regime_model.txt"
     "quantile_config.json"
 )
-for f in "${EXPECTED_FILES[@]}"; do
+for f in "${OPTIONAL_FILES[@]}"; do
     if [ -f "$MODEL_DIR/$f" ]; then
         SIZE=$(du -h "$MODEL_DIR/$f" | cut -f1)
         echo "  [OK] $f ($SIZE)"
         PASS=$((PASS+1))
     else
-        echo "  [FAIL] $f 缺失"
-        FAIL=$((FAIL+1))
+        echo "  [WARN] $f 缺失 (可选)"
     fi
 done
 TOTAL_FILES=$(ls "$MODEL_DIR" | wc -l)
@@ -94,10 +117,10 @@ grep -q "ML_STACKING_TIMEFRAME=1h" "$OVR_A" 2>/dev/null && RET=0 || RET=1
 check $RET "macd-analysis 固定 ML_STACKING_TIMEFRAME=1h"
 grep -q "ML_STACKING_TIMEFRAME=1h" "$OVR_E" 2>/dev/null && RET=0 || RET=1
 check $RET "macd-engine 固定 ML_STACKING_TIMEFRAME=1h"
-grep -q "ML_ENABLE_STACKING=0" "$OVR_A" 2>/dev/null && RET=0 || RET=1
-check $RET "macd-analysis 默认 ML_ENABLE_STACKING=0"
-grep -q "ML_ENABLE_STACKING=0" "$OVR_E" 2>/dev/null && RET=0 || RET=1
-check $RET "macd-engine 默认 ML_ENABLE_STACKING=0"
+grep -q "ML_ENABLE_STACKING=1" "$OVR_A" 2>/dev/null && RET=0 || RET=1
+check $RET "macd-analysis 默认 ML_ENABLE_STACKING=1"
+grep -q "ML_ENABLE_STACKING=1" "$OVR_E" 2>/dev/null && RET=0 || RET=1
+check $RET "macd-engine 默认 ML_ENABLE_STACKING=1"
 
 # 6. Web 服务
 echo ""
@@ -125,12 +148,18 @@ try:
     from ml_live_integration import MLSignalEnhancer
     e = MLSignalEnhancer()
     loaded = e.load_model()
+    stacking_required = bool(getattr(e, 'stacking_enabled', False))
     parts = []
     if e._direction_model: parts.append('LGB')
     if e._lstm_meta: parts.append('LSTM')
     if e._regime_model: parts.append('Regime')
     if e._quantile_model: parts.append('Quantile')
-    print(f'OK|{len(parts)}|{\",\".join(parts)}')
+    if e._stacking_meta_model: parts.append('Stacking')
+    if stacking_required and e._stacking_meta_model is None:
+        reason = getattr(e, '_stacking_disabled_reason', 'unknown')
+        print(f'FAIL|0|Stacking required but not loaded: {reason}')
+    else:
+        print(f'OK|{len(parts)}|{\",\".join(parts)}')
 except Exception as ex:
     print(f'FAIL|0|{ex}')
 " 2>/dev/null || echo "FAIL|0|Python error")

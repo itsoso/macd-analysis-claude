@@ -299,6 +299,66 @@ deploy.sh 自动执行 ML 健康检查 (`check_ml_health.py`)，验证模型文�
 | Gunicorn worker | `gunicorn_config.py` → `timeout` | 360s |
 | Nginx proxy | `deploy.sh` → `proxy_read_timeout` | 360s |
 
+## 热点币交易系统 (`hotcoin/`)
+
+独立子系统：自动发现币安全市场热点币，复用六书策略 + 多周期共识生成信号，现货 API 执行交易。
+
+### 架构概览
+
+```
+hotcoin/
+├── discovery/       # 热点发现层
+│   ├── ticker_stream.py       # WS 全市场 Ticker (1s)
+│   ├── anomaly_detector.py    # 量价异动检测
+│   ├── candidate_pool.py      # SQLite 候选池 (线程安全)
+│   ├── hot_ranker.py          # 六维热度评分 (0-100)
+│   ├── listing_monitor.py     # 新币上线监控
+│   ├── social_twitter.py      # Twitter KOL 监控
+│   ├── social_binance_sq.py   # Binance Square 监控
+│   └── filters.py             # 黑名单/流动性/FOMO 过滤
+├── engine/          # 信号计算层
+│   ├── signal_dispatcher.py   # ThreadPoolExecutor 并发调度
+│   ├── signal_worker.py       # 复用 signal_core + multi_tf_consensus
+│   ├── entry_exit_rules.py    # 入场/出场/分层止盈/黑天鹅
+│   └── hot_coin_params.py     # 热点币专用参数 (短周期快参)
+├── execution/       # 交易执行层
+│   ├── spot_engine.py         # 现货引擎 (整合信号→风控→下单)
+│   ├── order_executor.py      # 动态精度下单 + 防重复 + 预检查
+│   ├── portfolio_risk.py      # 五层风控 (L1止损~L5总回撤)
+│   ├── capital_allocator.py   # 热度加权资金分配
+│   ├── pnl_tracker.py         # JSONL 损益记录
+│   └── futures_adapter.py     # 合约适配 (Phase 4)
+├── ml/              # ML 层 (Phase 2 预留)
+├── web/             # Web 监控面板
+├── config.py        # 全局配置 (Discovery/Trading/Execution)
+└── runner.py        # asyncio 主循环 + 崩溃恢复
+```
+
+### 运行热点币系统
+
+```bash
+python -m hotcoin.runner                    # 默认 paper 模式
+HOTCOIN_PAPER=0 python -m hotcoin.runner    # 实盘 (需 API key)
+HOTCOIN_CAPITAL=500 python -m hotcoin.runner # 指定资金
+```
+
+### 核心流程 (10s 周期)
+
+```
+TickerStream (WS) → AnomalyDetector → CandidatePool
+                                           ↓
+HotRanker (六维评分) → CoinFilter → Top N 候选
+                                           ↓
+SignalDispatcher → signal_worker (复用 compute_signals_six + fuse_tf_scores)
+                                           ↓
+SpotEngine → EntryExitRules + PortfolioRisk + OrderExecutor
+```
+
+### 设计文档
+
+- **完整设计**: `docs/hotcoin_design.md` (架构、模块详解、已知问题)
+- **开发路线图**: `docs/hotcoin_roadmap.md` (Phase 1.5~5)
+
 ## 数据存储
 
 ```
@@ -310,9 +370,13 @@ data/
 ├── ml_models/                             # ML 模型文件 (8模型: .txt/.pt/.onnx/.meta.json/.zip/.pkl)
 ├── gpu_results/                           # GPU 训练结果 (.json/.parquet)
 ├── backtests/*.db                         # SQLite (runs/daily_records/trades)
-└── live/
-    ├── trades_YYYYMMDD.jsonl              # 实盘日志 (JSONL, 崩溃安全)
-    └── engine_state.json                  # 引擎状态
+├── live/
+│   ├── trades_YYYYMMDD.jsonl              # 实盘日志 (JSONL, 崩溃安全)
+│   └── engine_state.json                  # 引擎状态
+└── hotcoin/                               # 热点币数据 (独立目录)
+    ├── hotcoins.db                        # SQLite (候选池 + 热度历史)
+    ├── hotcoin_runtime_status.json        # 运行状态快照
+    └── hotcoin_trades_YYYYMMDD.jsonl      # 交易记录
 ```
 
 - **回测结果**: `optimize_six_book_result.json` (最佳参数 + 交易记录)

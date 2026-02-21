@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Optional
 
 try:
@@ -19,9 +19,7 @@ try:
 except ImportError:
     websockets = None  # type: ignore
 
-import requests
-
-from hotcoin.config import DiscoveryConfig, BASE_WS_URL, BASE_REST_URL
+from hotcoin.config import DiscoveryConfig, BASE_WS_URL
 
 log = logging.getLogger("hotcoin.ticker")
 
@@ -94,32 +92,51 @@ class TickerStream:
                 delay = min(delay * 2, self.MAX_RECONNECT_DELAY)
 
     def _handle_message(self, raw: str):
+        def _safe_float(v, default=0.0):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return default
+        def _safe_int(v, default=0):
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return default
+
         try:
             arr = json.loads(raw)
         except json.JSONDecodeError:
             return
+        if not isinstance(arr, list):
+            return
 
         now = time.time()
         for item in arr:
+            if not isinstance(item, dict):
+                continue
             sym = item.get("s", "")
             if not sym.endswith("USDT"):
                 continue
 
-            close = float(item.get("c", 0))
-            open_price = float(item.get("o", 0))
-            quote_vol = float(item.get("q", 0))
+            close = _safe_float(item.get("c", 0))
+            open_price = _safe_float(item.get("o", 0))
+            quote_vol = _safe_float(item.get("q", 0))
             if close <= 0 or open_price <= 0:
                 continue
+
+            event_time = _safe_int(item.get("E", 0), 0)
+            if event_time <= 0:
+                event_time = int(now * 1000)
 
             ticker = MiniTicker(
                 symbol=sym,
                 close=close,
                 open_price=open_price,
-                high=float(item.get("h", 0)),
-                low=float(item.get("l", 0)),
-                base_volume=float(item.get("v", 0)),
+                high=_safe_float(item.get("h", 0)),
+                low=_safe_float(item.get("l", 0)),
+                base_volume=_safe_float(item.get("v", 0)),
                 quote_volume=quote_vol,
-                event_time=int(item.get("E", 0)),
+                event_time=event_time,
                 price_change_24h=(close - open_price) / open_price if open_price else 0,
             )
 
@@ -129,10 +146,12 @@ class TickerStream:
 
             ticker.volume_1m = self._get_volume_1m(sym)
             ticker.avg_volume_20m = self._get_avg_volume_20m(sym)
-            snap = self._price_snapshots.get(sym, [])
-            if snap:
-                ticker.price_5m_ago = snap[0][1]
-                ticker.price_change_5m = (close - snap[0][1]) / snap[0][1] if snap[0][1] else 0
+            snap = self._price_snapshots.get(sym)
+            if snap and len(snap) > 0:
+                oldest_price = snap[0][1]
+                if oldest_price > 0:
+                    ticker.price_5m_ago = oldest_price
+                    ticker.price_change_5m = (close - oldest_price) / oldest_price
 
             self._tickers[sym] = ticker
 
@@ -154,8 +173,7 @@ class TickerStream:
         delta = 0.0
         if prev and quote_vol >= prev.quote_volume:
             delta = quote_vol - prev.quote_volume
-        elif prev:
-            delta = quote_vol
+        # 24h 成交额回退 (交易所每日重置) — 忽略本次增量, 避免虚假突增
         window.append((now, delta))
         cutoff = now - 1200
         while window and window[0][0] < cutoff:
@@ -183,11 +201,17 @@ class TickerStream:
             log.debug("清理 %d 个不活跃币种数据", len(stale))
 
     def _get_volume_1m(self, sym: str) -> float:
-        window = self._vol_window.get(sym, [])
+        window = self._vol_window.get(sym)
         if not window:
             return 0.0
         cutoff = window[-1][0] - 60
-        return sum(v for t, v in window if t >= cutoff)
+        total = 0.0
+        for i in range(len(window) - 1, -1, -1):
+            t, v = window[i]
+            if t < cutoff:
+                break
+            total += v
+        return total
 
     def _get_avg_volume_20m(self, sym: str) -> float:
         window = self._vol_window.get(sym, [])

@@ -32,6 +32,8 @@ class TradeRecord:
 class PnLTracker:
     """交易损益追踪。"""
 
+    MAX_IN_MEMORY = 500
+
     def __init__(self, data_dir: str = ""):
         self._trades: List[TradeRecord] = []
         self._data_dir = data_dir or os.path.join(os.path.dirname(__file__), "..", "data")
@@ -41,7 +43,8 @@ class PnLTracker:
                      exit_price: float, qty: float, entry_time: float,
                      reason: str = "") -> TradeRecord:
         pnl = (exit_price - entry_price) * qty if side == "BUY" else (entry_price - exit_price) * qty
-        pnl_pct = (exit_price - entry_price) / entry_price if side == "BUY" else (entry_price - exit_price) / entry_price
+        safe_entry = entry_price if entry_price > 0 else 1e-10
+        pnl_pct = (exit_price - entry_price) / safe_entry if side == "BUY" else (entry_price - exit_price) / safe_entry
 
         record = TradeRecord(
             symbol=symbol, side=side,
@@ -52,6 +55,8 @@ class PnLTracker:
             entry_time=entry_time, exit_time=time.time(),
         )
         self._trades.append(record)
+        if len(self._trades) > self.MAX_IN_MEMORY:
+            self._trades = self._trades[-self.MAX_IN_MEMORY:]
         self._persist(record)
         return record
 
@@ -72,8 +77,11 @@ class PnLTracker:
             "entry_time": record.entry_time,
             "exit_time": record.exit_time,
         }
-        with open(path, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        try:
+            with open(path, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except OSError:
+            log.exception("PnL 记录写入失败: %s", path)
 
     def get_summary(self) -> dict:
         if not self._trades:

@@ -36,6 +36,22 @@ def _safe_float(env_key: str, default: float) -> float:
         return default
 
 
+def _parse_env_bool(env_key: str) -> Any:
+    """
+    解析布尔环境变量。
+    返回 True/False，若未设置或无法识别则返回 None。
+    """
+    raw = os.environ.get(env_key)
+    if raw is None:
+        return None
+    val = raw.strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return True
+    if val in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Discovery 层配置
 # ---------------------------------------------------------------------------
@@ -104,7 +120,7 @@ class TradingConfig:
 
 @dataclass
 class ExecutionConfig:
-    enable_order_execution: bool = os.environ.get("HOTCOIN_EXECUTE", "0") == "1"
+    enable_order_execution: bool = False
     max_concurrent_positions: int = 5
     max_single_position_pct: float = 0.10  # 单币最大 10% 资金
     max_total_exposure_pct: float = 0.40   # 总敞口 40%
@@ -150,13 +166,18 @@ def load_config() -> HotCoinConfig:
         pass
 
     # 2) 环境变量覆盖（最高优先级）
-    if os.environ.get("HOTCOIN_PAPER", "1") == "0":
-        cfg.execution.use_paper_trading = False
+    paper = _parse_env_bool("HOTCOIN_PAPER")
+    if paper is not None:
+        cfg.execution.use_paper_trading = paper
     capital = os.environ.get("HOTCOIN_CAPITAL")
     if capital:
-        cfg.execution.initial_capital = float(capital)
-    if os.environ.get("HOTCOIN_EXECUTE"):
-        cfg.execution.enable_order_execution = os.environ.get("HOTCOIN_EXECUTE", "0") == "1"
+        try:
+            cfg.execution.initial_capital = float(capital)
+        except ValueError:
+            pass
+    execute = _parse_env_bool("HOTCOIN_EXECUTE")
+    if execute is not None:
+        cfg.execution.enable_order_execution = execute
     db_path = os.environ.get("HOTCOIN_DB_PATH")
     if db_path:
         cfg.db_path = db_path

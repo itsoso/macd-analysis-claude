@@ -100,25 +100,40 @@ class HotCoinEntryExit:
                 exit_pct=1.0,
             )
 
-        # 2. 黑天鹅 (15min 跌超阈值)
-        if coin and hasattr(coin, "price_change_15m"):
-            chg = getattr(coin, "price_change_15m", 0)
+        # 2. 黑天鹅 (5min 剧烈反向波动)
+        if coin:
+            chg = getattr(coin, "price_change_5m", 0)
             if side == "BUY" and chg < self.config.black_swan_pct:
                 return ExitDecision(
                     should_exit=True,
-                    reason=f"黑天鹅 (15m={chg:+.2%})",
+                    reason=f"黑天鹅 (5m={chg:+.2%})",
+                    exit_pct=1.0,
+                    is_emergency=True,
+                )
+            if side == "SELL" and chg > abs(self.config.black_swan_pct):
+                return ExitDecision(
+                    should_exit=True,
+                    reason=f"黑天鹅做空 (5m={chg:+.2%})",
                     exit_pct=1.0,
                     is_emergency=True,
                 )
 
-        # 3. 分层止盈
+        # 3. 分层止盈 (跳过已执行的档位, 触发最高已达标的未执行档位)
+        best_tier = None
         for tier_idx, (tp_pct, exit_ratio) in enumerate(self.config.take_profit_tiers):
-            if pnl_pct >= tp_pct and partial_exits <= tier_idx:
-                return ExitDecision(
-                    should_exit=True,
-                    reason=f"止盈T{tier_idx+1} ({pnl_pct:+.2%} >= {tp_pct:+.2%})",
-                    exit_pct=exit_ratio,
-                )
+            if tier_idx < partial_exits:
+                continue
+            if pnl_pct >= tp_pct:
+                best_tier = (tier_idx, tp_pct, exit_ratio)
+            else:
+                break
+        if best_tier is not None:
+            tier_idx, tp_pct, exit_ratio = best_tier
+            return ExitDecision(
+                should_exit=True,
+                reason=f"止盈T{tier_idx+1} ({pnl_pct:+.2%} >= {tp_pct:+.2%})",
+                exit_pct=exit_ratio,
+            )
 
         # 4. 追踪止损 (已过所有止盈层后)
         if partial_exits >= len(self.config.take_profit_tiers):

@@ -45,6 +45,8 @@ class OnlineLearner:
         })
         if len(self._buffer) >= self.buffer_size:
             self._trigger_update()
+        if len(self._buffer) > self.buffer_size * 3:
+            self._buffer = self._buffer[-self.buffer_size:]
 
     def _trigger_update(self):
         """触发增量训练。"""
@@ -54,9 +56,20 @@ class OnlineLearner:
             import lightgbm as lgb
             from sklearn.metrics import roc_auc_score
 
-            feature_names = sorted(self._buffer[0]["features"].keys())
+            all_keys = set()
+            for s in self._buffer:
+                all_keys.update(s["features"].keys())
+            feature_names = sorted(all_keys)
+            if not feature_names:
+                log.warning("在线学习: 无有效特征, 跳过")
+                return
+
             X = np.array([[s["features"].get(f, 0) for f in feature_names] for s in self._buffer])
             y = np.array([s["label"] for s in self._buffer])
+
+            if len(set(y)) < 2:
+                log.warning("在线学习: 标签单一 (全为 %d), 保留 buffer 等待更多样本", int(y[0]))
+                return
 
             split = int(len(X) * 0.8)
             X_train, X_val = X[:split], X[split:]

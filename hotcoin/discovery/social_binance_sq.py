@@ -41,6 +41,13 @@ class BinanceSquareMonitor:
         self.pool = pool
         self._seen_content_ids: Set[str] = set()
         self._mention_counts: Dict[str, List[float]] = {}
+        self._sentiment_cache: Dict[str, float] = {}
+
+        try:
+            from hotcoin.discovery.sentiment_scorer import SentimentScorer
+            self._scorer = SentimentScorer()
+        except Exception:
+            self._scorer = None
 
     async def run(self, shutdown: asyncio.Event, interval_sec: int = 300):
         log.info("币安广场监控启动 (间隔 %ds)", interval_sec)
@@ -117,6 +124,8 @@ class BinanceSquareMonitor:
                     if 2 <= len(t) <= 10 and t not in _COMMON_WORDS:
                         tickers.add(t)
 
+            sentiment = self._scorer.score(text) if self._scorer else 0.0
+
             for ticker in tickers:
                 symbol = f"{ticker}USDT"
                 mentions = self._mention_counts.setdefault(symbol, [])
@@ -124,17 +133,31 @@ class BinanceSquareMonitor:
                 cutoff = now - 3600
                 self._mention_counts[symbol] = [t for t in mentions if t >= cutoff]
 
-                log.info("广场提及: %s (content=%s)", symbol, content_id)
+                if sentiment != 0.0:
+                    self._sentiment_cache[symbol] = sentiment
+
+                log.info("广场提及: %s (content=%s, sentiment=%.2f)", symbol, content_id, sentiment)
                 self.pool.on_social_mention(
                     symbol=symbol,
                     source="binance_square",
                     kol_id="",
                     mention_count_1h=len(self._mention_counts[symbol]),
+                    sentiment=self._sentiment_cache.get(symbol, 0.0),
                 )
 
-        # 限制 seen 集合大小
         if len(self._seen_content_ids) > 5000:
-            self._seen_content_ids = set(list(self._seen_content_ids)[-2000:])
+            self._seen_content_ids.clear()
+
+    def cleanup_stale(self):
+        """清理不活跃 symbol 的过期提及记录。"""
+        now = time.time()
+        cutoff = now - 3600
+        stale = [s for s, ts in self._mention_counts.items() if not ts or ts[-1] < cutoff]
+        for s in stale:
+            del self._mention_counts[s]
+        stale_s = [s for s in self._sentiment_cache if s not in self._mention_counts]
+        for s in stale_s:
+            del self._sentiment_cache[s]
 
     def get_mention_velocity(self, symbol: str) -> float:
         mentions = self._mention_counts.get(symbol, [])

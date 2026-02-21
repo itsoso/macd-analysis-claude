@@ -131,6 +131,13 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
             computed_at=time.time(),
         )
 
+    # 降级警告: 可用周期不足一半时降低信号可信度
+    degraded = len(tf_scores) < len(tfs) / 2
+
+    if degraded:
+        log.warning("%s 信号降级: 仅 %d/%d 周期可用 (%s)",
+                    symbol, len(tf_scores), len(tfs), list(tf_scores.keys()))
+
     # 多周期共识
     try:
         computed_tfs = list(tf_scores.keys())
@@ -160,11 +167,15 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
     log.debug("%s 信号完成 %.1fs: %s strength=%d (%s)",
               symbol, elapsed, action, strength, decision.get("label", ""))
 
+    confidence = min(1.0, abs(strength) / 100)
+    if degraded:
+        confidence *= 0.5  # 降级信号降低可信度
+
     return TradeSignal(
         symbol=symbol,
         action=action,
         strength=strength,
-        confidence=min(1.0, abs(strength) / 100),
+        confidence=confidence,
         reason=decision.get("reason", decision.get("label", "")),
         sell_score=consensus.get("weighted_ss", 0),
         buy_score=consensus.get("weighted_bs", 0),

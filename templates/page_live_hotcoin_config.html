@@ -77,6 +77,40 @@
     }
     .result.ok { color: var(--accent-green); }
     .result.err { color: var(--accent-red); }
+    .metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+    @media (max-width: 900px) { .metrics { grid-template-columns: 1fr; } }
+    .metric-box {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        background: #0e1320;
+    }
+    .metric-box .label { font-size: 12px; color: var(--text-secondary); }
+    .metric-box .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+    .list-box {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        background: #0e1320;
+        min-height: 110px;
+    }
+    .list-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 12px;
+        padding: 5px 0;
+        border-bottom: 1px dashed #2a2f40;
+    }
+    .list-row:last-child { border-bottom: none; }
+    .list-key { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .list-val { color: var(--text-primary); font-weight: 600; }
+    .muted { color: var(--text-secondary); font-size: 12px; }
 </style>
 
 <div class="page-header">
@@ -164,6 +198,70 @@
 </div>
 
 <div class="card">
+    <h3>下单预检监控</h3>
+    <div class="btn-row">
+        <button class="btn" onclick="refreshPrecheckStats()">刷新预检统计</button>
+        <span id="precheckMeta" class="muted">等待数据...</span>
+    </div>
+    <div class="metrics">
+        <div class="metric-box">
+            <div class="label">预检失败总数</div>
+            <div class="value" id="precheckTotal">0</div>
+        </div>
+        <div class="metric-box">
+            <div class="label">失败码类型数</div>
+            <div class="value" id="precheckCodeKinds">0</div>
+        </div>
+        <div class="metric-box">
+            <div class="label">受影响币种数</div>
+            <div class="value" id="precheckSymbolKinds">0</div>
+        </div>
+    </div>
+    <div class="grid">
+        <div class="field">
+            <label>按失败码统计 (Top 10)</label>
+            <div id="precheckByCode" class="list-box"></div>
+        </div>
+        <div class="field">
+            <label>按币种统计 (Top 10)</label>
+            <div id="precheckBySymbol" class="list-box"></div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h3>运行状态与执行指标</h3>
+    <div class="btn-row">
+        <button class="btn" onclick="refreshRuntimeStatus()">刷新运行状态</button>
+        <span id="runtimeMeta" class="muted">等待数据...</span>
+    </div>
+    <div class="metrics">
+        <div class="metric-box">
+            <div class="label">引擎状态</div>
+            <div class="value" id="engineState">unknown</div>
+        </div>
+        <div class="metric-box">
+            <div class="label">可开新仓</div>
+            <div class="value" id="canOpenNewPositions">false</div>
+        </div>
+        <div class="metric-box">
+            <div class="label">行情最新延迟(s)</div>
+            <div class="value" id="latestTickerAgeSec">-</div>
+        </div>
+    </div>
+    <div class="grid">
+        <div class="field">
+            <label>执行指标 (5m)</label>
+            <div id="runtimeMetrics" class="list-box"></div>
+        </div>
+        <div class="field">
+            <label>状态原因</label>
+            <div id="runtimeReasons" class="list-box"></div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
     <h3>完整 JSON 配置</h3>
     <div class="btn-row">
         <button class="btn" onclick="loadHotcoinConfig()">加载</button>
@@ -180,6 +278,7 @@
 <script>
 let _loadedConfig = null;
 let _defaultConfig = null;
+let _precheckTimer = null;
 
 function setResult(msg, ok = true) {
     const box = document.getElementById('resultBox');
@@ -226,6 +325,94 @@ function parseNumber(v, fallback = 0) {
 function parseIntSafe(v, fallback = 0) {
     const n = parseInt(v, 10);
     return Number.isFinite(n) ? n : fallback;
+}
+
+function formatTs(ts) {
+    if (!ts) return '-';
+    const d = new Date(Number(ts) * 1000);
+    if (Number.isNaN(d.getTime())) return '-';
+    return d.toLocaleString();
+}
+
+function renderKeyValueList(containerId, rows) {
+    const box = document.getElementById(containerId);
+    if (!rows || rows.length === 0) {
+        box.innerHTML = '<div class="muted">暂无数据</div>';
+        return;
+    }
+    box.innerHTML = rows.map(([k, v]) => `
+        <div class="list-row">
+            <span class="list-key" title="${k}">${k}</span>
+            <span class="list-val">${v}</span>
+        </div>
+    `).join('');
+}
+
+function renderPrecheckStats(data) {
+    const byCode = data.by_code || {};
+    const bySymbolRaw = data.by_symbol || {};
+    const bySymbol = Object.entries(bySymbolRaw).map(([symbol, detail]) => {
+        const subtotal = Object.values(detail || {}).reduce((acc, n) => acc + (Number(n) || 0), 0);
+        return [symbol, subtotal];
+    });
+    bySymbol.sort((a, b) => b[1] - a[1]);
+
+    const codeRows = Object.entries(byCode).sort((a, b) => (b[1] || 0) - (a[1] || 0)).slice(0, 10);
+    const symbolRows = bySymbol.slice(0, 10);
+
+    document.getElementById('precheckTotal').textContent = Number(data.total || 0).toString();
+    document.getElementById('precheckCodeKinds').textContent = Object.keys(byCode).length.toString();
+    document.getElementById('precheckSymbolKinds').textContent = Object.keys(bySymbolRaw).length.toString();
+    document.getElementById('precheckMeta').textContent = `来源: ${data.source || '-'} | 时间: ${formatTs(data.ts)}`;
+
+    renderKeyValueList('precheckByCode', codeRows);
+    renderKeyValueList('precheckBySymbol', symbolRows);
+}
+
+async function refreshPrecheckStats() {
+    try {
+        const data = await apiCall('/hotcoin/api/precheck_stats');
+        renderPrecheckStats(data || {});
+    } catch (e) {
+        document.getElementById('precheckMeta').textContent = `预检统计加载失败: ${e.message}`;
+    }
+}
+
+function renderRuntimeStatus(data) {
+    const state = data.engine_state || 'unknown';
+    const canOpen = !!data.can_open_new_positions;
+    const freshness = data.freshness || {};
+    const metrics = data.execution_metrics || {};
+    const reasons = data.engine_state_reasons || [];
+
+    document.getElementById('engineState').textContent = state;
+    document.getElementById('canOpenNewPositions').textContent = String(canOpen);
+    const age = freshness.latest_ticker_age_sec;
+    document.getElementById('latestTickerAgeSec').textContent =
+        (age === null || age === undefined) ? '-' : String(age);
+    document.getElementById('runtimeMeta').textContent =
+        `更新时间: ${formatTs(data.ts)} | priced_symbols: ${freshness.priced_symbols ?? 0}`;
+
+    const metricRows = [
+        ['order_attempts_5m', metrics.order_attempts_5m ?? 0],
+        ['order_success_5m', metrics.order_success_5m ?? 0],
+        ['order_errors_5m', metrics.order_errors_5m ?? 0],
+        ['precheck_failures_5m', metrics.precheck_failures_5m ?? 0],
+        ['dedup_rejects_5m', metrics.dedup_rejects_5m ?? 0],
+        ['precheck_fail_rate_5m', metrics.precheck_fail_rate_5m ?? 0],
+        ['order_error_rate_5m', metrics.order_error_rate_5m ?? 0],
+    ];
+    renderKeyValueList('runtimeMetrics', metricRows);
+    renderKeyValueList('runtimeReasons', reasons.map(r => [r, 1]));
+}
+
+async function refreshRuntimeStatus() {
+    try {
+        const data = await apiCall('/hotcoin/api/status');
+        renderRuntimeStatus(data || {});
+    } catch (e) {
+        document.getElementById('runtimeMeta').textContent = `运行状态加载失败: ${e.message}`;
+    }
 }
 
 function fillCommonFields(cfg) {
@@ -338,6 +525,12 @@ async function saveHotcoinConfig() {
 }
 
 loadHotcoinConfig();
+refreshPrecheckStats();
+refreshRuntimeStatus();
+if (_precheckTimer) clearInterval(_precheckTimer);
+_precheckTimer = setInterval(() => {
+    refreshPrecheckStats();
+    refreshRuntimeStatus();
+}, 15000);
 </script>
 {% endblock %}
-

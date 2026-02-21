@@ -3,6 +3,7 @@
 - 文档目标：基于**最新代码 + 实际运行日志 + 模拟交易结果 + 参数配置**，给出可执行的全局架构改进计划。
 - 页面入口：`/strategy/spec-codex`（线上地址：`https://invest.executor.life/strategy/spec-codex`）
 - 本地源文件：`docs/strategy_spec_codex.md`
+- HotCoin 设计文档：`docs/hotcoin_design_doc.md`
 - 评估时间：`2026-02-20 23:10 CST`
 - 代码基线：`8b12f3f`（最近 5 次提交：`8b12f3f / f78a04a / 5af5516 / a97f4e7 / 0861145`）
 

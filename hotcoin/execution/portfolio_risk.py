@@ -9,6 +9,7 @@ L5 组合: 总回撤 -15% → 全清仓 + 冷却 24h
 附加: 流动性门槛 / FOMO 过滤
 """
 
+import datetime
 import logging
 import time
 from dataclasses import dataclass, field
@@ -193,9 +194,16 @@ class PortfolioRisk:
         self._check_daily_reset()
 
         # L5: 总回撤检查
+        # current_equity = 初始资金 + 已实现总PnL + 未实现PnL
+        # total_equity 已经是 initial_capital + 累计已实现PnL (通过 close_position 累加)
         unrealized = sum(self._calc_unrealized_pnl(p, current_prices.get(p.symbol, p.entry_price))
                          for p in self._positions.values())
         current_equity = self.state.total_equity + unrealized
+
+        # 更新峰值权益 (含未实现盈亏, 避免回撤计算失真)
+        if current_equity > self.state.peak_equity:
+            self.state.peak_equity = current_equity
+
         drawdown = (self.state.peak_equity - current_equity) / self.state.peak_equity if self.state.peak_equity > 0 else 0
 
         if drawdown >= self.config.total_drawdown_halt_pct:
@@ -231,9 +239,8 @@ class PortfolioRisk:
 
     def _check_daily_reset(self):
         """每日 UTC 0:00 重置日度统计 (按自然日边界)。"""
-        import datetime
         now = time.time()
-        utc_today_start = datetime.datetime.utcnow().replace(
+        utc_today_start = datetime.datetime.now(datetime.timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         ).timestamp()
         if self.state.daily_start_time < utc_today_start:

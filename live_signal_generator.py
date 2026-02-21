@@ -454,6 +454,8 @@ class LiveSignalGenerator:
                         _ver = _ml_info.get('ml_version', 'v?')
                         _stk_dis = _ml_info.get('stacking_disabled_reason', '-')
                         _stk_skip = _ml_info.get('stacking_skipped_reason', '-')
+                        _stk_lstm_skip = _ml_info.get('stacking_lstm_skipped_reason', '-')
+                        _stk_tft_skip = _ml_info.get('stacking_tft_skipped_reason', '-')
                         _ca_skip = _ml_info.get('ca_skipped_reason', '-')
                         _cov73 = _ml_info.get('stacking_feature_coverage_73', '-')
                         _cov94 = _ml_info.get('stacking_feature_coverage_94', '-')
@@ -484,6 +486,7 @@ class LiveSignalGenerator:
                             f"kelly={_kelly} pos_scale={_pos_scale} "
                             f"remote={_remote} "
                             f"stk_dis={_stk_dis} stk_skip={_stk_skip} "
+                            f"stk_lstm_skip={_stk_lstm_skip} stk_tft_skip={_stk_tft_skip} "
                             f"stk_cov=({_cov73},{_cov94}) ca_cov={_ca_cov} ca_skip={_ca_skip} "
                             f"q_act={_q_act} "
                             f"SS {sell_score:.1f}→{_ml_ss:.1f} "
@@ -552,6 +555,8 @@ class LiveSignalGenerator:
                 components['ml_remote_inference'] = _ml_info.get('remote_inference', False)
                 components['ml_stacking_disabled_reason'] = _ml_info.get('stacking_disabled_reason', '')
                 components['ml_stacking_skipped_reason'] = _ml_info.get('stacking_skipped_reason', '')
+                components['ml_stacking_lstm_skipped_reason'] = _ml_info.get('stacking_lstm_skipped_reason', '')
+                components['ml_stacking_tft_skipped_reason'] = _ml_info.get('stacking_tft_skipped_reason', '')
                 components['ml_stacking_mode'] = _ml_info.get('stacking_mode', False)
                 components['ml_ca_skipped_reason'] = _ml_info.get('ca_skipped_reason', '')
                 components['ml_stacking_cov_73'] = _ml_info.get('stacking_feature_coverage_73', '')

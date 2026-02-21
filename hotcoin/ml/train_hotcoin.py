@@ -126,13 +126,13 @@ def train_hotness_model(data: Dict[str, pd.DataFrame], interval: str = "15m"):
         combined.append(feat)
 
     combined_df = pd.concat(combined).dropna()
+    combined_df = combined_df.sort_index()
     X = combined_df[feature_cols].values
     y = combined_df["label"].values
 
     log.info("训练集: %d 样本, %d 特征, label_1=%.2f%%",
              len(X), X.shape[1], y.mean() * 100)
 
-    # Walk-forward split
     split_idx = int(len(X) * 0.7)
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
@@ -231,9 +231,14 @@ def train_trade_model(data: Dict[str, pd.DataFrame], interval: str = "15m"):
         log.error("无可用数据")
         return
 
-    X = pd.concat(all_X).values
-    y = pd.concat(all_y).values
+    X_df = pd.concat(all_X)
+    y_series = pd.concat(all_y)
+    X_df = X_df.sort_index()
+    y_series = y_series.loc[X_df.index]
+
     feature_cols = list(all_X[0].columns)
+    X = X_df.values
+    y = y_series.values
 
     log.info("训练集: %d 样本, %d 特征, label_1=%.2f%%",
              len(X), X.shape[1], y.mean() * 100)

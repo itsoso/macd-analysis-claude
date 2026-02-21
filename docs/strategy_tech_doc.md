@@ -1,4 +1,4 @@
-# ETH/USDT 六书融合量化交易策略 v10.2+ML v3.2 — 完整技术规格书（2026-02-18 更新）
+# ETH/USDT 六书融合量化交易策略 v10.2+ML v3.3 — 完整技术规格书（2026-02-21 更新）
 
 **交易标的**: ETH/USDT 永续合约 (Binance Futures)
 **主时间框架**: 1h K线
@@ -7,49 +7,52 @@
 **OOS验证区间**: 2024-01 ~ 2024-12 (12个月)
 **Walk-Forward验证**: 6窗口滚动 (2024Q1 ~ 2025Q4)
 **初始资金**: $100,000 USDT
-**策略版本**: v10.2+ML v3.2 — 六书融合 + ML 预测子系统 + H800 离线训练
+**策略版本**: v10.2+ML v3.3 — 六书融合 + ML 预测子系统 + H800 离线训练
 **生产配置版本**: v6（`STRATEGY_VERSION` 默认 `v6`，可环境变量切换）
 **GPU训练**: H800 离线训练（本地 Parquet 数据管线，LSTM/TFT/PPO/TabNet/Stacking 等模式）
-**ML 模式**: 正式增强（shadow_mode=False, 2026-02-20 起）
+**ML 模式**: 正式增强（shadow_mode=False, 2026-02-20 起），Stacking 由 systemd 环境变量显式启用
 
-> **最新架构与代码结构摘要** (2026-02-18):
+> **最新架构与代码结构摘要** (2026-02-21):
 > 1. **信号计算单源**：`signal_core.py` 是回测与实盘共用核心，统一计算六书评分与融合分数，避免信号漂移。  
 > 2. **实盘链路模块化**：`live_runner.py`（入口）→ `live_trading_engine.py`（编排）→ `live_signal_generator.py`（信号）→ `order_manager.py`/`risk_manager.py`（执行与风控）。  
-> 3. **ML 正式增强**：`ml_live_integration.py` 已关闭 shadow 模式（2026-02-20），ML 实际修改 SS/BS 信号；支持方向预测 (Stacking 优先)、Regime、分位数与可选远程 GPU 推理 API 回退。  
-> 4. **Stacking 上线门控**：Stacking 由环境变量与质量门槛联合控制（val/test/oof AUC、过拟合 gap、特征覆盖率）；不满足时自动回退加权 LGB+LSTM+TFT+跨资产 LGB。当前 1h Stacking OOF AUC=0.5883, 24492 样本，已通过门控。  
-> 5. **H800 训练入口统一**：`train_gpu.py` 含样本量门控（Stacking≥20k, TabNet≥10k），Multi-Horizon LSTM，ONNX 导出，12 种训练模式。  
-> 6. **文档渲染链路**：`/strategy/tech-doc` 页面直接渲染 `docs/strategy_tech_doc.md`，是线上技术文档单一来源。
+> 3. **ML 正式增强**：`ml_live_integration.py` 已关闭 shadow 模式，ML 实际修改 SS/BS 信号；Stacking 代码默认关闭 (`_env_flag("ML_ENABLE_STACKING", False)`)，通过 systemd 环境变量 `ML_ENABLE_STACKING=1` 显式开启。  
+> 4. **Stacking v3 (C=0.5)**：三轮迭代后确定 `C=0.5 + class_weight=None`，OOF AUC=0.5893，新增 Platt Scaling 概率校准（当前未启用，Brier Score 无改善）。元学习器系数：LGB(1.37) + Cross-Asset LGB(1.10) 双引擎主导，XGB/TFT 近零/负值。  
+> 5. **实盘止损对齐**：`live_signal_generator._compute_effective_sl()` 实现 MAE→ATR-SL→regime→固定 SL 优先级链，与回测完全一致。  
+> 6. **多周期共识 D 改进**：大周期权重≥70% 时允许谨慎入场（strength≤40），消除大周期强主导被小周期噪声否决的问题。
+> 7. **运维增强**：API 断路器（连续失败后冷却 300s）、K线新鲜度守护（require_fresh + max_lag_hours）、运行时清单（git commit/模型指纹/ML 配置）。
 
 **代码规模统计**:
-- Python 文件: **170 个**, 总行数 ~76,600
-- Top 5 大文件: `optimize_six_book.py` (5,488), `train_gpu.py` (3,798), `app.py` (2,180), `ml_live_integration.py` (1,782), `candlestick_patterns.py` (1,657)
+- Python 文件: **170+ 个**, 总行数 ~78,000
+- Top 5 大文件: `optimize_six_book.py` (5,488), `train_gpu.py` (~3,850), `app.py` (2,180), `ml_live_integration.py` (~1,900), `candlestick_patterns.py` (1,657)
 - 模板文件: 48 个 HTML 模板
-- 测试文件: 7 个 (tests/ + 根目录 test_*.py)
+- 测试文件: 8 个 (tests/ + 根目录 test_*.py)
 
 **最新代码结构（顶层）**:
-- `app.py`: Flask 主应用与文档/API 页面入口 (2,180 行)
+- `app.py`: Flask 主应用与文档/API 页面入口
 - `web_routes/`: 页面与结果 API 子路由
 - `templates/`: 控制台/文档/回测页面模板 (48 个)
-- `signal_core.py`: 六书信号与融合核心 (1,105 行)
-- `optimize_six_book.py`: 回测优化与多周期策略运行 (5,488 行, **待拆分**)
-- `strategy_futures.py`: 合约回测执行引擎 (1,378 行)
-- `live_*.py`: 实盘入口、信号生成、交易编排
-- `ml_live_integration.py`: ML 信号增强器 (1,782 行, 含 Stacking 门控 + 远程推理)
-- `train_gpu.py`: H800 离线训练总入口 (3,798 行, **待拆分**)
+- `signal_core.py`: 六书信号与融合核心
+- `optimize_six_book.py`: 回测优化与多周期策略运行 (**待拆分**)
+- `strategy_futures.py`: 合约回测执行引擎
+- `live_signal_generator.py`: 实盘信号生成（含止损优先级链、K线新鲜度守护）
+- `live_trading_engine.py`: 交易编排（含运行时清单、结构化日志）
+- `multi_tf_consensus.py`: 多周期共识（含情况D加权主导判断）
+- `ml_live_integration.py`: ML 信号增强器（含 Stacking 门控 + torch 兼容加载 + 错误诊断链）
+- `train_gpu.py`: H800 离线训练总入口（含 Platt 校准、OOF 诊断增强）
+- `binance_fetcher.py`: 数据获取（含 API 断路器、缓存新鲜度检查）
 - `data/`: klines、ml_models、backtests、live 状态
 - `tests/` + `test_*.py`: 单元/集成/策略一致性测试
 
-**近期改动摘要（架构/运维）**:
-- **ML 正式上线**: shadow_mode=False (2026-02-20)，ML 实际增强信号分数，Stacking 作为方向预测优先路径。
-- Stacking 1h 重训完成 (H800): OOF AUC=0.5883, 24492 样本; 元学习器系数分析：LGB(1.24) 和跨资产LGB(1.47) 贡献最大，XGBoost(-0.02) 和 TFT(-0.12) 贡献极低。
-- 新增 `scripts/sync_stacking_alias.py` 保证默认别名指向指定 TF 的 Stacking 模型。
-- `check_ml_health.py` 修复 shadow_mode 误报，优先读取 runtime config。
-- `train_gpu.py` 新增样本量门控（Stacking≥20k, TabNet≥10k），避免小样本浪费 GPU。
-- Multi-Horizon LSTM 训练与推理支持（best_head 自动选择）。
-- ONNX 模型重新导出（LSTM/TFT/MTF）。
-- 新增独立推理服务 `ml_inference_server.py`，支持 `/health`、`/predict`，ECS 侧可远程调用并失败回退本地推理。
-- 实控面板多周期检测增强：自动检测恢复补跑、请求超时控制、检测健康状态指示。
-- 部署脚本 `deploy.sh` / `deploy_local.sh` 维持双服务重启与健康检查流程。
+**近期改动摘要（2026-02-20 ~ 02-21）**:
+- **Stacking v3 三轮迭代**: C=1.0→0.3(balanced)→0.5(None)，最终 OOF AUC=0.5893, hvol_20 系数从 3.35 降至 0.11（正则化生效）。新增 Platt Scaling 概率校准框架。
+- **实盘止损与回测对齐**: `_compute_effective_sl()` 实现 MAE > ATR-SL > regime > 固定 SL 优先级链。
+- **多周期共识情况D改进**: 大周期权重占比≥70% 允许谨慎入场，消除误 HOLD。
+- **Stacking 默认关闭**: `ml_live_integration.py` 默认 False，由 `deploy.sh` 的 systemd env `ML_ENABLE_STACKING=1` 显式开启。
+- **API 断路器**: `binance_fetcher.py` 新增 endpoint 级断路器，连续失败后冷却 300s（可配 `BINANCE_API_CIRCUIT_COOLDOWN_SEC`）。
+- **K线新鲜度守护**: `fetch_binance_klines()` 增加 `require_fresh`/`max_lag_hours`/`allow_api_fallback` 参数。
+- **运行时清单**: `live_trading_engine._log_runtime_manifest()` 启动时记录 git commit、模型文件指纹、ML 配置。
+- **推理鲁棒性**: `_torch_load_state()` 兼容新旧 torch 版本；Stacking LSTM/TFT 全链路错误诊断（`_stacking_lstm_last_error`）。
+- **部署强化**: `deploy.sh` 增加依赖校验（lightgbm/xgboost/onnxruntime/sklearn/torch），Stacking 启用时自动安装 torch。
 
 >
 > **v10.2 Phase 2 改造** (2026-02-15):
@@ -931,7 +934,7 @@ v10.0 ("连续化改造"):
 
 | 模型 | 文件 | 架构 | Test AUC | 用途 |
 |------|------|------|----------|------|
-| **Stacking Ensemble** | `stacking_meta.pkl` + `stacking_meta.json` | 4 基模型 OOF → LogisticRegression 元学习器 | Val/Test 见 meta | **方向预测优先路径** (有则覆盖加权集成) |
+| **Stacking v3 Ensemble** | `stacking_meta.pkl` + `stacking_meta.json` | 5 基模型 OOF → LogisticRegression(C=0.5) + Platt 校准 | OOF 0.5893 / Test 0.5437 | **方向预测优先路径** (LGB+CA-LGB 双引擎主导) |
 | **LGB 方向预测** | `lgb_direction_model.txt` | LightGBM (Optuna) | **0.5537** | 涨跌概率 → bull_prob (Stacking 基模型之一 / fallback) |
 | **LSTM+Attention** | `lstm_1h.pt` + ONNX | 双向LSTM+Attention, BF16 | **0.5366** | 序列模式方向预测 (Stacking 基模型之一 / fallback) |
 | **跨资产 LGB** | `lgb_cross_asset_1h.txt` | LightGBM + BTC/SOL/BNB 特征 | **0.5485** | 跨市场联动预测 (fallback 加权) |
@@ -998,21 +1001,34 @@ v10.0 ("连续化改造"):
 # 多尺度: 3h/5h/12h/24h 四个 horizon 模型投票, 跨尺度共识
 ```
 
-### 13.5 实盘 ML 增强流程 (正式模式, 2026-02-20 起)
+### 13.5 实盘 ML 增强流程 (正式模式, 2026-02-21 起)
 
 ```
 live_signal_generator.py → compute_signals_six() → 六书 SS/BS
-  ↓ (use_ml_enhancement=True, shadow_mode=False ← 已开启正式增强)
+  ↓ (use_ml_enhancement=True, shadow_mode=False)
+  ↓ _compute_effective_sl() → MAE→ATR-SL→regime→固定 SL 优先级链 (与回测对齐)
 ml_live_integration.py → MLSignalEnhancer.enhance_signal()
-  ├─ 方向: Stacking(优先, 1h OOF AUC=0.5883) 或 LGB+LSTM+TFT+跨资产LGB 加权 → bull_prob
-  ├─ Stacking 元学习器系数: LGB=1.24, 跨资产LGB=1.47, LSTM=0.15, XGB≈0, TFT≈0
+  ├─ 方向: Stacking v3 (优先, C=0.5, OOF AUC=0.5893) 或 LGB+LSTM+TFT+跨资产LGB 加权 → bull_prob
+  ├─ Stacking 元学习器系数 (v3): LGB=1.37, 跨资产LGB=1.10, LSTM=0.12, XGB≈-0.04, TFT≈-0.10
+  ├─ Platt Scaling 校准: 已集成框架, 当前 enabled=false (Brier Score 无改善)
   ├─ Regime: vol_prob + trend_prob → boost/dampen/neutral
   ├─ 分位数: q05~q95 → Kelly 仓位 + 动态止损 + 尾部降权
   └─ 输出: enhanced_ss, enhanced_bs, kelly_fraction, dynamic_sl
   ↓
+Stacking 控制链: systemd env ML_ENABLE_STACKING=1 → deploy.sh 配置 → ml_live_integration.py 默认关闭
 正式模式 (当前): SS/BS 用 ML 增强值, 仓位用 kelly, 止损用 dynamic_sl
 shadow 模式 (如需回退): 只记录到日志, 不实际修改信号
 ```
+
+**Stacking v3 迭代历程**:
+
+| 版本 | C 值 | class_weight | OOF AUC | Val AUC | Test AUC | hvol_20 系数 | XGB 系数 | TFT 系数 |
+|------|------|-------------|---------|---------|----------|-------------|---------|---------|
+| v1 (初始) | 1.0 | None | 0.588 | 0.821 | 0.547 | 2.97 | -0.29 | 0.09 |
+| v2 (C=0.3) | 0.3 | balanced | ~0.588 | - | - | 偏移 | 偏移 | 偏移 |
+| **v3 (当前)** | **0.5** | **None** | **0.5893** | **0.771** | **0.5437** | **0.11** | **-0.04** | **-0.10** |
+
+关键改善: hvol_20 从 2.97 → 0.11 (正则化 + class_weight 调整消除波动率过拟合)
 
 ---
 
@@ -1114,7 +1130,7 @@ MTFFusionMLP(
 
 ```
 H800 训练产出 (data/ml_models/):
-  stacking_meta.pkl + stacking_meta.json  Stacking 元学习器 (4 基模型 OOF → LogisticRegression)
+  stacking_meta.pkl + stacking_meta.json  Stacking v3 元学习器 (5 基模型 OOF → LR(C=0.5) + Platt)
   stacking_lgb_*.txt / stacking_xgb_*.json / stacking_lstm_*.pt / stacking_tft_*.pt  Stacking 基模型
   lgb_direction_model.txt    LGB 方向 (Optuna, AUC 0.55)
   lgb_cross_asset_1h.txt     跨资产 LGB (94维, AUC 0.55)
@@ -1137,77 +1153,99 @@ H800 训练产出 (data/ml_models/):
 
 ---
 
-<h2 id="section-15">十五、全局代码审视与架构改进计划 (2026-02-18 Review)</h2>
+<h2 id="section-15">十五、全局代码审视与架构改进计划 (2026-02-21 Review)</h2>
 
 ### 15.0 全局代码 Review 发现
 
 #### A. 代码结构问题
 
-| # | 问题 | 严重度 | 详情 |
-|---|------|--------|------|
-| A1 | **模型类重复定义 ×12 处** | P0 | `LSTMAttention` 定义 5 处 (train_gpu.py×3, ml_live_integration.py×2)；`EfficientTFT` 定义 6 处；`LSTMMultiHorizon` 定义 2 处。同一网络结构散落多处，修改一处易遗漏其余。 |
-| A2 | **optimize_six_book.py 5,488 行** | P1 | 单文件承担回测引擎、参数优化、多周期融合、regime 分析、微结构叠加等多个职责。新增功能无法独立测试。 |
-| A3 | **train_gpu.py 3,798 行** | P1 | 包含 12 种训练模式、模型定义、ONNX 导出、数据预处理。模式间无代码复用接口。 |
-| A4 | **live_signal_generator.py 冗余导入** | P2 | 直接导入 `strategy_enhanced`, `ma_indicators`, `candlestick_patterns` 等 7 个模块，但信号计算已通过 `signal_core.compute_signals_six()` 封装。部分直接导入仅用于 `evaluate_action()` 中零散调用。 |
-| A5 | **app.py 2,180 行** | P2 | Web 路由、API 端点、subprocess 调用混杂。已有 `web_routes/` 拆分但不完全。 |
+| # | 问题 | 严重度 | 详情 | 状态 |
+|---|------|--------|------|------|
+| A1 | **模型类重复定义 ×12 处** | P0 | `LSTMAttention` 定义 5 处 (train_gpu.py×3, ml_live_integration.py×2)；`EfficientTFT` 定义 6 处；`LSTMMultiHorizon` 定义 2 处。 | 未修复 |
+| A2 | **optimize_six_book.py 5,488 行** | P1 | 单文件承担回测引擎、参数优化、多周期融合、regime 分析等多个职责。 | 未修复 |
+| A3 | **train_gpu.py ~3,850 行** | P1 | 包含 12 种训练模式 + Platt 校准 + OOF 诊断。持续增长中。 | 未修复 |
+| A4 | **live_signal_generator.py 冗余导入** | P2 | 直接导入 7 个策略模块，但信号计算已通过 `signal_core.compute_signals_six()` 封装。 | 未修复 |
+| A5 | **app.py 2,180 行** | P2 | Web 路由、API 端点、subprocess 调用混杂。已有 `web_routes/` 拆分但不完全。 | 未修复 |
 
 #### B. 配置与一致性问题
 
-| # | 问题 | 严重度 | 详情 |
-|---|------|--------|------|
-| B1 | **三层超时不对齐** | P0 | `app.py` subprocess timeout=300s < Gunicorn timeout=360s。长时间多周期检测中，subprocess 先超时导致 Gunicorn worker 空转 60s。 |
-| B2 | **deploy.sh ML_ENABLE_STACKING=1 硬编码** | P1 | Stacking 启用/禁用依赖环境变量，但部署脚本始终写入 `=1`。若需紧急关闭 Stacking，必须改脚本而非配置。 |
-| B3 | **技术文档过时** | P0 (已修复) | 文档仍显示 "shadow 模式运行中"，实际 shadow_mode 已于 2026-02-20 关闭。本次已修正。 |
+| # | 问题 | 严重度 | 详情 | 状态 |
+|---|------|--------|------|------|
+| ~~B1~~ | ~~三层超时不对齐~~ | ~~P0~~ | ~~`app.py` subprocess timeout 从 300s→360s~~ | ✅ 已修复 |
+| B2 | **deploy.sh ML_ENABLE_STACKING 硬编码** | P1 | `ML_ENABLE_STACKING_DEFAULT=1` 仍然硬编码在脚本中。紧急关闭需改脚本。 | 未修复 |
+| ~~B3~~ | ~~技术文档过时~~ | ~~P0~~ | ~~shadow 模式→正式模式~~ | ✅ 已修复 |
+| B4 | **Platt 校准训练端已实现、推理端未接入** | P1 | `train_gpu.py` 输出 `platt_calibration` 参数到 meta JSON，但 `ml_live_integration.py` 未读取、未应用 Platt 变换。当前 `enabled=false`，但 enabled=true 时也不会生效。 | **新发现** |
+| B5 | **deploy.sh 依赖校验逻辑有 heredoc 语法风险** | P2 | `$SSH_CMD ... <<'PY' ... PY"` 嵌套 heredoc 与环境变量传递写法在某些 shell 下不稳定，可能导致远程执行失败。 | **新发现** |
 
-#### C. ML 模型质量观察
+#### C. ML 模型质量观察 (Stacking v3, 2026-02-21 更新)
 
-| # | 发现 | 影响 | 建议 |
+| # | 发现 | v1→v3 变化 | 影响 | 建议 |
+|---|------|-----------|------|------|
+| C1 | **XGB/TFT 系数持续为负** | XGB: -0.29→-0.04; TFT: +0.09→-0.10 | 低 | v3 正则化缩小了绝对值，但 TFT 从正转负、XGB 仍负。两者对集成无正向贡献。 |
+| C2 | **hvol_20 系数大幅缩小** | 2.97→0.11 | ✅ 改善 | `C=0.5 + class_weight=None` 有效消除了 v1 中 hvol_20 过拟合问题。 |
+| C3 | **OOF-Test Gap 稳定** | 0.045→0.046 (0.5893-0.5437) | 可接受 | Gap 未恶化，在门控阈值 0.10 内，但持续 OOF > Test 说明轻微过拟合仍在。 |
+| C4 | **Val AUC 高位但下降** | 0.821→0.771 | 信息 | Val AUC 基于全量重训模型在 val 上评估（in-sample），高于 OOF 是正常的，下降说明正则化在抑制过拟合。 |
+| C5 | **Platt Scaling 未起效** | 新增 | 信息 | Brier Score: 0.2261→0.2261 (几乎不变)，Platt 参数 A≈1.01, B≈0.007 → 校准曲线已接近对角线，无需进一步变换。说明元学习器本身概率输出已较好。 |
+| C6 | **LGB+Cross-Asset LGB 双引擎主导** | LGB 1.37 + CA-LGB 1.10 | 核心 | 5 基模型实质是 2 基模型 (LGB 类)，应考虑精简为 LGB+CA-LGB 双基模型或引入差异更大的基模型。 |
+
+#### D. 实盘链路改进 (2026-02-21 新增)
+
+| # | 改进 | 影响 | 风险 |
 |---|------|------|------|
-| C1 | **Stacking 元学习器系数分析** | 信息 | XGBoost 系数=-0.02 (近零), TFT=-0.12 (负向)。元学习器实质上在做 "LGB + 跨资产LGB + hvol_20 偏置"，XGB/TFT 对最终预测贡献极低。 |
-| C2 | **hvol_20 系数=3.35 异常大** | 警告 | 作为 extra_feature 的 hvol_20 系数远大于任何基模型，可能是过拟合的波动率偏好。高波动时期 bull_prob 被 hvol 大幅拉偏。 |
-| C3 | **OOF AUC=0.5883 vs Test AUC=0.5429** | 警告 | Gap=0.045，虽未超过门控阈值(0.10)，但方向持续 OOF > Test，说明元学习器有轻微过拟合。 |
-| C4 | **ONNX 推理路径未验证一致性** | P1 | LSTM/TFT 的 ONNX 导出后未做 PyTorch vs ONNX 输出数值一致性对比。 |
+| D1 | **止损优先级链 (`_compute_effective_sl`)** | 消除回测/实盘止损不一致 | 低 — 逻辑与回测 `_compute_sl_pct()` 对齐 |
+| D2 | **多周期共识情况D改进** | 减少大周期强主导被误 HOLD | 中 — 70% 阈值需实盘验证，可能导致弱信号入场 |
+| D3 | **API 断路器** | 防止 API 连续故障导致系统阻塞 | 低 — 冷却 300s 后自动恢复 |
+| D4 | **K线新鲜度守护** | 防止使用过期缓存数据 | 低 — `allow_api_fallback=True` 保底 |
+| D5 | **运行时清单 (`_log_runtime_manifest`)** | 启动时记录完整运行环境，便于故障追溯 | 低 — 纯日志增强 |
+| D6 | **Stacking 错误诊断链** | LSTM/TFT 各阶段失败原因可追溯（import→load→infer） | 低 — 不影响回退逻辑 |
+| D7 | **torch 兼容加载 (`_torch_load_state`)** | 兼容新旧 torch 版本的 `weights_only` 参数 | 低 |
 
-#### D. 测试覆盖不足
+#### E. 测试覆盖不足
 
-| # | 问题 | 建议 |
-|---|------|------|
-| D1 | 7 个测试文件, 无 signal_core.py 单元测试 | 添加 `test_signal_core.py` 覆盖 `compute_signals_six()` / `calc_fusion_score_six()` |
-| D2 | 无 ML 端到端推理测试 | 添加 `test_ml_e2e.py` 验证特征→推理→增强全链路 |
-| D3 | 无回测结果回归测试 | 添加固定参数回测的金标准对比，防止代码改动导致回测结果漂移 |
+| # | 问题 | 建议 | 状态 |
+|---|------|------|------|
+| E1 | 8 个测试文件, 无 signal_core.py 单元测试 | 添加 `test_signal_core.py` | 未修复 |
+| E2 | 无 ML 端到端推理测试 | 添加 `test_ml_e2e.py` | 未修复 |
+| E3 | 无回测结果回归测试 | 添加固定参数回测的金标准对比 | 未修复 |
+| E4 | **Platt 校准推理路径无测试** | 若启用 Platt，推理侧需校准代码 + 测试 | **新发现** |
 
-### 15.1 架构改进计划 (P0/P1/P2)
+### 15.1 架构改进计划 (P0/P1/P2) — 2026-02-21 更新
 
 #### P0 — 必须立即修复
 
-| # | 改进项 | 预计工作量 | 收益 |
-|---|--------|-----------|------|
-| P0-1 | **统一模型定义模块**: 将 `LSTMAttention`, `EfficientTFT`, `LSTMMultiHorizon` 抽取到 `ml_models_def.py`，train_gpu.py 和 ml_live_integration.py 统一 import | 2h | 消除 12 处重复定义，修改一处自动同步 |
-| P0-2 | **三层超时对齐**: `app.py` subprocess timeout 从 300s → 360s，与 Gunicorn 和 Nginx 对齐 | 5min | 消除 subprocess 先超时导致 worker 空转 |
-| P0-3 | **Stacking 元学习器系数监控**: 在 `check_ml_health.py` 中添加系数合理性检查（负值基模型警告、extra_feature 过大警告） | 1h | 提前发现过拟合信号 |
-| P0-4 | **信号漂移回归测试**: 创建 `test_signal_regression.py`，固定输入数据对比 `compute_signals_six()` 输出，任何改动导致输出变化即报错 | 2h | 防止策略逻辑被意外改动 |
+| # | 改进项 | 预计工作量 | 收益 | 状态 |
+|---|--------|-----------|------|------|
+| P0-1 | **统一模型定义模块**: 将 `LSTMAttention`, `EfficientTFT`, `LSTMMultiHorizon` 抽取到 `ml_models_def.py` | 2h | 消除 12 处重复定义 | 未开始 |
+| ~~P0-2~~ | ~~三层超时对齐~~ | ~~5min~~ | ~~消除 worker 空转~~ | ✅ 已修复 |
+| P0-3 | **Stacking 元学习器系数监控**: `check_ml_health.py` 添加系数合理性检查 | 1h | 提前发现过拟合 | 未开始 |
+| P0-4 | **信号漂移回归测试**: 创建 `test_signal_regression.py` | 2h | 防止策略被意外改动 | 未开始 |
+| P0-5 | **Platt 推理端对接**: `ml_live_integration.py` 读取 `platt_calibration` 参数，enabled=true 时应用变换 | 1h | 训练-推理一致性 | **新增** |
 
 #### P1 — 近期重点改进
 
-| # | 改进项 | 预计工作量 | 收益 |
-|---|--------|-----------|------|
-| P1-1 | **拆分 optimize_six_book.py**: 按职责拆为 `backtest_engine.py`(回测循环)、`regime_analysis.py`(regime 计算)、`microstructure_overlay.py`(微结构)、`position_sizing.py`(仓位计算) | 1-2d | 可独立测试、降低认知负载 |
-| P1-2 | **拆分 train_gpu.py**: 按模型类型拆为 `train_lgb.py`, `train_lstm.py`, `train_tft.py`, `train_stacking.py` + 共享 `train_utils.py` | 1d | 各模型独立维护 |
-| P1-3 | **ONNX 推理一致性验证**: 添加 `test_onnx_consistency.py`，对比 PyTorch 和 ONNX 推理输出的数值偏差（atol=1e-4） | 4h | 确保 ONNX 加速不引入精度问题 |
-| P1-4 | **deploy.sh ML 配置外部化**: 将 ML 环境变量从脚本硬编码改为读取 `ml_deploy_config.env` 文件 | 2h | 灵活切换 Stacking 开关而无需改脚本 |
-| P1-5 | **live_signal_generator.py 清理冗余导入**: 移除 7 个未被直接使用的策略模块导入 | 30min | 减少启动耗时和内存占用 |
-| P1-6 | **统一训练-推理模型契约**: 定义标准化输出格式 `{model, meta, schema, version}`，推理侧严格校验 | 4h | 防止模型版本不匹配 |
+| # | 改进项 | 预计工作量 | 收益 | 状态 |
+|---|--------|-----------|------|------|
+| P1-1 | **拆分 optimize_six_book.py** | 1-2d | 可独立测试 | 未开始 |
+| P1-2 | **拆分 train_gpu.py** | 1d | 各模型独立维护 | 未开始 |
+| P1-3 | **ONNX 推理一致性验证** | 4h | 确保 ONNX 加速无精度问题 | 未开始 |
+| P1-4 | **deploy.sh ML 配置外部化** | 2h | 灵活切换无需改脚本 | 未开始 |
+| P1-5 | **live_signal_generator.py 清理冗余导入** | 30min | 减少启动耗时 | 未开始 |
+| P1-6 | **统一训练-推理模型契约** | 4h | 防止版本不匹配 | 未开始 |
+| P1-7 | **情况D 70% 阈值可配置化**: 将 `multi_tf_consensus.py` 中的 0.70 提取为 `consensus_config` 参数 | 30min | 便于回测调参 | **新增** |
+| P1-8 | **Stacking 精简为双基模型**: 评估移除 XGB/TFT 后 OOF AUC 变化，若下降 <0.005 则精简 | 2h | 减少推理延迟 + 维护成本 | **新增** |
 
 #### P2 — 中长期优化
 
-| # | 改进项 | 预计工作量 | 收益 |
-|---|--------|-----------|------|
-| P2-1 | **结构化日志 (JSON)**: 实盘信号日志从文本格式改为 JSON Lines，便于 ELK/Grafana 分析 | 4h | 自动化监控 |
-| P2-2 | **模型漂移监控**: 每日自动对比 bull_prob 分布与训练期分布（KS 检验），偏移超阈值告警 | 8h | 提前发现数据分布变化 |
-| P2-3 | **H800 自动晋升门禁**: `train_gpu.py` 训练完成后自动评估质量指标，不达标标记 `research_only` | 4h | 防止低质量模型进入生产 |
-| P2-4 | **app.py 进一步路由拆分**: 将剩余路由迁移到 `web_routes/` | 4h | 主文件控制在 500 行内 |
-| P2-5 | **XGBoost/TFT 基模型评估**: 鉴于系数近零/负，评估是否移除以简化 Stacking | 2h | 减少推理延迟 |
-| P2-6 | **hvol_20 extra_feature 正则化**: 在 Stacking 元学习器训练中加强 L2 正则化或移除 hvol_20 | 1h | 降低过拟合风险 |
+| # | 改进项 | 预计工作量 | 收益 | 状态 |
+|---|--------|-----------|------|------|
+| P2-1 | **结构化日志 (JSON)** | 4h | 自动化监控 | 未开始 |
+| P2-2 | **模型漂移监控** (KS 检验) | 8h | 提前发现分布变化 | 未开始 |
+| P2-3 | **H800 自动晋升门禁** | 4h | 防止低质量模型进入生产 | 未开始 |
+| P2-4 | **app.py 进一步路由拆分** | 4h | 主文件控制在 500 行内 | 未开始 |
+| ~~P2-5~~ | ~~XGBoost/TFT 基模型评估~~ | - | - | → 升级为 P1-8 |
+| ~~P2-6~~ | ~~hvol_20 正则化~~ | - | - | ✅ 已通过 v3 C=0.5 + class_weight=None 解决 (系数 2.97→0.11) |
+| P2-7 | **deploy.sh heredoc 语法重构**: 将嵌套 heredoc 改为独立 Python 脚本 `scripts/check_deps.py` | 1h | 消除 shell 兼容性风险 | **新增** |
+| P2-8 | **差异化基模型引入**: 替换 XGB/TFT 为差异更大的模型（如 CatBoost 或 GRU-based）提升集成多样性 | 1d | 提高 Stacking 上限 | **新增** |
 
 ### 15.2 策略优化路线图
 
@@ -1223,8 +1261,9 @@ H800 训练产出 (data/ml_models/):
 | ~~P0~~ | ~~P26~~ | ~~P21 R% 调参~~ | ~~消灭大亏单~~ | **✅ v10.1 已完成**: R%=2.5%, 与 ATR-SL 绑定 |
 | ~~P1~~ | ~~P27~~ | ~~Funding 现金流纳入回测~~ | ~~消除收益虚高~~ | **✅ v10 已完成**: Funding-in-PnL |
 | P1 | P28 | Anti-Squeeze 回测验证 | 验证 trend/high_vol short 改善 | funding_z 已接入, 需单独验证触发率 |
-| P1 | **P36** | **DIV 权重优化**: P18 shrinkage 混合 (neutral DIV=0.25) | 改善 neutral 信号质量 | **待执行** (DIV 0.50 全局下调已失败) |
+| P1 | **P36** | **DIV 权重优化**: P18 shrinkage 混合 (neutral DIV=0.25) | 改善 neutral 信号质量 | **待执行** |
 | P1 | **P37** | **Regime 连续化**: SL/杠杆/阈值 sigmoid 过渡 | 消除参数悬崖 | **待执行** (Phase 2) |
+| P1 | **P38** | **实盘止损优先级链回测验证**: 在 optimize_six_book 中验证 MAE→ATR-SL→regime→固定 SL 的效果 | 量化止损改善 | **新增** |
 | P2 | P29 | CS-KDJ 去相关 | 消除虚假共识 | 待设计 |
 | ~~P2~~ | ~~P30~~ | ~~Leg 风险预算~~ | ~~资金迁移~~ | **✅ v10 已完成**: use_leg_risk_budget |
 | P2 | P31 | 动态 Regime 阈值 (滚动百分位) | 适应市场周期变化 | 待设计 |
@@ -1237,10 +1276,13 @@ H800 训练产出 (data/ml_models/):
 | ~~P0~~ | ~~LightGBM Walk-Forward 基线~~ | 1h 周期, 5年数据, GPU 加速 | ✅ 已完成, AUC 0.5537 |
 | ~~P0~~ | ~~LSTM+Attention 深度模型~~ | BF16 混合精度, 双向 LSTM | ✅ 已完成, AUC 0.5366 |
 | ~~P0~~ | ~~Optuna 超参搜索~~ | 替代手工网格搜索, TPE 采样 | ✅ 已完成, 1000 trials |
-| ~~P0~~ | ~~Stacking Ensemble~~ | 4 基模型 OOF → 元学习器 | ✅ 已完成, OOF AUC 0.5883 |
-| P0 | **Stacking 元学习器优化** | 移除零贡献基模型 (XGB/TFT), 正则化 hvol_20 | 待执行 |
+| ~~P0~~ | ~~Stacking Ensemble~~ | 4 基模型 OOF → 元学习器 | ✅ 三轮迭代完成 (v3: C=0.5, OOF 0.5893) |
+| ~~P0~~ | ~~hvol_20 正则化~~ | 消除波动率过拟合 | ✅ v3 已解决 (系数 2.97→0.11) |
+| P0 | **Stacking 基模型精简** | 移除 XGB/TFT (系数持续为负), 评估 LGB+CA-LGB 双基模型 | **待执行** |
+| P0 | **Platt Scaling 推理接入** | 训练端已实现, 推理端 `ml_live_integration.py` 需对接 | **待执行** |
 | P1 | 多周期特征融合 | 15m/1h/4h/24h 跨周期特征堆叠 | 待开发 |
 | P1 | ONNX 一致性验证 + 加速部署 | PyTorch vs ONNX 数值对比 | 待验证 |
+| P1 | **差异化基模型引入** | CatBoost / GRU 替换 XGB/TFT 提升集成多样性 | 待评估 |
 | P2 | RAPIDS cuDF/cuML 加速 | GPU 加速特征计算和信号生成 | 待评估 |
 | P2 | Ray Tune 分布式 HPO | 多 GPU 并行超参搜索 | 待评估 |
 
@@ -1254,13 +1296,16 @@ H800 训练产出 (data/ml_models/):
 
 4. **ML 模型治理**: 模型版本化 (hash + schema)、A/B 灰度 (shadow 对比 live)、自动漂移监控 (KS 检验)、晋升门禁 (AUC/gap/coverage 三重门控)。
 
+5. **推理标准化**: 所有模型统一输出 `{prob, confidence, model_version, latency_ms}` 格式，meta JSON 含完整 schema + Platt 校准参数，推理侧严格版本校验。
+
 ---
 
 ### 版本变更日志
 
 | 版本 | 日期 | 核心变更 |
 |------|------|---------|
-| **v10.2+ML v3.2** | **2026-02-18** | **全局代码审视**: 发现 12 处模型类重复定义、三层超时不对齐、Stacking 元学习器 XGB/TFT 近零贡献 + hvol_20 过大系数；制定 P0-P2 架构改进计划；ML 正式增强已运行 (shadow_mode=False) |
+| **v10.2+ML v3.3** | **2026-02-21** | **Stacking v3 (C=0.5)**: hvol_20 过拟合解决 (2.97→0.11)、Platt Scaling 框架、XGB/TFT 持续低效确认；实盘止损优先级链对齐回测；多周期共识情况D加权主导；API 断路器 + K线新鲜度守护 + 运行时清单 + Stacking 错误诊断链 |
+| v10.2+ML v3.2 | 2026-02-18 | **全局代码审视**: 发现 12 处模型类重复定义、三层超时不对齐、Stacking 元学习器 XGB/TFT 近零贡献 + hvol_20 过大系数；制定 P0-P2 架构改进计划 |
 | v10.2+ML v3.1 | 2026-02-20 | Stacking 别名一致性脚本 + check_ml_health.py shadow 误报修复 + 样本量门控 (Stacking≥20k, TabNet≥10k) |
 | v10.2+ML v3 | 2026-02-19 | Stacking Ensemble: 4 基模型 (LGB/XGBoost/LSTM/TFT) 5-Fold OOF → LogisticRegression 元学习器；方向预测优先 Stacking，无则回退加权集成；train_gpu.py 12 种模式 (含 stacking/all_v4) |
 | v10.2+ML v2 | 2026-02-19 | 8 模型矩阵部署: LGB/LSTM/TFT/跨资产LGB/MTF融合MLP/Regime/分位数/PPO, Kelly 仓位+动态止损, ONNX 加速, shadow 模式上线 |

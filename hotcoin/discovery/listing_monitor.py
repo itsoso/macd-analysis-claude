@@ -30,12 +30,12 @@ _WILL_LIST_RE = re.compile(
     r"(?:will list|will add|新增|上线)\s+([A-Z][A-Z0-9]{1,9})",
     re.IGNORECASE,
 )
-_TICKER_RE = re.compile(r"\b([A-Z]{2,10})(?:USDT)?\b")
+_TICKER_RE = re.compile(r"\b([A-Z][A-Z0-9]{1,9})(?:USDT)?\b")
 _STOP_WORDS = frozenset({
     "THE", "FOR", "AND", "NEW", "WILL", "LIST", "ADD", "ALL", "HAS",
     "NOT", "ARE", "ITS", "WITH", "SPOT", "TRADE", "BINANCE", "USDT",
     "MARGIN", "FUTURES", "TOKEN", "COIN", "PAIR", "MARKET", "OPEN",
-    "UPDATE", "SEED", "ZONE", "ALPHA",
+    "UPDATE", "SEED", "ZONE", "ALPHA", "TRADING", "PRICE",
 })
 
 
@@ -47,6 +47,7 @@ class ListingMonitor:
         self.pool = pool
         self._seen_open_symbols: Set[str] = set()
         self._seen_article_ids: Set[int] = set()
+        self._last_seen_cleanup = 0.0
 
     async def run(self, shutdown: asyncio.Event):
         log.info("新币上线监控启动 (listing=%ds, announcement=%ds)",
@@ -71,6 +72,14 @@ class ListingMonitor:
                 break
             except Exception:
                 log.exception("上线监控异常")
+
+            # 每 24h 清理 _seen 集合, 防止无限增长
+            if now - self._last_seen_cleanup > 86400:
+                if len(self._seen_article_ids) > 500:
+                    self._seen_article_ids.clear()
+                if len(self._seen_open_symbols) > 200:
+                    self._seen_open_symbols.clear()
+                self._last_seen_cleanup = now
 
             await asyncio.sleep(10)
 

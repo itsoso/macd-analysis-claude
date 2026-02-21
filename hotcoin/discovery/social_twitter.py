@@ -46,6 +46,13 @@ class TwitterMonitor:
         self._headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         self._mention_counts: Dict[str, List[float]] = {}  # symbol → [timestamps]
         self._kol_set: Set[str] = set(DEFAULT_KOLS)
+        self._sentiment_cache: Dict[str, float] = {}
+
+        try:
+            from hotcoin.discovery.sentiment_scorer import SentimentScorer
+            self._scorer = SentimentScorer()
+        except Exception:
+            self._scorer = None
 
     @property
     def enabled(self) -> bool:
@@ -110,22 +117,26 @@ class TwitterMonitor:
                 tickers.add(m)
 
         now = time.time()
+        sentiment = self._scorer.score(text) if self._scorer else 0.0
+
         for ticker in tickers:
             symbol = f"{ticker}USDT"
-            log.info("Twitter 提及: %s (author=%s)", symbol, author_id)
+            log.info("Twitter 提及: %s (author=%s, sentiment=%.2f)", symbol, author_id, sentiment)
 
             mentions = self._mention_counts.setdefault(symbol, [])
             mentions.append(now)
-            # 清理 1h 前的记录
             cutoff = now - 3600
             self._mention_counts[symbol] = [t for t in mentions if t >= cutoff]
 
-            # 通知候选池
+            if sentiment != 0.0:
+                self._sentiment_cache[symbol] = sentiment
+
             self.pool.on_social_mention(
                 symbol=symbol,
                 source="twitter",
                 kol_id=author_id,
                 mention_count_1h=len(self._mention_counts[symbol]),
+                sentiment=self._sentiment_cache.get(symbol, 0.0),
             )
 
     async def _setup_rules(self):
@@ -145,6 +156,17 @@ class TwitterMonitor:
             log.info("Twitter stream 规则已设置 (%d 条)", len(rules))
         except Exception as e:
             log.warning("设置 Twitter 规则失败: %s", e)
+
+    def cleanup_stale(self):
+        """清理不活跃 symbol 的过期提及记录。"""
+        now = time.time()
+        cutoff = now - 3600
+        stale = [s for s, ts in self._mention_counts.items() if not ts or ts[-1] < cutoff]
+        for s in stale:
+            del self._mention_counts[s]
+        stale_s = [s for s, _ in self._sentiment_cache.items() if s not in self._mention_counts]
+        for s in stale_s:
+            del self._sentiment_cache[s]
 
     def get_mention_velocity(self, symbol: str) -> float:
         """返回最近 1h 提及速率 (次/小时)。"""

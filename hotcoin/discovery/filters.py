@@ -43,9 +43,12 @@ class CoinFilter:
         if sym in BLACKLIST_SYMBOLS:
             return "黑名单"
 
-        # 新币上线豁免流动性检查 (上线初期无 24h 成交额)
         is_listing = coin.has_listing_signal
-        if not is_listing and coin.quote_volume_24h < self.config.min_quote_volume_24h:
+        if is_listing:
+            listing_min = self.config.min_quote_volume_24h * 0.1
+            if coin.quote_volume_24h < listing_min:
+                return f"新币流动性过低 (${coin.quote_volume_24h:,.0f} < ${listing_min:,.0f})"
+        elif coin.quote_volume_24h < self.config.min_quote_volume_24h:
             return f"流动性不足 (${coin.quote_volume_24h:,.0f} < ${self.config.min_quote_volume_24h:,.0f})"
 
         if coin.price_change_24h > self.config.max_price_change_24h:

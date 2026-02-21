@@ -281,9 +281,10 @@
         // Anomaly log
         const anomalyLog = document.getElementById('anomaly-log');
         if (data.recent_anomalies && data.recent_anomalies.length > 0) {
-            anomalyLog.innerHTML = data.recent_anomalies.map(a =>
-                `<div class="log-signal">${a.time} ${a.symbol} vol=${a.vol_ratio}x chg5m=${a.price_chg_5m}</div>`
-            ).join('');
+            anomalyLog.innerHTML = data.recent_anomalies.map(a => {
+                const ts = a.computed_at ? new Date(a.computed_at * 1000).toLocaleTimeString() : '';
+                return `<div class="log-signal">${ts} ${a.symbol} vol=${(a.volume_surge_ratio||0).toFixed(1)}x 5m=${((a.price_change_5m||0)*100).toFixed(2)}%</div>`;
+            }).join('');
         }
 
         // Signal log
@@ -291,7 +292,8 @@
         if (data.recent_signals && data.recent_signals.length > 0) {
             signalLog.innerHTML = data.recent_signals.map(s => {
                 const cls = s.action === 'BUY' ? 'log-signal' : (s.action === 'SELL' ? 'log-warn' : 'log-info');
-                return `<div class="${cls}">${s.time} ${s.action} ${s.symbol} strength=${s.strength} ${s.reason}</div>`;
+                const ts = s.computed_at ? new Date(s.computed_at * 1000).toLocaleTimeString() : '';
+                return `<div class="${cls}">${ts} ${s.action} ${s.symbol} strength=${s.strength} ${s.reason||''}</div>`;
             }).join('');
         }
     }

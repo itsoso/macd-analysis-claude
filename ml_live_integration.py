@@ -97,6 +97,8 @@ class MLSignalEnhancer:
         self._stacking_cross_lgb = None   # stacking 专用跨资产 LGB（第5基模型）
         self._stacking_lstm = None        # stacking 专用 LSTM
         self._stacking_tft = None         # stacking 专用 TFT
+        self._stacking_lstm_last_error = ""
+        self._stacking_tft_last_error = ""
         self._cross_asset_close_cache = {}  # {(symbol, interval): (mtime, close_series)}
         self._cross_api_warned_symbols: set = set()  # 已 warning 过的失败符号，避免重复告警
 
@@ -189,6 +191,27 @@ class MLSignalEnhancer:
         present = sum(1 for c in cols if c in features.columns)
         return present, total, present / total
 
+    @staticmethod
+    def _torch_load_state(path: str, map_location):
+        """
+        兼容不同 torch 版本的 state_dict 加载。
+        - 新版本优先 weights_only=True
+        - 旧版本不支持该参数时自动回退
+        """
+        import torch
+
+        try:
+            obj = torch.load(path, map_location=map_location, weights_only=True)
+        except TypeError:
+            # torch 版本较低，不支持 weights_only
+            obj = torch.load(path, map_location=map_location)
+
+        if isinstance(obj, dict) and 'state_dict' in obj and isinstance(obj['state_dict'], dict):
+            obj = obj['state_dict']
+        if not isinstance(obj, dict):
+            raise ValueError(f"invalid_state_dict_type:{type(obj)}")
+        return obj
+
     def _iter_stacking_candidates(self):
         """按优先级返回可尝试的 stacking 配置文件名。"""
         candidates = []
@@ -266,8 +289,11 @@ class MLSignalEnhancer:
             return False, f"test_auc_too_low({test_auc:.4f}<{self.stacking_min_test_auc:.4f})"
         if oof_auc is not None and oof_auc < self.stacking_min_oof_auc:
             return False, f"oof_auc_too_low({oof_auc:.4f}<{self.stacking_min_oof_auc:.4f})"
-        if self.stacking_min_oof_samples > 0 and n_oof_samples is not None and n_oof_samples < self.stacking_min_oof_samples:
-            return False, f"insufficient_oof_samples({n_oof_samples}<{self.stacking_min_oof_samples})"
+        if self.stacking_min_oof_samples > 0:
+            if n_oof_samples is None:
+                return False, f"missing_oof_samples(min_required={self.stacking_min_oof_samples})"
+            if n_oof_samples < self.stacking_min_oof_samples:
+                return False, f"insufficient_oof_samples({n_oof_samples}<{self.stacking_min_oof_samples})"
         if oof_auc is not None and test_auc is not None:
             gap = oof_auc - test_auc
             if gap > self.stacking_max_oof_test_gap:
@@ -710,13 +736,25 @@ class MLSignalEnhancer:
         n_rows = 96  # TFT 最长序列
         fake_df = pd.DataFrame(0.0, index=range(n_rows), columns=all_cols)
         try:
-            self._predict_stacking_lstm(fake_df, cfg)
-            logger.info("Stacking LSTM 预热完成")
+            p_lstm = self._predict_stacking_lstm(fake_df, cfg)
+            if p_lstm is None:
+                logger.warning(
+                    "Stacking LSTM 预热未通过: %s",
+                    self._stacking_lstm_last_error or "unknown",
+                )
+            else:
+                logger.info("Stacking LSTM 预热完成 (prob=%.4f)", p_lstm)
         except Exception as e:
             logger.warning(f"Stacking LSTM 预热失败 (仍用延迟加载): {e}")
         try:
-            self._predict_stacking_tft(fake_df, cfg)
-            logger.info("Stacking TFT 预热完成")
+            p_tft = self._predict_stacking_tft(fake_df, cfg)
+            if p_tft is None:
+                logger.warning(
+                    "Stacking TFT 预热未通过: %s",
+                    self._stacking_tft_last_error or "unknown",
+                )
+            else:
+                logger.info("Stacking TFT 预热完成 (prob=%.4f)", p_tft)
         except Exception as e:
             logger.warning(f"Stacking TFT 预热失败 (仍用延迟加载): {e}")
 
@@ -867,7 +905,7 @@ class MLSignalEnhancer:
             # 延迟加载 LSTM 模型
             if self._lstm_model is None:
                 input_dim = len(feat_names)
-                state = torch.load(model_path, map_location='cpu', weights_only=True)
+                state = self._torch_load_state(model_path, map_location='cpu')
                 hidden_dim = int(self._lstm_meta.get('hidden_dim', state['lstm.weight_hh_l0'].shape[1]))
                 num_layers = int(self._lstm_meta.get('num_layers', 2))
                 dropout = float(self._lstm_meta.get('dropout', 0.3))
@@ -1044,7 +1082,7 @@ class MLSignalEnhancer:
 
                 self._tft_model = EfficientTFT(input_dim, d_model, n_heads, d_ff, n_layers)
                 dev = self._inference_device
-                state = torch.load(model_path, map_location=dev, weights_only=False)
+                state = self._torch_load_state(model_path, map_location=dev)
                 self._tft_model.load_state_dict(state)
                 self._tft_model.to(dev)
                 self._tft_model.eval()
@@ -1147,9 +1185,12 @@ class MLSignalEnhancer:
             if lstm_prob is not None:
                 ml_info['stacking_lstm_prob'] = round(lstm_prob, 4)
             else:
+                if self._stacking_lstm_last_error and 'stacking_lstm_skipped_reason' not in ml_info:
+                    ml_info['stacking_lstm_skipped_reason'] = self._stacking_lstm_last_error
                 lstm_prob = 0.5
         except Exception as e:
             logger.warning(f"Stacking LSTM 失败: {e}")
+            ml_info['stacking_lstm_skipped_reason'] = f"predict_exception:{type(e).__name__}"
 
         # 基模型 4: TFT (延迟加载)
         tft_prob = 0.5
@@ -1159,9 +1200,12 @@ class MLSignalEnhancer:
             if tft_prob is not None:
                 ml_info['stacking_tft_prob'] = round(tft_prob, 4)
             else:
+                if self._stacking_tft_last_error and 'stacking_tft_skipped_reason' not in ml_info:
+                    ml_info['stacking_tft_skipped_reason'] = self._stacking_tft_last_error
                 tft_prob = 0.5
         except Exception as e:
             logger.warning(f"Stacking TFT 失败: {e}")
+            ml_info['stacking_tft_skipped_reason'] = f"predict_exception:{type(e).__name__}"
 
         # 基模型 5: 跨资产 LGB（可选，仅当 meta 含 cross_asset_lgb 时使用）
         base_models = cfg.get('base_models', [])
@@ -1336,17 +1380,23 @@ class MLSignalEnhancer:
 
     def _predict_stacking_lstm(self, features: pd.DataFrame, cfg: Dict) -> Optional[float]:
         """Stacking 专用 LSTM 推理"""
-        import torch
-        import torch.nn as nn
+        try:
+            import torch
+            import torch.nn as nn
+        except Exception as e:
+            self._stacking_lstm_last_error = f"torch_import:{type(e).__name__}"
+            return None
 
         model_file = cfg.get('model_files', {}).get('lstm', '')
         model_path = os.path.join(self.model_dir, model_file)
         if not model_file or not os.path.exists(model_path):
+            self._stacking_lstm_last_error = "model_file_missing"
             return None
 
         feat_names = cfg.get('feature_names_73', [])
         SEQ_LEN = 48
         if len(features) < SEQ_LEN:
+            self._stacking_lstm_last_error = f"insufficient_rows({len(features)}<{SEQ_LEN})"
             return None
 
         # 对齐特征
@@ -1387,29 +1437,47 @@ class MLSignalEnhancer:
 
             dev = self._inference_device
             self._stacking_lstm = LSTMAttention(input_dim).to(dev)
-            state = torch.load(model_path, map_location=dev, weights_only=True)
-            self._stacking_lstm.load_state_dict(state)
+            try:
+                state = self._torch_load_state(model_path, map_location=dev)
+                self._stacking_lstm.load_state_dict(state)
+            except Exception as e:
+                self._stacking_lstm_last_error = f"load_failed:{type(e).__name__}"
+                self._stacking_lstm = None
+                logger.warning(f"Stacking LSTM 加载失败: {e}")
+                return None
             self._stacking_lstm.eval()
             logger.info(f"Stacking LSTM 加载完成 (input_dim={input_dim}, device={dev})")
 
-        with torch.no_grad():
-            logit = self._stacking_lstm(X_tensor.to(self._inference_device))
-            prob = torch.sigmoid(logit).item()
+        try:
+            with torch.no_grad():
+                logit = self._stacking_lstm(X_tensor.to(self._inference_device))
+                prob = torch.sigmoid(logit).item()
+        except Exception as e:
+            self._stacking_lstm_last_error = f"infer_failed:{type(e).__name__}"
+            logger.warning(f"Stacking LSTM 推理失败: {e}")
+            return None
+        self._stacking_lstm_last_error = ""
         return float(np.clip(prob, 0, 1))
 
     def _predict_stacking_tft(self, features: pd.DataFrame, cfg: Dict) -> Optional[float]:
         """Stacking 专用 TFT 推理"""
-        import torch
-        import torch.nn as nn
+        try:
+            import torch
+            import torch.nn as nn
+        except Exception as e:
+            self._stacking_tft_last_error = f"torch_import:{type(e).__name__}"
+            return None
 
         model_file = cfg.get('model_files', {}).get('tft', '')
         model_path = os.path.join(self.model_dir, model_file)
         if not model_file or not os.path.exists(model_path):
+            self._stacking_tft_last_error = "model_file_missing"
             return None
 
         feat_names = cfg.get('feature_names_94', [])
         SEQ_LEN = 96
         if len(features) < SEQ_LEN:
+            self._stacking_tft_last_error = f"insufficient_rows({len(features)}<{SEQ_LEN})"
             return None
 
         # 对齐特征 (94 维含跨资产)
@@ -1463,14 +1531,26 @@ class MLSignalEnhancer:
 
             dev = self._inference_device
             self._stacking_tft = EfficientTFT(input_dim).to(dev)
-            state = torch.load(model_path, map_location=dev, weights_only=True)
-            self._stacking_tft.load_state_dict(state)
+            try:
+                state = self._torch_load_state(model_path, map_location=dev)
+                self._stacking_tft.load_state_dict(state)
+            except Exception as e:
+                self._stacking_tft_last_error = f"load_failed:{type(e).__name__}"
+                self._stacking_tft = None
+                logger.warning(f"Stacking TFT 加载失败: {e}")
+                return None
             self._stacking_tft.eval()
             logger.info(f"Stacking TFT 加载完成 (input_dim={input_dim}, device={dev})")
 
-        with torch.no_grad():
-            logit = self._stacking_tft(X_tensor.to(self._inference_device))
-            prob = torch.sigmoid(logit).item()
+        try:
+            with torch.no_grad():
+                logit = self._stacking_tft(X_tensor.to(self._inference_device))
+                prob = torch.sigmoid(logit).item()
+        except Exception as e:
+            self._stacking_tft_last_error = f"infer_failed:{type(e).__name__}"
+            logger.warning(f"Stacking TFT 推理失败: {e}")
+            return None
+        self._stacking_tft_last_error = ""
         return float(np.clip(prob, 0, 1))
 
     def enhance_signal(

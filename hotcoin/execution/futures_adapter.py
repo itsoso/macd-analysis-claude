@@ -25,6 +25,7 @@ class FuturesAdapter:
         self.use_paper = use_paper
         self._order_manager = None
         self._futures_symbols: set = set()
+        self._leverage_set: set = set()  # 已设置杠杆的交易对
 
     def init(self):
         """延迟初始化, 仅在需要时加载。"""
@@ -32,6 +33,11 @@ class FuturesAdapter:
             return
 
         try:
+            import sys, os
+            # 确保项目根目录在 sys.path 中
+            root = os.path.join(os.path.dirname(__file__), "..", "..")
+            if root not in sys.path:
+                sys.path.insert(0, root)
             from live_config import TradingPhase, APIConfig
             from order_manager import BinanceOrderManager
 
@@ -75,8 +81,24 @@ class FuturesAdapter:
         except Exception as e:
             log.warning("获取合约交易对失败: %s", e)
 
+    def _usdt_to_quantity(self, symbol: str, usdt_amount: float) -> float:
+        """将 USDT 金额转为合约数量 (含杠杆)。"""
+        try:
+            import requests
+            resp = requests.get(
+                "https://fapi.binance.com/fapi/v1/ticker/price",
+                params={"symbol": symbol}, timeout=5,
+            )
+            if resp.status_code == 200:
+                price = float(resp.json().get("price", 0))
+                if price > 0:
+                    return (usdt_amount * self.leverage) / price
+        except Exception as e:
+            log.warning("获取 %s 合约价格失败: %s", symbol, e)
+        return 0.0
+
     def open_long(self, symbol: str, usdt_amount: float) -> Optional[dict]:
-        """开多。"""
+        """开多 (传入 USDT 金额, 自动换算为合约数量)。"""
         self.init()
         if not self._order_manager:
             return None
@@ -86,15 +108,19 @@ class FuturesAdapter:
             return {"paper": True, "side": "BUY", "symbol": symbol, "amount": usdt_amount}
 
         try:
-            self._order_manager.set_leverage(symbol, self.leverage)
-            result = self._order_manager.market_order(symbol, "BUY", usdt_amount, reduce_only=False)
+            qty = self._usdt_to_quantity(symbol, usdt_amount)
+            if qty <= 0:
+                log.error("合约开多 %s: 数量计算失败", symbol)
+                return None
+            self._ensure_leverage(symbol)
+            result = self._order_manager._place_order(symbol, "BUY", qty, reduce_only=False)
             return result
         except Exception as e:
             log.error("合约开多失败 %s: %s", symbol, e)
             return None
 
     def open_short(self, symbol: str, usdt_amount: float) -> Optional[dict]:
-        """开空。"""
+        """开空 (传入 USDT 金额, 自动换算为合约数量)。"""
         self.init()
         if not self._order_manager:
             return None
@@ -104,12 +130,22 @@ class FuturesAdapter:
             return {"paper": True, "side": "SELL", "symbol": symbol, "amount": usdt_amount}
 
         try:
-            self._order_manager.set_leverage(symbol, self.leverage)
-            result = self._order_manager.market_order(symbol, "SELL", usdt_amount, reduce_only=False)
+            qty = self._usdt_to_quantity(symbol, usdt_amount)
+            if qty <= 0:
+                log.error("合约开空 %s: 数量计算失败", symbol)
+                return None
+            self._ensure_leverage(symbol)
+            result = self._order_manager._place_order(symbol, "SELL", qty, reduce_only=False)
             return result
         except Exception as e:
             log.error("合约开空失败 %s: %s", symbol, e)
             return None
+
+    def _ensure_leverage(self, symbol: str):
+        """设置杠杆 (每个交易对仅设置一次)。"""
+        if symbol not in self._leverage_set:
+            self._order_manager.set_leverage(symbol, self.leverage)
+            self._leverage_set.add(symbol)
 
     def close_position(self, symbol: str, side: str, qty: float) -> Optional[dict]:
         """平仓。"""

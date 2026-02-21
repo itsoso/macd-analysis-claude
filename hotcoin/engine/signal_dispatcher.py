@@ -21,6 +21,8 @@ log = logging.getLogger("hotcoin.dispatch")
 class SignalDispatcher:
     """多币种信号并发调度。"""
 
+    SIGNAL_TIMEOUT_SEC = 60
+
     def __init__(self, trading_config: TradingConfig, discovery_config: DiscoveryConfig):
         self.config = trading_config
         self.discovery_config = discovery_config
@@ -30,7 +32,7 @@ class SignalDispatcher:
         )
 
     async def compute_signals(self, candidates: List[HotCoin]) -> List[TradeSignal]:
-        """并发计算候选币信号, 返回所有结果 (含 HOLD)。"""
+        """并发计算候选币信号, 返回所有结果 (含 HOLD)。单币超时保护。"""
         if not candidates:
             return []
 
@@ -38,23 +40,29 @@ class SignalDispatcher:
         tasks = []
         for coin in candidates:
             tfs = self.config.timeframes or HOT_COIN_TIMEFRAMES
-            task = loop.run_in_executor(
+            future = loop.run_in_executor(
                 self._executor,
                 compute_signal_for_symbol,
                 coin.symbol,
                 tfs,
             )
-            tasks.append(task)
+            tasks.append(asyncio.wait_for(future, timeout=self.SIGNAL_TIMEOUT_SEC))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         signals = []
         for coin, result in zip(candidates, results):
-            if isinstance(result, Exception):
-                log.warning("%s 信号计算异常: %s", coin.symbol, result)
+            if isinstance(result, asyncio.TimeoutError):
+                log.warning("%s 信号计算超时 (>%ds)", coin.symbol, self.SIGNAL_TIMEOUT_SEC)
                 signals.append(TradeSignal(
                     symbol=coin.symbol, action="HOLD",
-                    reason=f"exception: {result}",
+                    reason=f"timeout >{self.SIGNAL_TIMEOUT_SEC}s",
+                ))
+            elif isinstance(result, Exception):
+                log.error("%s 信号计算异常: %s", coin.symbol, result, exc_info=result)
+                signals.append(TradeSignal(
+                    symbol=coin.symbol, action="HOLD",
+                    reason=f"exception: {type(result).__name__}: {result}",
                 ))
             else:
                 signals.append(result)
@@ -67,5 +75,9 @@ class SignalDispatcher:
 
         return signals
 
-    def shutdown(self):
-        self._executor.shutdown(wait=False)
+    def shutdown(self, wait: bool = True, timeout: float = 30):
+        """优雅关闭线程池。wait=True 时等待进行中的任务完成。"""
+        log.info("SignalDispatcher 关闭中 (wait=%s)", wait)
+        self._executor.shutdown(wait=wait)
+        if wait:
+            log.info("SignalDispatcher 所有 worker 已退出")

@@ -6,8 +6,10 @@
 
 cd /opt/macd-analysis
 
+ML_ENABLE_STACKING_DEFAULT=1
+
 ML_ENV_OVERRIDE_CONTENT='[Service]
-Environment=ML_ENABLE_STACKING=0
+Environment=ML_ENABLE_STACKING=1
 Environment=ML_STACKING_TIMEFRAME=1h
 Environment=ML_STACKING_MIN_OOF_SAMPLES=20000
 Environment=ML_STACKING_MIN_VAL_AUC=0.53
@@ -52,7 +54,7 @@ fi
 # 3. 部署前 ML 健康检查
 echo ""
 echo "[3/5] 部署前 ML 健康检查..."
-/opt/macd-analysis/venv/bin/python3 check_ml_health.py --skip-live-check --timeframe 1h --fix-stacking-alias
+ML_ENABLE_STACKING=$ML_ENABLE_STACKING_DEFAULT /opt/macd-analysis/venv/bin/python3 check_ml_health.py --skip-live-check --timeframe 1h --fix-stacking-alias
 
 # 4. 更新 systemd ML 环境覆盖
 echo ""

@@ -1006,13 +1006,83 @@ def _coerce_hotcoin_value(value, default):
     return value
 
 
+def _validate_hotcoin_config(cfg):
+    """返回热点币配置校验错误列表。"""
+    errors = []
+    allowed_tfs = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"}
+
+    d = cfg.get('discovery', {})
+    t = cfg.get('trading', {})
+    e = cfg.get('execution', {})
+
+    def _check(cond, msg):
+        if not cond:
+            errors.append(msg)
+
+    # discovery
+    _check(d.get('volume_surge_ratio', 0) > 0, "discovery.volume_surge_ratio 必须 > 0")
+    _check(0 <= d.get('price_surge_5m_pct', -1) <= 1, "discovery.price_surge_5m_pct 必须在 [0,1]")
+    _check(d.get('min_quote_volume_24h', -1) >= 0, "discovery.min_quote_volume_24h 必须 >= 0")
+    _check(0 <= d.get('max_price_change_24h', -1) <= 5, "discovery.max_price_change_24h 必须在 [0,5]")
+    _check(d.get('pool_max_size', 0) >= 1, "discovery.pool_max_size 必须 >= 1")
+    _check(0 <= d.get('pool_exit_score', -1) <= 100, "discovery.pool_exit_score 必须在 [0,100]")
+    _check(0 <= d.get('pool_enter_score', -1) <= 100, "discovery.pool_enter_score 必须在 [0,100]")
+    _check(d.get('pool_enter_score', 0) >= d.get('pool_exit_score', 0),
+           "discovery.pool_enter_score 必须 >= pool_exit_score")
+
+    # trading
+    tfs = t.get('timeframes', [])
+    _check(isinstance(tfs, list) and len(tfs) > 0, "trading.timeframes 必须为非空数组")
+    if isinstance(tfs, list):
+        for tf in tfs:
+            _check(isinstance(tf, str) and tf in allowed_tfs, f"trading.timeframes 包含非法值: {tf}")
+    _check(t.get('signal_loop_sec', 0) > 0, "trading.signal_loop_sec 必须 > 0")
+    _check(t.get('max_signal_workers', 0) >= 1, "trading.max_signal_workers 必须 >= 1")
+    _check(t.get('min_consensus_strength', -1) >= 0, "trading.min_consensus_strength 必须 >= 0")
+    _check(t.get('default_sl_pct', 0) < 0, "trading.default_sl_pct 必须 < 0")
+    _check(0 < t.get('trailing_stop_pct', 0) < 1, "trading.trailing_stop_pct 必须在 (0,1)")
+    _check(t.get('max_hold_minutes', 0) > 0, "trading.max_hold_minutes 必须 > 0")
+    tiers = t.get('take_profit_tiers')
+    _check(isinstance(tiers, list) and len(tiers) > 0, "trading.take_profit_tiers 必须为非空数组")
+    total_exit = 0.0
+    if isinstance(tiers, list):
+        for i, tier in enumerate(tiers):
+            _check(isinstance(tier, (list, tuple)) and len(tier) == 2,
+                   f"trading.take_profit_tiers[{i}] 必须是长度为2的数组")
+            if isinstance(tier, (list, tuple)) and len(tier) == 2:
+                tp, ratio = tier[0], tier[1]
+                _check(isinstance(tp, (int, float)) and tp > 0,
+                       f"trading.take_profit_tiers[{i}].tp 必须 > 0")
+                _check(isinstance(ratio, (int, float)) and 0 < ratio <= 1,
+                       f"trading.take_profit_tiers[{i}].ratio 必须在 (0,1]")
+                if isinstance(ratio, (int, float)):
+                    total_exit += float(ratio)
+        _check(total_exit <= 1.000001, "trading.take_profit_tiers 的 ratio 累计不能 > 1")
+
+    # execution
+    _check(e.get('initial_capital', 0) > 0, "execution.initial_capital 必须 > 0")
+    _check(e.get('max_concurrent_positions', 0) >= 1, "execution.max_concurrent_positions 必须 >= 1")
+    _check(0 < e.get('max_single_position_pct', 0) <= 1, "execution.max_single_position_pct 必须在 (0,1]")
+    _check(0 < e.get('max_total_exposure_pct', 0) <= 1, "execution.max_total_exposure_pct 必须在 (0,1]")
+    _check(0 < e.get('max_sector_exposure_pct', 0) <= 1, "execution.max_sector_exposure_pct 必须在 (0,1]")
+    _check(0 < e.get('daily_max_loss_pct', 0) <= 1, "execution.daily_max_loss_pct 必须在 (0,1]")
+    _check(0 < e.get('total_drawdown_halt_pct', 0) <= 1, "execution.total_drawdown_halt_pct 必须在 (0,1]")
+    _check(0 < e.get('single_coin_max_loss_pct', 0) <= 1, "execution.single_coin_max_loss_pct 必须在 (0,1]")
+    _check(e.get('cooling_after_halt_sec', -1) >= 0, "execution.cooling_after_halt_sec 必须 >= 0")
+    _check(e.get('order_timeout_sec', 0) > 0, "execution.order_timeout_sec 必须 > 0")
+
+    _check(bool(str(cfg.get('db_path', '')).strip()), "db_path 不能为空")
+
+    return errors
+
+
 def _default_hotcoin_config():
     from dataclasses import asdict
     from hotcoin.config import HotCoinConfig
     return asdict(HotCoinConfig())
 
 
-def _normalize_hotcoin_config(raw):
+def _normalize_hotcoin_config(raw, strict=False):
     defaults = _default_hotcoin_config()
     if not isinstance(raw, dict):
         return defaults
@@ -1032,18 +1102,28 @@ def _normalize_hotcoin_config(raw):
         if top_key in raw:
             cfg[top_key] = _coerce_hotcoin_value(raw[top_key], cfg[top_key])
 
+    errors = _validate_hotcoin_config(cfg)
+    if errors:
+        if strict:
+            raise ValueError("；".join(errors[:8]))
+        app.logger.warning("hotcoin 配置存在非法值，已回退默认配置: %s", " | ".join(errors[:3]))
+        return defaults
+
     return cfg
 
 
 def _load_hotcoin_config():
     db_cfg = config_store.get_hotcoin_config()
     if isinstance(db_cfg, dict) and db_cfg:
-        return _normalize_hotcoin_config(db_cfg)
+        try:
+            return _normalize_hotcoin_config(db_cfg, strict=True)
+        except Exception as e:
+            app.logger.warning("DB hotcoin 配置无效，尝试文件回退: %s", e)
 
     if os.path.exists(HOTCOIN_CONFIG_FILE):
         with open(HOTCOIN_CONFIG_FILE, 'r', encoding='utf-8') as f:
             file_cfg = json.load(f)
-        normalized = _normalize_hotcoin_config(file_cfg)
+        normalized = _normalize_hotcoin_config(file_cfg, strict=False)
         config_store.set_hotcoin_config(normalized)
         return normalized
 
@@ -1051,7 +1131,7 @@ def _load_hotcoin_config():
 
 
 def _save_hotcoin_config(raw_cfg):
-    normalized = _normalize_hotcoin_config(raw_cfg)
+    normalized = _normalize_hotcoin_config(raw_cfg, strict=True)
     config_store.set_hotcoin_config(normalized)
     os.makedirs(os.path.dirname(HOTCOIN_CONFIG_FILE), exist_ok=True)
     with open(HOTCOIN_CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -1141,6 +1221,8 @@ def api_live_hotcoin_config_save():
             return jsonify({"success": False, "message": "请求体必须为 JSON 对象"}), 400
         saved = _save_hotcoin_config(raw_cfg)
         return jsonify({"success": True, "message": "热点币配置已保存", "config": saved})
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
