@@ -2575,25 +2575,24 @@ def train_mtf_fusion(decision_tfs=None):
 
 def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 20000):
     """
-    Stacking 集成 v6: 3 异构基模型 OOF → 元学习器 (LR + LGB 双轨)。
+    Stacking 集成 v9: 5 异构基模型 OOF → 元学习器 (LR + LGB 双轨)。
 
     基模型:
-      1. LightGBM Direction (73 维, Optuna 最优参数)
+      1. LightGBM Direction (40 维, Optuna 最优参数)
       2. LSTM+Attention (73 维, 48-bar 序列)
-      3. CatBoost (73 维, ordered boosting, 增加多样性)
+      3. CatBoost (94 维跨资产, 12h 标签)
+      4. TabNet (40 维, attention-based)
+      5. Ridge Classifier (40 维, 线性模型, 替代 DartLGB 增加多样性)
 
-    v5→v6 变更:
-      - 应用 Optuna 最优参数到 Stacking LGB
-      - Purged K-Fold + Embargo (24 bar gap 防时序泄漏)
-      - 加入 CatBoost 作为第 3 基模型 (与 LGB 低相关)
-      - 时间衰减加权 (近期样本权重更高)
-      - 自动剔除负系数基模型并重训
-      - LGB 非线性 meta-learner 对比 (取 OOF AUC 更高者)
-      - 特征重要性筛选 top-40
+    v8→v9 变更:
+      - 替换 DartLGB (与 LGB 相关 0.91) 为 Ridge Classifier (线性 vs 树, 真正多样性)
+      - Adversarial Validation: 检测 train/test 分布漂移, 剔除漂移特征
+      - Target Encoding: 时间特征 (hour, dow) 的目标编码
+      - Noise Injection: 训练时加高斯噪声增强泛化
 
     流程:
-      A. 数据准备 + 时间分割 + 特征筛选
-      B. 8-Fold Purged 时序 CV 生成 OOF 预测
+      A. 数据准备 + 时间分割 + 特征筛选 + 对抗验证
+      B. 8-Fold Purged 时序 CV 生成 OOF 预测 (含噪声注入)
       C. 训练元学习器 (LR vs LGB, 时间衰减加权)
       D. 全量重训基模型 + 保存
     """
@@ -2688,12 +2687,104 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             feat_73_cols_selected = feat_73_cols
             log.warning(f"  特征筛选失败: {e}")
 
+        # ---- A3. Adversarial Validation (检测 train/test 分布漂移) ----
+        # 训练分类器区分 train vs test，高重要性特征 = 漂移特征 → 剔除
+        adv_removed = []
+        try:
+            import lightgbm as lgb
+            adv_X_train = feat_73_selected[:train_end][~np.isnan(y_all[:train_end])]
+            adv_X_test = feat_73_selected[val_end + purge:][~np.isnan(y_all[val_end + purge:])]
+            if len(adv_X_train) > 200 and len(adv_X_test) > 100:
+                adv_X = np.vstack([adv_X_train, adv_X_test])
+                adv_y = np.concatenate([np.zeros(len(adv_X_train)), np.ones(len(adv_X_test))])
+                adv_params = {'objective': 'binary', 'metric': 'auc', 'num_leaves': 16,
+                              'learning_rate': 0.05, 'feature_fraction': 0.8,
+                              'verbose': -1, 'n_jobs': -1, 'seed': 99}
+                if gpu_info.get('lgb_gpu'):
+                    adv_params['device'] = 'cuda'
+                adv_model = lgb.train(adv_params, lgb.Dataset(adv_X, label=adv_y), num_boost_round=50)
+                adv_imp = adv_model.feature_importance(importance_type='gain')
+                adv_auc = roc_auc_score(adv_y, adv_model.predict(adv_X))
+                log.info(f"  Adversarial Validation AUC: {adv_auc:.4f} (>0.6 = 显著漂移)")
+
+                # 剔除漂移最严重的特征 (importance 占比 > 10%)
+                if adv_auc > 0.6:
+                    adv_imp_ratio = adv_imp / (adv_imp.sum() + 1e-8)
+                    drift_idx = np.where(adv_imp_ratio > 0.10)[0]
+                    if len(drift_idx) > 0 and len(drift_idx) < len(feat_73_cols_selected) // 2:
+                        adv_removed = [feat_73_cols_selected[i] for i in drift_idx]
+                        keep_mask = np.ones(feat_73_selected.shape[1], dtype=bool)
+                        keep_mask[drift_idx] = False
+                        feat_73_selected = feat_73_selected[:, keep_mask]
+                        feat_73_cols_selected = [c for i, c in enumerate(feat_73_cols_selected) if keep_mask[i]]
+                        log.info(f"  剔除漂移特征: {adv_removed} → 剩余 {len(feat_73_cols_selected)} 维")
+                    else:
+                        log.info(f"  漂移特征过多或为零，不剔除")
+                else:
+                    log.info(f"  分布漂移不显著，保留全部特征")
+        except Exception as e:
+            log.warning(f"  Adversarial Validation 失败: {e}")
+
+        # ---- A4. Target Encoding (时间特征) ----
+        # 从特征中提取 hour_sin/hour_cos 反推 hour，计算目标编码
+        te_features = np.zeros((n, 0), dtype=np.float32)
+        te_names = []
+        try:
+            hour_sin_idx = feat_73_cols.index('hour_sin') if 'hour_sin' in feat_73_cols else -1
+            hour_cos_idx = feat_73_cols.index('hour_cos') if 'hour_cos' in feat_73_cols else -1
+            dow_sin_idx = feat_73_cols.index('dow_sin') if 'dow_sin' in feat_73_cols else -1
+            dow_cos_idx = feat_73_cols.index('dow_cos') if 'dow_cos' in feat_73_cols else -1
+
+            if hour_sin_idx >= 0 and hour_cos_idx >= 0:
+                # 反推 hour (0-23) from sin/cos
+                hour_angle = np.arctan2(feat_73[:, hour_sin_idx], feat_73[:, hour_cos_idx])
+                hour_bucket = np.round(hour_angle * 24 / (2 * np.pi)) % 24
+                hour_bucket = hour_bucket.astype(int)
+                # 用训练集计算 target encoding (smoothed)
+                global_mean = np.nanmean(y_all[:train_end])
+                smooth_factor = 50  # 平滑因子
+                te_hour = np.full(n, global_mean, dtype=np.float32)
+                for h in range(24):
+                    mask_h = (hour_bucket[:train_end] == h) & ~np.isnan(y_all[:train_end])
+                    if mask_h.sum() > 10:
+                        h_mean = np.nanmean(y_all[:train_end][mask_h])
+                        h_count = mask_h.sum()
+                        smoothed = (h_count * h_mean + smooth_factor * global_mean) / (h_count + smooth_factor)
+                        te_hour[hour_bucket == h] = smoothed
+                te_features = np.column_stack([te_features, te_hour.reshape(-1, 1)]) if te_features.shape[1] > 0 else te_hour.reshape(-1, 1)
+                te_names.append('te_hour')
+
+            if dow_sin_idx >= 0 and dow_cos_idx >= 0:
+                dow_angle = np.arctan2(feat_73[:, dow_sin_idx], feat_73[:, dow_cos_idx])
+                dow_bucket = np.round(dow_angle * 7 / (2 * np.pi)) % 7
+                dow_bucket = dow_bucket.astype(int)
+                global_mean = np.nanmean(y_all[:train_end])
+                te_dow = np.full(n, global_mean, dtype=np.float32)
+                for d in range(7):
+                    mask_d = (dow_bucket[:train_end] == d) & ~np.isnan(y_all[:train_end])
+                    if mask_d.sum() > 10:
+                        d_mean = np.nanmean(y_all[:train_end][mask_d])
+                        d_count = mask_d.sum()
+                        smoothed = (d_count * d_mean + smooth_factor * global_mean) / (d_count + smooth_factor)
+                        te_dow[dow_bucket == d] = smoothed
+                te_features = np.column_stack([te_features, te_dow.reshape(-1, 1)])
+                te_names.append('te_dow')
+
+            if te_names:
+                # 将 target encoding 附加到 selected 特征
+                feat_73_selected = np.hstack([feat_73_selected, te_features])
+                feat_73_cols_selected.extend(te_names)
+                log.info(f"  Target Encoding: {te_names} → 特征 {feat_73_selected.shape[1]} 维")
+        except Exception as e:
+            log.warning(f"  Target Encoding 失败: {e}")
+
         # ---- B. 8-Fold Purged OOF 预测 ----
         N_FOLDS = 8
         EMBARGO = 48  # 48 bar gap (2天@1h) 防止时序泄漏
         fold_size = train_end // N_FOLDS
+        NOISE_STD = 0.02  # 噪声注入标准差 (相对于特征 std)
 
-        oof_preds = np.full((train_end, 5), np.nan)  # LGB, LSTM, CatBoost, TabNet, StandaloneLGB
+        oof_preds = np.full((train_end, 5), np.nan)  # LGB, LSTM, CatBoost, TabNet, Ridge
         oof_valid = np.zeros(train_end, dtype=bool)
 
         log.info(f"\n生成 OOF 预测 ({N_FOLDS} folds, expanding window, embargo={EMBARGO})...")
@@ -2732,6 +2823,10 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
 
             log.info(f"  Fold {fold_idx}: train={len(X_tr_73)}, predict={len(X_fold_73)}, embargo={EMBARGO}")
 
+            # Noise Injection: 训练数据加高斯噪声增强泛化
+            rng = np.random.RandomState(42 + fold_idx)
+            X_tr_73_noisy = X_tr_73 + rng.normal(0, NOISE_STD, X_tr_73.shape).astype(np.float32)
+
             # --- 基模型 1: LGB (Optuna 最优参数) ---
             try:
                 import lightgbm as lgb
@@ -2745,7 +2840,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 }
                 if gpu_info.get('lgb_gpu'):
                     lgb_params['device'] = 'cuda'
-                dtrain = lgb.Dataset(X_tr_73, label=y_tr)
+                dtrain = lgb.Dataset(X_tr_73_noisy, label=y_tr)
                 lgb_model = lgb.train(lgb_params, dtrain, num_boost_round=297)
                 lgb_pred = lgb_model.predict(X_fold_73)
                 oof_preds[fold_start:fold_end, 0][fold_valid] = lgb_pred
@@ -2766,6 +2861,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             try:
                 from catboost import CatBoostClassifier
                 X_tr_94_cb = feat_94[tr_start:tr_end][tr_valid]
+                X_tr_94_noisy = X_tr_94_cb + rng.normal(0, NOISE_STD, X_tr_94_cb.shape).astype(np.float32)
                 X_fold_94_cb = feat_94[fold_start:fold_end][fold_valid]
                 y_tr_12h = y_12h[tr_start:tr_end][tr_valid]
                 y_tr_12h_clean = np.nan_to_num(y_tr_12h, nan=0.5)
@@ -2776,7 +2872,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                     verbose=0, eval_metric='AUC',
                     bootstrap_type='Bernoulli', subsample=0.8,
                 )
-                cb_model.fit(X_tr_94_cb, y_tr_12h_clean)
+                cb_model.fit(X_tr_94_noisy, y_tr_12h_clean)
                 cb_pred = cb_model.predict_proba(X_fold_94_cb)[:, 1]
                 oof_preds[fold_start:fold_end, 2][fold_valid] = cb_pred
             except Exception as e:
@@ -2796,7 +2892,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                     scheduler_fn=__import__('torch').optim.lr_scheduler.StepLR,
                 )
                 tabnet_model.fit(
-                    X_tr_73.astype(np.float64), y_tr.astype(np.int64),
+                    X_tr_73_noisy.astype(np.float64), y_tr.astype(np.int64),
                     max_epochs=50, patience=10, batch_size=1024,
                 )
                 tabnet_pred = tabnet_model.predict_proba(X_fold_73.astype(np.float64))[:, 1]
@@ -2804,26 +2900,22 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} TabNet 失败: {e}")
 
-            # --- 基模型 5: DART LGB (dropout on trees, 与 GBDT 差异大) ---
+            # --- 基模型 5: Ridge Classifier (线性模型, 与树模型低相关) ---
             try:
-                import lightgbm as lgb
-                dart_params = {
-                    'objective': 'binary', 'metric': 'auc',
-                    'boosting_type': 'dart', 'num_leaves': 31,
-                    'learning_rate': 0.05, 'feature_fraction': 0.6,
-                    'drop_rate': 0.15, 'skip_drop': 0.5,
-                    'max_drop': 50, 'uniform_drop': False,
-                    'min_child_samples': 40, 'lambda_l1': 0.05,
-                    'lambda_l2': 0.3, 'verbose': -1, 'n_jobs': -1, 'seed': 77,
-                }
-                if gpu_info.get('lgb_gpu'):
-                    dart_params['device'] = 'cuda'
-                dtrain_dart = lgb.Dataset(X_tr_73, label=y_tr)
-                dart_model = lgb.train(dart_params, dtrain_dart, num_boost_round=150)
-                dart_pred = dart_model.predict(X_fold_73)
-                oof_preds[fold_start:fold_end, 4][fold_valid] = dart_pred
+                from sklearn.linear_model import RidgeClassifier
+                from sklearn.preprocessing import StandardScaler
+                # 标准化后 Ridge 效果更好
+                ridge_scaler = StandardScaler()
+                X_tr_ridge = ridge_scaler.fit_transform(X_tr_73_noisy)
+                X_fold_ridge = ridge_scaler.transform(X_fold_73)
+                ridge_model = RidgeClassifier(alpha=1.0, class_weight='balanced')
+                ridge_model.fit(X_tr_ridge, y_tr.astype(int))
+                # RidgeClassifier 没有 predict_proba，用 decision_function + sigmoid
+                ridge_decision = ridge_model.decision_function(X_fold_ridge)
+                ridge_pred = 1.0 / (1.0 + np.exp(-ridge_decision))  # sigmoid
+                oof_preds[fold_start:fold_end, 4][fold_valid] = ridge_pred
             except Exception as e:
-                log.warning(f"  Fold {fold_idx} DART LGB 失败: {e}")
+                log.warning(f"  Fold {fold_idx} Ridge 失败: {e}")
 
             oof_valid[fold_start:fold_end] |= fold_valid
 
@@ -2837,7 +2929,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         oof_X = oof_filled[has_oof]
         oof_y = y_all[:train_end][has_oof]
 
-        model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'DartLGB']
+        model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'Ridge']
         log.info(f"\nOOF 汇总: {len(oof_X)} 有效样本")
         for i, name in enumerate(model_names):
             valid_mask = ~np.isnan(oof_preds[:train_end][has_oof, i])
@@ -2972,7 +3064,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                     log.info(f"  ✅ 采用剔除后模型")
                 else:
                     log.info(f"  保留原始模型 (剔除后变差)")
-                    model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'DartLGB']  # 恢复
+                    model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'Ridge']  # 恢复
 
         # OOF 性能 (已在上面计算)
         log.info(f"  Meta OOF AUC: {oof_meta_auc:.4f} (type={meta_type})")
@@ -3132,26 +3224,23 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         except Exception as e:
             log.warning(f"  TabNet 全量训练失败: {e}")
 
-        # 重训 DART LGB
+        # 重训 Ridge Classifier
+        ridge_scaler_full = None
+        ridge_full = None
         try:
-            import lightgbm as lgb
-            dart_params = {
-                'objective': 'binary', 'metric': 'auc',
-                'boosting_type': 'dart', 'num_leaves': 31,
-                'learning_rate': 0.05, 'feature_fraction': 0.6,
-                'drop_rate': 0.15, 'skip_drop': 0.5,
-                'max_drop': 50, 'uniform_drop': False,
-                'min_child_samples': 40, 'lambda_l1': 0.05,
-                'lambda_l2': 0.3, 'verbose': -1, 'n_jobs': -1, 'seed': 77,
-            }
-            if gpu_info.get('lgb_gpu'):
-                dart_params['device'] = 'cuda'
-            dtrain_dart = lgb.Dataset(X_full_73, label=y_full)
-            final_dart = lgb.train(dart_params, dtrain_dart, num_boost_round=200)
-            final_dart.save_model(os.path.join(MODEL_DIR, f'stacking_dart_lgb_{tf}.txt'))
-            log.info("  DART LGB 保存完成")
+            from sklearn.linear_model import RidgeClassifier
+            from sklearn.preprocessing import StandardScaler
+            ridge_scaler_full = StandardScaler()
+            X_full_ridge = ridge_scaler_full.fit_transform(X_full_73)
+            ridge_full = RidgeClassifier(alpha=1.0, class_weight='balanced')
+            ridge_full.fit(X_full_ridge, y_full.astype(int))
+            # 保存 Ridge + Scaler
+            ridge_save = {'ridge': ridge_full, 'scaler': ridge_scaler_full}
+            with open(os.path.join(MODEL_DIR, f'stacking_ridge_{tf}.pkl'), 'wb') as f:
+                pickle.dump(ridge_save, f)
+            log.info("  Ridge 保存完成")
         except Exception as e:
-            log.warning(f"  DART LGB 全量训练失败: {e}")
+            log.warning(f"  Ridge 全量训练失败: {e}")
 
         # ---- E. 用最终保存的基模型评估元学习器 ----
         val_auc = _stacking_evaluate_meta_with_saved_models(
@@ -3217,7 +3306,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             meta_intercept = 0.0
             meta_coefficients = {}
         stacking_meta = {
-            'version': 'stacking_v8',
+            'version': 'stacking_v9',
             'timeframe': tf,
             'meta_type': meta_type,
             'trained_at': datetime.now().isoformat(),
@@ -3246,7 +3335,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 'lstm': f'stacking_lstm_{tf}.pt',
                 'catboost': f'stacking_catboost_{tf}.cbm',
                 'tabnet': f'stacking_tabnet_{tf}.zip',
-                'standalone_lgb': f'stacking_dart_lgb_{tf}.txt',
+                'standalone_lgb': f'stacking_ridge_{tf}.pkl',
                 'meta': meta_file,
             },
             'thresholds': {
@@ -3254,6 +3343,9 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 'short_threshold': 0.42,
             },
             'platt_calibration': platt_params,  # Platt Scaling 校准参数
+            'adversarial_removed': adv_removed,  # 对抗验证剔除的漂移特征
+            'target_encoding': te_names,  # 目标编码特征
+            'noise_std': NOISE_STD,  # 训练噪声注入强度
         }
         meta_json_path = os.path.join(MODEL_DIR, f'stacking_meta_{tf}.json')
         with open(meta_json_path, 'w') as f:
@@ -3638,7 +3730,7 @@ def _stacking_evaluate_meta_with_saved_models(
     from sklearn.metrics import roc_auc_score
 
     if active_models is None:
-        active_models = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'DartLGB']
+        active_models = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'Ridge']
 
     if valid_mask.sum() < 20:
         return 0.5
@@ -3706,18 +3798,23 @@ def _stacking_evaluate_meta_with_saved_models(
             log.warning(f"  TabNet 评估失败: {e}")
         preds.append(tabnet_pred)
 
-    # 5) DART LGB
-    if 'DartLGB' in active_models:
-        dart_pred = np.full(len(X_73), 0.5, dtype=np.float32)
+    # 5) Ridge Classifier
+    if 'Ridge' in active_models:
+        ridge_pred = np.full(len(X_73), 0.5, dtype=np.float32)
         try:
-            import lightgbm as lgb
-            dart_path = os.path.join(MODEL_DIR, f'stacking_dart_lgb_{tf}.txt')
-            if os.path.exists(dart_path):
-                dart_model = lgb.Booster(model_file=dart_path)
-                dart_pred = dart_model.predict(X_73).astype(np.float32)
+            import pickle as _pkl
+            ridge_path = os.path.join(MODEL_DIR, f'stacking_ridge_{tf}.pkl')
+            if os.path.exists(ridge_path):
+                with open(ridge_path, 'rb') as f:
+                    ridge_save = _pkl.load(f)
+                ridge_model = ridge_save['ridge']
+                ridge_scaler = ridge_save['scaler']
+                X_ridge = ridge_scaler.transform(X_73)
+                ridge_decision = ridge_model.decision_function(X_ridge)
+                ridge_pred = (1.0 / (1.0 + np.exp(-ridge_decision))).astype(np.float32)
         except Exception as e:
-            log.warning(f"  DART LGB 评估失败: {e}")
-        preds.append(dart_pred)
+            log.warning(f"  Ridge 评估失败: {e}")
+        preds.append(ridge_pred)
 
     meta_X = np.column_stack(preds)
 

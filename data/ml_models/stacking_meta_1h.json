@@ -1,14 +1,14 @@
 {
-  "version": "stacking_v8",
+  "version": "stacking_v9",
   "timeframe": "1h",
   "meta_type": "lgb",
-  "trained_at": "2026-02-21T10:09:23.675903",
+  "trained_at": "2026-02-21T11:04:27.634801",
   "base_models": [
     "lgb",
     "lstm",
     "catboost",
     "tabnet",
-    "dartlgb"
+    "ridge"
   ],
   "extra_features": [
     "hvol_20",
@@ -20,9 +20,9 @@
   "meta_intercept": 0.0,
   "hvol_extra_mean": 0.031221536919474602,
   "hvol_extra_std": 0.01891856709254742,
-  "oof_meta_auc": 0.592,
-  "val_auc": 0.7787,
-  "test_auc": 0.5376,
+  "oof_meta_auc": 0.588,
+  "val_auc": 0.7091,
+  "test_auc": 0.5445,
   "n_oof_samples": 26789,
   "n_folds": 8,
   "feature_names_73": [
@@ -135,7 +135,6 @@
     "vol_ratio_5_20",
     "vol_price_corr_10",
     "ofi_std5",
-    "cum_ofi",
     "cum_ofi_slope",
     "large_trade_ratio",
     "buy_sell_pressure",
@@ -147,7 +146,9 @@
     "cum_ret_20_rank",
     "sharpe_20",
     "funding_rate",
-    "funding_rate_ma"
+    "funding_rate_ma",
+    "te_hour",
+    "te_dow"
   ],
   "feature_names_94": [
     "ret_1",
@@ -627,7 +628,7 @@
     "lstm": "stacking_lstm_1h.pt",
     "catboost": "stacking_catboost_1h.cbm",
     "tabnet": "stacking_tabnet_1h.zip",
-    "standalone_lgb": "stacking_dart_lgb_1h.txt",
+    "standalone_lgb": "stacking_ridge_1h.pkl",
     "meta": "stacking_meta_1h.pkl"
   },
   "thresholds": {
@@ -635,10 +636,18 @@
     "short_threshold": 0.42
   },
   "platt_calibration": {
-    "A": 2.3414488064044745,
-    "B": 0.7466499466625074,
-    "brier_before": 0.2289943143048053,
-    "brier_after": 0.22714532806670132,
+    "A": 2.2069192189581144,
+    "B": 0.6750681245371479,
+    "brier_before": 0.22909973022586058,
+    "brier_after": 0.22748061338738387,
     "enabled": true
-  }
+  },
+  "adversarial_removed": [
+    "cum_ofi"
+  ],
+  "target_encoding": [
+    "te_hour",
+    "te_dow"
+  ],
+  "noise_std": 0.02
 }
