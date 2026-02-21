@@ -2708,24 +2708,27 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 continue
 
             tr_end = max(0, fold_start - EMBARGO)  # Purged: embargo gap
-            tr_valid = ~np.isnan(y_all[:tr_end])
+            # Sliding Window: 只用最近 60% 的可用数据 (适应 regime 变化)
+            SLIDE_RATIO = 0.6
+            tr_start = max(0, int(tr_end * (1 - SLIDE_RATIO)))
+            tr_valid = ~np.isnan(y_all[tr_start:tr_end])
             fold_valid = ~np.isnan(y_all[fold_start:fold_end])
 
             if tr_valid.sum() < 200 or fold_valid.sum() < 50:
                 log.info(f"  Fold {fold_idx}: 跳过 (样本不足)")
                 continue
 
-            X_tr_73 = feat_73_selected[:tr_end][tr_valid]
-            X_tr_94 = feat_94[:tr_end][tr_valid]
-            y_tr = y_all[:tr_end][tr_valid]
+            X_tr_73 = feat_73_selected[tr_start:tr_end][tr_valid]
+            X_tr_94 = feat_94[tr_start:tr_end][tr_valid]
+            y_tr = y_all[tr_start:tr_end][tr_valid]
 
             X_fold_73 = feat_73_selected[fold_start:fold_end][fold_valid]
             X_fold_94 = feat_94[fold_start:fold_end][fold_valid]
 
-            fold_mean_73 = np.nanmean(feat_73[:tr_end][tr_valid], axis=0)
-            fold_std_73 = np.nanstd(feat_73[:tr_end][tr_valid], axis=0) + 1e-8
-            fold_mean_94 = np.nanmean(X_tr_94, axis=0)
-            fold_std_94 = np.nanstd(X_tr_94, axis=0) + 1e-8
+            fold_mean_73 = np.nanmean(feat_73[tr_start:tr_end][tr_valid], axis=0)
+            fold_std_73 = np.nanstd(feat_73[tr_start:tr_end][tr_valid], axis=0) + 1e-8
+            fold_mean_94 = np.nanmean(feat_94[tr_start:tr_end][tr_valid], axis=0)
+            fold_std_94 = np.nanstd(feat_94[tr_start:tr_end][tr_valid], axis=0) + 1e-8
 
             log.info(f"  Fold {fold_idx}: train={len(X_tr_73)}, predict={len(X_fold_73)}, embargo={EMBARGO}")
 
@@ -2762,9 +2765,9 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             # --- 基模型 3: CatBoost (94 维跨资产, 12h 标签, 增加多样性) ---
             try:
                 from catboost import CatBoostClassifier
-                X_tr_94_cb = feat_94[:tr_end][tr_valid]
+                X_tr_94_cb = feat_94[tr_start:tr_end][tr_valid]
                 X_fold_94_cb = feat_94[fold_start:fold_end][fold_valid]
-                y_tr_12h = y_12h[:tr_end][tr_valid]
+                y_tr_12h = y_12h[tr_start:tr_end][tr_valid]
                 y_tr_12h_clean = np.nan_to_num(y_tr_12h, nan=0.5)
                 cb_model = CatBoostClassifier(
                     iterations=300, depth=6, learning_rate=0.03,
@@ -2801,25 +2804,26 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} TabNet 失败: {e}")
 
-            # --- 基模型 5: Standalone LGB Direction (独立超参, 免费多样性) ---
+            # --- 基模型 5: DART LGB (dropout on trees, 与 GBDT 差异大) ---
             try:
                 import lightgbm as lgb
-                standalone_params = {
+                dart_params = {
                     'objective': 'binary', 'metric': 'auc',
-                    'boosting_type': 'gbdt', 'num_leaves': 63,
-                    'learning_rate': 0.02, 'feature_fraction': 0.7,
-                    'bagging_fraction': 0.7, 'bagging_freq': 1,
-                    'min_child_samples': 30, 'lambda_l1': 0.1,
-                    'lambda_l2': 0.5, 'verbose': -1, 'n_jobs': -1, 'seed': 123,
+                    'boosting_type': 'dart', 'num_leaves': 31,
+                    'learning_rate': 0.05, 'feature_fraction': 0.6,
+                    'drop_rate': 0.15, 'skip_drop': 0.5,
+                    'max_drop': 50, 'uniform_drop': False,
+                    'min_child_samples': 40, 'lambda_l1': 0.05,
+                    'lambda_l2': 0.3, 'verbose': -1, 'n_jobs': -1, 'seed': 77,
                 }
                 if gpu_info.get('lgb_gpu'):
-                    standalone_params['device'] = 'cuda'
-                dtrain_sa = lgb.Dataset(X_tr_73, label=y_tr)
-                sa_model = lgb.train(standalone_params, dtrain_sa, num_boost_round=200)
-                sa_pred = sa_model.predict(X_fold_73)
-                oof_preds[fold_start:fold_end, 4][fold_valid] = sa_pred
+                    dart_params['device'] = 'cuda'
+                dtrain_dart = lgb.Dataset(X_tr_73, label=y_tr)
+                dart_model = lgb.train(dart_params, dtrain_dart, num_boost_round=150)
+                dart_pred = dart_model.predict(X_fold_73)
+                oof_preds[fold_start:fold_end, 4][fold_valid] = dart_pred
             except Exception as e:
-                log.warning(f"  Fold {fold_idx} StandaloneLGB 失败: {e}")
+                log.warning(f"  Fold {fold_idx} DART LGB 失败: {e}")
 
             oof_valid[fold_start:fold_end] |= fold_valid
 
@@ -2833,7 +2837,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         oof_X = oof_filled[has_oof]
         oof_y = y_all[:train_end][has_oof]
 
-        model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'StandaloneLGB']
+        model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'DartLGB']
         log.info(f"\nOOF 汇总: {len(oof_X)} 有效样本")
         for i, name in enumerate(model_names):
             valid_mask = ~np.isnan(oof_preds[:train_end][has_oof, i])
@@ -2913,13 +2917,13 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             import lightgbm as lgb
             meta_lgb_params = {
                 'objective': 'binary', 'metric': 'auc',
-                'num_leaves': 4, 'learning_rate': 0.05,
-                'feature_fraction': 1.0, 'bagging_fraction': 0.8,
-                'bagging_freq': 1, 'min_child_samples': max(50, n_oof // 100),
-                'lambda_l2': 1.0, 'verbose': -1, 'seed': 42,
+                'num_leaves': 4, 'learning_rate': 0.03,
+                'feature_fraction': 0.8, 'bagging_fraction': 0.7,
+                'bagging_freq': 1, 'min_child_samples': max(100, n_oof // 50),
+                'lambda_l2': 3.0, 'verbose': -1, 'seed': 42,
             }
             meta_lgb_dtrain = lgb.Dataset(oof_X, label=oof_y, weight=decay_weights)
-            meta_lgb_model = lgb.train(meta_lgb_params, meta_lgb_dtrain, num_boost_round=50)
+            meta_lgb_model = lgb.train(meta_lgb_params, meta_lgb_dtrain, num_boost_round=30)
             lgb_meta_pred = meta_lgb_model.predict(oof_X)
             lgb_meta_auc = roc_auc_score(oof_y, lgb_meta_pred)
             log.info(f"  LGB meta OOF AUC: {lgb_meta_auc:.4f}")
@@ -2968,7 +2972,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                     log.info(f"  ✅ 采用剔除后模型")
                 else:
                     log.info(f"  保留原始模型 (剔除后变差)")
-                    model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'StandaloneLGB']  # 恢复
+                    model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'DartLGB']  # 恢复
 
         # OOF 性能 (已在上面计算)
         log.info(f"  Meta OOF AUC: {oof_meta_auc:.4f} (type={meta_type})")
@@ -3128,25 +3132,26 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         except Exception as e:
             log.warning(f"  TabNet 全量训练失败: {e}")
 
-        # 重训 StandaloneLGB (不同超参)
+        # 重训 DART LGB
         try:
             import lightgbm as lgb
-            sa_params = {
+            dart_params = {
                 'objective': 'binary', 'metric': 'auc',
-                'boosting_type': 'gbdt', 'num_leaves': 63,
-                'learning_rate': 0.02, 'feature_fraction': 0.7,
-                'bagging_fraction': 0.7, 'bagging_freq': 1,
-                'min_child_samples': 30, 'lambda_l1': 0.1,
-                'lambda_l2': 0.5, 'verbose': -1, 'n_jobs': -1, 'seed': 123,
+                'boosting_type': 'dart', 'num_leaves': 31,
+                'learning_rate': 0.05, 'feature_fraction': 0.6,
+                'drop_rate': 0.15, 'skip_drop': 0.5,
+                'max_drop': 50, 'uniform_drop': False,
+                'min_child_samples': 40, 'lambda_l1': 0.05,
+                'lambda_l2': 0.3, 'verbose': -1, 'n_jobs': -1, 'seed': 77,
             }
             if gpu_info.get('lgb_gpu'):
-                sa_params['device'] = 'cuda'
-            dtrain_sa = lgb.Dataset(X_full_73, label=y_full)
-            final_sa = lgb.train(sa_params, dtrain_sa, num_boost_round=250)
-            final_sa.save_model(os.path.join(MODEL_DIR, f'stacking_standalone_lgb_{tf}.txt'))
-            log.info("  StandaloneLGB 保存完成")
+                dart_params['device'] = 'cuda'
+            dtrain_dart = lgb.Dataset(X_full_73, label=y_full)
+            final_dart = lgb.train(dart_params, dtrain_dart, num_boost_round=200)
+            final_dart.save_model(os.path.join(MODEL_DIR, f'stacking_dart_lgb_{tf}.txt'))
+            log.info("  DART LGB 保存完成")
         except Exception as e:
-            log.warning(f"  StandaloneLGB 全量训练失败: {e}")
+            log.warning(f"  DART LGB 全量训练失败: {e}")
 
         # ---- E. 用最终保存的基模型评估元学习器 ----
         val_auc = _stacking_evaluate_meta_with_saved_models(
@@ -3212,7 +3217,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             meta_intercept = 0.0
             meta_coefficients = {}
         stacking_meta = {
-            'version': 'stacking_v7',
+            'version': 'stacking_v8',
             'timeframe': tf,
             'meta_type': meta_type,
             'trained_at': datetime.now().isoformat(),
@@ -3241,7 +3246,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 'lstm': f'stacking_lstm_{tf}.pt',
                 'catboost': f'stacking_catboost_{tf}.cbm',
                 'tabnet': f'stacking_tabnet_{tf}.zip',
-                'standalone_lgb': f'stacking_standalone_lgb_{tf}.txt',
+                'standalone_lgb': f'stacking_dart_lgb_{tf}.txt',
                 'meta': meta_file,
             },
             'thresholds': {
@@ -3633,7 +3638,7 @@ def _stacking_evaluate_meta_with_saved_models(
     from sklearn.metrics import roc_auc_score
 
     if active_models is None:
-        active_models = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'StandaloneLGB']
+        active_models = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'DartLGB']
 
     if valid_mask.sum() < 20:
         return 0.5
@@ -3701,18 +3706,18 @@ def _stacking_evaluate_meta_with_saved_models(
             log.warning(f"  TabNet 评估失败: {e}")
         preds.append(tabnet_pred)
 
-    # 5) StandaloneLGB
-    if 'StandaloneLGB' in active_models:
-        sa_pred = np.full(len(X_73), 0.5, dtype=np.float32)
+    # 5) DART LGB
+    if 'DartLGB' in active_models:
+        dart_pred = np.full(len(X_73), 0.5, dtype=np.float32)
         try:
             import lightgbm as lgb
-            sa_path = os.path.join(MODEL_DIR, f'stacking_standalone_lgb_{tf}.txt')
-            if os.path.exists(sa_path):
-                sa_model = lgb.Booster(model_file=sa_path)
-                sa_pred = sa_model.predict(X_73).astype(np.float32)
+            dart_path = os.path.join(MODEL_DIR, f'stacking_dart_lgb_{tf}.txt')
+            if os.path.exists(dart_path):
+                dart_model = lgb.Booster(model_file=dart_path)
+                dart_pred = dart_model.predict(X_73).astype(np.float32)
         except Exception as e:
-            log.warning(f"  StandaloneLGB 评估失败: {e}")
-        preds.append(sa_pred)
+            log.warning(f"  DART LGB 评估失败: {e}")
+        preds.append(dart_pred)
 
     meta_X = np.column_stack(preds)
 

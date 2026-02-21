@@ -1,14 +1,14 @@
 {
-  "version": "stacking_v7",
+  "version": "stacking_v8",
   "timeframe": "4h",
   "meta_type": "lgb",
-  "trained_at": "2026-02-21T09:48:26.260951",
+  "trained_at": "2026-02-21T10:11:06.123097",
   "base_models": [
     "lgb",
     "lstm",
     "catboost",
     "tabnet",
-    "standalonelgb"
+    "dartlgb"
   ],
   "extra_features": [
     "hvol_20",
@@ -20,9 +20,9 @@
   "meta_intercept": 0.0,
   "hvol_extra_mean": 0.0641767606139183,
   "hvol_extra_std": 0.032997547404298784,
-  "oof_meta_auc": 0.6088,
-  "val_auc": 0.5067,
-  "test_auc": 0.515,
+  "oof_meta_auc": 0.5847,
+  "val_auc": 0.5389,
+  "test_auc": 0.5166,
   "n_oof_samples": 6685,
   "n_folds": 8,
   "feature_names_73": [
@@ -627,7 +627,7 @@
     "lstm": "stacking_lstm_4h.pt",
     "catboost": "stacking_catboost_4h.cbm",
     "tabnet": "stacking_tabnet_4h.zip",
-    "standalone_lgb": "stacking_standalone_lgb_4h.txt",
+    "standalone_lgb": "stacking_dart_lgb_4h.txt",
     "meta": "stacking_meta_4h.pkl"
   },
   "thresholds": {
@@ -635,10 +635,10 @@
     "short_threshold": 0.42
   },
   "platt_calibration": {
-    "A": 2.214871476915955,
-    "B": 0.30443592603126235,
-    "brier_before": 0.2399920104459478,
-    "brier_after": 0.23730768005065148,
+    "A": 2.954081807696789,
+    "B": 0.49767600153088415,
+    "brier_before": 0.24340699044941547,
+    "brier_after": 0.241013768714064,
     "enabled": true
   }
 }
