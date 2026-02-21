@@ -16,6 +16,7 @@
 """
 
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -57,7 +58,9 @@ class AlertScorer:
 
     def __init__(self):
         self._score_history: Dict[str, List[float]] = {}
+        self._score_last_seen: Dict[str, float] = {}  # symbol → last access timestamp
         self._lock = threading.Lock()
+        self._HISTORY_EXPIRE_SEC = 3600  # 1h 未活跃的 symbol 清理
 
     def score(
         self,
@@ -108,17 +111,27 @@ class AlertScorer:
         result.pump_phase = pump.phase.value if pump else "normal"
 
         # ---- 预警级别 (线程安全读写 history) ----
+        now = time.time()
         with self._lock:
+            # 先更新历史, 再判定级别 (L3 需要包含当前分数)
+            hist = self._score_history.setdefault(symbol, [])
+            hist.append(final_score)
+            if len(hist) > 10:
+                self._score_history[symbol] = hist[-10:]
+            self._score_last_seen[symbol] = now
+
             level, name, hint = self._determine_level(final_score, scan, symbol)
             result.level = level
             result.level_name = name
             result.action_hint = hint
 
-            # 更新历史 (用于 L3 检测)
-            hist = self._score_history.setdefault(symbol, [])
-            hist.append(final_score)
-            if len(hist) > 10:
-                self._score_history[symbol] = hist[-10:]
+            # 定期清理过期 symbol (每 100 次调用检查一次)
+            if len(self._score_history) > 50:
+                expired = [s for s, ts in self._score_last_seen.items()
+                           if now - ts > self._HISTORY_EXPIRE_SEC]
+                for s in expired:
+                    self._score_history.pop(s, None)
+                    self._score_last_seen.pop(s, None)
 
         return result
 

@@ -112,15 +112,24 @@ class HotCoinEntryExit:
                 exit_pct=1.0,
             )
 
-        # 1.5 Pump 派发阶段退出 (盈利时部分平仓, 仅触发一次)
-        if coin and partial_exits == 0:
+        # 1.5 Pump 派发阶段退出
+        if coin:
             cp = getattr(coin, "pump_phase", "")
-            if cp == "distribution" and pnl_pct > 0:
-                return ExitDecision(
-                    should_exit=True,
-                    reason=f"Pump进入派发阶段, 获利退出 ({pnl_pct:+.2%})",
-                    exit_pct=0.5,
-                )
+            if cp == "distribution":
+                if pnl_pct > 0 and partial_exits == 0:
+                    # 盈利时: 部分平仓50%, 仅触发一次 (后续靠追踪止损)
+                    return ExitDecision(
+                        should_exit=True,
+                        reason=f"Pump派发阶段, 获利减仓 ({pnl_pct:+.2%})",
+                        exit_pct=0.5,
+                    )
+                elif pnl_pct <= self.config.default_sl_pct * 0.6:
+                    # 亏损超过止损60%时: 派发+亏损双重信号, 全部平仓
+                    return ExitDecision(
+                        should_exit=True,
+                        reason=f"Pump派发+亏损, 紧急退出 ({pnl_pct:+.2%})",
+                        exit_pct=1.0,
+                    )
 
         # 2. 黑天鹅 (5min 剧烈反向波动)
         if coin:

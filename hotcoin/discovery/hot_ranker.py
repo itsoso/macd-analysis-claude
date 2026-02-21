@@ -90,9 +90,9 @@ class HotRanker:
             if s > 0:
                 active_weight += w
 
-        # 归一化: 按有效维度权重归一化, 保证动量币不被空维度稀释
-        # 最小权重 = momentum + liquidity = 0.45, 避免极端膨胀
-        effective_weight = max(active_weight, self.cfg.w_momentum + self.cfg.w_liquidity)
+        # 归一化: 按有效维度权重归一化, 保证动量币/公告币不被空维度稀释
+        # 最小权重 0.35: 避免单维度极端膨胀, 同时不过度抑制公告币
+        effective_weight = max(active_weight, 0.35)
         positive_score = (positive_raw / effective_weight) if effective_weight > 0 else 0
 
         # 风险惩罚: w_risk_penalty 直接控制最大扣减幅度

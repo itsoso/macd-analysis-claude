@@ -41,6 +41,7 @@ _TF_SECONDS = {
 _kline_cache: Dict[Tuple[str, str], Tuple[pd.DataFrame, float]] = {}
 _kline_cache_lock = threading.Lock()
 _KLINE_CACHE_MAX = 500
+_KLINE_CACHE_PRUNE_BATCH = 50  # 淘汰时一次性删除最老的 N 条, 避免频繁淘汰
 
 # 全局 AlertScorer 实例 (保持 score_history 用于 L3 连续高分检测)
 from hotcoin.engine.alert_scorer import AlertScorer as _AlertScorerCls
@@ -68,8 +69,9 @@ def _get_cached_klines(symbol: str, tf: str, days: int, min_bars: int):
         with _kline_cache_lock:
             _kline_cache[key] = (df, now)
             if len(_kline_cache) > _KLINE_CACHE_MAX:
-                oldest_key = min(_kline_cache, key=lambda k: _kline_cache[k][1])
-                del _kline_cache[oldest_key]
+                by_age = sorted(_kline_cache, key=lambda k: _kline_cache[k][1])
+                for old_key in by_age[:_KLINE_CACHE_PRUNE_BATCH]:
+                    _kline_cache.pop(old_key, None)
     return df
 
 
@@ -251,7 +253,10 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
         for _tf, _df in tf_raw_dfs.items():
             if "quote_volume" in _df.columns and len(_df) > 0:
                 bars_per_day = 1440 / _tf_minutes.get(_tf, 5)
-                quote_vol_24h = float(_df["quote_volume"].iloc[-1]) * bars_per_day
+                sample_n = min(len(_df), max(1, int(bars_per_day)))
+                avg_vol = float(_df["quote_volume"].iloc[-sample_n:].mean())
+                if not (avg_vol != avg_vol):  # NaN check
+                    quote_vol_24h = avg_vol * bars_per_day
                 break
 
         # Pump 检测: 按优先级 5m > 15m > 1m > 其他
@@ -287,7 +292,7 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
                          symbol, alert_level, alert.level_name, alert_score,
                          pump_phase, active_signals_list, active_filters_list)
     except Exception:
-        log.debug("%s Pump/Alert 增强层异常", symbol, exc_info=True)
+        log.warning("%s Pump/Alert 增强层异常", symbol, exc_info=True)
 
     return TradeSignal(
         symbol=symbol,

@@ -325,9 +325,16 @@ class HotCoinRunner:
         try:
             await self._shutdown.wait()
         finally:
+            log.info("开始优雅关闭...")
             for t in tasks:
                 t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=15,
+                )
+            except asyncio.TimeoutError:
+                log.warning("子任务取消超时 (15s), 强制继续")
             self.dispatcher.shutdown()
             self._write_stopped_status()
             self.pool.close()
@@ -382,18 +389,29 @@ class HotCoinRunner:
                                  sig.action, sig.symbol, sig.strength,
                                  sig.confidence, sig.reason)
 
-                # 3.5) 回写 Pump + Alert 到候选池
+                # 3.5) 回写 Pump + Alert 到候选池 (仅覆盖非空值, 避免默认值冲刷)
                 for sig in signals:
-                    if sig.pump_phase or sig.alert_level:
-                        coin = self.pool.get(sig.symbol)
-                        if coin:
-                            coin.pump_phase = sig.pump_phase or "normal"
-                            coin.pump_score = sig.pump_score
-                            coin.alert_level = sig.alert_level or "NONE"
-                            coin.alert_score = sig.alert_score
-                            coin.active_signals = ",".join(sig.active_signals) if sig.active_signals else ""
-                            coin.active_filters = ",".join(sig.active_filters) if sig.active_filters else ""
-                            self.pool.update_coin(coin)
+                    coin = self.pool.get(sig.symbol)
+                    if coin is None:
+                        continue
+                    changed = False
+                    if sig.pump_phase:
+                        coin.pump_phase = sig.pump_phase
+                        changed = True
+                    if sig.pump_score > 0:
+                        coin.pump_score = sig.pump_score
+                        changed = True
+                    if sig.alert_level:
+                        coin.alert_level = sig.alert_level
+                        changed = True
+                    if sig.alert_score > 0:
+                        coin.alert_score = sig.alert_score
+                        changed = True
+                    # signals/filters 每轮都全量更新 (可以从有到无)
+                    coin.active_signals = ",".join(sig.active_signals) if sig.active_signals else ""
+                    coin.active_filters = ",".join(sig.active_filters) if sig.active_filters else ""
+                    if changed:
+                        self.pool.update_coin(coin)
 
                 current_prices = {
                     sym: ticker.close
@@ -508,8 +526,12 @@ class HotCoinRunner:
         try:
             precheck_stats = self.spot_engine.executor.get_precheck_stats()
         except Exception:
-            precheck_stats = {}
-        risk_summary = self.spot_engine.risk.get_summary()
+            pass
+        risk_summary = {}
+        try:
+            risk_summary = self.spot_engine.risk.get_summary()
+        except Exception:
+            pass
         payload = {
             "running": True,
             "ts": time.time(),

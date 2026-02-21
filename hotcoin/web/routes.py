@@ -651,10 +651,19 @@ def api_status():
             "price_change_24h": c.price_change_24h,
             "quote_volume_24h": c.quote_volume_24h,
             "volume_surge_ratio": c.volume_surge_ratio,
+            "score_announcement": c.score_announcement,
+            "score_social": c.score_social,
+            "score_sentiment": c.score_sentiment,
             "score_momentum": c.score_momentum,
             "score_liquidity": c.score_liquidity,
             "score_risk_penalty": c.score_risk_penalty,
             "has_listing_signal": c.has_listing_signal,
+            "pump_phase": c.pump_phase,
+            "pump_score": c.pump_score,
+            "alert_level": c.alert_level,
+            "alert_score": c.alert_score,
+            "active_signals": c.active_signals,
+            "active_filters": c.active_filters,
             "signal": "",  # filled from recent signals cache
         })
 
@@ -984,3 +993,56 @@ def api_balances():
         return jsonify({"ok": True, "balances": balances, "ts": time.time()})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@hotcoin_bp.route("/api/params")
+def api_params():
+    """返回运行时关键参数快照 (只读)。"""
+    from hotcoin.engine.hot_coin_params import (
+        HOT_COIN_FUSION_CONFIG,
+        HOT_COIN_INDICATOR_PARAMS,
+        HOT_COIN_TIMEFRAMES,
+        HOT_COIN_CONSENSUS_CONFIG,
+        HOT_COIN_KLINE_PARAMS,
+    )
+
+    r = _get_runner()
+    config_snapshot = {}
+    if r is not None:
+        cfg = r.config
+        config_snapshot = {
+            "execution": {
+                "initial_capital": cfg.execution.initial_capital,
+                "max_concurrent_positions": cfg.execution.max_concurrent_positions,
+                "max_total_exposure_pct": cfg.execution.max_total_exposure_pct,
+                "max_single_position_pct": cfg.execution.max_single_position_pct,
+                "paper": cfg.execution.use_paper_trading,
+                "enable_order_execution": cfg.execution.enable_order_execution,
+            },
+            "trading": {
+                "min_consensus_strength": cfg.trading.min_consensus_strength,
+                "default_sl_pct": cfg.trading.default_sl_pct,
+                "take_profit_tiers": cfg.trading.take_profit_tiers,
+                "trailing_stop_pct": cfg.trading.trailing_stop_pct,
+                "max_hold_minutes": cfg.trading.max_hold_minutes,
+                "signal_loop_sec": cfg.trading.signal_loop_sec,
+            },
+            "discovery": {
+                "pool_max_size": cfg.discovery.pool_max_size,
+                "pool_enter_score": cfg.discovery.pool_enter_score,
+                "pool_exit_score": cfg.discovery.pool_exit_score,
+                "listing_poll_sec": cfg.discovery.listing_poll_sec,
+                "announcement_poll_sec": cfg.discovery.announcement_poll_sec,
+            },
+        }
+
+    return jsonify({
+        "ok": True,
+        "fusion": HOT_COIN_FUSION_CONFIG,
+        "indicators": HOT_COIN_INDICATOR_PARAMS,
+        "timeframes": HOT_COIN_TIMEFRAMES,
+        "consensus": HOT_COIN_CONSENSUS_CONFIG,
+        "kline_params": HOT_COIN_KLINE_PARAMS,
+        "config": config_snapshot,
+        "ts": time.time(),
+    })
