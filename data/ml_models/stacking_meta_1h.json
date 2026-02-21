@@ -1,7 +1,7 @@
 {
   "version": "stacking_v2",
   "timeframe": "1h",
-  "trained_at": "2026-02-20T14:55:31.240886",
+  "trained_at": "2026-02-20T15:33:34.888788",
   "base_models": [
     "lgb",
     "xgboost",
@@ -14,17 +14,17 @@
   ],
   "meta_input_dim": 6,
   "meta_coefficients": {
-    "lgb": 1.509219405295841,
-    "xgboost": -0.32572486492947067,
-    "lstm": 0.107747521623937,
-    "tft": 0.0010054503532343426,
-    "cross_asset_lgb": 1.5364297010219243,
-    "hvol_20": 2.939359659109645
+    "lgb": 1.6147317686499987,
+    "xgboost": -0.29346236424771055,
+    "lstm": 0.048580799770710476,
+    "tft": 0.0916350305404436,
+    "cross_asset_lgb": 1.4276059633383784,
+    "hvol_20": 2.965563910305364
   },
-  "meta_intercept": -1.7544926382248693,
-  "oof_meta_auc": 0.5879,
-  "val_auc": 0.8331,
-  "test_auc": 0.548,
+  "meta_intercept": -1.7763105865521378,
+  "oof_meta_auc": 0.588,
+  "val_auc": 0.8203,
+  "test_auc": 0.5466,
   "n_oof_samples": 24492,
   "n_folds": 5,
   "feature_names_73": [

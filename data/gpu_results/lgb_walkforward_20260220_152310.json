@@ -1,0 +1,13 @@
+{
+  "1h": {
+    "total_folds": 357,
+    "avg_val_auc": 0.6034,
+    "min_val_auc": 0.407,
+    "max_val_auc": 0.7968,
+    "std_val_auc": 0.0736,
+    "elapsed_sec": 731.0,
+    "timeframe": "1h",
+    "samples": 43737,
+    "features": 80
+  }
+}
