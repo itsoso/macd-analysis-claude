@@ -48,20 +48,32 @@ class SymbolInfo:
 
 
 class ExchangeInfoCache:
-    """exchangeInfo 缓存, 每小时刷新。"""
+    """exchangeInfo 缓存, 每小时刷新。失败后 5min 重试。"""
 
     REFRESH_INTERVAL = 3600  # 1h
+    RETRY_INTERVAL = 300     # 5min (失败后重试)
 
     def __init__(self):
         self._cache: Dict[str, SymbolInfo] = {}
         self._last_refresh = 0.0
+        self._last_attempt = 0.0
         self._lock = threading.Lock()
+        self._first_seen: Dict[str, float] = {}
+        self._consecutive_failures = 0
 
     def get(self, symbol: str) -> Optional[SymbolInfo]:
-        if time.time() - self._last_refresh > self.REFRESH_INTERVAL:
+        now = time.time()
+        interval = self.RETRY_INTERVAL if self._consecutive_failures > 0 else self.REFRESH_INTERVAL
+        if now - self._last_attempt > interval:
             with self._lock:
-                if time.time() - self._last_refresh > self.REFRESH_INTERVAL:
-                    self._refresh()
+                if now - self._last_attempt > interval:
+                    try:
+                        self._refresh()
+                    except Exception:
+                        self._last_attempt = time.time()
+                        self._consecutive_failures += 1
+                        log.exception("exchangeInfo 刷新异常 (连续 %d 次)",
+                                      self._consecutive_failures)
         return self._cache.get(symbol)
 
     def _refresh(self):
@@ -125,10 +137,26 @@ class ExchangeInfoCache:
                     status=sym_info.get("status", "TRADING"),
                 )
 
-            self._last_refresh = time.time()
+            now = time.time()
+            for sym in self._cache:
+                if sym not in self._first_seen:
+                    self._first_seen[sym] = now
+            self._last_refresh = now
+            self._last_attempt = now
+            self._consecutive_failures = 0
             log.info("exchangeInfo 刷新: %d 个 USDT 交易对", len(self._cache))
         except Exception:
-            log.exception("exchangeInfo 刷新失败")
+            self._last_attempt = time.time()
+            self._consecutive_failures += 1
+            log.exception("exchangeInfo 刷新失败 (连续 %d 次, %.0f秒后重试)",
+                          self._consecutive_failures, self.RETRY_INTERVAL)
+
+    def get_coin_age_days(self, symbol: str) -> int:
+        """估算币种上线天数。-1 表示未知。"""
+        fs = self._first_seen.get(symbol)
+        if fs is None:
+            return -1
+        return max(0, int((time.time() - fs) / 86400))
 
     @staticmethod
     def _precision_from_step(step: float) -> int:
@@ -172,6 +200,10 @@ class OrderExecutor:
             "precheck_failed": deque(),
             "dedup_rejected": deque(),
         }
+
+    def get_coin_age_days(self, symbol: str) -> int:
+        """估算币种上线天数 (委托给 ExchangeInfoCache)。"""
+        return self._exchange_info.get_coin_age_days(symbol)
 
     @staticmethod
     def _quantize_down(value: float, step: float = 0.0, precision: int = 8) -> float:
@@ -512,6 +544,30 @@ class OrderExecutor:
             pass
         return 0.0
 
+    # Binance error codes that are retryable (transient)
+    _RETRYABLE_HTTP = {429, 418, 500, 502, 503, 504}
+    _RETRYABLE_API_CODES = {
+        -1000,  # UNKNOWN (internal error)
+        -1001,  # DISCONNECTED
+        -1003,  # TOO_MANY_REQUESTS
+        -1006,  # UNEXPECTED_RESP
+        -1007,  # TIMEOUT
+        -1015,  # TOO_MANY_ORDERS (rate limit)
+    }
+
+    @staticmethod
+    def classify_order_error(http_status: int, api_code: int) -> str:
+        """分类订单错误: 'retryable' | 'non_retryable' | 'unknown'。"""
+        if http_status in OrderExecutor._RETRYABLE_HTTP:
+            return "retryable"
+        if api_code in OrderExecutor._RETRYABLE_API_CODES:
+            return "retryable"
+        if http_status == 200:
+            return "non_retryable"
+        if 400 <= http_status < 500:
+            return "non_retryable"
+        return "unknown"
+
     def _send_spot_order(self, params: dict) -> dict:
         """发送现货订单到币安 API。"""
         url = f"{BASE_REST_URL}/api/v3/order"
@@ -536,13 +592,84 @@ class OrderExecutor:
                 self._order_history.append(result)
                 self._record_runtime_event("order_success")
             else:
-                log.error("下单失败: %s", result)
+                api_code = int(result.get("code", 0))
+                error_class = self.classify_order_error(resp.status_code, api_code)
+                log.error("下单失败 [%s]: HTTP %d, code=%d, %s",
+                          error_class, resp.status_code, api_code, result)
                 result["error"] = result.get("msg", f"HTTP {resp.status_code}")
-                self._record_runtime_event("order_error")
+                result["error_class"] = error_class
+                event_type = "order_error" if error_class != "retryable" else "order_error"
+                self._record_runtime_event(event_type)
             return result
+        except requests.exceptions.Timeout:
+            log.warning("下单超时: %s %s", params.get("symbol"), params.get("side"))
+            self._record_runtime_event("order_error")
+            return {"error": "request timeout", "error_class": "retryable"}
+        except requests.exceptions.ConnectionError as e:
+            log.warning("下单连接错误: %s", e)
+            self._record_runtime_event("order_error")
+            return {"error": str(e), "error_class": "retryable"}
         except Exception as e:
             log.exception("下单异常")
             self._record_runtime_event("order_error")
+            return {"error": str(e), "error_class": "unknown"}
+
+    def query_open_orders(self, symbol: str = "") -> list:
+        """查询当前未成交订单。paper 模式返回空列表。"""
+        if self.paper:
+            return []
+        params: dict = {"timestamp": int(time.time() * 1000), "recvWindow": 5000}
+        if symbol:
+            params["symbol"] = symbol
+
+        query = urlencode(sorted(params.items()))
+        signature = hmac.new(
+            self._api_secret.encode(), query.encode(), hashlib.sha256
+        ).hexdigest()
+        headers = {"X-MBX-APIKEY": self._api_key}
+        try:
+            resp = requests.get(
+                f"{BASE_REST_URL}/api/v3/openOrders",
+                params=query + "&signature=" + signature,
+                headers=headers, timeout=10,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            log.warning("查询 openOrders 失败: HTTP %d %s", resp.status_code, resp.text[:200])
+        except Exception:
+            log.exception("查询 openOrders 异常")
+        return []
+
+    def cancel_order(self, symbol: str, order_id: int) -> dict:
+        """取消指定订单。"""
+        if self.paper:
+            return {"status": "CANCELED", "orderId": order_id}
+        params = {
+            "symbol": symbol,
+            "orderId": order_id,
+            "timestamp": int(time.time() * 1000),
+            "recvWindow": 5000,
+        }
+        query = urlencode(sorted(params.items()))
+        signature = hmac.new(
+            self._api_secret.encode(), query.encode(), hashlib.sha256
+        ).hexdigest()
+        headers = {"X-MBX-APIKEY": self._api_key}
+        try:
+            resp = requests.delete(
+                f"{BASE_REST_URL}/api/v3/order",
+                params=query + "&signature=" + signature,
+                headers=headers, timeout=10,
+            )
+            result = resp.json()
+            if resp.status_code == 200:
+                log.info("取消订单成功: %s #%d", symbol, order_id)
+            else:
+                result["error"] = result.get("msg", f"HTTP {resp.status_code}")
+                log.warning("取消订单失败: %s #%d %s", symbol, order_id, result)
+            return result
+        except Exception as e:
+            log.exception("取消订单异常: %s #%d", symbol, order_id)
             return {"error": str(e)}
 
     def _paper_order(self, symbol: str, side: str,

@@ -2,7 +2,7 @@
 
 - 文档目标：统一描述 HotCoin 发现-信号-执行-监控全链路，明确当前实现状态与下一步改造计划。
 - 代码范围：`hotcoin/`、`hotcoin/web/`、`templates/page_live_hotcoin_config.html`
-- 代码基线：`f489b38` + R3-R5 工作区改进（未提交）
+- 代码基线：`main`（含 Phase A/B/C 最新改造）
 
 ---
 
@@ -48,8 +48,9 @@
 - `hotcoin/execution/pnl_tracker.py`：收益与成交统计。
 
 4. Web/Ops（配置与观测层）
-- `hotcoin/web/routes.py`：`/hotcoin/api/status`、`/hotcoin/api/precheck_stats`。
-- `templates/page_live_hotcoin_config.html`：热点币独立配置页 + 预检监控卡片。
+- `hotcoin/web/routes.py`：`/hotcoin/api/status`、`/hotcoin/api/precheck_stats`、`/hotcoin/api/execution_metrics`。
+- `templates/page_live_hotcoin_config.html`：热点币独立配置页 + 预检监控 + 运行状态/执行指标卡片。
+- `hotcoin/data/hotcoin_events.jsonl`：统一事件流（可回放）。
 - `app.py`：`/api/live/hotcoin_config` 配置读写与校验。
 
 ### 2.2 主流程
@@ -59,7 +60,7 @@
 2. 执行开平仓：
 - `SpotEngine.process_signals()` → 风控检查 → `OrderExecutor` 下单。
 3. 状态落盘：
-- 写 `hotcoin/data/hotcoin_runtime_status.json`（含候选池、信号、仓位、预检统计）。
+- 写 `hotcoin/data/hotcoin_runtime_status.json`（含 `engine_state`、`freshness`、`execution_metrics`、候选池、信号、仓位、预检统计）。
 4. Web 展示：
 - 仪表盘和配置页通过 API 获取运行态。
 
@@ -153,17 +154,57 @@
 27. `runner`：主循环异常日志包含 `pool_size/positions` 上下文；无价格数据时输出 warning。
 28. `runner._write_status_snapshot`：填充 `recent_anomalies` 数据。
 
+### 3.5 运行状态机与执行门控（Phase A，已落地）
+
+1. 引入 `engine_state: tradeable | degraded | blocked`
+- 由 `ticker` 新鲜度、`order_errors_5m`、`risk_halted` 联合决定。
+- 阈值：`ticker stale >= 90s` 进入 `degraded`，`>= 300s` 进入 `blocked`。
+- 阈值：`order_errors_5m >= 3` 进入 `degraded`，`>= 10` 进入 `blocked`。
+
+2. 开仓门控
+- `spot_engine.process_signals(signals, allow_open=...)`。
+- 非 `tradeable` 状态下暂停新开仓，SELL/平仓逻辑保留。
+
+3. 运行状态可视化
+- `hotcoin/api/status` 返回 `engine_state`、`engine_state_reasons`、`can_open_new_positions`、`freshness`、`execution_metrics`。
+- 配置页新增运行状态面板与 5m 执行指标。
+
+### 3.6 事件契约与回放（Phase B，已落地）
+
+1. 统一事件流输出
+- `hotcoin/runner.py` 输出 `candidate_snapshot`、`signal_snapshot`。
+- `hotcoin/execution/spot_engine.py` 输出 `order_attempt`、`order_result`。
+- 事件统一写入 `hotcoin/data/hotcoin_events.jsonl`。
+
+2. 回放工具
+- 新增 `scripts/replay_hotcoin_events.py`。
+- 支持按 `event_type/symbol` 过滤、摘要统计、最近事件回看。
+
+### 3.7 训练治理产物（Phase C，已落地）
+
+1. `hotcoin/ml/train_hotcoin.py` 在 `hotness`/`trade` 训练后自动产出：
+- `runtime_contract_{task}_{interval}.json`
+- `promotion_decision_{task}_{interval}.json`
+
+2. 门禁规则（当前）
+- `n_samples >= 20000`
+- `test_auc >= 0.55`
+- 未达标标记 `research_only`，达标标记 `production`。
+
 ---
 
 ## 4. 当前运行风险与不足
 
 ### P0（立即处理）
 
-1. 缺乏"可交易状态门"
-- 当前仍是"尽量执行"；缺少明确的 `tradeable / degraded / blocked` 状态机。
+1. 事件链路缺少 trace_id / signal_id
+- 当前已有 `candidate_snapshot/signal_snapshot/order_attempt/order_result`，但跨阶段追踪仍需统一 ID。
 
-2. 缺乏冷却与恢复的统一语义
-- 数据面异常、API 异常、风控停机之间缺统一事件总线与恢复策略。
+2. 健康指标缺少告警闭环
+- `/hotcoin/health` 已提供聚合状态，但尚未接入阈值告警与自动化处置策略。
+
+3. 运行状态恢复策略仍可细化
+- 已接入恢复滞后（hysteresis），但尚未按不同故障类型（行情断流/执行错误/risk halt）配置差异化恢复阈值。
 
 ### P1（1-2 周）
 
@@ -171,7 +212,7 @@
 - 候选池信号、执行滑点、成交回执在离线评估中尚未完全复现。
 
 2. 监控告警仍偏弱
-- 缺 SLO 指标（例如预检失败率、信号覆盖率、延迟分位数）。
+- 缺 SLO 告警闭环（例如预检失败率、信号覆盖率、延迟分位数阈值告警）。
 
 ### P2（2-6 周）
 
@@ -179,7 +220,7 @@
 - 社媒/公告信号有接入，但权重与收益归因体系不完整。
 
 2. 机器学习增强链路未完全产品化
-- `hotcoin/ml/` 具备训练模块，但尚未形成稳定在线晋升与回滚流程。
+- 训练治理产物已落地，但运行时尚未强制消费 `promotion_decision` 做线上晋升/回滚。
 
 ---
 
@@ -187,69 +228,51 @@
 
 > 完整路线图见 `docs/hotcoin_roadmap.md`。以下为近期 3 个阶段聚焦。
 
-### Phase A — 剩余稳定化 + 运行状态机（本周，最高优先）
+### N1 — 运维闭环（本周，最高优先）
 
-1. **清零 Phase 1.5 剩余项** (~3 项)
-   - `coin_age_days` 从 exchangeInfo 提取
-   - `listing_monitor` 添加 429 指数退避
-   - `/hotcoin/health` 健康检查端点
+1. `/hotcoin/health` 聚合健康端点（已完成）
+- 覆盖：WS 连接、新鲜度、risk halt、executor 错误率、状态机状态。
 
-2. **引入运行状态机**
-   - 新增 `engine_state: tradeable | degraded | blocked`
-   - 行情断流 > 60s → `degraded`（暂停新仓，继续监控持仓）
-   - 关键 API 连续失败 3 次 → `blocked`
-   - 风控 L5 触发 → `blocked`（24h 冷却）
+2. 事件日志轮转与归档（已完成）
+- `hotcoin_events.jsonl` 按天或大小滚动，保留窗口 + 自动压缩。
 
-3. **区分可重试/不可重试失败**
-   - 网络超时 → 3 次退避重试
-   - 参数/预检失败 → 不重试
-   - 交易所业务失败 → 按错误码处理
+3. 状态机恢复滞后（hysteresis）（已完成）
+- 由 `degraded/blocked` 恢复到 `tradeable` 需满足连续 N 个周期正常，减少抖动。
 
 验收标准：
-1. 行情断流 60s 内自动降级。
-2. 失败重试不会被 dedup 误拦截。
-3. 配置页展示当前状态及降级原因。
+1. 任意时刻可通过一个端点拿到系统健康摘要。
+2. 事件日志不会无限增长。
+3. 运行状态不再在阈值边缘频繁抖动。
 
-### Phase B — 事件日志与回测（1-2 周）
+### N2 — 回放到回测（1-2 周）
 
-1. **事件日志契约**
-   - 统一字段：`candidate_snapshot`、`signal_snapshot`、`order_attempt`、`order_result`
-   - 每轮信号计算输出完整 JSONL 事件流
+1. 建立事件到交易的可追溯链
+- 事件中统一增加 `trace_id` / `signal_id`，贯通发现-信号-执行。
 
-2. **回放工具**
-   - 从 JSONL 复现"为什么进场 / 为什么没进场"
+2. 回测引擎复用执行语义
+- 复用预检、精度、费用、去重与风控，减少 paper/live 偏差。
 
-3. **回测引擎**
-   - 复用执行层预检、精度与费用模型，避免回测/实盘偏差
-   - 热点币历史数据采集（30 天异动币种 K线）
-   - 参数优化：止盈层级、持仓时间、热度入场阈值
-
-4. **K线缓存优化**
-   - 同一 bar 内不重复拉取，降低 API 调用量和 429 风险
+3. K线缓存与限流策略
+- 同一 bar 不重复请求，加入请求预算与 429 退避。
 
 验收标准：
-1. 任一交易可被完整回放（输入、决策、执行、结果）。
-2. 回测与 paper 统计偏差显著收敛。
+1. 任一订单可从事件流回放到策略决策路径。
+2. 回测与 paper 的核心指标偏差收敛到可解释范围。
 
-### Phase C — 实盘灰度（2-4 周）
+### N3 — 模型晋升产品化（2-4 周）
 
-1. **实盘前准备**
-   - 全面端到端测试（mock Binance API）
-   - 订单状态跟踪 + 紧急平仓按钮
-   - 账户余额核对（每 5min）
+1. 运行时强制消费 `promotion_decision`
+- 仅 `production` 模型允许在线推理，`research_only` 自动隔离。
 
-2. **灰度三步走**
-   - Step 1: $100, max_concurrent=2, 热度≥70
-   - Step 2: $300, max_concurrent=3, 热度≥50
-   - Step 3: $500, max_concurrent=5, 完整策略
+2. 模型版本与配置指纹写入运行状态
+- 状态文件和事件流包含 `model_version/model_hash/config_hash`。
 
-3. **通知系统**
-   - 飞书/Telegram：开仓、平仓、风控触发、系统异常
-   - 日报：每日 PnL + 持仓分布
+3. 实盘灰度开关治理
+- 资金阶梯、币种白名单、紧急平仓开关纳入统一配置页。
 
 验收标准：
-1. 实盘运行 14 天，无资金安全事故。
-2. 紧急平仓从触发到执行 < 5s。
+1. 模型上线/回滚有完整审计轨迹。
+2. 灰度切换具备可观测、可回退、可验证流程。
 
 ---
 
@@ -274,14 +297,34 @@ curl -s http://127.0.0.1:5000/hotcoin/api/status | jq .
 # 下单预检统计
 curl -s http://127.0.0.1:5000/hotcoin/api/precheck_stats | jq .
 
+# 执行错误率/去重拒绝率（5m）
+curl -s http://127.0.0.1:5000/hotcoin/api/execution_metrics | jq .
+
+# 健康聚合
+curl -s http://127.0.0.1:5000/hotcoin/health | jq .
+
 # 热点币配置
 curl -s http://127.0.0.1:5000/api/live/hotcoin_config | jq .
+```
+
+### 6.3 事件回放
+
+```bash
+# 事件摘要
+python3 scripts/replay_hotcoin_events.py --summary-only
+
+# 按事件类型/交易对回放
+python3 scripts/replay_hotcoin_events.py --event-type order_result --symbol ETHUSDT --limit 50
 ```
 
 ---
 
 ## 7. 版本记录
 
+- `2026-02-21 v6`：N1 收口：状态恢复滞后（hysteresis）上线，新增状态机恢复单测与事件日志轮转单测。
+- `2026-02-21 v5`：N1 持续推进：`/hotcoin/health` 聚合健康端点 + `hotcoin_events.jsonl` 自动轮转归档（含保留窗口）。
+- `2026-02-21 v4`：完成 Phase A/B/C 收口：运行状态机 + 执行指标 + 事件回放 + 训练治理产物（runtime_contract/promotion_decision）。
+- `2026-02-21 v4`：Phase A — coin_age_days 估算、listing_monitor 429 退避、health 端点对齐。91 测试全绿。
 - `2026-02-21 v3`：R3-R5 改造 — 28 项线程安全/内存保护/业务逻辑修正。83 测试全绿。
 - `2026-02-21 v2`：新增预检统计监控、dedup 原子预留+回滚、TickerStream 容错、文档重构。
 - `2026-02-21 v1`：初始 hotcoin 模块上线。

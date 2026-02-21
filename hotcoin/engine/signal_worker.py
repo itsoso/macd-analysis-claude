@@ -10,9 +10,12 @@
 """
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+import pandas as pd
 
 from hotcoin.engine.hot_coin_params import (
     HOT_COIN_FUSION_CONFIG,
@@ -25,6 +28,51 @@ from hotcoin.engine.hot_coin_params import (
 log = logging.getLogger("hotcoin.worker")
 
 _P = HOT_COIN_INDICATOR_PARAMS
+
+# ---------------------------------------------------------------------------
+# K线 bar-level 缓存: 同一个 bar 周期内复用上次拉取的 DataFrame
+# ---------------------------------------------------------------------------
+_TF_SECONDS = {
+    "1m": 60, "3m": 180, "5m": 300, "15m": 900,
+    "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400,
+    "6h": 21600, "8h": 28800, "12h": 43200, "1d": 86400, "24h": 86400,
+}
+
+_kline_cache: Dict[Tuple[str, str], Tuple[pd.DataFrame, float]] = {}
+_kline_cache_lock = threading.Lock()
+_KLINE_CACHE_MAX = 500
+
+
+def _get_cached_klines(symbol: str, tf: str, days: int, min_bars: int):
+    """从缓存或 API 获取 K线。缓存 key=(symbol, tf), 有效期 = bar 周期的 80%。"""
+    from binance_fetcher import fetch_binance_klines
+
+    key = (symbol, tf)
+    bar_sec = _TF_SECONDS.get(tf, 300)
+    ttl = max(bar_sec * 0.8, 30)
+    now = time.time()
+
+    with _kline_cache_lock:
+        cached = _kline_cache.get(key)
+        if cached is not None:
+            df_cached, ts = cached
+            if now - ts < ttl and len(df_cached) >= min_bars:
+                return df_cached
+
+    df = fetch_binance_klines(symbol, interval=tf, days=days)
+    if df is not None and len(df) >= min_bars:
+        with _kline_cache_lock:
+            _kline_cache[key] = (df, now)
+            if len(_kline_cache) > _KLINE_CACHE_MAX:
+                oldest_key = min(_kline_cache, key=lambda k: _kline_cache[k][1])
+                del _kline_cache[oldest_key]
+    return df
+
+
+def clear_kline_cache():
+    """清空 K线缓存 (测试/重置用)。"""
+    with _kline_cache_lock:
+        _kline_cache.clear()
 
 
 def _add_hot_indicators(df):
@@ -68,6 +116,7 @@ class TradeSignal:
     consensus: dict = field(default_factory=dict)
     tf_details: dict = field(default_factory=dict)
     computed_at: float = 0.0
+    trace_id: str = ""
 
 
 def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = None) -> TradeSignal:
@@ -81,7 +130,6 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
     t0 = time.time()
 
     try:
-        from binance_fetcher import fetch_binance_klines
         from ma_indicators import add_moving_averages
         from signal_core import compute_signals_six, calc_fusion_score_six
         from multi_tf_consensus import fuse_tf_scores
@@ -96,7 +144,7 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
         try:
             kline_cfg = HOT_COIN_KLINE_PARAMS.get(tf, {"days": 7, "min_bars": 50})
 
-            df = fetch_binance_klines(symbol, interval=tf, days=kline_cfg["days"])
+            df = _get_cached_klines(symbol, tf, kline_cfg["days"], kline_cfg["min_bars"])
             if df is None or len(df) < kline_cfg["min_bars"]:
                 bars = len(df) if df is not None else 0
                 log.debug("%s %s 数据不足 (%d bars)", symbol, tf, bars)

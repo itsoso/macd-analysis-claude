@@ -31,7 +31,8 @@ class SignalDispatcher:
             thread_name_prefix="sig-worker",
         )
 
-    async def compute_signals(self, candidates: List[HotCoin]) -> List[TradeSignal]:
+    async def compute_signals(self, candidates: List[HotCoin],
+                              cycle_id: str = "") -> List[TradeSignal]:
         """并发计算候选币信号, 返回所有结果 (含 HOLD)。单币超时保护。"""
         if not candidates:
             return []
@@ -57,27 +58,46 @@ class SignalDispatcher:
                 signals.append(TradeSignal(
                     symbol=coin.symbol, action="HOLD",
                     reason=f"timeout >{self.SIGNAL_TIMEOUT_SEC}s",
+                    trace_id=cycle_id,
                 ))
             elif isinstance(result, Exception):
                 log.error("%s 信号计算异常: %s", coin.symbol, result, exc_info=result)
                 signals.append(TradeSignal(
                     symbol=coin.symbol, action="HOLD",
                     reason=f"exception: {type(result).__name__}: {result}",
+                    trace_id=cycle_id,
                 ))
             else:
+                result.trace_id = cycle_id
                 signals.append(result)
 
         actionable = [s for s in signals if s.action != "HOLD"]
         if actionable:
-            log.info("信号结果: %d/%d 可操作 — %s",
+            log.info("信号结果 [%s]: %d/%d 可操作 — %s",
+                     cycle_id[:8] if cycle_id else "-",
                      len(actionable), len(signals),
                      ", ".join(f"{s.symbol}:{s.action}" for s in actionable))
 
         return signals
 
     def shutdown(self, wait: bool = True, timeout: float = 30):
-        """优雅关闭线程池。wait=True 时等待进行中的任务完成。"""
-        log.info("SignalDispatcher 关闭中 (wait=%s)", wait)
-        self._executor.shutdown(wait=wait)
-        if wait:
+        """优雅关闭线程池。wait=True 时最多等 timeout 秒, 防止死锁。"""
+        import threading
+
+        log.info("SignalDispatcher 关闭中 (wait=%s, timeout=%.0fs)", wait, timeout)
+        if not wait:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            return
+
+        done = threading.Event()
+
+        def _shutdown_worker():
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            done.set()
+
+        t = threading.Thread(target=_shutdown_worker, daemon=True)
+        t.start()
+        if done.wait(timeout=timeout):
             log.info("SignalDispatcher 所有 worker 已退出")
+        else:
+            log.warning("SignalDispatcher shutdown 超时 (%.0fs), 强制放弃", timeout)

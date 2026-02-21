@@ -25,8 +25,9 @@ log = logging.getLogger("hotcoin.ranker")
 class HotRanker:
     """六维热度评分引擎。"""
 
-    def __init__(self, config: DiscoveryConfig):
+    def __init__(self, config: DiscoveryConfig, coin_age_fn=None):
         self.cfg = config
+        self._coin_age_fn = coin_age_fn
 
     def update_scores(self, pool):
         """对候选池中所有币种重新评分 (单次批量 commit)。"""
@@ -40,6 +41,12 @@ class HotRanker:
     def _compute_score(self, coin):
         """计算六维热度评分, 0-100 范围。"""
         now = time.time()
+
+        if callable(self._coin_age_fn):
+            try:
+                coin.coin_age_days = self._coin_age_fn(coin.symbol)
+            except Exception:
+                pass
 
         # --- 维度 1: 公告强度 (Phase 2 完善) ---
         s_announce = 0.0

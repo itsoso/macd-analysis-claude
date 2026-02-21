@@ -219,6 +219,11 @@ def api_status():
             cached["execution_metrics"] = _normalize_execution_metrics(cached.get("execution_metrics"))
             cached["engine_state"] = str(cached.get("engine_state", "stopped"))
             cached["engine_state_reasons"] = cached.get("engine_state_reasons", []) or []
+            cached["state_recovery_pending"] = (
+                cached.get("state_recovery_pending")
+                if isinstance(cached.get("state_recovery_pending"), dict)
+                else None
+            )
             cached["can_open_new_positions"] = bool(cached.get("can_open_new_positions", False))
             cached["freshness"] = cached.get("freshness", {}) or {}
             return jsonify(cached)
@@ -237,6 +242,7 @@ def api_status():
             "execution_metrics": _default_execution_metrics(),
             "engine_state": "stopped",
             "engine_state_reasons": [],
+            "state_recovery_pending": None,
             "can_open_new_positions": False,
             "freshness": {},
             "message": "热点币系统未启动",
@@ -257,6 +263,11 @@ def api_status():
             merged["execution_metrics"] = _normalize_execution_metrics(merged.get("execution_metrics"))
             merged["engine_state"] = str(merged.get("engine_state", "unknown"))
             merged["engine_state_reasons"] = merged.get("engine_state_reasons", []) or []
+            merged["state_recovery_pending"] = (
+                merged.get("state_recovery_pending")
+                if isinstance(merged.get("state_recovery_pending"), dict)
+                else None
+            )
             merged["can_open_new_positions"] = bool(merged.get("can_open_new_positions", False))
             merged["freshness"] = merged.get("freshness", {}) or {}
             return jsonify(merged)
@@ -300,11 +311,14 @@ def api_status():
     )
     engine_state = "unknown"
     state_reasons = []
+    state_recovery_pending = None
     can_open = False
     freshness = {}
     if isinstance(cached, dict):
         engine_state = str(cached.get("engine_state", "unknown"))
         state_reasons = cached.get("engine_state_reasons", []) or []
+        pending = cached.get("state_recovery_pending")
+        state_recovery_pending = pending if isinstance(pending, dict) else None
         can_open = bool(cached.get("can_open_new_positions", False))
         freshness = cached.get("freshness", {}) or {}
 
@@ -323,6 +337,7 @@ def api_status():
         "execution_metrics": execution_metrics,
         "engine_state": engine_state,
         "engine_state_reasons": state_reasons,
+        "state_recovery_pending": state_recovery_pending,
         "can_open_new_positions": can_open,
         "freshness": freshness,
     })

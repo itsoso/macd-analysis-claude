@@ -42,32 +42,45 @@ _STOP_WORDS = frozenset({
 class ListingMonitor:
     """新币上线监控 — 异步后台任务。"""
 
+    _BACKOFF_BASE = 60
+    _BACKOFF_MAX = 480
+
     def __init__(self, config: DiscoveryConfig, pool):
         self.config = config
         self.pool = pool
         self._seen_open_symbols: Set[str] = set()
         self._seen_article_ids: Set[int] = set()
         self._last_seen_cleanup = 0.0
+        self._listing_backoff = 0
+        self._announce_backoff = 0
 
     async def run(self, shutdown: asyncio.Event):
         log.info("新币上线监控启动 (listing=%ds, announcement=%ds)",
                  self.config.listing_poll_sec, self.config.announcement_poll_sec)
 
-        listing_interval = self.config.listing_poll_sec
-        announce_interval = self.config.announcement_poll_sec
         last_listing = 0.0
         last_announce = 0.0
 
         while not shutdown.is_set():
             now = time.time()
+            listing_interval = self.config.listing_poll_sec + self._listing_backoff
+            announce_interval = self.config.announcement_poll_sec + self._announce_backoff
             try:
                 if now - last_listing >= listing_interval:
-                    await asyncio.to_thread(self._check_open_symbol_list)
+                    ok = await asyncio.to_thread(self._check_open_symbol_list)
                     last_listing = now
+                    self._listing_backoff = 0 if ok else min(
+                        self._listing_backoff * 2 or self._BACKOFF_BASE,
+                        self._BACKOFF_MAX,
+                    )
 
                 if now - last_announce >= announce_interval:
-                    await asyncio.to_thread(self._check_announcements)
+                    ok = await asyncio.to_thread(self._check_announcements)
                     last_announce = now
+                    self._announce_backoff = 0 if ok else min(
+                        self._announce_backoff * 2 or self._BACKOFF_BASE,
+                        self._BACKOFF_MAX,
+                    )
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -83,23 +96,27 @@ class ListingMonitor:
 
             await asyncio.sleep(10)
 
-    def _check_open_symbol_list(self):
-        """调用 /sapi/v1/spot/open-symbol-list 发现即将上线的交易对 (需 API Key)。"""
+    def _check_open_symbol_list(self) -> bool:
+        """调用 /sapi/v1/spot/open-symbol-list 发现即将上线的交易对 (需 API Key)。
+        返回 True 表示成功, False 表示需退避。"""
         if not _API_KEY:
-            return
+            return True
         try:
             headers = {"X-MBX-APIKEY": _API_KEY}
             resp = requests.get(
                 f"{BASE_REST_URL}/sapi/v1/spot/open-symbol-list",
                 headers=headers, timeout=10,
             )
+            if resp.status_code == 429 or resp.status_code == 418:
+                log.warning("open-symbol-list 触发限频 (%d), 启动退避", resp.status_code)
+                return False
             if resp.status_code != 200:
                 log.debug("open-symbol-list 返回 %d", resp.status_code)
-                return
+                return True
 
             data = resp.json()
             if not isinstance(data, list):
-                return
+                return True
 
             for entry in data:
                 symbols = entry.get("symbols", [])
@@ -112,11 +129,14 @@ class ListingMonitor:
                     self._seen_open_symbols.add(sym)
                     log.info("发现即将上线: %s (openTime=%d)", sym, open_time)
                     self.pool.on_listing(sym, open_time)
+            return True
         except requests.RequestException as e:
             log.warning("open-symbol-list 请求失败: %s", e)
+            return False
 
-    def _check_announcements(self):
-        """轮询币安公告, 检测 'Will List' 类新币上线公告。"""
+    def _check_announcements(self) -> bool:
+        """轮询币安公告, 检测 'Will List' 类新币上线公告。
+        返回 True 表示成功, False 表示需退避。"""
         try:
             resp = requests.get(
                 _ANNOUNCEMENT_URL,
@@ -129,8 +149,11 @@ class ListingMonitor:
                 timeout=10,
                 headers={"User-Agent": "Mozilla/5.0"},
             )
+            if resp.status_code == 429 or resp.status_code == 418:
+                log.warning("公告 API 触发限频 (%d), 启动退避", resp.status_code)
+                return False
             if resp.status_code != 200:
-                return
+                return True
 
             data = resp.json()
             articles = data.get("data", {}).get("catalogs", [{}])
@@ -146,11 +169,14 @@ class ListingMonitor:
                 title = art.get("title", "")
                 code = art.get("code", "")
                 self._parse_listing_announcement(title, code)
+            return True
 
         except requests.RequestException as e:
             log.debug("公告查询失败: %s", e)
+            return False
         except Exception:
             log.exception("公告解析异常")
+            return True
 
     def _parse_listing_announcement(self, title: str, code: str):
         """从公告标题中提取新币符号。"""

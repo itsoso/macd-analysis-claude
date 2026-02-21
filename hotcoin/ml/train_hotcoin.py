@@ -18,6 +18,7 @@
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +44,82 @@ log = logging.getLogger("hotcoin.train")
 # ---------------------------------------------------------------------------
 # 数据准备
 # ---------------------------------------------------------------------------
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _write_governance_artifacts(model_path: str, meta_path: str, task: str, interval: str):
+    """输出模型契约与晋升门禁结果。"""
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception as e:
+        log.warning("治理产物生成失败: 无法读取 meta (%s)", e)
+        return
+
+    model_dir = os.path.dirname(model_path)
+    now_iso = datetime.now().isoformat()
+    thresholds = {
+        "min_samples": 20000,
+        "min_test_auc": 0.55,
+    }
+    n_samples = int(meta.get("n_samples", 0) or 0)
+    test_auc = float(meta.get("test_auc", 0.0) or 0.0)
+    approved = (n_samples >= thresholds["min_samples"]) and (test_auc >= thresholds["min_test_auc"])
+    reasons = []
+    if n_samples < thresholds["min_samples"]:
+        reasons.append(f"n_samples<{thresholds['min_samples']}")
+    if test_auc < thresholds["min_test_auc"]:
+        reasons.append(f"test_auc<{thresholds['min_test_auc']}")
+    if not reasons:
+        reasons.append("all_thresholds_passed")
+
+    runtime_contract = {
+        "schema_version": "hotcoin_model_contract_v1",
+        "task": task,
+        "interval": interval,
+        "generated_at": now_iso,
+        "model_files": {
+            "model": os.path.basename(model_path),
+            "meta": os.path.basename(meta_path),
+        },
+        "hashes": {
+            os.path.basename(model_path): _sha256_file(model_path),
+            os.path.basename(meta_path): _sha256_file(meta_path),
+        },
+        "metrics": {
+            "n_samples": n_samples,
+            "n_features": int(meta.get("n_features", 0) or 0),
+            "test_auc": test_auc,
+        },
+        "feature_names": meta.get("feature_names", []),
+    }
+
+    promotion_decision = {
+        "schema_version": "hotcoin_promotion_decision_v1",
+        "task": task,
+        "interval": interval,
+        "generated_at": now_iso,
+        "metrics": runtime_contract["metrics"],
+        "thresholds": thresholds,
+        "approved": approved,
+        "deployment_tier": "production" if approved else "research_only",
+        "reasons": reasons,
+    }
+
+    contract_path = os.path.join(model_dir, f"runtime_contract_{task}_{interval}.json")
+    decision_path = os.path.join(model_dir, f"promotion_decision_{task}_{interval}.json")
+    with open(contract_path, "w", encoding="utf-8") as f:
+        json.dump(runtime_contract, f, indent=2, ensure_ascii=False)
+    with open(decision_path, "w", encoding="utf-8") as f:
+        json.dump(promotion_decision, f, indent=2, ensure_ascii=False)
+    log.info("治理产物已生成: %s, %s", contract_path, decision_path)
 
 def prepare_multi_symbol_data(symbols: List[str], interval: str = "15m",
                                days: int = 180) -> Dict[str, pd.DataFrame]:
@@ -185,8 +262,10 @@ def train_hotness_model(data: Dict[str, pd.DataFrame], interval: str = "15m"):
             "test_auc": auc,
             "trained_at": datetime.now().isoformat(),
         }
-        with open(model_path.replace(".txt", "_meta.json"), "w") as f:
-            json.dump(meta, f, indent=2)
+        meta_path = model_path.replace(".txt", "_meta.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+        _write_governance_artifacts(model_path, meta_path, task="hotness", interval=interval)
 
         log.info("模型已保存: %s", model_path)
 
@@ -294,8 +373,10 @@ def train_trade_model(data: Dict[str, pd.DataFrame], interval: str = "15m"):
             "test_auc": auc,
             "trained_at": datetime.now().isoformat(),
         }
-        with open(model_path.replace(".txt", "_meta.json"), "w") as f:
-            json.dump(meta, f, indent=2)
+        meta_path = model_path.replace(".txt", "_meta.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+        _write_governance_artifacts(model_path, meta_path, task="trade", interval=interval)
 
         log.info("模型已保存: %s", model_path)
 

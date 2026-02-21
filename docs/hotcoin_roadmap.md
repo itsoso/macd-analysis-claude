@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-Phase 1 核心代码完成 (~7000 行, 42 文件)，经历 5 轮 code review 共修复 44 个问题。
-83 个单测全部通过 (43 hotcoin + 40 core)。Paper 模式可运行，尚未进入生产环境。
+Phase 1 核心代码完成，近期完成 Phase A/B/C 收口（状态机、事件回放、训练治理门禁）+ Phase B 修复。
+热点币与配置 API 回归测试 62 项通过，核心 ETH 40 项通过，共 102 项全绿。Paper 模式可运行，处于实盘前治理阶段。
 
 ---
 
@@ -27,19 +27,22 @@ Phase 1 核心代码完成 (~7000 行, 42 文件)，经历 5 轮 code review 共
 - [x] signal_worker: `_add_hot_indicators` 参数直传不修改全局 config
 - [x] order_executor: dedup_lock 保护
 
-### 1.5.3 数据完整性 (部分完成)
+### 1.5.3 数据完整性 ✅ 已完成
 - [x] listing_monitor: STOP_WORDS + 正则修复 (R2)
 - [x] ticker_stream: 24h 成交额日重置防虚假突增 (R5)
 - [x] filters: 新币上线 10% 最低流动性门槛 (R5)
-- [ ] hot_ranker: 实现 `coin_age_days` 从 exchangeInfo 提取 (通过 listingDate)
-- [ ] listing_monitor: 添加指数退避 (429 后 60s → 120s → 240s)
+- [x] hot_ranker: `coin_age_days` 从 ExchangeInfoCache._first_seen 估算 (Phase A)
+- [x] listing_monitor: 429/418 指数退避 60s→120s→240s→480s (Phase A)
 
 ### 1.5.4 可观测性 (部分完成)
 - [x] runner: 主循环异常包含 pool_size/positions 上下文 (R5)
 - [x] signal_dispatcher: 异常日志包含完整 exc_info 堆栈 (R5)
 - [x] runner: `_write_status_snapshot` 填充 `recent_anomalies` (R3)
 - [x] 配置页新增预检监控卡片 (Codex)
-- [ ] 添加 `/hotcoin/health` 健康检查端点
+- [x] 配置页新增运行状态/执行指标面板（engine_state、freshness、error_rate）
+- [x] 新增 `/hotcoin/api/execution_metrics`
+- [x] `/hotcoin/health` 健康检查端点 (Codex + Phase A 去重)
+- [x] `hotcoin_events.jsonl` 自动轮转归档（大小阈值 + 历史保留窗口）
 - [ ] spot_engine: 记录 trace_id 便于日志追踪
 - [ ] Prometheus 指标导出 (池大小、信号数、PnL、延迟)
 
@@ -49,15 +52,16 @@ Phase 1 核心代码完成 (~7000 行, 42 文件)，经历 5 轮 code review 共
 - [x] capital_allocator: 传入 used_exposure 避免超配 (R4)
 - [x] portfolio_risk: UTC 0:00 日重置 + current_prices 真实敞口 (R4)
 - [x] signal_dispatcher: asyncio.wait_for 超时保护 (R4)
-- [ ] exchangeInfo 刷新失败容错 (5min 重试 + 旧缓存标记)
-- [ ] signal_dispatcher: shutdown(wait=True) 超时防死锁
+- [x] exchangeInfo 刷新失败容错 (5min 重试 + get() 双保险异常兜底) (Phase B)
+- [x] signal_dispatcher: shutdown(wait=True) 超时防死锁 (Phase B)
+- [x] pnl_tracker: `_trades` 列表 threading.Lock 保护 (Phase B)
 
 ### 验收标准
 - Paper 模式连续运行 7 天，无 OOM、无 crash、无 SQLite 锁冲突
 - 日志无 ERROR 级别输出 (除网络超时类预期异常)
 - 内存使用稳定 (不随时间增长)
 
-**当前进度**: ~80%，剩余主要是 `coin_age_days`、rate limit 退避、健康检查端点。
+**当前进度**: ~99%，剩余核心是 trace_id 贯通与健康告警闭环。
 
 ---
 
@@ -66,18 +70,19 @@ Phase 1 核心代码完成 (~7000 行, 42 文件)，经历 5 轮 code review 共
 **目标**: 提升信号质量，建立可回放能力。
 
 ### 2.1 运行状态机 🔴 最高优先
-- [ ] 引入 `engine_state: tradeable | degraded | blocked`
-  - 行情断流 > 60s → `degraded` (暂停新仓，继续监控持仓)
-  - 关键 API 连续失败 3 次 → `blocked` (全部暂停)
+- [x] 引入 `engine_state: tradeable | degraded | blocked`
+  - 行情断流 `>=90s` → `degraded`，`>=300s` → `blocked`
+  - `order_errors_5m >=3` → `degraded`，`>=10` → `blocked`
   - 风控 L5 触发 → `blocked` (24h 冷却)
-  - 恢复条件：行情连续正常 30s → `tradeable`
+  - 恢复滞后窗口（hysteresis）已接入：degraded=3 周期、blocked=6 周期确认恢复
 - [ ] 区分可重试/不可重试失败类型，设置不同冷却时间
-- [ ] 配置页展示当前状态及降级原因
+- [x] 配置页展示当前状态及降级原因
 
 ### 2.2 事件日志契约
-- [ ] 统一字段规范：`candidate_snapshot`、`signal_snapshot`、`order_attempt`、`order_result`
-- [ ] 每轮信号计算输出完整 JSONL 事件流
-- [ ] 回放工具：从 JSONL 复现 "为什么进场 / 为什么没进场"
+- [x] 统一字段规范：`candidate_snapshot`、`signal_snapshot`、`order_attempt`、`order_result`
+- [x] 每轮信号计算输出完整 JSONL 事件流
+- [x] 回放工具：从 JSONL 复现 "为什么进场 / 为什么没进场"
+- [ ] 事件 `trace_id/signal_id` 贯通 discovery → signal → order
 
 ### 2.3 回测框架
 - [ ] 热点币历史数据采集 (过去 30 天异动币种 K线)
@@ -85,19 +90,26 @@ Phase 1 核心代码完成 (~7000 行, 42 文件)，经历 5 轮 code review 共
 - [ ] 复用执行层预检、精度与费用模型，避免回测/实盘偏差
 - [ ] 参数优化: 止盈层级、持仓时间、热度入场阈值
 
-### 2.4 K线缓存优化
-- [ ] 同一 bar 内不重复拉取 (bar-level 缓存)
-- [ ] 减少 Binance REST API 调用量，降低 429 风险
+### 2.4 K线缓存优化 ✅ 已完成 (Phase B)
+- [x] 同一 bar 内不重复拉取 (bar-level 缓存, TTL=bar_sec*0.8)
+- [x] 缓存 LRU 淘汰 (max 500 条), 线程安全
+- [x] 减少 Binance REST API 调用量，降低 429 风险
 
 ### 2.5 ML 热点币模型
 - [ ] 使用 `features_hot.py` 生成训练数据 (~30 维热点特征)
 - [ ] LightGBM 热度预测模型 (目标: 预测未来 30min 涨幅 top 10%)
 - [ ] Shadow 模式验证 (不修改信号，只记录对比)
 
+### 2.6 模型治理（新增）
+- [x] 训练后自动生成 `runtime_contract_{task}_{interval}.json`
+- [x] 训练后自动生成 `promotion_decision_{task}_{interval}.json`
+- [ ] 运行时强制读取 promotion 决策（production/research_only）
+- [ ] 模型 hash/version 写入运行状态与事件流
+
 ### 验收标准
 - 任一交易可被完整回放（输入、决策、执行、结果）
 - 回测与 paper 统计偏差显著收敛
-- 行情断流 60s 内自动降级
+- 行情断流按阈值自动降级（当前 `>=90s degraded / >=300s blocked`）
 
 ---
 
@@ -172,29 +184,29 @@ Phase 1 核心代码完成 (~7000 行, 42 文件)，经历 5 轮 code review 共
 
 ---
 
-## 优先级矩阵
+## 优先级矩阵（更新）
 
 ```
                紧急
                 ↑
-    Phase 1.5   │   Phase 2.1
-    (剩余稳定化)│   (状态机)
+    Phase 1.5   │   N1
+    (剩余稳定化)│   (健康端点+状态恢复)
                 │
   ──────────────┼──────────────→ 重要
                 │
-    Phase 2.2   │   Phase 2.5
-    (事件日志)  │   (ML 模型)
+    Phase 2.3   │   Phase 2.6
+    (回测框架)  │   (模型治理产品化)
                 │
                 ↓
                不紧急
 ```
 
-**建议执行顺序**: 1.5 剩余 → 2.1 状态机 → 2.2 事件日志 → 2.3 回测 → 2.5 ML → 3 实盘灰度 → 4 合约
+**建议执行顺序**: 1.5 剩余 → N1（健康/日志轮转/状态恢复）→ 2.3 回测 → 2.6 运行时模型治理 → 3 实盘灰度 → 4 合约
 
 - **1.5 剩余稳定化** 工作量小 (~3 项)，尽快清零
-- **2.1 运行状态机** 是实盘的前置条件，优先级最高
-- **2.2 事件日志** 为回测和问题排查打基础
-- **2.3 回测框架** 验证策略参数
+- **运行状态机/事件日志基础能力** 已落地，下一步要补 trace_id 链路与健康告警闭环
+- **2.3 回测框架** 是策略参数优化与实盘前的关键验证环节
+- **2.6 模型治理** 决定后续 H800 模型能否稳定上线
 - **Phase 3 实盘灰度** 需要 1.5 + 2.1 + 2.2 完成后进入
 - **Phase 4 合约** 在现货跑通后再考虑
 
@@ -202,6 +214,11 @@ Phase 1 核心代码完成 (~7000 行, 42 文件)，经历 5 轮 code review 共
 
 ## 变更日志
 
+- `2026-02-21` R8：状态机恢复滞后（hysteresis）上线，新增 `test_runner_state_hysteresis.py`。70 测试全绿。
+- `2026-02-18` Phase B Fix：exchangeInfo 刷新失败 5min 重试 + get() 双保险兜底、SignalDispatcher shutdown 超时防死锁、K线 bar-level 缓存 (TTL=80% bar 周期)、PnLTracker 线程安全。62 hotcoin + 40 core = 102 测试全绿。
+- `2026-02-21` R7：新增事件日志自动轮转归档（Runner），补充 health 聚合测试与归档测试。58 测试全绿。
+- `2026-02-21` R6：完成状态机、事件回放、训练治理产物接入，更新路线图优先级。
+- `2026-02-21` Phase A：coin_age_days 估算、listing_monitor 429 退避、health 端点去重。91 测试全绿。
 - `2026-02-21` R5：五轮改进完成，44 项修复，更新路线图反映当前进度。
 - `2026-02-21` R2：两轮 review 完成，16 项修复。
 - `2026-02-18`：Phase 1 初始实现完成。

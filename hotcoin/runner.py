@@ -17,6 +17,7 @@ import sys
 import os
 import threading
 import time
+import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -33,6 +34,47 @@ from hotcoin.engine.signal_dispatcher import SignalDispatcher
 from hotcoin.execution.spot_engine import HotCoinSpotEngine
 
 log = logging.getLogger("hotcoin")
+
+
+def _apply_state_hysteresis(
+    current_state: str,
+    current_recovery_ok_cycles: int,
+    raw_state: str,
+    raw_reasons,
+    degraded_recovery_cycles: int,
+    blocked_recovery_cycles: int,
+    allow_recovery_progress: bool = True,
+):
+    """对状态恢复做滞后控制：非 tradeable -> tradeable 需要连续健康周期确认。"""
+    valid_states = {"tradeable", "degraded", "blocked"}
+    raw_state = raw_state if raw_state in valid_states else "degraded"
+    current_state = current_state if current_state in valid_states else raw_state
+    reasons = list(raw_reasons or [])
+    recovery_ok_cycles = max(0, int(current_recovery_ok_cycles or 0))
+
+    if raw_state != "tradeable":
+        # 劣化状态立即生效，恢复计数清零
+        return raw_state, reasons, 0, None
+
+    if current_state == "tradeable":
+        return "tradeable", (reasons or ["healthy"]), 0, None
+
+    required = blocked_recovery_cycles if current_state == "blocked" else degraded_recovery_cycles
+    required = max(1, int(required))
+    if allow_recovery_progress:
+        recovery_ok_cycles += 1
+
+    if recovery_ok_cycles >= required:
+        return "tradeable", ["recovered_to_tradeable"], 0, None
+
+    pending = {
+        "target_state": "tradeable",
+        "ok_cycles": recovery_ok_cycles,
+        "required_cycles": required,
+        "source_state": current_state,
+    }
+    reasons.append(f"recovery_pending:{recovery_ok_cycles}/{required}")
+    return current_state, reasons, recovery_ok_cycles, pending
 
 
 def _event_archive_base(events_file: str) -> tuple[str, str]:
@@ -126,6 +168,8 @@ class HotCoinRunner:
     TICKER_STALE_BLOCKED_SEC = 300
     ORDER_ERROR_DEGRADED_5M = 3
     ORDER_ERROR_BLOCKED_5M = 10
+    DEGRADED_RECOVERY_CONFIRM_CYCLES = 3
+    BLOCKED_RECOVERY_CONFIRM_CYCLES = 6
     EVENT_LOG_ROTATE_MAX_BYTES = 20 * 1024 * 1024
     EVENT_LOG_ARCHIVE_KEEP = 14
     EVENT_LOG_COMPRESS_ARCHIVE = True
@@ -137,6 +181,9 @@ class HotCoinRunner:
         self._events_file = os.path.join(os.path.dirname(__file__), "data", "hotcoin_events.jsonl")
         self._event_lock = threading.Lock()
         self._last_engine_state = ""
+        self._effective_engine_state = "unknown"
+        self._recovery_ok_cycles = 0
+        self._state_recovery_pending = None
 
         # Discovery 层
         self.pool = CandidatePool(config.db_path, config.discovery)
@@ -155,12 +202,14 @@ class HotCoinRunner:
 
         # (Trading 层 dispatcher + spot_engine 已在上方创建)
 
-    def _emit_event(self, event_type: str, payload: dict):
+    def _emit_event(self, event_type: str, payload: dict, trace_id: str = ""):
         event = {
             "ts": time.time(),
             "event_type": str(event_type),
             "payload": payload if isinstance(payload, dict) else {"raw": payload},
         }
+        if trace_id:
+            event["trace_id"] = trace_id
         try:
             os.makedirs(os.path.dirname(self._events_file), exist_ok=True)
             line = json.dumps(event, ensure_ascii=False) + "\n"
@@ -225,6 +274,26 @@ class HotCoinRunner:
         state = "tradeable" if severity == 0 else ("degraded" if severity == 1 else "blocked")
         return state, reasons, freshness
 
+    def _apply_engine_state_hysteresis(
+        self,
+        raw_state: str,
+        raw_reasons,
+        allow_recovery_progress: bool = True,
+    ):
+        state, reasons, ok_cycles, pending = _apply_state_hysteresis(
+            current_state=self._effective_engine_state,
+            current_recovery_ok_cycles=self._recovery_ok_cycles,
+            raw_state=raw_state,
+            raw_reasons=raw_reasons,
+            degraded_recovery_cycles=self.DEGRADED_RECOVERY_CONFIRM_CYCLES,
+            blocked_recovery_cycles=self.BLOCKED_RECOVERY_CONFIRM_CYCLES,
+            allow_recovery_progress=allow_recovery_progress,
+        )
+        self._effective_engine_state = state
+        self._recovery_ok_cycles = ok_cycles
+        self._state_recovery_pending = pending
+        return state, reasons, pending
+
     async def run(self):
         """主事件循环。"""
         log.info("=" * 60)
@@ -282,6 +351,7 @@ class HotCoinRunner:
         """10s 周期: 评分 → 筛选 → 信号 → (执行)。"""
         interval = self.config.trading.signal_loop_sec
         while not self._shutdown.is_set():
+            cycle_id = uuid.uuid4().hex[:12]
             try:
                 # 0) 清除冷却到期 / 低分超时的币种
                 self.pool.remove_expired()
@@ -298,11 +368,11 @@ class HotCoinRunner:
 
                 if candidates:
                     symbols = [c.symbol for c in candidates]
-                    log.info("候选池 Top %d: %s", len(candidates),
+                    log.info("[%s] 候选池 Top %d: %s", cycle_id[:8], len(candidates),
                              ", ".join(f"{s}({c.heat_score:.0f})" for s, c in zip(symbols, candidates)))
 
                 # 3) 信号计算
-                signals = await self.dispatcher.compute_signals(candidates)
+                signals = await self.dispatcher.compute_signals(candidates, cycle_id=cycle_id)
                 for sig in signals:
                     if sig.action != "HOLD":
                         log.info("信号 %s %s | strength=%d confidence=%.2f | %s",
@@ -316,9 +386,14 @@ class HotCoinRunner:
                 }
 
                 runtime_metrics_gate = self.spot_engine.executor.get_runtime_metrics(window_sec=300)
-                engine_state, state_reasons, freshness = self._compute_engine_state(
+                raw_state_gate, raw_state_reasons_gate, freshness = self._compute_engine_state(
                     current_prices=current_prices,
                     runtime_metrics=runtime_metrics_gate,
+                )
+                engine_state, state_reasons, recovery_pending = self._apply_engine_state_hysteresis(
+                    raw_state=raw_state_gate,
+                    raw_reasons=raw_state_reasons_gate,
+                    allow_recovery_progress=True,
                 )
                 allow_open = engine_state == "tradeable"
                 if engine_state != self._last_engine_state:
@@ -332,13 +407,19 @@ class HotCoinRunner:
                     "candidate_count": len(candidates),
                     "top_symbols": [c.symbol for c in candidates[:10]],
                     "engine_state": engine_state,
-                })
+                    "state_recovery_pending": recovery_pending,
+                }, trace_id=cycle_id)
                 self._emit_event("signal_snapshot", {
                     "signal_count": len(signals),
                     "actionable_count": len([s for s in signals if s.action != "HOLD"]),
+                    "signals": [
+                        {"symbol": s.symbol, "action": s.action, "strength": s.strength}
+                        for s in signals if s.action != "HOLD"
+                    ],
                     "engine_state": engine_state,
                     "allow_open": allow_open,
-                })
+                    "state_recovery_pending": recovery_pending,
+                }, trace_id=cycle_id)
 
                 # 4) 可选执行
                 if self.config.execution.enable_order_execution:
@@ -354,15 +435,21 @@ class HotCoinRunner:
                                     engine_state, self.spot_engine.num_positions)
 
                 runtime_metrics = self.spot_engine.executor.get_runtime_metrics(window_sec=300)
-                engine_state, state_reasons, freshness = self._compute_engine_state(
+                raw_state, raw_state_reasons, freshness = self._compute_engine_state(
                     current_prices=current_prices,
                     runtime_metrics=runtime_metrics,
+                )
+                engine_state, state_reasons, recovery_pending = self._apply_engine_state_hysteresis(
+                    raw_state=raw_state,
+                    raw_reasons=raw_state_reasons,
+                    allow_recovery_progress=False,
                 )
                 self._write_status_snapshot(
                     candidates=candidates,
                     signals=signals,
                     engine_state=engine_state,
                     state_reasons=state_reasons,
+                    state_recovery_pending=recovery_pending,
                     freshness=freshness,
                     runtime_metrics=runtime_metrics,
                 )
@@ -379,10 +466,12 @@ class HotCoinRunner:
         signals,
         engine_state: str = "unknown",
         state_reasons=None,
+        state_recovery_pending=None,
         freshness=None,
         runtime_metrics=None,
     ):
         state_reasons = list(state_reasons or [])
+        state_recovery_pending = state_recovery_pending if isinstance(state_recovery_pending, dict) else None
         freshness = freshness if isinstance(freshness, dict) else {}
         runtime_metrics = runtime_metrics if isinstance(runtime_metrics, dict) else {}
         actionable = [s for s in signals if s.action != "HOLD"]
@@ -398,6 +487,7 @@ class HotCoinRunner:
             "ts": time.time(),
             "engine_state": engine_state,
             "engine_state_reasons": state_reasons,
+            "state_recovery_pending": state_recovery_pending,
             "can_open_new_positions": engine_state == "tradeable",
             "freshness": freshness,
             "execution_metrics": runtime_metrics,

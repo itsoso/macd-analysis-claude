@@ -49,11 +49,11 @@ class HotCoinSpotEngine:
         self.executor = OrderExecutor(config.execution)
         self.pnl = PnLTracker()
 
-    def _emit_event(self, event_type: str, payload: dict):
+    def _emit_event(self, event_type: str, payload: dict, trace_id: str = ""):
         if not callable(self._event_sink):
             return
         try:
-            self._event_sink(event_type, payload)
+            self._event_sink(event_type, payload, trace_id=trace_id)
         except Exception:
             log.debug("event_sink 写入失败: %s", event_type, exc_info=True)
 
@@ -141,7 +141,7 @@ class HotCoinSpotEngine:
             log.info("风控拒绝 %s: %s", sig.symbol, reason)
             return
 
-        # 现货开仓只支持 BUY
+        tid = sig.trace_id
         self._emit_event("order_attempt", {
             "symbol": sig.symbol,
             "side": "BUY",
@@ -152,7 +152,7 @@ class HotCoinSpotEngine:
             "strength": int(sig.strength),
             "confidence": float(sig.confidence),
             "ts": time.time(),
-        })
+        }, trace_id=tid)
         result = self.executor.spot_market_buy(sig.symbol, alloc, hint_price=current_price)
         self._emit_event("order_result", {
             "symbol": sig.symbol,
@@ -160,11 +160,12 @@ class HotCoinSpotEngine:
             "intent": "open",
             "ok": not bool(result.get("error")),
             "error": result.get("error"),
+            "error_class": result.get("error_class", ""),
             "code": result.get("code"),
             "precheck_code": result.get("precheck_code"),
             "status": result.get("status"),
             "ts": time.time(),
-        })
+        }, trace_id=tid)
         if result.get("error"):
             log.error("开仓下单失败 %s: %s", sig.symbol, result.get("error"))
             return
@@ -287,6 +288,7 @@ class HotCoinSpotEngine:
             "intent": "close",
             "ok": not bool(result.get("error")),
             "error": result.get("error"),
+            "error_class": result.get("error_class", ""),
             "code": result.get("code"),
             "precheck_code": result.get("precheck_code"),
             "status": result.get("status"),
@@ -331,6 +333,7 @@ class HotCoinSpotEngine:
             "intent": "partial_close",
             "ok": not bool(result.get("error")),
             "error": result.get("error"),
+            "error_class": result.get("error_class", ""),
             "code": result.get("code"),
             "precheck_code": result.get("precheck_code"),
             "status": result.get("status"),
@@ -348,6 +351,39 @@ class HotCoinSpotEngine:
             qty=close_qty, entry_time=pos.entry_time,
             reason=reason,
         )
+
+    def reconcile_open_orders(self) -> dict:
+        """
+        查询 Binance 未成交订单, 与内部持仓对账。
+        返回 {stale_orders: int, canceled: int} 摘要。
+        """
+        if self.config.execution.use_paper_trading:
+            return {"stale_orders": 0, "canceled": 0}
+        try:
+            open_orders = self.executor.query_open_orders()
+        except Exception:
+            log.exception("对账查询失败")
+            return {"stale_orders": 0, "canceled": 0, "error": "query_failed"}
+
+        stale = 0
+        canceled = 0
+        now = time.time()
+        for order in open_orders:
+            sym = order.get("symbol", "")
+            order_time_ms = int(order.get("time", 0))
+            age_sec = (now * 1000 - order_time_ms) / 1000 if order_time_ms else 0
+            # 超过 5 分钟未成交的 LIMIT 订单视为过期
+            if age_sec > 300 and order.get("type") == "LIMIT":
+                oid = int(order.get("orderId", 0))
+                log.warning("过期 LIMIT 订单 %s #%d (%.0fs), 尝试取消", sym, oid, age_sec)
+                result = self.executor.cancel_order(sym, oid)
+                if not result.get("error"):
+                    canceled += 1
+                stale += 1
+
+        if stale:
+            log.info("对账: %d 过期订单, %d 已取消", stale, canceled)
+        return {"stale_orders": stale, "canceled": canceled}
 
     def get_status(self) -> dict:
         """返回引擎状态摘要。"""

@@ -6,7 +6,7 @@
 
 **目标**: 在热点币的爆发初期介入，通过多维信号确认降低假突破风险，结合五层风控保护资金安全。
 
-**当前状态**: Phase 1 完成 + R1-R5 五轮改进 (~7000 行代码, 42 个文件, 83 单测全绿)，paper 模式可运行。
+**当前状态**: Phase 1 完成 + R1-R5 + Phase A/B (~7400 行代码, 43 个文件, 102 单测全绿)，paper 模式可运行。
 
 ## 2. 系统架构
 
@@ -305,6 +305,10 @@ hotcoin/data/
 | R5-5 | filters | 新币上线零流动性豁免 | R5 (10% 最低门槛) |
 | R5-6 | signal_dispatcher | 异常日志缺堆栈 | R5 (exc_info) |
 | R5-7 | runner | 主循环异常缺上下文 | R5 (pool_size + positions) |
+| A-1 | hot_ranker + ExchangeInfoCache | coin_age_days 始终为 -1 | Phase A (_first_seen 估算) |
+| A-2 | listing_monitor | 无 rate limit 退避 | Phase A (429/418 指数退避) |
+| A-3 | runner + web | 缺 /hotcoin/health | Codex + Phase A (去重) |
+| A-4 | runner | 缺状态机 | Codex (_compute_engine_state) |
 
 </details>
 
@@ -314,12 +318,9 @@ hotcoin/data/
 
 | 编号 | 文件 | 问题 |
 |------|------|------|
-| B-5 | listing_monitor | 无 rate limit 指数退避 (429 防护) |
-| B-6 | hot_ranker | coin_age_days 始终为 -1，风险惩罚不生效 |
 | B-7 | signal_dispatcher | shutdown(wait=True) 可能死锁 |
 | B-8 | web/routes | _runner 全局变量无线程锁 |
 | B-9 | order_executor | exchangeInfo 刷新失败后 1h 用旧缓存 |
-| B-10 | runner | 缺乏 `tradeable/degraded/blocked` 状态机 |
 | B-11 | spot_engine | 无订单状态跟踪 (open orders 可能遗漏) |
 
 #### P2 — 优化

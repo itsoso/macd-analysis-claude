@@ -7,6 +7,7 @@
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List
@@ -36,6 +37,7 @@ class PnLTracker:
 
     def __init__(self, data_dir: str = ""):
         self._trades: List[TradeRecord] = []
+        self._lock = threading.Lock()
         self._data_dir = data_dir or os.path.join(os.path.dirname(__file__), "..", "data")
         os.makedirs(self._data_dir, exist_ok=True)
 
@@ -54,9 +56,10 @@ class PnLTracker:
             reason=reason,
             entry_time=entry_time, exit_time=time.time(),
         )
-        self._trades.append(record)
-        if len(self._trades) > self.MAX_IN_MEMORY:
-            self._trades = self._trades[-self.MAX_IN_MEMORY:]
+        with self._lock:
+            self._trades.append(record)
+            if len(self._trades) > self.MAX_IN_MEMORY:
+                self._trades = self._trades[-self.MAX_IN_MEMORY:]
         self._persist(record)
         return record
 
@@ -84,22 +87,24 @@ class PnLTracker:
             log.exception("PnL 记录写入失败: %s", path)
 
     def get_summary(self) -> dict:
-        if not self._trades:
+        with self._lock:
+            snapshot = list(self._trades)
+        if not snapshot:
             return {"total_trades": 0}
 
-        wins = [t for t in self._trades if t.pnl > 0]
-        losses = [t for t in self._trades if t.pnl <= 0]
-        total_pnl = sum(t.pnl for t in self._trades)
-        avg_hold = sum(t.holding_sec for t in self._trades) / len(self._trades) if self._trades else 0
+        wins = [t for t in snapshot if t.pnl > 0]
+        losses = [t for t in snapshot if t.pnl <= 0]
+        total_pnl = sum(t.pnl for t in snapshot)
+        avg_hold = sum(t.holding_sec for t in snapshot) / len(snapshot)
 
         return {
-            "total_trades": len(self._trades),
+            "total_trades": len(snapshot),
             "wins": len(wins),
             "losses": len(losses),
-            "win_rate": len(wins) / len(self._trades) if self._trades else 0,
+            "win_rate": len(wins) / len(snapshot),
             "total_pnl": round(total_pnl, 2),
-            "avg_pnl": round(total_pnl / len(self._trades), 2),
+            "avg_pnl": round(total_pnl / len(snapshot), 2),
             "avg_holding_min": round(avg_hold / 60, 1),
-            "best_trade": round(max(t.pnl for t in self._trades), 2) if self._trades else 0,
-            "worst_trade": round(min(t.pnl for t in self._trades), 2) if self._trades else 0,
+            "best_trade": round(max(t.pnl for t in snapshot), 2),
+            "worst_trade": round(min(t.pnl for t in snapshot), 2),
         }
