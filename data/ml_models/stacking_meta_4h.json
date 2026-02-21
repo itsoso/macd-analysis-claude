@@ -1,26 +1,24 @@
 {
-  "version": "stacking_v5",
+  "version": "stacking_v6",
   "timeframe": "4h",
-  "trained_at": "2026-02-21T06:46:38.082074",
+  "meta_type": "lgb",
+  "trained_at": "2026-02-21T08:42:19.843037",
   "base_models": [
     "lgb",
-    "lstm"
+    "lstm",
+    "catboost"
   ],
   "extra_features": [
     "hvol_20"
   ],
-  "meta_input_dim": 3,
-  "meta_coefficients": {
-    "lgb": 0.45214046042883027,
-    "lstm": -0.006478143730971996,
-    "hvol_20": 0.10684987854755633
-  },
-  "meta_intercept": -0.4441824563632812,
+  "meta_input_dim": 4,
+  "meta_coefficients": {},
+  "meta_intercept": 0.0,
   "hvol_extra_mean": 0.0641767606139183,
   "hvol_extra_std": 0.032997547404298784,
-  "oof_meta_auc": 0.5394,
-  "val_auc": 0.7255,
-  "test_auc": 0.4917,
+  "oof_meta_auc": 0.5973,
+  "val_auc": 0.4768,
+  "test_auc": 0.505,
   "n_oof_samples": 6685,
   "n_folds": 8,
   "feature_names_73": [
@@ -104,6 +102,48 @@
     "funding_rate_ma",
     "oi_change",
     "oi_change_5"
+  ],
+  "feature_names_73_selected": [
+    "ret_13",
+    "momentum_accel",
+    "slope_MA5",
+    "dist_MA10",
+    "slope_MA20",
+    "dist_MA60",
+    "slope_MA60",
+    "ma_cross_5_20_prev",
+    "ma_cross_10_60",
+    "macd_dif",
+    "macd_dea",
+    "macd_bar",
+    "macd_bar_change",
+    "atr_14",
+    "atr_5",
+    "k",
+    "d",
+    "j",
+    "cci",
+    "hvol_5",
+    "hvol_20",
+    "hvol_ratio",
+    "dist_high_20",
+    "dist_low_20",
+    "vol_ratio_5_20",
+    "vol_price_corr_10",
+    "ofi_ma5",
+    "ofi_std5",
+    "cum_ofi",
+    "cum_ofi_slope",
+    "buy_sell_pressure",
+    "body_ratio",
+    "lower_shadow_ratio",
+    "avg_body_3",
+    "max_range_3",
+    "dow_cos",
+    "cum_ret_20_rank",
+    "sharpe_20",
+    "funding_rate",
+    "funding_rate_ma"
   ],
   "feature_names_94": [
     "ret_1",
@@ -581,6 +621,7 @@
   "model_files": {
     "lgb": "stacking_lgb_4h.txt",
     "lstm": "stacking_lstm_4h.pt",
+    "catboost": "stacking_catboost_4h.cbm",
     "meta": "stacking_meta_4h.pkl"
   },
   "thresholds": {
@@ -588,10 +629,10 @@
     "short_threshold": 0.42
   },
   "platt_calibration": {
-    "A": 1.0194418706906325,
-    "B": 0.0041157813807595044,
-    "brier_before": 0.24545575958260893,
-    "brier_after": 0.24545540173682942,
+    "A": 1.8990683630325573,
+    "B": 0.21918432830367168,
+    "brier_before": 0.24049767178990508,
+    "brier_after": 0.23889928157035697,
     "enabled": true
   }
 }

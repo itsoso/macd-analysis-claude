@@ -2575,25 +2575,33 @@ def train_mtf_fusion(decision_tfs=None):
 
 def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 20000):
     """
-    Stacking 集成: 3 个异构基模型的 OOF 预测 → LogisticRegression 元学习器。
+    Stacking 集成 v6: 3 异构基模型 OOF → 元学习器 (LR + LGB 双轨)。
 
-    基模型 (v4):
-      1. LightGBM Direction (73 维, Optuna 参数)
+    基模型:
+      1. LightGBM Direction (73 维, Optuna 最优参数)
       2. LSTM+Attention (73 维, 48-bar 序列)
-      3. 跨资产 LGB (94 维含跨资产 BTC/SOL/BNB)
+      3. CatBoost (73 维, ordered boosting, 增加多样性)
 
-    v3→v4 变更: 移除 XGBoost (与 LGB 冗余, 系数-0.04) 和 TFT (负系数-0.10)
-    折内训练与全量重训统一 label_smooth=0.10，消除 OOF/推理概率分布不一致
+    v5→v6 变更:
+      - 应用 Optuna 最优参数到 Stacking LGB
+      - Purged K-Fold + Embargo (24 bar gap 防时序泄漏)
+      - 加入 CatBoost 作为第 3 基模型 (与 LGB 低相关)
+      - 时间衰减加权 (近期样本权重更高)
+      - 自动剔除负系数基模型并重训
+      - LGB 非线性 meta-learner 对比 (取 OOF AUC 更高者)
+      - 特征重要性筛选 top-40
 
     流程:
-      A. 数据准备 + 时间分割
-      B. 5-Fold 时序 CV 生成 OOF 预测
-      C. 训练 LogisticRegression 元学习器
+      A. 数据准备 + 时间分割 + 特征筛选
+      B. 8-Fold Purged 时序 CV 生成 OOF 预测
+      C. 训练元学习器 (LR vs LGB, 时间衰减加权)
       D. 全量重训基模型 + 保存
     """
     import pickle
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import roc_auc_score
+
+    gpu_info = detect_gpu()
 
     timeframes = timeframes or ['1h']
     primary_tf = timeframes[0]
@@ -2645,14 +2653,48 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                  f"test={n-val_end-purge}")
         log.info(f"特征: 73 维 (LGB/XGB/LSTM) + 94 维 (TFT)")
 
-        # ---- B. 5-Fold OOF 预测 ----
+        # ---- A2. 特征重要性筛选 (top-40) ----
+        # 用前 50% 数据快速训练 LGB，按 gain 排序选 top-40 特征
+        TOP_K = 40
+        try:
+            import lightgbm as lgb
+            _sel_end = train_end // 2
+            _sel_valid = ~np.isnan(y_all[:_sel_end])
+            _sel_X = feat_73[:_sel_end][_sel_valid]
+            _sel_y = y_all[:_sel_end][_sel_valid]
+            if len(_sel_X) > 500:
+                _sel_params = {'objective': 'binary', 'metric': 'auc', 'num_leaves': 31,
+                               'learning_rate': 0.05, 'feature_fraction': 0.8,
+                               'verbose': -1, 'n_jobs': -1, 'seed': 42}
+                if gpu_info.get('lgb_gpu'):
+                    _sel_params['device'] = 'cuda'
+                _sel_model = lgb.train(_sel_params, lgb.Dataset(_sel_X, label=_sel_y),
+                                       num_boost_round=100)
+                _imp = _sel_model.feature_importance(importance_type='gain')
+                _top_idx = np.argsort(_imp)[::-1][:TOP_K]
+                _top_idx = np.sort(_top_idx)  # 保持原始顺序
+                feat_73_selected = feat_73[:, _top_idx]
+                feat_73_cols_selected = [feat_73_cols[i] for i in _top_idx]
+                log.info(f"  特征筛选: 73 → {len(_top_idx)} 维 (top-{TOP_K} by gain)")
+                log.info(f"  Top-5: {[feat_73_cols[i] for i in np.argsort(_imp)[::-1][:5]]}")
+            else:
+                feat_73_selected = feat_73
+                feat_73_cols_selected = feat_73_cols
+                log.info(f"  特征筛选: 跳过 (样本不足)")
+        except Exception as e:
+            feat_73_selected = feat_73
+            feat_73_cols_selected = feat_73_cols
+            log.warning(f"  特征筛选失败: {e}")
+
+        # ---- B. 8-Fold Purged OOF 预测 ----
         N_FOLDS = 8
+        EMBARGO = 24  # 24 bar gap 防止时序泄漏
         fold_size = train_end // N_FOLDS
 
-        oof_preds = np.full((train_end, 2), np.nan)  # (n_train, 2 models: LGB, LSTM)
+        oof_preds = np.full((train_end, 3), np.nan)  # (n_train, 3 models: LGB, LSTM, CatBoost)
         oof_valid = np.zeros(train_end, dtype=bool)
 
-        log.info(f"\n生成 OOF 预测 ({N_FOLDS} folds, expanding window)...")
+        log.info(f"\n生成 OOF 预测 ({N_FOLDS} folds, expanding window, embargo={EMBARGO})...")
 
         for fold_idx in range(N_FOLDS):
             fold_start = fold_idx * fold_size
@@ -2663,7 +2705,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 log.info(f"  Fold 0: 跳过 (无训练数据)")
                 continue
 
-            tr_end = fold_start
+            tr_end = max(0, fold_start - EMBARGO)  # Purged: embargo gap
             tr_valid = ~np.isnan(y_all[:tr_end])
             fold_valid = ~np.isnan(y_all[fold_start:fold_end])
 
@@ -2671,33 +2713,35 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 log.info(f"  Fold {fold_idx}: 跳过 (样本不足)")
                 continue
 
-            X_tr_73 = feat_73[:tr_end][tr_valid]
+            X_tr_73 = feat_73_selected[:tr_end][tr_valid]
             X_tr_94 = feat_94[:tr_end][tr_valid]
             y_tr = y_all[:tr_end][tr_valid]
 
-            X_fold_73 = feat_73[fold_start:fold_end][fold_valid]
+            X_fold_73 = feat_73_selected[fold_start:fold_end][fold_valid]
             X_fold_94 = feat_94[fold_start:fold_end][fold_valid]
 
-            fold_mean_73 = np.nanmean(X_tr_73, axis=0)
-            fold_std_73 = np.nanstd(X_tr_73, axis=0) + 1e-8
+            fold_mean_73 = np.nanmean(feat_73[:tr_end][tr_valid], axis=0)
+            fold_std_73 = np.nanstd(feat_73[:tr_end][tr_valid], axis=0) + 1e-8
             fold_mean_94 = np.nanmean(X_tr_94, axis=0)
             fold_std_94 = np.nanstd(X_tr_94, axis=0) + 1e-8
 
-            log.info(f"  Fold {fold_idx}: train={len(X_tr_73)}, predict={len(X_fold_73)}")
+            log.info(f"  Fold {fold_idx}: train={len(X_tr_73)}, predict={len(X_fold_73)}, embargo={EMBARGO}")
 
-            # --- 基模型 1: LGB ---
+            # --- 基模型 1: LGB (Optuna 最优参数) ---
             try:
                 import lightgbm as lgb
                 lgb_params = {
                     'objective': 'binary', 'metric': 'auc',
-                    'boosting_type': 'gbdt', 'num_leaves': 34,
-                    'learning_rate': 0.0102, 'feature_fraction': 0.573,
-                    'bagging_fraction': 0.513, 'bagging_freq': 3,
-                    'min_child_samples': 56, 'lambda_l1': 0.0114,
-                    'lambda_l2': 0.2146, 'verbose': -1, 'n_jobs': -1, 'seed': 42,
+                    'boosting_type': 'gbdt', 'num_leaves': 37,
+                    'learning_rate': 0.0105, 'feature_fraction': 0.592,
+                    'bagging_fraction': 0.536, 'bagging_freq': 2,
+                    'min_child_samples': 59, 'lambda_l1': 0.0103,
+                    'lambda_l2': 0.157, 'verbose': -1, 'n_jobs': -1, 'seed': 42,
                 }
+                if gpu_info.get('lgb_gpu'):
+                    lgb_params['device'] = 'cuda'
                 dtrain = lgb.Dataset(X_tr_73, label=y_tr)
-                lgb_model = lgb.train(lgb_params, dtrain, num_boost_round=300)
+                lgb_model = lgb.train(lgb_params, dtrain, num_boost_round=297)
                 lgb_pred = lgb_model.predict(X_fold_73)
                 oof_preds[fold_start:fold_end, 0][fold_valid] = lgb_pred
             except Exception as e:
@@ -2713,6 +2757,22 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} LSTM 失败: {e}")
 
+            # --- 基模型 3: CatBoost (ordered boosting, 增加多样性) ---
+            try:
+                from catboost import CatBoostClassifier
+                cb_model = CatBoostClassifier(
+                    iterations=300, depth=6, learning_rate=0.03,
+                    l2_leaf_reg=3.0, random_seed=42,
+                    task_type='GPU' if gpu_info.get('lgb_gpu') else 'CPU',
+                    verbose=0, eval_metric='AUC',
+                    bootstrap_type='Bernoulli', subsample=0.8,
+                )
+                cb_model.fit(X_tr_73, y_tr)
+                cb_pred = cb_model.predict_proba(X_fold_73)[:, 1]
+                oof_preds[fold_start:fold_end, 2][fold_valid] = cb_pred
+            except Exception as e:
+                log.warning(f"  Fold {fold_idx} CatBoost 失败: {e}")
+
             oof_valid[fold_start:fold_end] |= fold_valid
 
         # OOF 汇总
@@ -2725,7 +2785,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         oof_X = oof_filled[has_oof]
         oof_y = y_all[:train_end][has_oof]
 
-        model_names = ['LGB', 'LSTM']
+        model_names = ['LGB', 'LSTM', 'CatBoost']
         log.info(f"\nOOF 汇总: {len(oof_X)} 有效样本")
         for i, name in enumerate(model_names):
             valid_mask = ~np.isnan(oof_preds[:train_end][has_oof, i])
@@ -2770,36 +2830,104 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             oof_X = np.hstack([oof_X] + oof_extra)
             log.info(f"  附加特征: {extra_feat_names} → 元学习器输入 {oof_X.shape[1]} 维")
 
-        # ---- C. 训练元学习器 ----
-        # class_weight=None: 移除 balanced 以修正系统性看多偏差 (pred_mean 0.497 vs label 0.363)
-        # C=0.5: 适度 L2 正则化，平衡过拟合与欠拟合
-        log.info(f"\n训练 LogisticRegression 元学习器 (C=0.5, class_weight=None)...")
+        # ---- C. 训练元学习器 (时间衰减加权 + LR vs LGB 双轨) ----
+        # 时间衰减: 近期样本权重更高 (半衰期 = 样本量的 30%)
+        n_oof = len(oof_X)
+        half_life = max(n_oof * 0.3, 500)
+        time_idx = np.arange(n_oof, dtype=np.float64)
+        decay_weights = np.exp(-np.log(2) * (n_oof - 1 - time_idx) / half_life)
+        decay_weights /= decay_weights.mean()  # 归一化使均值为 1
 
-        meta_model = LogisticRegression(C=0.5, penalty='l2', solver='lbfgs',
-                                        max_iter=1000, random_state=42,
-                                        class_weight=None)
-        meta_model.fit(oof_X, oof_y)
+        # --- 方案 A: LogisticRegression (线性) ---
+        log.info(f"\n训练元学习器 (时间衰减加权, half_life={half_life:.0f})...")
+        log.info(f"  方案 A: LogisticRegression (C=0.5)")
 
-        # OOF 性能
-        oof_meta_pred = meta_model.predict_proba(oof_X)[:, 1]
-        oof_meta_auc = roc_auc_score(oof_y, oof_meta_pred)
-        log.info(f"  Meta OOF AUC: {oof_meta_auc:.4f}")
+        meta_lr = LogisticRegression(C=0.5, penalty='l2', solver='lbfgs',
+                                      max_iter=1000, random_state=42,
+                                      class_weight=None)
+        meta_lr.fit(oof_X, oof_y, sample_weight=decay_weights)
+        lr_pred = meta_lr.predict_proba(oof_X)[:, 1]
+        lr_auc = roc_auc_score(oof_y, lr_pred)
+        log.info(f"  LR OOF AUC: {lr_auc:.4f}")
 
-        # 诊断: 检查负系数基模型 (L2 正则化可能对高度相关的树模型产生负权重)
-        base_coefs = meta_model.coef_[0][:len(model_names)]
-        neg_coef_models = [(model_names[i], round(float(base_coefs[i]), 4))
-                           for i in range(len(model_names)) if base_coefs[i] < 0]
-        if neg_coef_models:
-            log.warning(f"  ⚠️  负系数基模型: {neg_coef_models}")
-            log.warning(f"     负系数意味着该模型的看多预测反而使元学习器看空。")
-            log.warning(f"     可能原因: 两模型高度相关 + L2正则化 → 考虑 C=0.5 或移除该模型")
-        for i, (name, _) in enumerate(zip(model_names, base_coefs)):
-            log.info(f"  系数 {name}: {base_coefs[i]:.4f}")
-        if extra_feat_names:
-            extra_coefs = meta_model.coef_[0][len(model_names):]
-            for name, coef in zip(extra_feat_names, extra_coefs):
-                log.info(f"  系数 {name}: {coef:.4f}")
-        log.info(f"  截距: {float(meta_model.intercept_[0]):.4f}")
+        # --- 方案 B: LGB 非线性 meta-learner ---
+        log.info(f"  方案 B: LGB meta (num_leaves=4)")
+        try:
+            import lightgbm as lgb
+            meta_lgb_params = {
+                'objective': 'binary', 'metric': 'auc',
+                'num_leaves': 4, 'learning_rate': 0.05,
+                'feature_fraction': 1.0, 'bagging_fraction': 0.8,
+                'bagging_freq': 1, 'min_child_samples': max(50, n_oof // 100),
+                'lambda_l2': 1.0, 'verbose': -1, 'seed': 42,
+            }
+            meta_lgb_dtrain = lgb.Dataset(oof_X, label=oof_y, weight=decay_weights)
+            meta_lgb_model = lgb.train(meta_lgb_params, meta_lgb_dtrain, num_boost_round=50)
+            lgb_meta_pred = meta_lgb_model.predict(oof_X)
+            lgb_meta_auc = roc_auc_score(oof_y, lgb_meta_pred)
+            log.info(f"  LGB meta OOF AUC: {lgb_meta_auc:.4f}")
+        except Exception as e:
+            lgb_meta_auc = 0.0
+            log.warning(f"  LGB meta 训练失败: {e}")
+
+        # 选择更优方案
+        use_lgb_meta = lgb_meta_auc > lr_auc + 0.005  # LGB 需显著优于 LR
+        if use_lgb_meta:
+            meta_model = meta_lgb_model
+            meta_type = 'lgb'
+            oof_meta_pred = lgb_meta_pred
+            oof_meta_auc = lgb_meta_auc
+            log.info(f"  ✅ 选择 LGB meta (AUC {lgb_meta_auc:.4f} > LR {lr_auc:.4f})")
+        else:
+            meta_model = meta_lr
+            meta_type = 'lr'
+            oof_meta_pred = lr_pred
+            oof_meta_auc = lr_auc
+            log.info(f"  ✅ 选择 LR meta (AUC {lr_auc:.4f}, LGB {lgb_meta_auc:.4f} 未显著优于)")
+
+        # 自动剔除负系数基模型 (仅 LR 模式)
+        if meta_type == 'lr':
+            base_coefs = meta_lr.coef_[0][:len(model_names)]
+            neg_models = [model_names[i] for i in range(len(model_names)) if base_coefs[i] < -0.01]
+            if neg_models:
+                log.warning(f"  ⚠️  负系数基模型: {neg_models} → 自动剔除并重训")
+                keep_idx = [i for i in range(len(model_names)) if base_coefs[i] >= -0.01]
+                model_names = [model_names[i] for i in keep_idx]
+                oof_X_trimmed = np.column_stack([oof_filled[has_oof][:, i] for i in keep_idx])
+                # 重新附加 extra features
+                if oof_extra:
+                    oof_X_trimmed = np.hstack([oof_X_trimmed] + oof_extra)
+                meta_lr2 = LogisticRegression(C=0.5, penalty='l2', solver='lbfgs',
+                                               max_iter=1000, random_state=42, class_weight=None)
+                meta_lr2.fit(oof_X_trimmed, oof_y, sample_weight=decay_weights)
+                lr2_pred = meta_lr2.predict_proba(oof_X_trimmed)[:, 1]
+                lr2_auc = roc_auc_score(oof_y, lr2_pred)
+                log.info(f"  剔除后 LR OOF AUC: {lr2_auc:.4f} (之前 {lr_auc:.4f})")
+                if lr2_auc >= lr_auc - 0.005:  # 剔除后不显著变差
+                    meta_model = meta_lr2
+                    oof_meta_pred = lr2_pred
+                    oof_meta_auc = lr2_auc
+                    oof_X = oof_X_trimmed
+                    log.info(f"  ✅ 采用剔除后模型")
+                else:
+                    log.info(f"  保留原始模型 (剔除后变差)")
+                    model_names = ['LGB', 'LSTM', 'CatBoost']  # 恢复
+
+        # OOF 性能 (已在上面计算)
+        log.info(f"  Meta OOF AUC: {oof_meta_auc:.4f} (type={meta_type})")
+
+        # 诊断: 系数 (仅 LR 模式)
+        if meta_type == 'lr' and hasattr(meta_model, 'coef_'):
+            base_coefs = meta_model.coef_[0][:len(model_names)]
+            for i, name in enumerate(model_names):
+                log.info(f"  系数 {name}: {base_coefs[i]:.4f}")
+            if extra_feat_names:
+                extra_coefs = meta_model.coef_[0][len(model_names):]
+                for name, coef in zip(extra_feat_names, extra_coefs):
+                    log.info(f"  系数 {name}: {coef:.4f}")
+            log.info(f"  截距: {float(meta_model.intercept_[0]):.4f}")
+        elif meta_type == 'lgb':
+            log.info(f"  LGB meta feature importance: {dict(zip(model_names + extra_feat_names, meta_model.feature_importance('gain').tolist()))}")
 
         # 标签分布诊断 (高偏差警告)
         label_mean = oof_y.mean()
@@ -2864,25 +2992,27 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
 
         full_end = val_end
         full_valid = ~np.isnan(y_all[:full_end])
-        X_full_73 = feat_73[:full_end][full_valid]
+        X_full_73 = feat_73_selected[:full_end][full_valid]
         X_full_94 = feat_94[:full_end][full_valid]
         y_full = y_all[:full_end][full_valid]
-        feat_mean_73 = np.nanmean(X_full_73, axis=0)
-        feat_std_73 = np.nanstd(X_full_73, axis=0) + 1e-8
+        feat_mean_73 = np.nanmean(feat_73[:full_end][full_valid], axis=0)
+        feat_std_73 = np.nanstd(feat_73[:full_end][full_valid], axis=0) + 1e-8
         feat_mean_94 = np.nanmean(X_full_94, axis=0)
         feat_std_94 = np.nanstd(X_full_94, axis=0) + 1e-8
 
-        # 重训 LGB
+        # 重训 LGB (Optuna 最优参数)
         try:
             import lightgbm as lgb
             lgb_params = {
                 'objective': 'binary', 'metric': 'auc',
-                'boosting_type': 'gbdt', 'num_leaves': 34,
-                'learning_rate': 0.0102, 'feature_fraction': 0.573,
-                'bagging_fraction': 0.513, 'bagging_freq': 3,
-                'min_child_samples': 56, 'lambda_l1': 0.0114,
-                'lambda_l2': 0.2146, 'verbose': -1, 'n_jobs': -1, 'seed': 42,
+                'boosting_type': 'gbdt', 'num_leaves': 37,
+                'learning_rate': 0.0105, 'feature_fraction': 0.592,
+                'bagging_fraction': 0.536, 'bagging_freq': 2,
+                'min_child_samples': 59, 'lambda_l1': 0.0103,
+                'lambda_l2': 0.157, 'verbose': -1, 'n_jobs': -1, 'seed': 42,
             }
+            if gpu_info.get('lgb_gpu'):
+                lgb_params['device'] = 'cuda'
             dtrain = lgb.Dataset(X_full_73, label=y_full)
             final_lgb = lgb.train(lgb_params, dtrain, num_boost_round=400)
             final_lgb.save_model(os.path.join(MODEL_DIR, f'stacking_lgb_{tf}.txt'))
@@ -2900,11 +3030,29 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         except Exception as e:
             log.warning(f"  LSTM 全量训练失败: {e}")
 
+        # 重训 CatBoost
+        try:
+            from catboost import CatBoostClassifier
+            cb_full = CatBoostClassifier(
+                iterations=400, depth=6, learning_rate=0.03,
+                l2_leaf_reg=3.0, random_seed=42,
+                task_type='GPU' if gpu_info.get('lgb_gpu') else 'CPU',
+                verbose=0, eval_metric='AUC',
+                bootstrap_type='Bernoulli', subsample=0.8,
+            )
+            cb_full.fit(X_full_73, y_full)
+            cb_full.save_model(os.path.join(MODEL_DIR, f'stacking_catboost_{tf}.cbm'))
+            log.info("  CatBoost 保存完成")
+        except Exception as e:
+            log.warning(f"  CatBoost 全量训练失败: {e}")
+
         # ---- E. 用最终保存的基模型评估元学习器 ----
         val_auc = _stacking_evaluate_meta_with_saved_models(
             meta_model=meta_model,
+            meta_type=meta_type,
             tf=tf,
-            feat_73=feat_73,
+            feat_73=feat_73_selected,
+            feat_73_full=feat_73,
             feat_94=feat_94,
             y_all=y_all,
             start=val_start,
@@ -2918,11 +3066,14 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             feat_std_94=feat_std_94,
             hvol_extra_mean=hvol_extra_mean,
             hvol_extra_std=hvol_extra_std,
+            active_models=model_names,
         )
         test_auc = _stacking_evaluate_meta_with_saved_models(
             meta_model=meta_model,
+            meta_type=meta_type,
             tf=tf,
-            feat_73=feat_73,
+            feat_73=feat_73_selected,
+            feat_73_full=feat_73,
             feat_94=feat_94,
             y_all=y_all,
             start=test_start,
@@ -2936,6 +3087,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             feat_std_94=feat_std_94,
             hvol_extra_mean=hvol_extra_mean,
             hvol_extra_std=hvol_extra_std,
+            active_models=model_names,
         )
         log.info(f"  验证 AUC(最终基模型): {val_auc:.4f}")
         log.info(f"  测试 AUC(最终基模型): {test_auc:.4f}")
@@ -2947,17 +3099,25 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             pickle.dump(meta_model, f)
 
         # 保存元数据 (含系数，便于 ONNX 导出和 debug)
-        meta_coef = meta_model.coef_[0].tolist()
-        meta_intercept = float(meta_model.intercept_[0])
-        base_model_names = ['lgb', 'lstm'] + extra_feat_names
+        base_model_names_lower = [m.lower() for m in model_names]
+        if meta_type == 'lr' and hasattr(meta_model, 'coef_'):
+            meta_coef = meta_model.coef_[0].tolist()
+            meta_intercept = float(meta_model.intercept_[0])
+            coef_names = base_model_names_lower + extra_feat_names
+            meta_coefficients = dict(zip(coef_names, meta_coef))
+        else:
+            meta_coef = []
+            meta_intercept = 0.0
+            meta_coefficients = {}
         stacking_meta = {
-            'version': 'stacking_v5',
+            'version': 'stacking_v6',
             'timeframe': tf,
+            'meta_type': meta_type,
             'trained_at': datetime.now().isoformat(),
-            'base_models': ['lgb', 'lstm'],
+            'base_models': base_model_names_lower,
             'extra_features': extra_feat_names,
-            'meta_input_dim': len(base_model_names),
-            'meta_coefficients': dict(zip(base_model_names, meta_coef)),
+            'meta_input_dim': oof_X.shape[1] if hasattr(oof_X, 'shape') else len(base_model_names_lower) + len(extra_feat_names),
+            'meta_coefficients': meta_coefficients,
             'meta_intercept': meta_intercept,
             # hvol_20 z-score 标准化参数 (训练时应用，推理时需同步)
             'hvol_extra_mean': hvol_extra_mean,
@@ -2968,6 +3128,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             'n_oof_samples': int(len(oof_X)),
             'n_folds': N_FOLDS,
             'feature_names_73': feat_73_cols,
+            'feature_names_73_selected': feat_73_cols_selected,
             'feature_names_94': feat_94_cols,
             'feat_mean_73': feat_mean_73.tolist(),
             'feat_std_73': feat_std_73.tolist(),
@@ -2976,6 +3137,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             'model_files': {
                 'lgb': f'stacking_lgb_{tf}.txt',
                 'lstm': f'stacking_lstm_{tf}.pt',
+                'catboost': f'stacking_catboost_{tf}.cbm',
                 'meta': meta_file,
             },
             'thresholds': {
@@ -3344,8 +3506,10 @@ def _stacking_predict_tft_saved(feat_raw, start, end, valid_mask, model_path,
 
 def _stacking_evaluate_meta_with_saved_models(
     meta_model,
+    meta_type: str,
     tf: str,
     feat_73: np.ndarray,
+    feat_73_full: np.ndarray,
     feat_94: np.ndarray,
     y_all: np.ndarray,
     start: int,
@@ -3359,9 +3523,13 @@ def _stacking_evaluate_meta_with_saved_models(
     feat_std_94: np.ndarray,
     hvol_extra_mean: float = 0.0,
     hvol_extra_std: float = 1.0,
+    active_models: List[str] = None,
 ) -> float:
-    """使用最终保存的 3 个基模型评估 meta learner。"""
+    """使用最终保存的基模型评估 meta learner (支持 LR/LGB meta + CatBoost)。"""
     from sklearn.metrics import roc_auc_score
+
+    if active_models is None:
+        active_models = ['LGB', 'LSTM', 'CatBoost']
 
     if valid_mask.sum() < 20:
         return 0.5
@@ -3370,41 +3538,66 @@ def _stacking_evaluate_meta_with_saved_models(
     X_94 = feat_94[start:end][valid_mask]
     y_true = y_all[start:end][valid_mask]
 
+    preds = []
+
     # 1) LGB
-    lgb_pred = np.full(len(X_73), 0.5, dtype=np.float32)
-    try:
-        import lightgbm as lgb
-        lgb_path = os.path.join(MODEL_DIR, f'stacking_lgb_{tf}.txt')
-        if os.path.exists(lgb_path):
-            lgb_model = lgb.Booster(model_file=lgb_path)
-            lgb_pred = lgb_model.predict(X_73).astype(np.float32)
-    except Exception as e:
-        log.warning(f"  LGB 评估失败: {e}")
+    if 'LGB' in active_models:
+        lgb_pred = np.full(len(X_73), 0.5, dtype=np.float32)
+        try:
+            import lightgbm as lgb
+            lgb_path = os.path.join(MODEL_DIR, f'stacking_lgb_{tf}.txt')
+            if os.path.exists(lgb_path):
+                lgb_model = lgb.Booster(model_file=lgb_path)
+                lgb_pred = lgb_model.predict(X_73).astype(np.float32)
+        except Exception as e:
+            log.warning(f"  LGB 评估失败: {e}")
+        preds.append(lgb_pred)
 
-    # 2) LSTM
-    lstm_path = os.path.join(MODEL_DIR, f'stacking_lstm_{tf}.pt')
-    lstm_pred = _stacking_predict_lstm_saved(
-        feat_raw=feat_73,
-        start=start,
-        end=end,
-        valid_mask=valid_mask,
-        model_path=lstm_path,
-        input_dim=feat_73.shape[1],
-        feat_mean=feat_mean_73,
-        feat_std=feat_std_73,
-        seq_len=48,
-    )
+    # 2) LSTM (uses full 73-dim features for sequence input)
+    if 'LSTM' in active_models:
+        lstm_path = os.path.join(MODEL_DIR, f'stacking_lstm_{tf}.pt')
+        lstm_pred = _stacking_predict_lstm_saved(
+            feat_raw=feat_73_full,
+            start=start,
+            end=end,
+            valid_mask=valid_mask,
+            model_path=lstm_path,
+            input_dim=feat_73_full.shape[1],
+            feat_mean=feat_mean_73,
+            feat_std=feat_std_73,
+            seq_len=48,
+        )
+        preds.append(lstm_pred)
 
-    meta_X = np.column_stack([lgb_pred, lstm_pred])
+    # 3) CatBoost
+    if 'CatBoost' in active_models:
+        cb_pred = np.full(len(X_73), 0.5, dtype=np.float32)
+        try:
+            from catboost import CatBoostClassifier
+            cb_path = os.path.join(MODEL_DIR, f'stacking_catboost_{tf}.cbm')
+            if os.path.exists(cb_path):
+                cb_model = CatBoostClassifier()
+                cb_model.load_model(cb_path)
+                cb_pred = cb_model.predict_proba(X_73)[:, 1].astype(np.float32)
+        except Exception as e:
+            log.warning(f"  CatBoost 评估失败: {e}")
+        preds.append(cb_pred)
+
+    meta_X = np.column_stack(preds)
 
     # 附加特征 (hvol_20 需与训练时同步 z-score 标准化)
     if hvol_idx >= 0 and 'hvol_20' in extra_feat_names:
-        hvol = feat_73[start:end][valid_mask, hvol_idx:hvol_idx + 1]
+        hvol = feat_73_full[start:end][valid_mask, hvol_idx:hvol_idx + 1]
         hvol = np.nan_to_num(hvol, nan=0.0, posinf=0.0, neginf=0.0)
         hvol = (hvol - hvol_extra_mean) / max(hvol_extra_std, 1e-8)
         meta_X = np.hstack([meta_X, hvol])
 
-    meta_pred = meta_model.predict_proba(meta_X)[:, 1]
+    # 根据 meta_type 选择预测方式
+    if meta_type == 'lgb':
+        meta_pred = meta_model.predict(meta_X)
+    else:
+        meta_pred = meta_model.predict_proba(meta_X)[:, 1]
+
     try:
         return float(roc_auc_score(y_true, meta_pred))
     except Exception:

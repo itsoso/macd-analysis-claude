@@ -1,26 +1,24 @@
 {
-  "version": "stacking_v5",
+  "version": "stacking_v6",
   "timeframe": "1h",
-  "trained_at": "2026-02-21T06:45:59.905061",
+  "meta_type": "lgb",
+  "trained_at": "2026-02-21T08:41:08.498381",
   "base_models": [
     "lgb",
-    "lstm"
+    "lstm",
+    "catboost"
   ],
   "extra_features": [
     "hvol_20"
   ],
-  "meta_input_dim": 3,
-  "meta_coefficients": {
-    "lgb": 1.537027849919156,
-    "lstm": 0.10505308131956692,
-    "hvol_20": 0.14155630836164268
-  },
-  "meta_intercept": -1.1903263779897124,
+  "meta_input_dim": 4,
+  "meta_coefficients": {},
+  "meta_intercept": 0.0,
   "hvol_extra_mean": 0.031221536919474602,
   "hvol_extra_std": 0.01891856709254742,
-  "oof_meta_auc": 0.5828,
-  "val_auc": 0.7519,
-  "test_auc": 0.5418,
+  "oof_meta_auc": 0.5919,
+  "val_auc": 0.7584,
+  "test_auc": 0.5337,
   "n_oof_samples": 26789,
   "n_folds": 8,
   "feature_names_73": [
@@ -104,6 +102,48 @@
     "funding_rate_ma",
     "oi_change",
     "oi_change_5"
+  ],
+  "feature_names_73_selected": [
+    "ret_13",
+    "ret_21",
+    "roc_20",
+    "dist_MA5",
+    "slope_MA20",
+    "dist_MA60",
+    "slope_MA60",
+    "ma_cross_5_20",
+    "ma_cross_5_20_prev",
+    "ma_cross_10_60",
+    "macd_dif",
+    "macd_dea",
+    "macd_bar",
+    "atr_14",
+    "atr_5",
+    "k",
+    "d",
+    "j",
+    "cci",
+    "hvol_5",
+    "hvol_20",
+    "hvol_ratio",
+    "dist_high_20",
+    "dist_low_20",
+    "vol_ratio_5_20",
+    "vol_price_corr_10",
+    "ofi_std5",
+    "cum_ofi",
+    "cum_ofi_slope",
+    "large_trade_ratio",
+    "buy_sell_pressure",
+    "avg_body_3",
+    "max_range_3",
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "cum_ret_20_rank",
+    "sharpe_20",
+    "funding_rate",
+    "funding_rate_ma"
   ],
   "feature_names_94": [
     "ret_1",
@@ -581,6 +621,7 @@
   "model_files": {
     "lgb": "stacking_lgb_1h.txt",
     "lstm": "stacking_lstm_1h.pt",
+    "catboost": "stacking_catboost_1h.cbm",
     "meta": "stacking_meta_1h.pkl"
   },
   "thresholds": {
@@ -588,10 +629,10 @@
     "short_threshold": 0.42
   },
   "platt_calibration": {
-    "A": 1.0107896474506315,
-    "B": 0.006291220291085791,
-    "brier_before": 0.22872208541043648,
-    "brier_after": 0.2287230546436605,
-    "enabled": false
+    "A": 1.2921373601068424,
+    "B": 0.13723227061424376,
+    "brier_before": 0.22718033958832903,
+    "brier_after": 0.22693131999730223,
+    "enabled": true
   }
 }
