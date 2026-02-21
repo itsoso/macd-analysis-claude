@@ -228,7 +228,7 @@ class HotCoinRunner:
             log.exception("写入事件日志失败: %s", self._events_file)
 
     def _latest_ticker_age_sec(self, now: float) -> float:
-        tickers = self.ticker_stream.tickers
+        tickers = self.ticker_stream.tickers_ref
         if not tickers:
             return -1.0
         latest_event_ts = max((t.event_time or 0) for t in tickers.values()) / 1000.0
@@ -240,7 +240,7 @@ class HotCoinRunner:
         now = time.time()
         age_sec = self._latest_ticker_age_sec(now)
         freshness = {
-            "ws_connected": bool(self.ticker_stream.tickers),
+            "ws_connected": bool(self.ticker_stream.tickers_ref),
             "latest_ticker_age_sec": round(age_sec, 2) if age_sec >= 0 else None,
             "priced_symbols": len(current_prices),
         }
@@ -350,8 +350,11 @@ class HotCoinRunner:
     async def _main_loop(self):
         """10s 周期: 评分 → 筛选 → 信号 → (执行)。"""
         interval = self.config.trading.signal_loop_sec
+        reconcile_every = 30  # 每 30 轮 (~5min) 对账一次
+        loop_count = 0
         while not self._shutdown.is_set():
             cycle_id = uuid.uuid4().hex[:12]
+            loop_count += 1
             try:
                 # 0) 清除冷却到期 / 低分超时的币种
                 self.pool.remove_expired()
@@ -379,9 +382,22 @@ class HotCoinRunner:
                                  sig.action, sig.symbol, sig.strength,
                                  sig.confidence, sig.reason)
 
+                # 3.5) 回写 Pump + Alert 到候选池
+                for sig in signals:
+                    if sig.pump_phase or sig.alert_level:
+                        coin = self.pool.get(sig.symbol)
+                        if coin:
+                            coin.pump_phase = sig.pump_phase or "normal"
+                            coin.pump_score = sig.pump_score
+                            coin.alert_level = sig.alert_level or "NONE"
+                            coin.alert_score = sig.alert_score
+                            coin.active_signals = ",".join(sig.active_signals) if sig.active_signals else ""
+                            coin.active_filters = ",".join(sig.active_filters) if sig.active_filters else ""
+                            self.pool.update_coin(coin)
+
                 current_prices = {
                     sym: ticker.close
-                    for sym, ticker in self.ticker_stream.tickers.items()
+                    for sym, ticker in self.ticker_stream.tickers_ref.items()
                     if ticker.close > 0
                 }
 
@@ -423,7 +439,15 @@ class HotCoinRunner:
 
                 # 4) 可选执行
                 if self.config.execution.enable_order_execution:
-                    self.spot_engine.process_signals(signals, allow_open=allow_open)
+                    self.spot_engine.process_signals(
+                        signals, allow_open=allow_open, current_prices=current_prices)
+
+                    if loop_count % reconcile_every == 0:
+                        try:
+                            await asyncio.to_thread(self.spot_engine.reconcile_open_orders)
+                        except Exception:
+                            log.debug("对账异常", exc_info=True)
+
                     can_check_positions = bool(current_prices) and (
                         freshness.get("latest_ticker_age_sec") is None
                         or freshness.get("latest_ticker_age_sec") <= self.TICKER_STALE_BLOCKED_SEC
@@ -454,6 +478,10 @@ class HotCoinRunner:
                     runtime_metrics=runtime_metrics,
                 )
 
+            except (MemoryError, SystemExit):
+                log.critical("致命异常, 触发系统关闭", exc_info=True)
+                self._shutdown.set()
+                return
             except Exception:
                 log.exception("主循环异常 (pool=%d, positions=%d)",
                               self.pool.size, self.spot_engine.num_positions)
@@ -508,10 +536,16 @@ class HotCoinRunner:
                     "score_liquidity": c.score_liquidity,
                     "score_risk_penalty": c.score_risk_penalty,
                     "has_listing_signal": c.has_listing_signal,
+                    "pump_phase": c.pump_phase,
+                    "pump_score": c.pump_score,
+                    "alert_level": c.alert_level,
+                    "alert_score": c.alert_score,
+                    "active_signals": c.active_signals,
+                    "active_filters": c.active_filters,
                 }
                 for c in candidates[:20]
             ],
-            "ws_connected": bool(self.ticker_stream.tickers),
+            "ws_connected": bool(self.ticker_stream.tickers_ref),
             "paper": self.config.execution.use_paper_trading,
             "execution_enabled": bool(self.config.execution.enable_order_execution),
             "anomaly_count": len(anomaly_coins),

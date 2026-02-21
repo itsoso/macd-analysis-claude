@@ -42,6 +42,10 @@ _kline_cache: Dict[Tuple[str, str], Tuple[pd.DataFrame, float]] = {}
 _kline_cache_lock = threading.Lock()
 _KLINE_CACHE_MAX = 500
 
+# 全局 AlertScorer 实例 (保持 score_history 用于 L3 连续高分检测)
+from hotcoin.engine.alert_scorer import AlertScorer as _AlertScorerCls
+_alert_scorer = _AlertScorerCls()
+
 
 def _get_cached_klines(symbol: str, tf: str, days: int, min_bars: int):
     """从缓存或 API 获取 K线。缓存 key=(symbol, tf), 有效期 = bar 周期的 80%。"""
@@ -117,6 +121,13 @@ class TradeSignal:
     tf_details: dict = field(default_factory=dict)
     computed_at: float = 0.0
     trace_id: str = ""
+    # Pump / Signal / Alert 增强
+    pump_phase: str = ""
+    pump_score: float = 0.0
+    alert_level: str = ""
+    alert_score: float = 0.0
+    active_signals: list = field(default_factory=list)
+    active_filters: list = field(default_factory=list)
 
 
 def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = None) -> TradeSignal:
@@ -139,6 +150,7 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
 
     tf_scores = {}
     tf_details = {}
+    tf_raw_dfs: Dict[str, pd.DataFrame] = {}  # 收集原始 df 供 Pump/Scan 复用
 
     for tf in tfs:
         try:
@@ -149,6 +161,8 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
                 bars = len(df) if df is not None else 0
                 log.debug("%s %s 数据不足 (%d bars)", symbol, tf, bars)
                 continue
+
+            tf_raw_dfs[tf] = df  # 缓存原始 df (信号扫描需要 OHLCV 原始列)
 
             df = _add_hot_indicators(df)
             add_moving_averages(df, timeframe=tf)
@@ -219,6 +233,62 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
     if degraded:
         confidence *= 0.5  # 降级信号降低可信度
 
+    # --- Pump + Signal Scan + Alert (增强层, 不影响原有逻辑) ---
+    pump_phase = ""
+    pump_score = 0.0
+    alert_level = ""
+    alert_score = 0.0
+    active_signals_list = []
+    active_filters_list = []
+    try:
+        from hotcoin.engine.pump_detector import detect_pump_phase
+        from hotcoin.engine.signal_scanner import scan_timeframe, aggregate_scans
+
+        # 从已有 df 获取 quote_vol_24h (用于 F3 流动性过滤)
+        quote_vol_24h = 0.0
+        _tf_minutes = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30,
+                       "1h": 60, "2h": 120, "4h": 240}
+        for _tf, _df in tf_raw_dfs.items():
+            if "quote_volume" in _df.columns and len(_df) > 0:
+                bars_per_day = 1440 / _tf_minutes.get(_tf, 5)
+                quote_vol_24h = float(_df["quote_volume"].iloc[-1]) * bars_per_day
+                break
+
+        # Pump 检测: 按优先级 5m > 15m > 1m > 其他
+        pump_result = None
+        _pump_tf_pref = ["5m", "15m", "1m", "3m", "30m", "1h"]
+        for ptf in _pump_tf_pref:
+            if ptf in tf_raw_dfs:
+                pump_result = detect_pump_phase(tf_raw_dfs[ptf])
+                break
+        # fallback: 用第一个可用 tf
+        if pump_result is None and tf_raw_dfs:
+            pump_result = detect_pump_phase(next(iter(tf_raw_dfs.values())))
+
+        # Signal Scan: 直接复用已缓存的 df (无需重新拉取)
+        scan_results = []
+        for tf, df_scan in tf_raw_dfs.items():
+            scan_results.append(
+                scan_timeframe(df_scan, tf, symbol=symbol, quote_vol_24h=quote_vol_24h))
+
+        if scan_results:
+            agg_scan = aggregate_scans(scan_results)
+            alert = _alert_scorer.score(pump_result, agg_scan, tf_details)
+
+            pump_phase = alert.pump_phase
+            pump_score = pump_result.score if pump_result else 0.0
+            alert_level = alert.level
+            alert_score = alert.total_score
+            active_signals_list = alert.active_signals
+            active_filters_list = alert.active_filters
+
+            if alert_level != "NONE":
+                log.info("%s 预警 %s(%s) score=%.0f pump=%s signals=%s filters=%s",
+                         symbol, alert_level, alert.level_name, alert_score,
+                         pump_phase, active_signals_list, active_filters_list)
+    except Exception:
+        log.debug("%s Pump/Alert 增强层异常", symbol, exc_info=True)
+
     return TradeSignal(
         symbol=symbol,
         action=action,
@@ -230,4 +300,10 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
         consensus=consensus,
         tf_details=tf_details,
         computed_at=time.time(),
+        pump_phase=pump_phase,
+        pump_score=pump_score,
+        alert_level=alert_level,
+        alert_score=alert_score,
+        active_signals=active_signals_list,
+        active_filters=active_filters_list,
     )

@@ -68,6 +68,18 @@ class HotCoinEntryExit:
         if coin and coin.heat_score < 30:
             return EntryDecision(allow=False, reason=f"热度过低 ({coin.heat_score:.0f})")
 
+        # F1-F3 反欺诈过滤
+        filters = getattr(signal, "active_filters", None) or []
+        if "F2" in filters:
+            return EntryDecision(allow=False, reason="F2过滤: 疑似拉高出货")
+        if "F1" in filters and "F3" in filters:
+            return EntryDecision(allow=False, reason="F1+F3过滤: 刷量且低流动性")
+
+        # Pump 阶段过滤: 派发阶段不入场
+        pump_phase = getattr(signal, "pump_phase", "")
+        if pump_phase == "distribution":
+            return EntryDecision(allow=False, reason="Pump阶段=派发, 不入场")
+
         sl = self.config.default_sl_pct
         return EntryDecision(allow=True, reason="OK", suggested_sl_pct=sl)
 
@@ -99,6 +111,16 @@ class HotCoinEntryExit:
                 reason=f"止损触发 ({pnl_pct:+.2%} <= {self.config.default_sl_pct:+.2%})",
                 exit_pct=1.0,
             )
+
+        # 1.5 Pump 派发阶段退出 (盈利时部分平仓, 仅触发一次)
+        if coin and partial_exits == 0:
+            cp = getattr(coin, "pump_phase", "")
+            if cp == "distribution" and pnl_pct > 0:
+                return ExitDecision(
+                    should_exit=True,
+                    reason=f"Pump进入派发阶段, 获利退出 ({pnl_pct:+.2%})",
+                    exit_pct=0.5,
+                )
 
         # 2. 黑天鹅 (5min 剧烈反向波动)
         if coin:

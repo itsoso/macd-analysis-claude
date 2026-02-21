@@ -160,6 +160,31 @@
         .tag-mixed { background: #1a2a3a; color: var(--accent-blue); }
         .tag-unknown { background: #2a2a2a; color: var(--text-muted); }
 
+        /* Alert level badges */
+        .alert-badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+        }
+        .alert-L1 { background: rgba(255, 170, 0, 0.15); color: var(--accent-yellow); }
+        .alert-L2 { background: rgba(249, 115, 22, 0.18); color: var(--accent-orange); }
+        .alert-L3 { background: rgba(255, 77, 106, 0.2); color: var(--accent-red); }
+        .alert-NONE { color: var(--text-muted); font-size: 11px; }
+
+        /* Pump phase tags */
+        .pump-normal { color: var(--text-muted); }
+        .pump-accumulation { background: rgba(74, 158, 255, 0.12); color: var(--accent-blue); }
+        .pump-early_pump { background: rgba(0, 214, 143, 0.12); color: var(--accent-green); }
+        .pump-main_pump { background: rgba(255, 77, 106, 0.15); color: var(--accent-red); }
+        .pump-distribution { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); }
+
+        /* Signal chips */
+        .sig-chip {
+            display: inline-block; padding: 1px 5px; border-radius: 3px;
+            font-size: 10px; font-weight: 600; margin: 1px;
+        }
+        .sig-S { background: rgba(0, 214, 143, 0.12); color: var(--accent-green); }
+        .sig-F { background: rgba(255, 77, 106, 0.12); color: var(--accent-red); }
+
         /* Heat dimension bars */
         .dim-bars { display: flex; gap: 2px; align-items: center; }
         .dim-bar {
@@ -320,7 +345,10 @@
                         <tr>
                             <th style="width:30px">#</th>
                             <th>币种</th>
-                            <th onclick="sortCoins('heat_score')" id="th-heat">热度 ▼</th>
+                            <th onclick="sortCoins('alert_score')">预警</th>
+                            <th onclick="sortCoins('heat_score')" id="th-heat">热度</th>
+                            <th>阶段</th>
+                            <th>信号</th>
                             <th>来源</th>
                             <th onclick="sortCoins('price_change_5m')">5m%</th>
                             <th onclick="sortCoins('price_change_24h')">24h%</th>
@@ -364,7 +392,7 @@ let allCoins = [];
 let allPosts = [];
 let coinFilter = 'all';
 let postFilter = 'all';
-let sortField = 'heat_score';
+let sortField = 'alert_score';
 let sortAsc = false;
 let autoRefresh = true;
 let refreshTimer = null;
@@ -429,7 +457,11 @@ function renderCoins() {
     }
     coins.sort((a, b) => {
         const va = a[sortField] || 0, vb = b[sortField] || 0;
-        return sortAsc ? va - vb : vb - va;
+        const cmp = sortAsc ? va - vb : vb - va;
+        if (cmp !== 0) return cmp;
+        // 次要排序: alert_score → heat_score
+        const sec = sortField === 'alert_score' ? 'heat_score' : 'alert_score';
+        return (b[sec] || 0) - (a[sec] || 0);
     });
 
     document.getElementById('pool-badge').textContent = coins.length;
@@ -475,13 +507,40 @@ function renderCoins() {
             return `<div class="dim-bar ${d.cls}" title="${d.label}: ${d.val.toFixed(0)}"><div class="dim-bar-fill" style="height:${h}%"></div></div>`;
         }).join('');
 
+        // Alert level
+        const alertLv = c.alert_level || 'NONE';
+        let alertHtml;
+        if (alertLv === 'NONE') {
+            alertHtml = '<span class="alert-NONE">-</span>';
+        } else {
+            const alertNames = { L1: '预警', L2: '起飞', L3: '确认' };
+            alertHtml = `<span class="alert-badge alert-${alertLv}">${alertLv} ${alertNames[alertLv] || ''}</span>`;
+            if (c.alert_score) alertHtml += `<div style="font-size:10px;color:var(--text-muted);margin-top:2px">${c.alert_score.toFixed(0)}分</div>`;
+        }
+
+        // Pump phase
+        const phase = c.pump_phase || 'normal';
+        const phaseNames = { normal: '-', accumulation: '吸筹', early_pump: '早拉', main_pump: '主升', distribution: '派发' };
+        const phaseHtml = phase === 'normal'
+            ? `<span class="pump-normal">-</span>`
+            : `<span class="tag pump-${phase}">${phaseNames[phase] || phase}</span>`;
+
+        // Signals + Filters
+        const sigs = (c.active_signals || '').split(',').filter(Boolean);
+        const filts = (c.active_filters || '').split(',').filter(Boolean);
+        const sigHtml = sigs.map(s => `<span class="sig-chip sig-S">${s}</span>`).join('')
+            + filts.map(f => `<span class="sig-chip sig-F">${f}</span>`).join('');
+
         return `<tr>
             <td style="color:var(--text-muted)">${i+1}</td>
             <td><strong>${c.symbol.replace('USDT','')}</strong><span style="color:var(--text-muted)">/U</span></td>
+            <td>${alertHtml}</td>
             <td>
                 <span style="margin-right:4px;font-weight:600">${c.heat_score.toFixed(0)}</span>
                 <span class="heat-bar"><span class="heat-bar-fill ${heatCls}" style="width:${Math.min(100,c.heat_score)}%"></span></span>
             </td>
+            <td>${phaseHtml}</td>
+            <td style="max-width:120px">${sigHtml || '<span style="color:var(--text-muted)">-</span>'}</td>
             <td><span class="tag ${srcCls}">${c.source || '-'}</span></td>
             <td class="${chg5cls}">${(chg5m*100).toFixed(2)}%</td>
             <td class="${chg24cls}">${(chg24h*100).toFixed(2)}%</td>

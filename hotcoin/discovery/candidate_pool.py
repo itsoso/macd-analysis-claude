@@ -59,6 +59,14 @@ class HotCoin:
     score_liquidity: float = 0.0
     score_risk_penalty: float = 0.0
 
+    # Pump + 信号 + 预警字段
+    pump_phase: str = "normal"
+    pump_score: float = 0.0
+    alert_level: str = "NONE"        # "NONE" | "L1" | "L2" | "L3"
+    alert_score: float = 0.0
+    active_signals: str = ""         # "S1@5m,S3@15m" (逗号分隔)
+    active_filters: str = ""         # "F2" (逗号分隔)
+
 
 class CandidatePool:
     """线程安全的候选币池, 带 SQLite 持久化。"""
@@ -293,6 +301,8 @@ class CandidatePool:
             "heat_score", "score_announcement", "score_social",
             "score_sentiment", "score_momentum", "score_liquidity",
             "score_risk_penalty", "last_score_update", "low_score_since",
+            "pump_phase", "pump_score", "alert_level", "alert_score",
+            "active_signals", "active_filters",
         )
         with self._lock:
             for coin in coins:
