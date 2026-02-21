@@ -1,32 +1,28 @@
 {
-  "version": "stacking_v2",
+  "version": "stacking_v5",
   "timeframe": "4h",
-  "trained_at": "2026-02-20T07:15:03.158709",
+  "trained_at": "2026-02-21T06:46:38.082074",
   "base_models": [
     "lgb",
-    "xgboost",
-    "lstm",
-    "tft",
-    "cross_asset_lgb"
+    "lstm"
   ],
   "extra_features": [
     "hvol_20"
   ],
-  "meta_input_dim": 6,
+  "meta_input_dim": 3,
   "meta_coefficients": {
-    "lgb": 0.22301113684173987,
-    "xgboost": 0.008785988648928196,
-    "lstm": 0.2958694032644137,
-    "tft": -0.2408334672796987,
-    "cross_asset_lgb": 0.6088313224150289,
-    "hvol_20": 0.2416454091745167
+    "lgb": 0.45214046042883027,
+    "lstm": -0.006478143730971996,
+    "hvol_20": 0.10684987854755633
   },
-  "meta_intercept": -0.6812349237054612,
-  "oof_meta_auc": 0.5518,
-  "val_auc": 0.5642,
-  "test_auc": 0.4874,
-  "n_oof_samples": 6112,
-  "n_folds": 5,
+  "meta_intercept": -0.4441824563632812,
+  "hvol_extra_mean": 0.0641767606139183,
+  "hvol_extra_std": 0.032997547404298784,
+  "oof_meta_auc": 0.5394,
+  "val_auc": 0.7255,
+  "test_auc": 0.4917,
+  "n_oof_samples": 6685,
+  "n_folds": 8,
   "feature_names_73": [
     "ret_1",
     "ret_2",
@@ -584,14 +580,18 @@
   ],
   "model_files": {
     "lgb": "stacking_lgb_4h.txt",
-    "xgboost": "stacking_xgb_4h.json",
     "lstm": "stacking_lstm_4h.pt",
-    "tft": "stacking_tft_4h.pt",
-    "cross_asset_lgb": "stacking_lgb_cross_4h.txt",
     "meta": "stacking_meta_4h.pkl"
   },
   "thresholds": {
     "long_threshold": 0.58,
     "short_threshold": 0.42
+  },
+  "platt_calibration": {
+    "A": 1.0194418706906325,
+    "B": 0.0041157813807595044,
+    "brier_before": 0.24545575958260893,
+    "brier_after": 0.24545540173682942,
+    "enabled": true
   }
 }

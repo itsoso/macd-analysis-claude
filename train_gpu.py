@@ -2646,10 +2646,10 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         log.info(f"特征: 73 维 (LGB/XGB/LSTM) + 94 维 (TFT)")
 
         # ---- B. 5-Fold OOF 预测 ----
-        N_FOLDS = 5
+        N_FOLDS = 8
         fold_size = train_end // N_FOLDS
 
-        oof_preds = np.full((train_end, 3), np.nan)  # (n_train, 3 models: LGB, LSTM, CrossAssetLGB)
+        oof_preds = np.full((train_end, 2), np.nan)  # (n_train, 2 models: LGB, LSTM)
         oof_valid = np.zeros(train_end, dtype=bool)
 
         log.info(f"\n生成 OOF 预测 ({N_FOLDS} folds, expanding window)...")
@@ -2713,24 +2713,6 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} LSTM 失败: {e}")
 
-            # --- 基模型 3: Cross-Asset LGB (94 dims) ---
-            try:
-                import lightgbm as lgb
-                lgb_cross_params = {
-                    'objective': 'binary', 'metric': 'auc',
-                    'boosting_type': 'gbdt', 'num_leaves': 34,
-                    'learning_rate': 0.0102, 'feature_fraction': 0.573,
-                    'bagging_fraction': 0.513, 'bagging_freq': 3,
-                    'min_child_samples': 56, 'lambda_l1': 0.0114,
-                    'lambda_l2': 0.2146, 'verbose': -1, 'n_jobs': -1, 'seed': 43,
-                }
-                dtrain_cross = lgb.Dataset(X_tr_94, label=y_tr)
-                lgb_cross_model = lgb.train(lgb_cross_params, dtrain_cross, num_boost_round=300)
-                lgb_cross_pred = lgb_cross_model.predict(X_fold_94)
-                oof_preds[fold_start:fold_end, 2][fold_valid] = lgb_cross_pred
-            except Exception as e:
-                log.warning(f"  Fold {fold_idx} Cross-Asset LGB 失败: {e}")
-
             oof_valid[fold_start:fold_end] |= fold_valid
 
         # OOF 汇总
@@ -2743,7 +2725,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         oof_X = oof_filled[has_oof]
         oof_y = y_all[:train_end][has_oof]
 
-        model_names = ['LGB', 'LSTM', 'CrossAssetLGB']
+        model_names = ['LGB', 'LSTM']
         log.info(f"\nOOF 汇总: {len(oof_X)} 有效样本")
         for i, name in enumerate(model_names):
             valid_mask = ~np.isnan(oof_preds[:train_end][has_oof, i])
@@ -2918,25 +2900,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         except Exception as e:
             log.warning(f"  LSTM 全量训练失败: {e}")
 
-        # 重训 Cross-Asset LGB
-        try:
-            import lightgbm as lgb
-            lgb_cross_params = {
-                'objective': 'binary', 'metric': 'auc',
-                'boosting_type': 'gbdt', 'num_leaves': 34,
-                'learning_rate': 0.0102, 'feature_fraction': 0.573,
-                'bagging_fraction': 0.513, 'bagging_freq': 3,
-                'min_child_samples': 56, 'lambda_l1': 0.0114,
-                'lambda_l2': 0.2146, 'verbose': -1, 'n_jobs': -1, 'seed': 43,
-            }
-            dtrain_cross = lgb.Dataset(X_full_94, label=y_full)
-            final_lgb_cross = lgb.train(lgb_cross_params, dtrain_cross, num_boost_round=400)
-            final_lgb_cross.save_model(os.path.join(MODEL_DIR, f'stacking_lgb_cross_{tf}.txt'))
-            log.info("  Cross-Asset LGB 保存完成")
-        except Exception as e:
-            log.warning(f"  Cross-Asset LGB 全量训练失败: {e}")
-
-        # ---- E. 用最终保存的 3 个基模型评估元学习器 ----
+        # ---- E. 用最终保存的基模型评估元学习器 ----
         val_auc = _stacking_evaluate_meta_with_saved_models(
             meta_model=meta_model,
             tf=tf,
@@ -2985,12 +2949,12 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         # 保存元数据 (含系数，便于 ONNX 导出和 debug)
         meta_coef = meta_model.coef_[0].tolist()
         meta_intercept = float(meta_model.intercept_[0])
-        base_model_names = ['lgb', 'lstm', 'cross_asset_lgb'] + extra_feat_names
+        base_model_names = ['lgb', 'lstm'] + extra_feat_names
         stacking_meta = {
-            'version': 'stacking_v4',
+            'version': 'stacking_v5',
             'timeframe': tf,
             'trained_at': datetime.now().isoformat(),
-            'base_models': ['lgb', 'lstm', 'cross_asset_lgb'],
+            'base_models': ['lgb', 'lstm'],
             'extra_features': extra_feat_names,
             'meta_input_dim': len(base_model_names),
             'meta_coefficients': dict(zip(base_model_names, meta_coef)),
@@ -3012,7 +2976,6 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             'model_files': {
                 'lgb': f'stacking_lgb_{tf}.txt',
                 'lstm': f'stacking_lstm_{tf}.pt',
-                'cross_asset_lgb': f'stacking_lgb_cross_{tf}.txt',
                 'meta': meta_file,
             },
             'thresholds': {
@@ -3432,18 +3395,7 @@ def _stacking_evaluate_meta_with_saved_models(
         seq_len=48,
     )
 
-    # 3) Cross-Asset LGB
-    lgb_cross_pred = np.full(len(X_73), 0.5, dtype=np.float32)
-    try:
-        import lightgbm as lgb
-        cross_path = os.path.join(MODEL_DIR, f'stacking_lgb_cross_{tf}.txt')
-        if os.path.exists(cross_path):
-            cross_model = lgb.Booster(model_file=cross_path)
-            lgb_cross_pred = cross_model.predict(X_94).astype(np.float32)
-    except Exception as e:
-        log.warning(f"  CrossAsset LGB 评估失败: {e}")
-
-    meta_X = np.column_stack([lgb_pred, lstm_pred, lgb_cross_pred])
+    meta_X = np.column_stack([lgb_pred, lstm_pred])
 
     # 附加特征 (hvol_20 需与训练时同步 z-score 标准化)
     if hvol_idx >= 0 and 'hvol_20' in extra_feat_names:
@@ -3728,8 +3680,8 @@ def main():
     parser.add_argument('--multi-horizon', type=int, default=1, choices=[0, 1],
                         help='LSTM 是否启用 Multi-Horizon (1=启用, 0=单头回退)')
     parser.add_argument('--min-stacking-samples', type=int,
-                        default=int(os.environ.get('ML_STACKING_MIN_OOF_SAMPLES', '20000')),
-                        help='Stacking 最小样本门槛 (默认 20000)')
+                        default=int(os.environ.get('ML_STACKING_MIN_OOF_SAMPLES', '8000')),
+                        help='Stacking 最小样本门槛 (默认 8000)')
     parser.add_argument('--min-tabnet-samples', type=int,
                         default=int(os.environ.get('ML_TABNET_MIN_SAMPLES', '10000')),
                         help='TabNet 最小样本门槛 (默认 10000)')
