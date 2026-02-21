@@ -121,6 +121,87 @@ def _read_runner_execution_metrics():
     return _normalize_execution_metrics(stats)
 
 
+def _read_runner_risk_summary():
+    if _runner is None:
+        return None
+    engine = getattr(_runner, "spot_engine", None)
+    risk = getattr(engine, "risk", None) if engine is not None else None
+    if risk is None or not hasattr(risk, "get_summary"):
+        return None
+    try:
+        out = risk.get_summary()
+    except Exception:
+        return None
+    return out if isinstance(out, dict) else {}
+
+
+def _read_runner_ws_connected():
+    if _runner is None:
+        return None
+    stream = getattr(_runner, "ticker_stream", None)
+    tickers = getattr(stream, "tickers", None) if stream is not None else None
+    if isinstance(tickers, dict):
+        return bool(tickers)
+    return None
+
+
+def _compute_health_status(payload: dict):
+    checks = {
+        "runner_attached": bool(payload.get("runner_attached")),
+        "status_snapshot_fresh": bool(payload.get("status_snapshot_fresh", False)),
+        "ws_connected": bool(payload.get("ws_connected", False)),
+        "risk_halted": bool(payload.get("risk_halted", False)),
+        "engine_state": str(payload.get("engine_state", "unknown")),
+        "latest_ticker_age_sec": payload.get("latest_ticker_age_sec"),
+        "order_errors_5m": int(payload.get("order_errors_5m", 0) or 0),
+    }
+    reasons = []
+    severity = 0  # 0=ok,1=degraded,2=blocked,3=stopped
+
+    if not checks["runner_attached"]:
+        return "stopped", ["runner_not_attached"], checks
+
+    if checks["risk_halted"]:
+        severity = max(severity, 2)
+        reasons.append("risk_halted")
+
+    state = checks["engine_state"]
+    if state == "blocked":
+        severity = max(severity, 2)
+        reasons.append("engine_state_blocked")
+    elif state in ("degraded", "unknown"):
+        severity = max(severity, 1)
+        reasons.append(f"engine_state_{state}")
+
+    age = checks["latest_ticker_age_sec"]
+    if isinstance(age, (int, float)):
+        if age >= 300:
+            severity = max(severity, 2)
+            reasons.append("ticker_stale>=300s")
+        elif age >= 90:
+            severity = max(severity, 1)
+            reasons.append("ticker_stale>=90s")
+    elif not checks["ws_connected"]:
+        severity = max(severity, 1)
+        reasons.append("ws_disconnected")
+
+    if checks["order_errors_5m"] >= 10:
+        severity = max(severity, 2)
+        reasons.append("order_errors_5m>=10")
+    elif checks["order_errors_5m"] >= 3:
+        severity = max(severity, 1)
+        reasons.append("order_errors_5m>=3")
+
+    if not checks["status_snapshot_fresh"]:
+        severity = max(severity, 1)
+        reasons.append("status_snapshot_stale")
+
+    status = "ok" if severity == 0 else ("degraded" if severity == 1 else "blocked")
+    if not reasons:
+        reasons.append("healthy")
+    return status, reasons, checks
+
+
 @hotcoin_bp.route("/")
 def dashboard():
     """热点币仪表盘页面。"""
@@ -295,6 +376,76 @@ def api_execution_metrics():
     return jsonify(out)
 
 
+@hotcoin_bp.route("/health")
+def health():
+    """热点币系统健康聚合接口。"""
+    now = time.time()
+    cached = _read_runtime_status_file()
+    metrics = _read_runner_execution_metrics() or _normalize_execution_metrics(
+        cached.get("execution_metrics") if isinstance(cached, dict) else None
+    )
+
+    runner_attached = _runner is not None
+    ts = float(cached.get("ts", 0) or 0) if isinstance(cached, dict) else 0.0
+    status_age_sec = (now - ts) if ts > 0 else None
+    status_snapshot_fresh = bool(ts > 0 and status_age_sec is not None and status_age_sec < 180)
+
+    ws_connected = _read_runner_ws_connected()
+    if ws_connected is None and isinstance(cached, dict):
+        ws_connected = bool(cached.get("ws_connected", False))
+    ws_connected = bool(ws_connected)
+
+    freshness = cached.get("freshness", {}) if isinstance(cached, dict) else {}
+    if not isinstance(freshness, dict):
+        freshness = {}
+    latest_ticker_age_sec = freshness.get("latest_ticker_age_sec")
+    try:
+        if latest_ticker_age_sec is not None:
+            latest_ticker_age_sec = float(latest_ticker_age_sec)
+    except Exception:
+        latest_ticker_age_sec = None
+
+    engine_state = str(cached.get("engine_state", "unknown")) if isinstance(cached, dict) else "unknown"
+    state_reasons = cached.get("engine_state_reasons", []) if isinstance(cached, dict) else []
+    if not isinstance(state_reasons, list):
+        state_reasons = []
+
+    risk_summary = _read_runner_risk_summary()
+    risk_halted = bool((risk_summary or {}).get("halted"))
+    if not risk_halted and isinstance(cached, dict):
+        risk_halted = bool(cached.get("risk_halted", False))
+
+    status, reasons, checks = _compute_health_status(
+        {
+            "runner_attached": runner_attached,
+            "status_snapshot_fresh": status_snapshot_fresh,
+            "ws_connected": ws_connected,
+            "risk_halted": risk_halted,
+            "engine_state": engine_state,
+            "latest_ticker_age_sec": latest_ticker_age_sec,
+            "order_errors_5m": metrics.get("order_errors_5m", 0),
+        }
+    )
+
+    out = {
+        "status": status,
+        "can_trade": status == "ok" and engine_state == "tradeable" and not risk_halted,
+        "ts": now,
+        "runner_attached": runner_attached,
+        "engine_state": engine_state,
+        "engine_state_reasons": state_reasons,
+        "status_snapshot_fresh": status_snapshot_fresh,
+        "status_snapshot_age_sec": round(status_age_sec, 2) if isinstance(status_age_sec, (int, float)) else None,
+        "ws_connected": ws_connected,
+        "latest_ticker_age_sec": latest_ticker_age_sec,
+        "risk_halted": risk_halted,
+        "execution_metrics": metrics,
+        "checks": checks,
+        "reasons": reasons,
+    }
+    return jsonify(out)
+
+
 @hotcoin_bp.route("/api/pool")
 def api_pool():
     """完整候选池数据。"""
@@ -317,3 +468,44 @@ def api_pool():
             for c in coins
         ]
     })
+
+
+@hotcoin_bp.route("/monitor")
+def monitor():
+    """热点币实盘监控页面。"""
+    return render_template("hotcoin_monitor.html")
+
+
+@hotcoin_bp.route("/api/hot_posts")
+def api_hot_posts():
+    """最近社交热帖 (币安广场 + Twitter)。"""
+    now = time.time()
+
+    # 优先从 runner 直接读取
+    if _runner is not None:
+        posts = []
+        sq = getattr(_runner, "square_monitor", None)
+        tw = getattr(_runner, "twitter_monitor", None)
+        if sq and hasattr(sq, "get_recent_posts"):
+            try:
+                posts.extend(sq.get_recent_posts(30))
+            except Exception:
+                pass
+        if tw and hasattr(tw, "get_recent_posts"):
+            try:
+                posts.extend(tw.get_recent_posts(30))
+            except Exception:
+                pass
+        posts.sort(key=lambda p: p.get("ts", 0), reverse=True)
+        return jsonify({"posts": posts[:50], "ts": now, "source": "runner"})
+
+    # Fallback: 从状态文件读取
+    cached = _read_runtime_status_file()
+    if isinstance(cached, dict) and "hot_posts" in cached:
+        return jsonify({
+            "posts": cached["hot_posts"],
+            "ts": float(cached.get("ts", 0) or 0),
+            "source": "status_file",
+        })
+
+    return jsonify({"posts": [], "ts": now, "source": "none"})

@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import time
+from collections import deque
 from typing import Dict, List, Set
 
 import requests
@@ -42,6 +43,7 @@ class BinanceSquareMonitor:
         self._seen_content_ids: Set[str] = set()
         self._mention_counts: Dict[str, List[float]] = {}
         self._sentiment_cache: Dict[str, float] = {}
+        self._recent_posts: deque = deque(maxlen=100)
 
         try:
             from hotcoin.discovery.sentiment_scorer import SentimentScorer
@@ -126,6 +128,17 @@ class BinanceSquareMonitor:
 
             sentiment = self._scorer.score(text) if self._scorer else 0.0
 
+            if tickers:
+                self._recent_posts.append({
+                    "id": content_id,
+                    "title": title[:120],
+                    "body": (body or "")[:200],
+                    "tickers": sorted(tickers),
+                    "sentiment": round(sentiment, 2),
+                    "source": "binance_square",
+                    "ts": now,
+                })
+
             for ticker in tickers:
                 symbol = f"{ticker}USDT"
                 mentions = self._mention_counts.setdefault(symbol, [])
@@ -158,6 +171,12 @@ class BinanceSquareMonitor:
         stale_s = [s for s in self._sentiment_cache if s not in self._mention_counts]
         for s in stale_s:
             del self._sentiment_cache[s]
+
+    def get_recent_posts(self, limit: int = 50) -> list:
+        """返回最近的帖子列表 (新→旧)。"""
+        posts = list(self._recent_posts)
+        posts.reverse()
+        return posts[:limit]
 
     def get_mention_velocity(self, symbol: str) -> float:
         mentions = self._mention_counts.get(symbol, [])

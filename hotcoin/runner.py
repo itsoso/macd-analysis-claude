@@ -8,9 +8,11 @@
 """
 
 import asyncio
+import gzip
 import json
 import logging
 import signal
+import shutil
 import sys
 import os
 import threading
@@ -33,6 +35,90 @@ from hotcoin.execution.spot_engine import HotCoinSpotEngine
 log = logging.getLogger("hotcoin")
 
 
+def _event_archive_base(events_file: str) -> tuple[str, str]:
+    directory = os.path.dirname(events_file) or "."
+    filename = os.path.basename(events_file)
+    if filename.endswith(".jsonl"):
+        stem = filename[:-6]
+    else:
+        stem = filename
+    return directory, stem
+
+
+def _list_event_archives(events_file: str) -> list[str]:
+    directory, stem = _event_archive_base(events_file)
+    out = []
+    try:
+        for name in os.listdir(directory):
+            if not name.startswith(stem + "."):
+                continue
+            if not (name.endswith(".jsonl") or name.endswith(".jsonl.gz")):
+                continue
+            full = os.path.join(directory, name)
+            if os.path.abspath(full) == os.path.abspath(events_file):
+                continue
+            out.append(full)
+    except Exception:
+        return []
+    def _mtime(path: str) -> float:
+        try:
+            return os.path.getmtime(path)
+        except Exception:
+            return 0.0
+
+    out.sort(key=_mtime, reverse=True)
+    return out
+
+
+def _prune_event_archives(events_file: str, keep: int):
+    keep = max(0, int(keep))
+    archives = _list_event_archives(events_file)
+    for p in archives[keep:]:
+        try:
+            os.remove(p)
+        except Exception:
+            log.warning("删除旧事件归档失败: %s", p, exc_info=True)
+
+
+def _rotate_event_log_file(
+    events_file: str,
+    max_bytes: int,
+    keep_archives: int,
+    compress_archive: bool = True,
+    now_ts: float | None = None,
+) -> str | None:
+    try:
+        if not os.path.exists(events_file):
+            return None
+        size = os.path.getsize(events_file)
+    except Exception:
+        return None
+
+    max_bytes = max(1, int(max_bytes))
+    if size < max_bytes:
+        return None
+
+    directory, stem = _event_archive_base(events_file)
+    ts = time.strftime("%Y%m%d_%H%M%S", time.localtime(now_ts or time.time()))
+    rotated = os.path.join(directory, f"{stem}.{ts}.jsonl")
+    idx = 1
+    while os.path.exists(rotated) or os.path.exists(rotated + ".gz"):
+        rotated = os.path.join(directory, f"{stem}.{ts}_{idx}.jsonl")
+        idx += 1
+
+    os.replace(events_file, rotated)
+    final_path = rotated
+    if compress_archive:
+        gz_path = rotated + ".gz"
+        with open(rotated, "rb") as src, gzip.open(gz_path, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        os.remove(rotated)
+        final_path = gz_path
+
+    _prune_event_archives(events_file, keep_archives)
+    return final_path
+
+
 class HotCoinRunner:
     """主调度器: 协调 Discovery → Trading → Execution。"""
 
@@ -40,6 +126,9 @@ class HotCoinRunner:
     TICKER_STALE_BLOCKED_SEC = 300
     ORDER_ERROR_DEGRADED_5M = 3
     ORDER_ERROR_BLOCKED_5M = 10
+    EVENT_LOG_ROTATE_MAX_BYTES = 20 * 1024 * 1024
+    EVENT_LOG_ARCHIVE_KEEP = 14
+    EVENT_LOG_COMPRESS_ARCHIVE = True
 
     def __init__(self, config: HotCoinConfig):
         self.config = config
@@ -53,15 +142,18 @@ class HotCoinRunner:
         self.pool = CandidatePool(config.db_path, config.discovery)
         self.coin_filter = CoinFilter(config.discovery)
         self.anomaly_detector = AnomalyDetector(config.discovery)
-        self.ranker = HotRanker(config.discovery)
+        # Trading 层 (先创建, 以便取 coin_age_fn)
+        self.dispatcher = SignalDispatcher(config.trading, config.discovery)
+        self.spot_engine = HotCoinSpotEngine(config, self.pool, event_sink=self._emit_event)
+
+        self.ranker = HotRanker(config.discovery,
+                                coin_age_fn=self.spot_engine.executor.get_coin_age_days)
         self.ticker_stream = TickerStream(config.discovery, self.anomaly_detector, self.pool)
         self.listing_monitor = ListingMonitor(config.discovery, self.pool)
         self.twitter_monitor = TwitterMonitor(self.pool)
         self.square_monitor = BinanceSquareMonitor(self.pool)
 
-        # Trading 层
-        self.dispatcher = SignalDispatcher(config.trading, config.discovery)
-        self.spot_engine = HotCoinSpotEngine(config, self.pool, event_sink=self._emit_event)
+        # (Trading 层 dispatcher + spot_engine 已在上方创建)
 
     def _emit_event(self, event_type: str, payload: dict):
         event = {
@@ -73,6 +165,14 @@ class HotCoinRunner:
             os.makedirs(os.path.dirname(self._events_file), exist_ok=True)
             line = json.dumps(event, ensure_ascii=False) + "\n"
             with self._event_lock:
+                rotated = _rotate_event_log_file(
+                    events_file=self._events_file,
+                    max_bytes=self.EVENT_LOG_ROTATE_MAX_BYTES,
+                    keep_archives=self.EVENT_LOG_ARCHIVE_KEEP,
+                    compress_archive=self.EVENT_LOG_COMPRESS_ARCHIVE,
+                )
+                if rotated:
+                    log.info("事件日志已轮转: %s", rotated)
                 with open(self._events_file, "a", encoding="utf-8") as f:
                     f.write(line)
         except Exception:
@@ -348,8 +448,23 @@ class HotCoinRunner:
                 for c in anomaly_coins[:20]
             ],
             "precheck_stats": precheck_stats,
+            "hot_posts": self._collect_hot_posts(),
         }
         self._write_json_atomic(payload)
+
+    def _collect_hot_posts(self) -> list:
+        """合并币安广场 + Twitter 最近帖子, 按时间倒序返回。"""
+        posts = []
+        try:
+            posts.extend(self.square_monitor.get_recent_posts(30))
+        except Exception:
+            pass
+        try:
+            posts.extend(self.twitter_monitor.get_recent_posts(30))
+        except Exception:
+            pass
+        posts.sort(key=lambda p: p.get("ts", 0), reverse=True)
+        return posts[:50]
 
     def _write_stopped_status(self):
         self._write_json_atomic({

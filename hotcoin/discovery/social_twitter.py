@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import time
+from collections import deque
 from typing import Dict, List, Optional, Set
 
 import requests
@@ -47,6 +48,7 @@ class TwitterMonitor:
         self._mention_counts: Dict[str, List[float]] = {}  # symbol → [timestamps]
         self._kol_set: Set[str] = set(DEFAULT_KOLS)
         self._sentiment_cache: Dict[str, float] = {}
+        self._recent_posts: deque = deque(maxlen=100)
 
         try:
             from hotcoin.discovery.sentiment_scorer import SentimentScorer
@@ -119,6 +121,18 @@ class TwitterMonitor:
         now = time.time()
         sentiment = self._scorer.score(text) if self._scorer else 0.0
 
+        if tickers:
+            self._recent_posts.append({
+                "id": tweet.get("id", ""),
+                "title": "",
+                "body": text[:200],
+                "tickers": sorted(tickers),
+                "sentiment": round(sentiment, 2),
+                "source": "twitter",
+                "author": author_id,
+                "ts": now,
+            })
+
         for ticker in tickers:
             symbol = f"{ticker}USDT"
             log.info("Twitter 提及: %s (author=%s, sentiment=%.2f)", symbol, author_id, sentiment)
@@ -167,6 +181,12 @@ class TwitterMonitor:
         stale_s = [s for s, _ in self._sentiment_cache.items() if s not in self._mention_counts]
         for s in stale_s:
             del self._sentiment_cache[s]
+
+    def get_recent_posts(self, limit: int = 50) -> list:
+        """返回最近的推文列表 (新→旧)。"""
+        posts = list(self._recent_posts)
+        posts.reverse()
+        return posts[:limit]
 
     def get_mention_velocity(self, symbol: str) -> float:
         """返回最近 1h 提及速率 (次/小时)。"""
