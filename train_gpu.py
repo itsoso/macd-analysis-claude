@@ -2757,9 +2757,11 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} LSTM 失败: {e}")
 
-            # --- 基模型 3: CatBoost (ordered boosting, 增加多样性) ---
+            # --- 基模型 3: CatBoost (94 维跨资产特征, 增加多样性) ---
             try:
                 from catboost import CatBoostClassifier
+                X_tr_94_cb = feat_94[:tr_end][tr_valid]
+                X_fold_94_cb = feat_94[fold_start:fold_end][fold_valid]
                 cb_model = CatBoostClassifier(
                     iterations=300, depth=6, learning_rate=0.03,
                     l2_leaf_reg=3.0, random_seed=42,
@@ -2767,8 +2769,8 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                     verbose=0, eval_metric='AUC',
                     bootstrap_type='Bernoulli', subsample=0.8,
                 )
-                cb_model.fit(X_tr_73, y_tr)
-                cb_pred = cb_model.predict_proba(X_fold_73)[:, 1]
+                cb_model.fit(X_tr_94_cb, y_tr)
+                cb_pred = cb_model.predict_proba(X_fold_94_cb)[:, 1]
                 oof_preds[fold_start:fold_end, 2][fold_valid] = cb_pred
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} CatBoost 失败: {e}")
@@ -3030,9 +3032,10 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         except Exception as e:
             log.warning(f"  LSTM 全量训练失败: {e}")
 
-        # 重训 CatBoost
+        # 重训 CatBoost (94 维跨资产特征)
         try:
             from catboost import CatBoostClassifier
+            X_full_94_cb = feat_94[:full_end][full_valid]
             cb_full = CatBoostClassifier(
                 iterations=400, depth=6, learning_rate=0.03,
                 l2_leaf_reg=3.0, random_seed=42,
@@ -3040,7 +3043,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 verbose=0, eval_metric='AUC',
                 bootstrap_type='Bernoulli', subsample=0.8,
             )
-            cb_full.fit(X_full_73, y_full)
+            cb_full.fit(X_full_94_cb, y_full)
             cb_full.save_model(os.path.join(MODEL_DIR, f'stacking_catboost_{tf}.cbm'))
             log.info("  CatBoost 保存完成")
         except Exception as e:
@@ -3569,7 +3572,7 @@ def _stacking_evaluate_meta_with_saved_models(
         )
         preds.append(lstm_pred)
 
-    # 3) CatBoost
+    # 3) CatBoost (94 维跨资产特征)
     if 'CatBoost' in active_models:
         cb_pred = np.full(len(X_73), 0.5, dtype=np.float32)
         try:
@@ -3578,7 +3581,7 @@ def _stacking_evaluate_meta_with_saved_models(
             if os.path.exists(cb_path):
                 cb_model = CatBoostClassifier()
                 cb_model.load_model(cb_path)
-                cb_pred = cb_model.predict_proba(X_73)[:, 1].astype(np.float32)
+                cb_pred = cb_model.predict_proba(X_94)[:, 1].astype(np.float32)
         except Exception as e:
             log.warning(f"  CatBoost 评估失败: {e}")
         preds.append(cb_pred)

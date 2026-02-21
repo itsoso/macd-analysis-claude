@@ -2,7 +2,7 @@
   "version": "stacking_v6",
   "timeframe": "1h",
   "meta_type": "lgb",
-  "trained_at": "2026-02-21T08:41:08.498381",
+  "trained_at": "2026-02-21T09:00:16.332268",
   "base_models": [
     "lgb",
     "lstm",
@@ -16,9 +16,9 @@
   "meta_intercept": 0.0,
   "hvol_extra_mean": 0.031221536919474602,
   "hvol_extra_std": 0.01891856709254742,
-  "oof_meta_auc": 0.5919,
-  "val_auc": 0.7584,
-  "test_auc": 0.5337,
+  "oof_meta_auc": 0.5908,
+  "val_auc": 0.7644,
+  "test_auc": 0.538,
   "n_oof_samples": 26789,
   "n_folds": 8,
   "feature_names_73": [
@@ -629,10 +629,10 @@
     "short_threshold": 0.42
   },
   "platt_calibration": {
-    "A": 1.2921373601068424,
-    "B": 0.13723227061424376,
-    "brier_before": 0.22718033958832903,
-    "brier_after": 0.22693131999730223,
+    "A": 1.292199640385266,
+    "B": 0.144292166758095,
+    "brier_before": 0.2272254970173605,
+    "brier_after": 0.226993929115967,
     "enabled": true
   }
 }
