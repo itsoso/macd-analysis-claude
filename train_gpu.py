@@ -2619,6 +2619,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         features_cross = _add_cross_asset_features(features.copy(), tf)
 
         label = labels_df['profitable_long_5']
+        label_12h = labels_df['profitable_long_12']  # CatBoost 用不同视野标签增加多样性
         n = len(features)
 
         # 样本门禁：小样本下 Stacking 容易过拟合，直接跳过避免浪费 H800 资源
@@ -2640,6 +2641,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         purge = 24
 
         y_all = label.values.astype(np.float32)
+        y_12h = label_12h.values.astype(np.float32)  # CatBoost 标签
 
         # 基模型用 73 维特征 (LGB/XGB/LSTM), TFT 用 94 维 (含跨资产)
         feat_73 = features.values.astype(np.float32)
@@ -2688,10 +2690,10 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
 
         # ---- B. 8-Fold Purged OOF 预测 ----
         N_FOLDS = 8
-        EMBARGO = 24  # 24 bar gap 防止时序泄漏
+        EMBARGO = 48  # 48 bar gap (2天@1h) 防止时序泄漏
         fold_size = train_end // N_FOLDS
 
-        oof_preds = np.full((train_end, 3), np.nan)  # (n_train, 3 models: LGB, LSTM, CatBoost)
+        oof_preds = np.full((train_end, 5), np.nan)  # LGB, LSTM, CatBoost, TabNet, StandaloneLGB
         oof_valid = np.zeros(train_end, dtype=bool)
 
         log.info(f"\n生成 OOF 预测 ({N_FOLDS} folds, expanding window, embargo={EMBARGO})...")
@@ -2757,11 +2759,13 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} LSTM 失败: {e}")
 
-            # --- 基模型 3: CatBoost (94 维跨资产特征, 增加多样性) ---
+            # --- 基模型 3: CatBoost (94 维跨资产, 12h 标签, 增加多样性) ---
             try:
                 from catboost import CatBoostClassifier
                 X_tr_94_cb = feat_94[:tr_end][tr_valid]
                 X_fold_94_cb = feat_94[fold_start:fold_end][fold_valid]
+                y_tr_12h = y_12h[:tr_end][tr_valid]
+                y_tr_12h_clean = np.nan_to_num(y_tr_12h, nan=0.5)
                 cb_model = CatBoostClassifier(
                     iterations=300, depth=6, learning_rate=0.03,
                     l2_leaf_reg=3.0, random_seed=42,
@@ -2769,11 +2773,53 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                     verbose=0, eval_metric='AUC',
                     bootstrap_type='Bernoulli', subsample=0.8,
                 )
-                cb_model.fit(X_tr_94_cb, y_tr)
+                cb_model.fit(X_tr_94_cb, y_tr_12h_clean)
                 cb_pred = cb_model.predict_proba(X_fold_94_cb)[:, 1]
                 oof_preds[fold_start:fold_end, 2][fold_valid] = cb_pred
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} CatBoost 失败: {e}")
+
+            # --- 基模型 4: TabNet (attention-based, 73 维) ---
+            try:
+                from pytorch_tabnet.tab_model import TabNetClassifier
+                tabnet_model = TabNetClassifier(
+                    n_d=16, n_a=16, n_steps=3, gamma=1.5,
+                    n_independent=1, n_shared=1,
+                    lambda_sparse=1e-3, momentum=0.3,
+                    seed=42, verbose=0,
+                    device_name='cuda' if gpu_info.get('lgb_gpu') else 'cpu',
+                    optimizer_params=dict(lr=0.02),
+                    scheduler_params=dict(step_size=10, gamma=0.9),
+                    scheduler_fn=__import__('torch').optim.lr_scheduler.StepLR,
+                )
+                tabnet_model.fit(
+                    X_tr_73.astype(np.float64), y_tr.astype(np.int64),
+                    max_epochs=50, patience=10, batch_size=1024,
+                )
+                tabnet_pred = tabnet_model.predict_proba(X_fold_73.astype(np.float64))[:, 1]
+                oof_preds[fold_start:fold_end, 3][fold_valid] = tabnet_pred
+            except Exception as e:
+                log.warning(f"  Fold {fold_idx} TabNet 失败: {e}")
+
+            # --- 基模型 5: Standalone LGB Direction (独立超参, 免费多样性) ---
+            try:
+                import lightgbm as lgb
+                standalone_params = {
+                    'objective': 'binary', 'metric': 'auc',
+                    'boosting_type': 'gbdt', 'num_leaves': 63,
+                    'learning_rate': 0.02, 'feature_fraction': 0.7,
+                    'bagging_fraction': 0.7, 'bagging_freq': 1,
+                    'min_child_samples': 30, 'lambda_l1': 0.1,
+                    'lambda_l2': 0.5, 'verbose': -1, 'n_jobs': -1, 'seed': 123,
+                }
+                if gpu_info.get('lgb_gpu'):
+                    standalone_params['device'] = 'cuda'
+                dtrain_sa = lgb.Dataset(X_tr_73, label=y_tr)
+                sa_model = lgb.train(standalone_params, dtrain_sa, num_boost_round=200)
+                sa_pred = sa_model.predict(X_fold_73)
+                oof_preds[fold_start:fold_end, 4][fold_valid] = sa_pred
+            except Exception as e:
+                log.warning(f"  Fold {fold_idx} StandaloneLGB 失败: {e}")
 
             oof_valid[fold_start:fold_end] |= fold_valid
 
@@ -2787,7 +2833,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         oof_X = oof_filled[has_oof]
         oof_y = y_all[:train_end][has_oof]
 
-        model_names = ['LGB', 'LSTM', 'CatBoost']
+        model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'StandaloneLGB']
         log.info(f"\nOOF 汇总: {len(oof_X)} 有效样本")
         for i, name in enumerate(model_names):
             valid_mask = ~np.isnan(oof_preds[:train_end][has_oof, i])
@@ -2831,6 +2877,15 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         if oof_extra:
             oof_X = np.hstack([oof_X] + oof_extra)
             log.info(f"  附加特征: {extra_feat_names} → 元学习器输入 {oof_X.shape[1]} 维")
+
+        # 交互特征: 模型间分歧度 + 最大最小差
+        n_base = len(model_names)
+        base_preds = oof_X[:, :n_base]
+        disagree = np.abs(base_preds[:, 0:1] - np.mean(base_preds[:, 1:], axis=1, keepdims=True))
+        pred_range = np.max(base_preds, axis=1, keepdims=True) - np.min(base_preds, axis=1, keepdims=True)
+        oof_X = np.hstack([oof_X, disagree, pred_range])
+        extra_feat_names.extend(['disagree', 'pred_range'])
+        log.info(f"  交互特征: disagree + pred_range → 元学习器输入 {oof_X.shape[1]} 维")
 
         # ---- C. 训练元学习器 (时间衰减加权 + LR vs LGB 双轨) ----
         # 时间衰减: 近期样本权重更高 (半衰期 = 样本量的 30%)
@@ -2913,7 +2968,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                     log.info(f"  ✅ 采用剔除后模型")
                 else:
                     log.info(f"  保留原始模型 (剔除后变差)")
-                    model_names = ['LGB', 'LSTM', 'CatBoost']  # 恢复
+                    model_names = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'StandaloneLGB']  # 恢复
 
         # OOF 性能 (已在上面计算)
         log.info(f"  Meta OOF AUC: {oof_meta_auc:.4f} (type={meta_type})")
@@ -3032,10 +3087,12 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         except Exception as e:
             log.warning(f"  LSTM 全量训练失败: {e}")
 
-        # 重训 CatBoost (94 维跨资产特征)
+        # 重训 CatBoost (94 维跨资产特征, 12h 标签)
         try:
             from catboost import CatBoostClassifier
             X_full_94_cb = feat_94[:full_end][full_valid]
+            y_full_12h = y_12h[:full_end][full_valid]
+            y_full_12h_clean = np.nan_to_num(y_full_12h, nan=0.5)
             cb_full = CatBoostClassifier(
                 iterations=400, depth=6, learning_rate=0.03,
                 l2_leaf_reg=3.0, random_seed=42,
@@ -3043,11 +3100,53 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 verbose=0, eval_metric='AUC',
                 bootstrap_type='Bernoulli', subsample=0.8,
             )
-            cb_full.fit(X_full_94_cb, y_full)
+            cb_full.fit(X_full_94_cb, y_full_12h_clean)
             cb_full.save_model(os.path.join(MODEL_DIR, f'stacking_catboost_{tf}.cbm'))
             log.info("  CatBoost 保存完成")
         except Exception as e:
             log.warning(f"  CatBoost 全量训练失败: {e}")
+
+        # 重训 TabNet
+        try:
+            from pytorch_tabnet.tab_model import TabNetClassifier
+            tabnet_full = TabNetClassifier(
+                n_d=16, n_a=16, n_steps=3, gamma=1.5,
+                n_independent=1, n_shared=1,
+                lambda_sparse=1e-3, momentum=0.3,
+                seed=42, verbose=0,
+                device_name='cuda' if gpu_info.get('lgb_gpu') else 'cpu',
+                optimizer_params=dict(lr=0.02),
+                scheduler_params=dict(step_size=10, gamma=0.9),
+                scheduler_fn=__import__('torch').optim.lr_scheduler.StepLR,
+            )
+            tabnet_full.fit(
+                X_full_73.astype(np.float64), y_full.astype(np.int64),
+                max_epochs=50, patience=10, batch_size=1024,
+            )
+            tabnet_full.save_model(os.path.join(MODEL_DIR, f'stacking_tabnet_{tf}'))
+            log.info("  TabNet 保存完成")
+        except Exception as e:
+            log.warning(f"  TabNet 全量训练失败: {e}")
+
+        # 重训 StandaloneLGB (不同超参)
+        try:
+            import lightgbm as lgb
+            sa_params = {
+                'objective': 'binary', 'metric': 'auc',
+                'boosting_type': 'gbdt', 'num_leaves': 63,
+                'learning_rate': 0.02, 'feature_fraction': 0.7,
+                'bagging_fraction': 0.7, 'bagging_freq': 1,
+                'min_child_samples': 30, 'lambda_l1': 0.1,
+                'lambda_l2': 0.5, 'verbose': -1, 'n_jobs': -1, 'seed': 123,
+            }
+            if gpu_info.get('lgb_gpu'):
+                sa_params['device'] = 'cuda'
+            dtrain_sa = lgb.Dataset(X_full_73, label=y_full)
+            final_sa = lgb.train(sa_params, dtrain_sa, num_boost_round=250)
+            final_sa.save_model(os.path.join(MODEL_DIR, f'stacking_standalone_lgb_{tf}.txt'))
+            log.info("  StandaloneLGB 保存完成")
+        except Exception as e:
+            log.warning(f"  StandaloneLGB 全量训练失败: {e}")
 
         # ---- E. 用最终保存的基模型评估元学习器 ----
         val_auc = _stacking_evaluate_meta_with_saved_models(
@@ -3113,7 +3212,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             meta_intercept = 0.0
             meta_coefficients = {}
         stacking_meta = {
-            'version': 'stacking_v6',
+            'version': 'stacking_v7',
             'timeframe': tf,
             'meta_type': meta_type,
             'trained_at': datetime.now().isoformat(),
@@ -3141,6 +3240,8 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 'lgb': f'stacking_lgb_{tf}.txt',
                 'lstm': f'stacking_lstm_{tf}.pt',
                 'catboost': f'stacking_catboost_{tf}.cbm',
+                'tabnet': f'stacking_tabnet_{tf}.zip',
+                'standalone_lgb': f'stacking_standalone_lgb_{tf}.txt',
                 'meta': meta_file,
             },
             'thresholds': {
@@ -3532,7 +3633,7 @@ def _stacking_evaluate_meta_with_saved_models(
     from sklearn.metrics import roc_auc_score
 
     if active_models is None:
-        active_models = ['LGB', 'LSTM', 'CatBoost']
+        active_models = ['LGB', 'LSTM', 'CatBoost', 'TabNet', 'StandaloneLGB']
 
     if valid_mask.sum() < 20:
         return 0.5
@@ -3586,6 +3687,33 @@ def _stacking_evaluate_meta_with_saved_models(
             log.warning(f"  CatBoost 评估失败: {e}")
         preds.append(cb_pred)
 
+    # 4) TabNet
+    if 'TabNet' in active_models:
+        tabnet_pred = np.full(len(X_73), 0.5, dtype=np.float32)
+        try:
+            from pytorch_tabnet.tab_model import TabNetClassifier
+            tabnet_path = os.path.join(MODEL_DIR, f'stacking_tabnet_{tf}.zip')
+            if os.path.exists(tabnet_path):
+                tabnet_model = TabNetClassifier()
+                tabnet_model.load_model(tabnet_path)
+                tabnet_pred = tabnet_model.predict_proba(X_73.astype(np.float64))[:, 1].astype(np.float32)
+        except Exception as e:
+            log.warning(f"  TabNet 评估失败: {e}")
+        preds.append(tabnet_pred)
+
+    # 5) StandaloneLGB
+    if 'StandaloneLGB' in active_models:
+        sa_pred = np.full(len(X_73), 0.5, dtype=np.float32)
+        try:
+            import lightgbm as lgb
+            sa_path = os.path.join(MODEL_DIR, f'stacking_standalone_lgb_{tf}.txt')
+            if os.path.exists(sa_path):
+                sa_model = lgb.Booster(model_file=sa_path)
+                sa_pred = sa_model.predict(X_73).astype(np.float32)
+        except Exception as e:
+            log.warning(f"  StandaloneLGB 评估失败: {e}")
+        preds.append(sa_pred)
+
     meta_X = np.column_stack(preds)
 
     # 附加特征 (hvol_20 需与训练时同步 z-score 标准化)
@@ -3594,6 +3722,14 @@ def _stacking_evaluate_meta_with_saved_models(
         hvol = np.nan_to_num(hvol, nan=0.0, posinf=0.0, neginf=0.0)
         hvol = (hvol - hvol_extra_mean) / max(hvol_extra_std, 1e-8)
         meta_X = np.hstack([meta_X, hvol])
+
+    # 交互特征 (与训练时同步)
+    if 'disagree' in extra_feat_names:
+        n_base = len(active_models)
+        base_preds_eval = meta_X[:, :n_base]
+        disagree = np.abs(base_preds_eval[:, 0:1] - np.mean(base_preds_eval[:, 1:], axis=1, keepdims=True))
+        pred_range = np.max(base_preds_eval, axis=1, keepdims=True) - np.min(base_preds_eval, axis=1, keepdims=True)
+        meta_X = np.hstack([meta_X, disagree, pred_range])
 
     # 根据 meta_type 选择预测方式
     if meta_type == 'lgb':

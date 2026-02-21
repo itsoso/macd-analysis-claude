@@ -1,24 +1,28 @@
 {
-  "version": "stacking_v6",
+  "version": "stacking_v7",
   "timeframe": "1h",
   "meta_type": "lgb",
-  "trained_at": "2026-02-21T09:00:16.332268",
+  "trained_at": "2026-02-21T09:46:25.041393",
   "base_models": [
     "lgb",
     "lstm",
-    "catboost"
+    "catboost",
+    "tabnet",
+    "standalonelgb"
   ],
   "extra_features": [
-    "hvol_20"
+    "hvol_20",
+    "disagree",
+    "pred_range"
   ],
-  "meta_input_dim": 4,
+  "meta_input_dim": 8,
   "meta_coefficients": {},
   "meta_intercept": 0.0,
   "hvol_extra_mean": 0.031221536919474602,
   "hvol_extra_std": 0.01891856709254742,
-  "oof_meta_auc": 0.5908,
-  "val_auc": 0.7644,
-  "test_auc": 0.538,
+  "oof_meta_auc": 0.5944,
+  "val_auc": 0.7456,
+  "test_auc": 0.5371,
   "n_oof_samples": 26789,
   "n_folds": 8,
   "feature_names_73": [
@@ -622,6 +626,8 @@
     "lgb": "stacking_lgb_1h.txt",
     "lstm": "stacking_lstm_1h.pt",
     "catboost": "stacking_catboost_1h.cbm",
+    "tabnet": "stacking_tabnet_1h.zip",
+    "standalone_lgb": "stacking_standalone_lgb_1h.txt",
     "meta": "stacking_meta_1h.pkl"
   },
   "thresholds": {
@@ -629,10 +635,10 @@
     "short_threshold": 0.42
   },
   "platt_calibration": {
-    "A": 1.292199640385266,
-    "B": 0.144292166758095,
-    "brier_before": 0.2272254970173605,
-    "brier_after": 0.226993929115967,
+    "A": 1.249534657966388,
+    "B": 0.11075145451639143,
+    "brier_before": 0.22689874187460105,
+    "brier_after": 0.22671745758162307,
     "enabled": true
   }
 }

@@ -1,24 +1,28 @@
 {
-  "version": "stacking_v6",
+  "version": "stacking_v7",
   "timeframe": "4h",
   "meta_type": "lgb",
-  "trained_at": "2026-02-21T09:01:32.210579",
+  "trained_at": "2026-02-21T09:48:26.260951",
   "base_models": [
     "lgb",
     "lstm",
-    "catboost"
+    "catboost",
+    "tabnet",
+    "standalonelgb"
   ],
   "extra_features": [
-    "hvol_20"
+    "hvol_20",
+    "disagree",
+    "pred_range"
   ],
-  "meta_input_dim": 4,
+  "meta_input_dim": 8,
   "meta_coefficients": {},
   "meta_intercept": 0.0,
   "hvol_extra_mean": 0.0641767606139183,
   "hvol_extra_std": 0.032997547404298784,
-  "oof_meta_auc": 0.5905,
-  "val_auc": 0.3997,
-  "test_auc": 0.5095,
+  "oof_meta_auc": 0.6088,
+  "val_auc": 0.5067,
+  "test_auc": 0.515,
   "n_oof_samples": 6685,
   "n_folds": 8,
   "feature_names_73": [
@@ -622,6 +626,8 @@
     "lgb": "stacking_lgb_4h.txt",
     "lstm": "stacking_lstm_4h.pt",
     "catboost": "stacking_catboost_4h.cbm",
+    "tabnet": "stacking_tabnet_4h.zip",
+    "standalone_lgb": "stacking_standalone_lgb_4h.txt",
     "meta": "stacking_meta_4h.pkl"
   },
   "thresholds": {
@@ -629,10 +635,10 @@
     "short_threshold": 0.42
   },
   "platt_calibration": {
-    "A": 1.9266870172585588,
-    "B": 0.22855759734832445,
-    "brier_before": 0.24116072873893535,
-    "brier_after": 0.23966093616994522,
+    "A": 2.214871476915955,
+    "B": 0.30443592603126235,
+    "brier_before": 0.2399920104459478,
+    "brier_after": 0.23730768005065148,
     "enabled": true
   }
 }
