@@ -230,6 +230,13 @@ def load_json(path):
 register_page_routes(app)
 register_result_api_routes(app, load_json=load_json, result_paths=RESULT_FILE_PATHS)
 
+# ── 热点币系统蓝图 ──
+try:
+    from hotcoin.web.routes import hotcoin_bp
+    app.register_blueprint(hotcoin_bp)
+except ImportError:
+    pass
+
 # ── 配置存储: 自动迁移旧 JSON 文件到 DB ──
 config_store.ensure_migrated()
 
@@ -249,6 +256,7 @@ def api_multi_tf_date_range_report():
 # ── 裸K线交易法 · 逐日盈亏 (从 DB 读取) ──
 NAKED_KLINE_DB_FILE = os.path.join(BASE_DIR, 'data', 'backtests', 'naked_kline_backtest.db')
 LIVE_MONITOR_RULES_FILE = os.path.join(BASE_DIR, 'data', 'live', 'monitor_rules.json')
+HOTCOIN_CONFIG_FILE = os.path.join(BASE_DIR, 'data', 'live', 'hotcoin_config.json')
 
 DEFAULT_LIVE_MONITOR_RULES = {
     "pf_alert_threshold": 1.00,              # 已实现PF低于该值触发预警
@@ -903,8 +911,8 @@ def page_strategy_tech_doc():
         'page_strategy_tech_doc.html',
         active_page='strategy-tech-doc',
         content=html_content,
-        version='10.2 + ML v3.2',
-        last_updated='2026-02-18',
+        version='10.2 + ML v3.3',
+        last_updated='2026-02-21',
         win_rate='64.9%',
         cpf='2.51',
     )
@@ -967,8 +975,88 @@ def page_live_control():
     return render_template('page_live_control.html', active_page='live-control')
 
 
+@app.route('/strategy/live-hotcoin-config')
+def page_live_hotcoin_config():
+    return render_template('page_live_hotcoin_config.html', active_page='live-hotcoin-config')
+
+
 # 存储后台引擎进程信息
 _engine_process = {"proc": None, "phase": None, "started_at": None}
+
+
+def _coerce_hotcoin_value(value, default):
+    if isinstance(default, bool):
+        if isinstance(value, str):
+            return value.strip().lower() in ('1', 'true', 'yes', 'on')
+        return bool(value)
+    if isinstance(default, int) and not isinstance(default, bool):
+        try:
+            return int(value)
+        except Exception:
+            return default
+    if isinstance(default, float):
+        try:
+            return float(value)
+        except Exception:
+            return default
+    if isinstance(default, list):
+        return value if isinstance(value, list) else default
+    if isinstance(default, str):
+        return str(value)
+    return value
+
+
+def _default_hotcoin_config():
+    from dataclasses import asdict
+    from hotcoin.config import HotCoinConfig
+    return asdict(HotCoinConfig())
+
+
+def _normalize_hotcoin_config(raw):
+    defaults = _default_hotcoin_config()
+    if not isinstance(raw, dict):
+        return defaults
+
+    # 深拷贝默认值
+    cfg = json.loads(json.dumps(defaults, ensure_ascii=False))
+
+    for section in ('discovery', 'trading', 'execution'):
+        section_raw = raw.get(section, {})
+        if not isinstance(section_raw, dict):
+            continue
+        for key, default_value in cfg[section].items():
+            if key in section_raw:
+                cfg[section][key] = _coerce_hotcoin_value(section_raw[key], default_value)
+
+    for top_key in ('db_path', 'log_level'):
+        if top_key in raw:
+            cfg[top_key] = _coerce_hotcoin_value(raw[top_key], cfg[top_key])
+
+    return cfg
+
+
+def _load_hotcoin_config():
+    db_cfg = config_store.get_hotcoin_config()
+    if isinstance(db_cfg, dict) and db_cfg:
+        return _normalize_hotcoin_config(db_cfg)
+
+    if os.path.exists(HOTCOIN_CONFIG_FILE):
+        with open(HOTCOIN_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            file_cfg = json.load(f)
+        normalized = _normalize_hotcoin_config(file_cfg)
+        config_store.set_hotcoin_config(normalized)
+        return normalized
+
+    return _default_hotcoin_config()
+
+
+def _save_hotcoin_config(raw_cfg):
+    normalized = _normalize_hotcoin_config(raw_cfg)
+    config_store.set_hotcoin_config(normalized)
+    os.makedirs(os.path.dirname(HOTCOIN_CONFIG_FILE), exist_ok=True)
+    with open(HOTCOIN_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(normalized, f, indent=2, ensure_ascii=False)
+    return normalized
 
 
 @app.route('/api/live/generate_config', methods=['POST'])
@@ -1029,6 +1117,32 @@ def api_live_load_config():
         config_store.set_live_trading_config(data)
         return jsonify({"success": True, "config": data})
     return jsonify({"success": False, "message": "配置不存在，请先生成"})
+
+
+@app.route('/api/live/hotcoin_config')
+def api_live_hotcoin_config_get():
+    """读取热点币配置。"""
+    try:
+        return jsonify({
+            "success": True,
+            "config": _load_hotcoin_config(),
+            "default_config": _default_hotcoin_config(),
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/live/hotcoin_config', methods=['POST'])
+def api_live_hotcoin_config_save():
+    """保存热点币配置。"""
+    try:
+        raw_cfg = request.get_json(silent=True)
+        if not isinstance(raw_cfg, dict):
+            return jsonify({"success": False, "message": "请求体必须为 JSON 对象"}), 400
+        saved = _save_hotcoin_config(raw_cfg)
+        return jsonify({"success": True, "message": "热点币配置已保存", "config": saved})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route('/api/ml/status')

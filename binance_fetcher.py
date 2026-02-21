@@ -923,3 +923,41 @@ if __name__ == '__main__':
                     print(f"  {col} 覆盖率: {coverage:.1f}%")
     else:
         print(f"用法: python3 binance_fetcher.py [kline|mark|funding|oi|all]")
+
+
+# ── 热点币系统用 API (hotcoin/) ──────────────────────────────────
+
+def fetch_all_tickers_24h() -> list:
+    """
+    获取全市场 24h 行情 (REST 方式, 用于初始化/补充 WebSocket 数据)。
+    GET /api/v3/ticker/24hr — 无需认证, weight=40。
+    返回: list of dict, 每个含 symbol, priceChangePercent, quoteVolume 等。
+    """
+    url = "https://api.binance.com/api/v3/ticker/24hr"
+    try:
+        resp = _api_get_json(url, timeout=15)
+        if isinstance(resp, list):
+            return [t for t in resp if t.get("symbol", "").endswith("USDT")]
+        return []
+    except Exception as e:
+        print(f"[binance_fetcher] fetch_all_tickers_24h 失败: {e}")
+        return []
+
+
+def fetch_exchange_info(quote_asset: str = "USDT") -> dict:
+    """
+    获取交易所信息 (交易对精度/过滤器)。
+    GET /api/v3/exchangeInfo — 无需认证。
+    返回: dict, key=symbol, value=symbol_info (含 filters)。
+    """
+    url = "https://api.binance.com/api/v3/exchangeInfo"
+    try:
+        resp = _api_get_json(url, timeout=15)
+        result = {}
+        for sym_info in resp.get("symbols", []):
+            if sym_info.get("quoteAsset") == quote_asset and sym_info.get("status") == "TRADING":
+                result[sym_info["symbol"]] = sym_info
+        return result
+    except Exception as e:
+        print(f"[binance_fetcher] fetch_exchange_info 失败: {e}")
+        return {}

@@ -413,10 +413,14 @@ class BinanceOrderManager:
     # ============================================================
     # 辅助方法
     # ============================================================
+    _SYMBOL_QTY_PRECISION = {
+        "ETHUSDT": 3,
+        "BTCUSDT": 5,
+    }
+
     def _format_quantity(self, symbol: str, quantity: float) -> str:
-        """格式化数量精度 (ETHUSDT 精度为 3)"""
-        # ETH 默认精度
-        precision = 3
+        """格式化数量精度 — 从缓存或 exchangeInfo 获取, 兜底 ETH 精度 3。"""
+        precision = self._SYMBOL_QTY_PRECISION.get(symbol, 3)
         return f"{quantity:.{precision}f}"
 
     def get_order_history(self) -> list:

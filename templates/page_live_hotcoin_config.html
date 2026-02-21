@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+{% block title %}热点币配置 - 技术分析平台{% endblock %}
+
+{% block content %}
+<style>
+    .page-header { margin-bottom: 20px; }
+    .page-header h1 { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
+    .page-header p { color: var(--text-secondary); font-size: 14px; }
+    .card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
+    }
+    .card h3 {
+        margin: 0 0 14px;
+        font-size: 16px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+    }
+    @media (max-width: 1100px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 12px; color: var(--text-secondary); }
+    .field input, .field select, .field textarea {
+        background: #0e1320;
+        border: 1px solid var(--border);
+        color: var(--text-primary);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 13px;
+        outline: none;
+    }
+    .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent-blue); }
+    .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--text-primary);
+        padding-top: 20px;
+    }
+    .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    .btn {
+        padding: 9px 14px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #101827;
+        color: var(--text-primary);
+        font-size: 13px;
+        cursor: pointer;
+    }
+    .btn:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
+    .btn.primary {
+        background: var(--accent-blue);
+        border-color: var(--accent-blue);
+        color: #fff;
+    }
+    .editor {
+        width: 100%;
+        min-height: 420px;
+        resize: vertical;
+        font-family: "JetBrains Mono", monospace;
+        line-height: 1.6;
+    }
+    .result {
+        font-size: 13px;
+        margin-top: 8px;
+        color: var(--text-secondary);
+    }
+    .result.ok { color: var(--accent-green); }
+    .result.err { color: var(--accent-red); }
+</style>
+
+<div class="page-header">
+    <h1>🔥 热点币配置</h1>
+    <p>独立于主策略配置，保存后用于 <code>hotcoin.runner</code> 读取（DB + JSON 双写）。</p>
+</div>
+
+<div class="card">
+    <h3>常用参数</h3>
+    <div class="grid">
+        <div class="field">
+            <label>日志级别</label>
+            <select id="logLevel">
+                <option value="DEBUG">DEBUG</option>
+                <option value="INFO">INFO</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+            </select>
+        </div>
+        <div class="field">
+            <label>数据库路径</label>
+            <input id="dbPath" type="text" />
+        </div>
+        <div class="field">
+            <label>初始资金 (USDT)</label>
+            <input id="initialCapital" type="number" step="10" />
+        </div>
+        <div class="field">
+            <label>最大并发仓位</label>
+            <input id="maxConcurrent" type="number" step="1" />
+        </div>
+        <div class="field">
+            <label>单币仓位上限</label>
+            <input id="maxSinglePct" type="number" step="0.01" />
+        </div>
+        <div class="field">
+            <label>总敞口上限</label>
+            <input id="maxExposurePct" type="number" step="0.01" />
+        </div>
+        <div class="field">
+            <label>量能突增倍数</label>
+            <input id="volSurgeRatio" type="number" step="0.1" />
+        </div>
+        <div class="field">
+            <label>5m 涨幅阈值</label>
+            <input id="priceSurge5m" type="number" step="0.001" />
+        </div>
+        <div class="field">
+            <label>最低 24h 成交额</label>
+            <input id="minQuoteVol24h" type="number" step="10000" />
+        </div>
+        <div class="field">
+            <label>交易周期 (逗号分隔)</label>
+            <input id="timeframes" type="text" placeholder="1m,5m,15m,1h" />
+        </div>
+        <div class="field">
+            <label>信号循环秒数</label>
+            <input id="signalLoopSec" type="number" step="1" />
+        </div>
+        <div class="field">
+            <label>最小共识强度</label>
+            <input id="minConsensus" type="number" step="1" />
+        </div>
+        <div class="field">
+            <label>默认止损比例</label>
+            <input id="defaultSlPct" type="number" step="0.001" />
+        </div>
+        <div class="field">
+            <label>追踪止损比例</label>
+            <input id="trailingStopPct" type="number" step="0.001" />
+        </div>
+        <div class="field">
+            <label>最大持仓分钟数</label>
+            <input id="maxHoldMinutes" type="number" step="1" />
+        </div>
+        <div class="checkbox-row">
+            <input id="enableExecution" type="checkbox" />
+            <label for="enableExecution">启用执行 (HOTCOIN_EXECUTE)</label>
+        </div>
+        <div class="checkbox-row">
+            <input id="usePaperTrading" type="checkbox" />
+            <label for="usePaperTrading">纸面交易 (HOTCOIN_PAPER)</label>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h3>完整 JSON 配置</h3>
+    <div class="btn-row">
+        <button class="btn" onclick="loadHotcoinConfig()">加载</button>
+        <button class="btn" onclick="syncFormToEditor()">同步常用参数到 JSON</button>
+        <button class="btn" onclick="resetHotcoinDefault()">恢复默认</button>
+        <button class="btn primary" onclick="saveHotcoinConfig()">保存</button>
+    </div>
+    <div class="field">
+        <textarea id="hotcoinConfigEditor" class="editor" spellcheck="false"></textarea>
+    </div>
+    <div id="resultBox" class="result"></div>
+</div>
+
+<script>
+let _loadedConfig = null;
+let _defaultConfig = null;
+
+function setResult(msg, ok = true) {
+    const box = document.getElementById('resultBox');
+    box.textContent = msg;
+    box.className = `result ${ok ? 'ok' : 'err'}`;
+}
+
+async function apiCall(url, options = {}) {
+    const resp = await fetch(url, {
+        headers: {'Content-Type': 'application/json'},
+        ...options
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.success === false) {
+        throw new Error(data.message || `HTTP ${resp.status}`);
+    }
+    return data;
+}
+
+function getByPath(obj, path, fallback = null) {
+    let cur = obj;
+    for (const key of path) {
+        if (!cur || typeof cur !== 'object' || !(key in cur)) return fallback;
+        cur = cur[key];
+    }
+    return cur;
+}
+
+function setByPath(obj, path, value) {
+    let cur = obj;
+    for (let i = 0; i < path.length - 1; i++) {
+        const key = path[i];
+        if (!cur[key] || typeof cur[key] !== 'object') cur[key] = {};
+        cur = cur[key];
+    }
+    cur[path[path.length - 1]] = value;
+}
+
+function parseNumber(v, fallback = 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function parseIntSafe(v, fallback = 0) {
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function fillCommonFields(cfg) {
+    document.getElementById('logLevel').value = getByPath(cfg, ['log_level'], 'INFO');
+    document.getElementById('dbPath').value = getByPath(cfg, ['db_path'], '');
+    document.getElementById('initialCapital').value = getByPath(cfg, ['execution', 'initial_capital'], 1000);
+    document.getElementById('maxConcurrent').value = getByPath(cfg, ['execution', 'max_concurrent_positions'], 5);
+    document.getElementById('maxSinglePct').value = getByPath(cfg, ['execution', 'max_single_position_pct'], 0.10);
+    document.getElementById('maxExposurePct').value = getByPath(cfg, ['execution', 'max_total_exposure_pct'], 0.40);
+    document.getElementById('volSurgeRatio').value = getByPath(cfg, ['discovery', 'volume_surge_ratio'], 5.0);
+    document.getElementById('priceSurge5m').value = getByPath(cfg, ['discovery', 'price_surge_5m_pct'], 0.03);
+    document.getElementById('minQuoteVol24h').value = getByPath(cfg, ['discovery', 'min_quote_volume_24h'], 500000);
+    document.getElementById('timeframes').value = (getByPath(cfg, ['trading', 'timeframes'], ['1m', '5m', '15m', '1h']) || []).join(',');
+    document.getElementById('signalLoopSec').value = getByPath(cfg, ['trading', 'signal_loop_sec'], 10);
+    document.getElementById('minConsensus').value = getByPath(cfg, ['trading', 'min_consensus_strength'], 20);
+    document.getElementById('defaultSlPct').value = getByPath(cfg, ['trading', 'default_sl_pct'], -0.05);
+    document.getElementById('trailingStopPct').value = getByPath(cfg, ['trading', 'trailing_stop_pct'], 0.03);
+    document.getElementById('maxHoldMinutes').value = getByPath(cfg, ['trading', 'max_hold_minutes'], 240);
+    document.getElementById('enableExecution').checked = !!getByPath(cfg, ['execution', 'enable_order_execution'], false);
+    document.getElementById('usePaperTrading').checked = !!getByPath(cfg, ['execution', 'use_paper_trading'], true);
+}
+
+function patchCommonFields(cfg) {
+    setByPath(cfg, ['log_level'], document.getElementById('logLevel').value.trim() || 'INFO');
+    setByPath(cfg, ['db_path'], document.getElementById('dbPath').value.trim());
+
+    setByPath(cfg, ['execution', 'initial_capital'], parseNumber(document.getElementById('initialCapital').value, 1000));
+    setByPath(cfg, ['execution', 'max_concurrent_positions'], parseIntSafe(document.getElementById('maxConcurrent').value, 5));
+    setByPath(cfg, ['execution', 'max_single_position_pct'], parseNumber(document.getElementById('maxSinglePct').value, 0.10));
+    setByPath(cfg, ['execution', 'max_total_exposure_pct'], parseNumber(document.getElementById('maxExposurePct').value, 0.40));
+    setByPath(cfg, ['execution', 'enable_order_execution'], document.getElementById('enableExecution').checked);
+    setByPath(cfg, ['execution', 'use_paper_trading'], document.getElementById('usePaperTrading').checked);
+
+    setByPath(cfg, ['discovery', 'volume_surge_ratio'], parseNumber(document.getElementById('volSurgeRatio').value, 5.0));
+    setByPath(cfg, ['discovery', 'price_surge_5m_pct'], parseNumber(document.getElementById('priceSurge5m').value, 0.03));
+    setByPath(cfg, ['discovery', 'min_quote_volume_24h'], parseNumber(document.getElementById('minQuoteVol24h').value, 500000));
+
+    const tfList = document.getElementById('timeframes').value
+        .split(',')
+        .map(v => v.trim())
+        .filter(Boolean);
+    setByPath(cfg, ['trading', 'timeframes'], tfList.length ? tfList : ['1m', '5m', '15m', '1h']);
+    setByPath(cfg, ['trading', 'signal_loop_sec'], parseNumber(document.getElementById('signalLoopSec').value, 10));
+    setByPath(cfg, ['trading', 'min_consensus_strength'], parseIntSafe(document.getElementById('minConsensus').value, 20));
+    setByPath(cfg, ['trading', 'default_sl_pct'], parseNumber(document.getElementById('defaultSlPct').value, -0.05));
+    setByPath(cfg, ['trading', 'trailing_stop_pct'], parseNumber(document.getElementById('trailingStopPct').value, 0.03));
+    setByPath(cfg, ['trading', 'max_hold_minutes'], parseIntSafe(document.getElementById('maxHoldMinutes').value, 240));
+}
+
+function getEditorConfig() {
+    const text = document.getElementById('hotcoinConfigEditor').value.trim();
+    if (!text) return {};
+    return JSON.parse(text);
+}
+
+function setEditorConfig(cfg) {
+    document.getElementById('hotcoinConfigEditor').value = JSON.stringify(cfg, null, 2);
+}
+
+function syncFormToEditor() {
+    try {
+        const cfg = getEditorConfig();
+        patchCommonFields(cfg);
+        setEditorConfig(cfg);
+        setResult('已同步常用参数到 JSON。');
+    } catch (e) {
+        setResult(`同步失败: ${e.message}`, false);
+    }
+}
+
+async function loadHotcoinConfig() {
+    try {
+        const data = await apiCall('/api/live/hotcoin_config');
+        _loadedConfig = data.config || {};
+        _defaultConfig = data.default_config || {};
+        fillCommonFields(_loadedConfig);
+        setEditorConfig(_loadedConfig);
+        setResult('热点币配置加载成功。');
+    } catch (e) {
+        setResult(`加载失败: ${e.message}`, false);
+    }
+}
+
+function resetHotcoinDefault() {
+    if (!_defaultConfig) {
+        setResult('默认配置尚未加载，请先点击“加载”。', false);
+        return;
+    }
+    fillCommonFields(_defaultConfig);
+    setEditorConfig(_defaultConfig);
+    setResult('已恢复默认配置。');
+}
+
+async function saveHotcoinConfig() {
+    try {
+        const cfg = getEditorConfig();
+        patchCommonFields(cfg);
+        const data = await apiCall('/api/live/hotcoin_config', {
+            method: 'POST',
+            body: JSON.stringify(cfg),
+        });
+        const saved = data.config || cfg;
+        _loadedConfig = saved;
+        fillCommonFields(saved);
+        setEditorConfig(saved);
+        setResult('热点币配置保存成功。');
+    } catch (e) {
+        setResult(`保存失败: ${e.message}`, false);
+    }
+}
+
+loadHotcoinConfig();
+</script>
+{% endblock %}
+

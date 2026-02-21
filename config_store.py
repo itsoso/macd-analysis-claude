@@ -227,6 +227,7 @@ def list_namespaces() -> list:
 
 NS_LIVE_TRADING = 'live_trading'
 NS_MONITOR_RULES = 'monitor_rules'
+NS_HOTCOIN = 'hotcoin'
 
 
 def get_live_trading_config() -> Dict[str, Any]:
@@ -323,6 +324,18 @@ def get_monitor_rules() -> Dict[str, Any]:
 def set_monitor_rules(rules: Dict[str, Any]):
     """保存监控规则。"""
     set_config(NS_MONITOR_RULES, rules)
+
+
+def get_hotcoin_config() -> Dict[str, Any]:
+    """读取热点币配置。"""
+    return get_config(NS_HOTCOIN)
+
+
+def set_hotcoin_config(config_dict: Dict[str, Any]):
+    """保存热点币配置。"""
+    if not isinstance(config_dict, dict):
+        raise ValueError("hotcoin config must be a dict")
+    set_config(NS_HOTCOIN, config_dict)
 
 
 # ── 迁移: 从旧 JSON 文件导入 ────────────────────────
