@@ -2575,13 +2575,15 @@ def train_mtf_fusion(decision_tfs=None):
 
 def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 20000):
     """
-    Stacking 集成: 4 个异构基模型的 OOF 预测 → LogisticRegression 元学习器。
+    Stacking 集成: 3 个异构基模型的 OOF 预测 → LogisticRegression 元学习器。
 
-    基模型:
+    基模型 (v4):
       1. LightGBM Direction (73 维, Optuna 参数)
-      2. XGBoost (73 维, 保守配置)
-      3. LSTM+Attention (73 维, 48-bar 序列)
-      4. TFT (94 维含跨资产, 96-bar 序列)
+      2. LSTM+Attention (73 维, 48-bar 序列)
+      3. 跨资产 LGB (94 维含跨资产 BTC/SOL/BNB)
+
+    v3→v4 变更: 移除 XGBoost (与 LGB 冗余, 系数-0.04) 和 TFT (负系数-0.10)
+    折内训练与全量重训统一 label_smooth=0.10，消除 OOF/推理概率分布不一致
 
     流程:
       A. 数据准备 + 时间分割
@@ -2647,7 +2649,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         N_FOLDS = 5
         fold_size = train_end // N_FOLDS
 
-        oof_preds = np.full((train_end, 5), np.nan)  # (n_train, 5 models)
+        oof_preds = np.full((train_end, 3), np.nan)  # (n_train, 3 models: LGB, LSTM, CrossAssetLGB)
         oof_valid = np.zeros(train_end, dtype=bool)
 
         log.info(f"\n生成 OOF 预测 ({N_FOLDS} folds, expanding window)...")
@@ -2701,48 +2703,17 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} LGB 失败: {e}")
 
-            # --- 基模型 2: XGBoost ---
-            try:
-                import xgboost as xgb
-                xgb_params = {
-                    'objective': 'binary:logistic', 'eval_metric': 'auc',
-                    'max_depth': 5, 'learning_rate': 0.01,
-                    'subsample': 0.7, 'colsample_bytree': 0.7,
-                    'min_child_weight': 10, 'reg_alpha': 0.01,
-                    'reg_lambda': 1.0, 'seed': 42, 'verbosity': 0,
-                }
-                if detect_gpu().get('torch_cuda'):
-                    xgb_params['tree_method'] = 'hist'
-                    xgb_params['device'] = 'cuda'
-                dmat_tr = xgb.DMatrix(X_tr_73, label=y_tr)
-                dmat_fold = xgb.DMatrix(X_fold_73)
-                xgb_model = xgb.train(xgb_params, dmat_tr, num_boost_round=300)
-                xgb_pred = xgb_model.predict(dmat_fold)
-                oof_preds[fold_start:fold_end, 1][fold_valid] = xgb_pred
-            except Exception as e:
-                log.warning(f"  Fold {fold_idx} XGBoost 失败: {e}")
-
-            # --- 基模型 3: LSTM+Attention ---
+            # --- 基模型 2: LSTM+Attention ---
             try:
                 lstm_pred = _stacking_train_lstm_fold(
                     feat_73, y_all, tr_end, fold_start, fold_end,
                     fold_valid, feat_73.shape[1], fold_mean_73, fold_std_73)
                 if lstm_pred is not None:
-                    oof_preds[fold_start:fold_end, 2][fold_valid] = lstm_pred
+                    oof_preds[fold_start:fold_end, 1][fold_valid] = lstm_pred
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} LSTM 失败: {e}")
 
-            # --- 基模型 4: TFT ---
-            try:
-                tft_pred = _stacking_train_tft_fold(
-                    feat_94, y_all, tr_end, fold_start, fold_end,
-                    fold_valid, feat_94.shape[1], fold_mean_94, fold_std_94)
-                if tft_pred is not None:
-                    oof_preds[fold_start:fold_end, 3][fold_valid] = tft_pred
-            except Exception as e:
-                log.warning(f"  Fold {fold_idx} TFT 失败: {e}")
-
-            # --- 基模型 5: Cross-Asset LGB (94 dims) ---
+            # --- 基模型 3: Cross-Asset LGB (94 dims) ---
             try:
                 import lightgbm as lgb
                 lgb_cross_params = {
@@ -2756,7 +2727,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
                 dtrain_cross = lgb.Dataset(X_tr_94, label=y_tr)
                 lgb_cross_model = lgb.train(lgb_cross_params, dtrain_cross, num_boost_round=300)
                 lgb_cross_pred = lgb_cross_model.predict(X_fold_94)
-                oof_preds[fold_start:fold_end, 4][fold_valid] = lgb_cross_pred
+                oof_preds[fold_start:fold_end, 2][fold_valid] = lgb_cross_pred
             except Exception as e:
                 log.warning(f"  Fold {fold_idx} Cross-Asset LGB 失败: {e}")
 
@@ -2772,7 +2743,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         oof_X = oof_filled[has_oof]
         oof_y = y_all[:train_end][has_oof]
 
-        model_names = ['LGB', 'XGBoost', 'LSTM', 'TFT', 'CrossAssetLGB']
+        model_names = ['LGB', 'LSTM', 'CrossAssetLGB']
         log.info(f"\nOOF 汇总: {len(oof_X)} 有效样本")
         for i, name in enumerate(model_names):
             valid_mask = ~np.isnan(oof_preds[:train_end][has_oof, i])
@@ -2937,23 +2908,6 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         except Exception as e:
             log.warning(f"  LGB 全量训练失败: {e}")
 
-        # 重训 XGBoost
-        try:
-            import xgboost as xgb
-            xgb_params = {
-                'objective': 'binary:logistic', 'eval_metric': 'auc',
-                'max_depth': 5, 'learning_rate': 0.01,
-                'subsample': 0.7, 'colsample_bytree': 0.7,
-                'min_child_weight': 10, 'reg_alpha': 0.01,
-                'reg_lambda': 1.0, 'seed': 42, 'verbosity': 0,
-            }
-            dmat = xgb.DMatrix(X_full_73, label=y_full)
-            final_xgb = xgb.train(xgb_params, dmat, num_boost_round=400)
-            final_xgb.save_model(os.path.join(MODEL_DIR, f'stacking_xgb_{tf}.json'))
-            log.info("  XGBoost 保存完成")
-        except Exception as e:
-            log.warning(f"  XGBoost 全量训练失败: {e}")
-
         # 重训 LSTM
         try:
             _stacking_retrain_lstm_full(
@@ -2963,16 +2917,6 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             log.info("  LSTM 保存完成")
         except Exception as e:
             log.warning(f"  LSTM 全量训练失败: {e}")
-
-        # 重训 TFT
-        try:
-            _stacking_retrain_tft_full(
-                feat_94, y_all, full_end, full_valid, feat_94.shape[1], tf,
-                feat_mean_94, feat_std_94
-            )
-            log.info("  TFT 保存完成")
-        except Exception as e:
-            log.warning(f"  TFT 全量训练失败: {e}")
 
         # 重训 Cross-Asset LGB
         try:
@@ -2992,7 +2936,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         except Exception as e:
             log.warning(f"  Cross-Asset LGB 全量训练失败: {e}")
 
-        # ---- E. 用最终保存的 5 个基模型评估元学习器 ----
+        # ---- E. 用最终保存的 3 个基模型评估元学习器 ----
         val_auc = _stacking_evaluate_meta_with_saved_models(
             meta_model=meta_model,
             tf=tf,
@@ -3041,12 +2985,12 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
         # 保存元数据 (含系数，便于 ONNX 导出和 debug)
         meta_coef = meta_model.coef_[0].tolist()
         meta_intercept = float(meta_model.intercept_[0])
-        base_model_names = ['lgb', 'xgboost', 'lstm', 'tft', 'cross_asset_lgb'] + extra_feat_names
+        base_model_names = ['lgb', 'lstm', 'cross_asset_lgb'] + extra_feat_names
         stacking_meta = {
-            'version': 'stacking_v3',
+            'version': 'stacking_v4',
             'timeframe': tf,
             'trained_at': datetime.now().isoformat(),
-            'base_models': ['lgb', 'xgboost', 'lstm', 'tft', 'cross_asset_lgb'],
+            'base_models': ['lgb', 'lstm', 'cross_asset_lgb'],
             'extra_features': extra_feat_names,
             'meta_input_dim': len(base_model_names),
             'meta_coefficients': dict(zip(base_model_names, meta_coef)),
@@ -3067,9 +3011,7 @@ def train_stacking_ensemble(timeframes: List[str] = None, min_samples: int = 200
             'feat_std_94': feat_std_94.tolist(),
             'model_files': {
                 'lgb': f'stacking_lgb_{tf}.txt',
-                'xgboost': f'stacking_xgb_{tf}.json',
                 'lstm': f'stacking_lstm_{tf}.pt',
-                'tft': f'stacking_tft_{tf}.pt',
                 'cross_asset_lgb': f'stacking_lgb_cross_{tf}.txt',
                 'meta': meta_file,
             },
@@ -3157,13 +3099,16 @@ def _stacking_train_lstm_fold(feat_raw, y_all, tr_end, fold_start, fold_end,
 
     model = LSTMAttention(input_dim).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    criterion = nn.BCEWithLogitsLoss()
+    # 折内训练也使用 label_smooth=0.10，与全量重训保持一致
+    # 消除 OOF/推理概率分布不一致 (v3 bug: 折内无平滑 → OOF 概率集中,  全量有平滑 → 推理概率分散)
+    label_smooth_eps = 0.10
 
     model.train()
     for ep in range(epochs):
         for xb, yb in train_loader:
             optimizer.zero_grad()
-            loss = criterion(model(xb), yb)
+            smooth_yb = yb * (1 - label_smooth_eps) + 0.5 * label_smooth_eps
+            loss = nn.functional.binary_cross_entropy_with_logits(model(xb), smooth_yb)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -3452,7 +3397,7 @@ def _stacking_evaluate_meta_with_saved_models(
     hvol_extra_mean: float = 0.0,
     hvol_extra_std: float = 1.0,
 ) -> float:
-    """使用最终保存的 5 个基模型评估 meta learner。"""
+    """使用最终保存的 3 个基模型评估 meta learner。"""
     from sklearn.metrics import roc_auc_score
 
     if valid_mask.sum() < 20:
@@ -3473,19 +3418,7 @@ def _stacking_evaluate_meta_with_saved_models(
     except Exception as e:
         log.warning(f"  LGB 评估失败: {e}")
 
-    # 2) XGBoost
-    xgb_pred = np.full(len(X_73), 0.5, dtype=np.float32)
-    try:
-        import xgboost as xgb
-        xgb_path = os.path.join(MODEL_DIR, f'stacking_xgb_{tf}.json')
-        if os.path.exists(xgb_path):
-            xgb_model = xgb.Booster()
-            xgb_model.load_model(xgb_path)
-            xgb_pred = xgb_model.predict(xgb.DMatrix(X_73)).astype(np.float32)
-    except Exception as e:
-        log.warning(f"  XGBoost 评估失败: {e}")
-
-    # 3) LSTM
+    # 2) LSTM
     lstm_path = os.path.join(MODEL_DIR, f'stacking_lstm_{tf}.pt')
     lstm_pred = _stacking_predict_lstm_saved(
         feat_raw=feat_73,
@@ -3499,21 +3432,7 @@ def _stacking_evaluate_meta_with_saved_models(
         seq_len=48,
     )
 
-    # 4) TFT
-    tft_path = os.path.join(MODEL_DIR, f'stacking_tft_{tf}.pt')
-    tft_pred = _stacking_predict_tft_saved(
-        feat_raw=feat_94,
-        start=start,
-        end=end,
-        valid_mask=valid_mask,
-        model_path=tft_path,
-        input_dim=feat_94.shape[1],
-        feat_mean=feat_mean_94,
-        feat_std=feat_std_94,
-        seq_len=96,
-    )
-
-    # 5) Cross-Asset LGB
+    # 3) Cross-Asset LGB
     lgb_cross_pred = np.full(len(X_73), 0.5, dtype=np.float32)
     try:
         import lightgbm as lgb
@@ -3524,7 +3443,7 @@ def _stacking_evaluate_meta_with_saved_models(
     except Exception as e:
         log.warning(f"  CrossAsset LGB 评估失败: {e}")
 
-    meta_X = np.column_stack([lgb_pred, xgb_pred, lstm_pred, tft_pred, lgb_cross_pred])
+    meta_X = np.column_stack([lgb_pred, lstm_pred, lgb_cross_pred])
 
     # 附加特征 (hvol_20 需与训练时同步 z-score 标准化)
     if hvol_idx >= 0 and 'hvol_20' in extra_feat_names:
@@ -3543,7 +3462,7 @@ def _stacking_evaluate_meta_with_saved_models(
 def _stacking_retrain_lstm_full(feat_raw, y_all, full_end, full_valid,
                                 input_dim, tf, feat_mean, feat_std,
                                 seq_len=48, epochs=22):
-    """全量重训 LSTM 用于 stacking 推理 (epochs=22 + label_smooth=0.05 防极端 logit)"""
+    """全量重训 LSTM 用于 stacking 推理 (epochs=22 + label_smooth=0.10 防极端 logit)"""
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
@@ -3585,9 +3504,8 @@ def _stacking_retrain_lstm_full(feat_raw, y_all, full_end, full_valid,
 
     model = LSTMAttention(input_dim).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    # 标签平滑 (0→0.05, 1→0.95): 防止全量重训后 logit 过于极端，导致生产推理出现极端概率
-    # OOF 训练时 (20 epochs) 不会过拟合，但全量重训 (30 epochs) 容易收敛到极端 logit
-    label_smooth_eps = 0.05
+    # 标签平滑 (0→0.10, 1→0.90): 与折内训练统一，防止推理出现极端概率
+    label_smooth_eps = 0.10
 
     model.train()
     for ep in range(epochs):

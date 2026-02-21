@@ -111,24 +111,28 @@ ml_live_integration.py → MLSignalEnhancer  (ML 增强，可选)
 - **向量化**: `compute_signals_six_fast()` → `signal_vectorized.py` — 回测用，10x 加速
 - **多进程**: `compute_signals_six_multiprocess()` — 大规模回测用，fork + COW
 
-### ML 预测子系统 (8 模型, H800 训练)
+### ML 预测子系统 (Stacking v3, H800 训练)
 
 ```
 ml_features.py (94 维特征: 73基础 + 21跨资产 BTC/SOL/BNB)
     ↓
-┌─ LGB 方向预测 (lgb_direction_model.txt, Optuna, AUC 0.55)
-├─ LSTM+Attention (lstm_1h.pt + ONNX, BF16, AUC 0.54)
-├─ 跨资产 LGB (lgb_cross_asset_1h.txt, 94维, AUC 0.55)
-├─ TFT (tft_1h.pt + ONNX, 148K参数)
-├─ MTF 融合 MLP (mtf_fusion_mlp.pt + ONNX, 多周期分数融合, AUC 0.56)
+┌─── Stacking Ensemble v4 (3 基模型 OOF + label_smooth 0.10) ──┐
+│  1. LGB Direction    (73维, Optuna)                           │
+│  2. LSTM+Attention   (73维, 48-bar序列, label_smooth=0.10)    │
+│  3. 跨资产 LGB       (94维 BTC/SOL/BNB)                      │
+│  + hvol_20 附加特征   (z-score 标准化)                        │
+│  元学习器: LogisticRegression(C=0.5, class_weight=None)       │
+│  v3基准: OOF AUC 0.5893 | Test AUC 0.5437 | 样本 24,492     │
+│  v4变更: 移除XGB/TFT(负系数) + 折内/全量label_smooth统一     │
+└───────────────────────────────────────────────────────────────┘
 ├─ Regime 分类 (vol_regime + trend, vol AUC 0.59)
 ├─ 分位数回归 (h5+h12, q05~q95, Kelly 仓位 + 动态止损)
-├─ PPO 仓位 (ppo_position_agent.zip, 实验性)
-└─ **Stacking Ensemble** (stacking_meta.pkl, 4基模型OOF → LogisticRegression 元学习器)
+├─ MTF 融合 MLP (mtf_fusion_mlp.pt + ONNX, 多周期分数融合)
+└─ PPO 仓位 (ppo_position_agent.zip, 实验性)
     ↓
 ml_live_integration.py → MLSignalEnhancer (五层: 方向→融合→Regime→分位数→执行)
-    方向预测优先级: Stacking(优先) → LGB+LSTM+TFT+跨资产LGB加权(fallback)
-    当前状态: **shadow 模式** (只记录不修改信号)
+    方向预测: Stacking v4(优先) → LGB+LSTM+跨资产LGB加权(fallback)
+    当前状态: **Stacking 已启用** (ML_ENABLE_STACKING=1, 非 shadow)
 ```
 
 ### 回测引擎
@@ -158,7 +162,7 @@ live_runner.py (CLI 入口) → live_signal_generator.py (信号生成)
 
 ```
 config.py (全局指标参数)
-  → live_config.py (实盘策略配置, StrategyConfig, 含版本管理 v1-v5)
+  → live_config.py (实盘策略配置, StrategyConfig, 含版本管理 v1-v6)
     → optimize_six_book_result.json (回测优化最佳参数)
       → 命令行覆盖 (--capital, --leverage 等)
 ```
@@ -167,25 +171,25 @@ config.py (全局指标参数)
 
 ## GPU 训练架构 (H800)
 
-H800 位于办公内网，需要跳板机访问，**无法直接连接 Binance API**。数据通过离线打包传输。
+H800 位于办公内网，需要跳板机访问，**无法直接连接 Binance API**。数据通过离线打包传输。H800 **可访问 GitHub**，代码和模型通过 git pull/push 同步。
 
 ### 数据流
 
 ```
-本机 (可访问 Binance)                          H800 GPU (内网)
-┌──────────────────────────┐                  ┌──────────────────────────┐
-│ fetch_5year_data.py       │                  │ verify_data.py            │
-│   → data/klines/         │   tar.gz + SCP    │   → 数据完整性检查        │
-│   → data/mark_klines/    │  ──────────────→  │                          │
-│   → data/funding_rates/  │   (~62MB)         │ train_gpu.py              │
-│   → data/open_interest/  │                   │   --mode lgb/lstm/optuna  │
-│                          │                   │   --mode tft/cross_asset  │
-│ pack_for_h800.sh         │                   │   --mode mtf_fusion/ppo   │
-│   → macd_train_data.tar.gz│                  │   --mode onnx/retrain     │
-│                          │   模型回传          │                          │
-│ data/ml_models/ ←        │  ←──────────────  │ data/ml_models/           │
-│                          │   (~几MB)          │ data/gpu_results/         │
-└──────────────────────────┘                  └──────────────────────────┘
+本机 (可访问 Binance)          GitHub              H800 GPU (内网)
+┌────────────────────┐    ┌──────────┐    ┌─────────────────────────┐
+│ fetch_5year_data.py │    │          │    │ verify_data.py          │
+│   → data/klines/   │    │  代码+   │    │   → 数据完整性检查      │
+│   → data/mark_*    │    │  模型    │    │                         │
+│   → data/funding_* │    │  双向    │    │ train_gpu.py            │
+│   → data/open_*    │    │  同步    │    │   --mode stacking       │
+│                    │    │          │    │   --mode lgb/lstm/tft   │
+│ pack_for_h800.sh   │    │          │    │   → data/ml_models/     │
+│ (数据打包 ~62MB)   │──→ │          │ ←──│   → data/gpu_results/   │
+│                    │    │          │    │                         │
+│ git pull (拉模型)  │ ←──│ main     │──→ │ git pull (拉代码)       │
+│ ./deploy.sh        │    │ branch   │ ←──│ git push (推模型)       │
+└────────────────────┘    └──────────┘    └─────────────────────────┘
 ```
 
 训练数据: K线 (OHLCV)、Mark Price、Funding Rate、Open Interest。交易对: ETHUSDT (主力), BTCUSDT, SOLUSDT, BNBUSDT。周期: 15m, 1h, 4h, 24h。
@@ -206,13 +210,30 @@ python3 train_gpu.py --mode tft --tf 1h           # TFT (Temporal Fusion Transfo
 python3 train_gpu.py --mode cross_asset --tf 1h   # 跨资产 LGB (BTC/SOL/BNB)
 python3 train_gpu.py --mode mtf_fusion            # 多周期融合 MLP
 python3 train_gpu.py --mode ppo                   # PPO 仓位优化 (强化学习)
-python3 train_gpu.py --mode stacking --tf 1h      # Stacking Ensemble (4基模型OOF → LogisticRegression)
+python3 train_gpu.py --mode stacking --tf 1h      # Stacking Ensemble (3基模型OOF → LogisticRegression)
 
 # 批量
 python3 train_gpu.py --mode all_v4   # 全量 (基础 + TFT + 跨资产 + MTF融合 + PPO + Stacking)
 ```
 
 ### H800 操作流程
+
+**方式 A: GitHub 同步（推荐）**
+
+```bash
+# H800 上:
+git pull origin main                           # 拉最新代码
+python3 train_gpu.py --mode stacking --tf 1h   # 训练
+git add data/ml_models/ data/gpu_results/
+git commit -m "feat: Stacking vX retrain"
+git push origin main
+
+# 本机:
+git pull origin main                           # 拉回新模型
+./deploy.sh                                    # 部署到生产
+```
+
+**方式 B: 数据打包传输（H800 无历史数据时）**
 
 ```bash
 # 1. 本机: 拉取数据 + 打包
@@ -236,6 +257,7 @@ scp -J jumphost macd_models.tar.gz user@dev:~/macd-analysis/
 ### 训练与推理衔接
 
 - **推理**: `ml_live_integration.py` 从 `data/ml_models/` 加载模型；更新该目录后需 **重启服务** 才能用上新模型。
+- **Stacking 环境变量**: `ML_ENABLE_STACKING=1` 通过 systemd override 注入，控制是否启用 Stacking 推理。相关门控参数: `ML_STACKING_MIN_OOF_AUC`, `ML_STACKING_MIN_TEST_AUC`, `ML_STACKING_MIN_OOF_SAMPLES` 等。
 - **服务器训练**: `train_gpu.py` 不依赖 Binance API，只读本地 Parquet。服务器有数据时可运行 `--mode lgb`（CPU 友好），产出直接写入 `data/ml_models/`。
 - 详细步骤见 `docs/server_ml_train_inference.md`，GPU 推理方案见 `docs/gpu_inference_options.md`。
 
@@ -257,8 +279,8 @@ SSH端口:     22222
 ### 部署命令
 
 ```bash
-# 推荐: 自动化部署 (拉取代码 → 重启 Web + 交易引擎)
-./deploy.sh           # 完整部署 (含 engine.pid 清理、双服务重启)
+# 推荐: 自动化部署 (8 步: 代码拉取→依赖→ML健康检查→回测同步→systemd覆盖→重启)
+./deploy.sh           # 完整部署 (含 ML 健康检查、systemd ML 环境变量覆盖)
 ./deploy.sh --force   # 服务器有未提交修改时强制覆盖部署
 
 # 手动一行部署 (Web 重启会通过 PartOf 自动重启交易引擎)
@@ -266,6 +288,8 @@ ssh -p 22222 root@47.237.191.17 "cd /opt/macd-analysis && git pull origin main &
 
 # VNC 备选 (SSH 不通时): 阿里云控制台 → ECS → 远程连接 → VNC
 ```
+
+deploy.sh 自动执行 ML 健康检查 (`check_ml_health.py`)，验证模型文件、Stacking 别名、特征管线、端到端推理。ML 环境变量通过 systemd override 注入（`/etc/systemd/system/macd-engine.service.d/20-ml-stacking.conf`）。
 
 ### 超时配置 (三层必须一致)
 
