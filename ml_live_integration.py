@@ -137,7 +137,8 @@ class MLSignalEnhancer:
         self.cross_asset_weight = 0.10    # v6: 跨资产权重
 
         # Stacking / 跨资产门控参数
-        self.stacking_enabled = _env_flag("ML_ENABLE_STACKING", True)
+        # 默认关闭 Stacking，避免小样本或别名漂移时误上线；达标后通过环境变量显式开启。
+        self.stacking_enabled = _env_flag("ML_ENABLE_STACKING", False)
         self.stacking_target_timeframe = (
             os.environ.get("ML_STACKING_TIMEFRAME")
             or os.environ.get("ML_TIMEFRAME")

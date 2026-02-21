@@ -9,6 +9,8 @@ import os
 import signal
 import sys
 import time
+import hashlib
+import subprocess
 import traceback
 from datetime import datetime, timedelta
 from typing import Optional, Dict
@@ -222,6 +224,7 @@ class LiveTradingEngine:
         _ml_shd = getattr(self.config.strategy, "ml_enhancement_shadow_mode", True)
         _ml_gpu = bool(getattr(self.config.strategy, "ml_gpu_inference_url", ""))
         self.logger.info(f"  ML增强: {_ml_on} (shadow={_ml_shd}, gpu_url={_ml_gpu})")
+        self._log_runtime_manifest()
         self.logger.info("=" * 60)
 
         # 通知启动
@@ -364,18 +367,7 @@ class LiveTradingEngine:
                 self._last_signal = sig
 
                 # 8. 记录信号日志
-                log_extra = {}
-                if self._last_consensus:
-                    cs = self._last_consensus.get("consensus", {})
-                    cd = cs.get("decision", {})
-                    log_extra = {
-                        "consensus_label": cd.get("label", ""),
-                        "consensus_strength": cd.get("strength", 0),
-                        "consensus_direction": cd.get("direction", ""),
-                        "fused_ss": round(cs.get("weighted_ss", 0), 1),
-                        "fused_bs": round(cs.get("weighted_bs", 0), 1),
-                        "coverage": cs.get("coverage", 0),
-                    }
+                log_extra = self._build_signal_log_extra()
                 self.logger.log_signal(
                     sell_score=sig.sell_score,
                     buy_score=sig.buy_score,
@@ -403,6 +395,7 @@ class LiveTradingEngine:
                     reverse_sig = self._try_reverse_open(sig, current_price)
                     if reverse_sig and reverse_sig.action != "HOLD":
                         self._execute_action(reverse_sig, current_price)
+                        reverse_log_extra = self._build_signal_log_extra()
                         self.logger.log_signal(
                             sell_score=reverse_sig.sell_score,
                             buy_score=reverse_sig.buy_score,
@@ -410,6 +403,7 @@ class LiveTradingEngine:
                             conflict=reverse_sig.conflict,
                             action_taken=reverse_sig.action,
                             timestamp=reverse_sig.timestamp,
+                            extra=reverse_log_extra if reverse_log_extra else None,
                         )
                         sig = reverse_sig
 
@@ -1091,6 +1085,98 @@ class LiveTradingEngine:
     # ============================================================
     # 辅助方法
     # ============================================================
+    def _sha256_file(self, path: str, max_bytes: int = 2 * 1024 * 1024) -> str:
+        """返回文件内容哈希前 12 位；只读取前 max_bytes 避免启动卡顿。"""
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                remain = max(0, int(max_bytes))
+                while remain > 0:
+                    chunk = f.read(min(1024 * 1024, remain))
+                    if not chunk:
+                        break
+                    h.update(chunk)
+                    remain -= len(chunk)
+            return h.hexdigest()[:12]
+        except Exception:
+            return ""
+
+    def _collect_runtime_manifest(self) -> dict:
+        """收集运行时清单，便于线上定位“代码/模型是否生效”。"""
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        manifest = {
+            "phase": self.phase.value,
+            "symbol": self.config.strategy.symbol,
+            "timeframe": self.config.strategy.timeframe,
+            "pid": os.getpid(),
+            "ml_enabled": bool(getattr(self.config.strategy, "use_ml_enhancement", False)),
+            "ml_shadow": bool(getattr(self.config.strategy, "ml_enhancement_shadow_mode", True)),
+            "ml_stacking_env": os.environ.get("ML_ENABLE_STACKING", ""),
+            "ml_stacking_tf_env": os.environ.get("ML_STACKING_TIMEFRAME", ""),
+        }
+
+        try:
+            commit = subprocess.check_output(
+                ["git", "-C", base_dir, "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+            manifest["git_commit"] = commit
+        except Exception:
+            manifest["git_commit"] = ""
+
+        try:
+            dirty = subprocess.check_output(
+                ["git", "-C", base_dir, "status", "--porcelain"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+            manifest["git_dirty"] = bool(dirty)
+        except Exception:
+            manifest["git_dirty"] = None
+
+        model_dir = os.path.join(base_dir, "data", "ml_models")
+        watched = [
+            "lgb_direction_model_1h.txt",
+            "lgb_direction_model.txt",
+            "lstm_1h_meta.json",
+            "tft_1h.meta.json",
+            "stacking_meta.json",
+            "ensemble_config.json",
+        ]
+        model_fingerprints = {}
+        for name in watched:
+            path = os.path.join(model_dir, name)
+            if os.path.exists(path):
+                model_fingerprints[name] = self._sha256_file(path)
+        manifest["model_fingerprints"] = model_fingerprints
+        return manifest
+
+    def _log_runtime_manifest(self):
+        """启动时记录运行时清单。"""
+        try:
+            manifest = self._collect_runtime_manifest()
+            self.logger.info(
+                f"[RUNTIME MANIFEST] {json.dumps(manifest, ensure_ascii=False, sort_keys=True)}"
+            )
+        except Exception as e:
+            self.logger.warning(f"[RUNTIME MANIFEST] 记录失败: {e}")
+
+    def _build_signal_log_extra(self) -> dict:
+        """提取最近一次多周期共识到 SIGNAL 结构化日志 extra。"""
+        if not self._last_consensus:
+            return {}
+        cs = self._last_consensus.get("consensus", {})
+        cd = cs.get("decision", {})
+        return {
+            "consensus_label": cd.get("label", ""),
+            "consensus_strength": cd.get("strength", 0),
+            "consensus_direction": cd.get("direction", ""),
+            "fused_ss": round(cs.get("weighted_ss", 0), 1),
+            "fused_bs": round(cs.get("weighted_bs", 0), 1),
+            "coverage": cs.get("coverage", 0),
+        }
+
     def _update_positions_pnl(self, price: float):
         """更新持仓最大盈亏比例"""
         for pos in self.positions.values():

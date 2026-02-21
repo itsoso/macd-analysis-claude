@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 语言要求
+
+**所有回复必须使用中文**，包括代码注释之外的所有解释、分析、建议和对话内容。
+
 ## 项目概述
 
 **MACD Analysis 六书融合策略平台** — 基于 ETH/USDT 的量化交易分析系统。

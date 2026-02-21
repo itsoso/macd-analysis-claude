@@ -588,10 +588,11 @@
     "lstm": "stacking_lstm_1h.pt",
     "tft": "stacking_tft_1h.pt",
     "cross_asset_lgb": "stacking_lgb_cross_1h.txt",
-    "meta": "stacking_meta_1h.pkl"
+    "meta": "stacking_meta.pkl"
   },
   "thresholds": {
     "long_threshold": 0.58,
     "short_threshold": 0.42
-  }
+  },
+  "alias_of": "stacking_meta_1h.json"
 }

@@ -9,8 +9,9 @@ import numpy as np
 import json
 import time
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 from urllib.request import urlopen, Request
-from urllib.error import URLError, HTTPError
+from urllib.error import HTTPError
 
 
 BINANCE_KLINE_URL = "https://api.binance.com/api/v3/klines"
@@ -99,7 +100,10 @@ def fetch_binance_klines(symbol: str = "ETHUSDT",
                          interval: str = "15m",
                          days: int = 30,
                          limit_per_request: int = 1000,
-                         force_api: bool = False) -> pd.DataFrame:
+                         force_api: bool = False,
+                         require_fresh: bool = False,
+                         max_lag_hours: float | None = None,
+                         allow_api_fallback: bool = True) -> pd.DataFrame:
     """
     获取K线数据: 优先本地 Parquet, 无则走API
 
@@ -109,6 +113,9 @@ def fetch_binance_klines(symbol: str = "ETHUSDT",
         days: 获取最近多少天的数据
         limit_per_request: 每次API请求最多返回条数
         force_api: 强制走API (跳过本地缓存)
+        require_fresh: True 时要求本地缓存满足新鲜度，否则尝试 API 回退
+        max_lag_hours: 本地缓存允许的最大滞后小时数 (None=自动 max(2*周期, 6h))
+        allow_api_fallback: 本地缓存不可用/过期时是否允许回退 API
 
     返回: DataFrame with open, high, low, close, volume, quote_volume
     """
@@ -116,7 +123,33 @@ def fetch_binance_klines(symbol: str = "ETHUSDT",
     if not force_api:
         local_df = _try_load_local(symbol, interval, days)
         if local_df is not None:
-            return local_df
+            if not require_fresh:
+                return local_df
+
+            interval_hours = INTERVAL_MAP_HOURS.get(interval, 1.0)
+            cfg_lag = 0.0
+            if max_lag_hours is not None:
+                try:
+                    cfg_lag = max(0.0, float(max_lag_hours))
+                except Exception:
+                    cfg_lag = 0.0
+            allowed_lag = max(cfg_lag, interval_hours * 2.0, 6.0)
+            cache_lag = (datetime.now() - pd.Timestamp(local_df.index[-1])).total_seconds() / 3600.0
+
+            if cache_lag <= allowed_lag:
+                return local_df
+
+            print(
+                f"  本地 K线缓存过期: {symbol} {interval} lag={cache_lag:.1f}h "
+                f"(max={allowed_lag:.1f}h)"
+            )
+            if not allow_api_fallback:
+                print("  已禁用 API 回退，继续使用本地过期缓存")
+                return local_df
+
+    if not allow_api_fallback and not force_api:
+        print(f"  [本地] {symbol} {interval} 缓存缺失/无效, 已禁用 API 回退")
+        return pd.DataFrame()
 
     # ── 本地无数据, 走API ──
     all_klines = []
@@ -152,20 +185,7 @@ def fetch_binance_klines(symbol: str = "ETHUSDT",
                f"&startTime={current_start}"
                f"&limit={limit_per_request}")
 
-        try:
-            req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urlopen(req, timeout=15) as response:
-                data = json.loads(response.read().decode())
-        except Exception as e:
-            print(f"  请求失败: {e}, 重试中...")
-            time.sleep(2)
-            try:
-                req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urlopen(req, timeout=15) as response:
-                    data = json.loads(response.read().decode())
-            except Exception as e2:
-                print(f"  重试仍失败: {e2}")
-                break
+        data = _api_get_json(url, max_retries=2)
 
         if not data:
             break
@@ -252,13 +272,64 @@ _MARK_DIR = os.path.join(_BASE_DIR, 'data', 'mark_klines')
 _FUNDING_DIR = os.path.join(_BASE_DIR, 'data', 'funding_rates')
 _OI_DIR = os.path.join(_BASE_DIR, 'data', 'open_interest')
 
+# API 断路器: endpoint 连续失败后进入冷却，避免每个 tick 都卡在重试
+_API_CIRCUIT_COOLDOWN_SEC = int(os.environ.get("BINANCE_API_CIRCUIT_COOLDOWN_SEC", "300"))
+_API_CIRCUIT_OPEN_UNTIL: dict[str, float] = {}
+_API_CIRCUIT_LAST_WARN_TS: dict[str, float] = {}
+
+
+def _api_endpoint_key(url: str) -> str:
+    """将 URL 归一化为 endpoint key (host + path)。"""
+    try:
+        parsed = urlparse(url)
+        return f"{parsed.netloc}{parsed.path}"
+    except Exception:
+        return url
+
+
+def _is_api_circuit_open(endpoint_key: str) -> bool:
+    """检查 endpoint 是否处于断路器冷却期。"""
+    until_ts = _API_CIRCUIT_OPEN_UNTIL.get(endpoint_key, 0.0)
+    now_ts = time.time()
+    if until_ts <= now_ts:
+        if endpoint_key in _API_CIRCUIT_OPEN_UNTIL:
+            _API_CIRCUIT_OPEN_UNTIL.pop(endpoint_key, None)
+            _API_CIRCUIT_LAST_WARN_TS.pop(endpoint_key, None)
+        return False
+
+    # 最多每 60s 提示一次，避免刷屏
+    last_warn = _API_CIRCUIT_LAST_WARN_TS.get(endpoint_key, 0.0)
+    if now_ts - last_warn >= 60:
+        remain = max(0.0, until_ts - now_ts)
+        print(f"  API 断路器生效: {endpoint_key} 暂停请求 {remain:.0f}s")
+        _API_CIRCUIT_LAST_WARN_TS[endpoint_key] = now_ts
+    return True
+
+
+def _open_api_circuit(endpoint_key: str, reason: str = "") -> None:
+    """打开 endpoint 断路器。"""
+    until_ts = time.time() + max(1, _API_CIRCUIT_COOLDOWN_SEC)
+    _API_CIRCUIT_OPEN_UNTIL[endpoint_key] = until_ts
+    _API_CIRCUIT_LAST_WARN_TS[endpoint_key] = time.time()
+    extra = f" ({reason})" if reason else ""
+    print(
+        f"  API 断路器开启: {endpoint_key}{extra}, "
+        f"cooldown={_API_CIRCUIT_COOLDOWN_SEC}s"
+    )
+
 
 def _api_get_json(url: str, max_retries: int = 3) -> list:
     """通用 API GET 请求, 带重试。HTTP 4xx 客户端错误不重试(永久失败)。"""
+    endpoint_key = _api_endpoint_key(url)
+    if _is_api_circuit_open(endpoint_key):
+        return []
+
     for attempt in range(max_retries):
         try:
             req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urlopen(req, timeout=20) as response:
+                _API_CIRCUIT_OPEN_UNTIL.pop(endpoint_key, None)
+                _API_CIRCUIT_LAST_WARN_TS.pop(endpoint_key, None)
                 return json.loads(response.read().decode())
         except HTTPError as e:
             # 4xx 客户端错误 (如 400 startTime 超出限制) 无需重试
@@ -271,6 +342,7 @@ def _api_get_json(url: str, max_retries: int = 3) -> list:
                 time.sleep(wait)
             else:
                 print(f"  请求最终失败: {e}")
+                _open_api_circuit(endpoint_key, reason=f"http_{e.code}")
                 return []
         except Exception as e:
             if attempt < max_retries - 1:
@@ -279,6 +351,7 @@ def _api_get_json(url: str, max_retries: int = 3) -> list:
                 time.sleep(wait)
             else:
                 print(f"  请求最终失败: {e}")
+                _open_api_circuit(endpoint_key, reason=type(e).__name__)
                 return []
 
 

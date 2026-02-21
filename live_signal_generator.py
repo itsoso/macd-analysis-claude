@@ -262,9 +262,13 @@ class LiveSignalGenerator:
                 self.logger.info(f"刷新 {self.symbol} {self.timeframe} 数据...")
 
             # 获取主周期数据
+            max_kline_lag_h = float(getattr(self.config, 'max_kline_lag_hours', 6.0) or 6.0)
             df = fetch_binance_klines(
                 self.symbol, interval=self.timeframe,
-                days=self.lookback_days
+                days=self.lookback_days,
+                require_fresh=True,
+                max_lag_hours=max_kline_lag_h,
+                allow_api_fallback=True,
             )
             if df is None or len(df) < 50:
                 if self.logger:

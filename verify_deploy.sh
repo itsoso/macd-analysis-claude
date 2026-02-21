@@ -94,6 +94,10 @@ grep -q "ML_STACKING_TIMEFRAME=1h" "$OVR_A" 2>/dev/null && RET=0 || RET=1
 check $RET "macd-analysis 固定 ML_STACKING_TIMEFRAME=1h"
 grep -q "ML_STACKING_TIMEFRAME=1h" "$OVR_E" 2>/dev/null && RET=0 || RET=1
 check $RET "macd-engine 固定 ML_STACKING_TIMEFRAME=1h"
+grep -q "ML_ENABLE_STACKING=0" "$OVR_A" 2>/dev/null && RET=0 || RET=1
+check $RET "macd-analysis 默认 ML_ENABLE_STACKING=0"
+grep -q "ML_ENABLE_STACKING=0" "$OVR_E" 2>/dev/null && RET=0 || RET=1
+check $RET "macd-engine 默认 ML_ENABLE_STACKING=0"
 
 # 6. Web 服务
 echo ""

@@ -64,6 +64,13 @@ WARN = '\033[93m!\033[0m'
 INFO = '\033[94m·\033[0m'
 
 
+def env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on', 'y')
+
+
 def check_files():
     """检查模型文件是否存在"""
     print("\n── 模型文件检查 ─────────────────────────────")
@@ -439,6 +446,7 @@ def print_summary(results):
     else:
         print(f"\n  {WARN} 存在问题，请根据上方输出排查")
     print()
+    return all_ok
 
 
 def main():
@@ -457,12 +465,24 @@ def main():
     results = {}
     cfg_ok, cfg_tf, cfg_ml, cfg_shadow = check_runtime_config()
     target_tf = (args.timeframe or cfg_tf or '1h').strip()
+    stacking_enabled = env_flag('ML_ENABLE_STACKING', default=False)
+    print(f"  {INFO} ML_ENABLE_STACKING={1 if stacking_enabled else 0}")
     results['运行配置'] = cfg_ok
-    results['Stacking别名'] = check_stacking_alias_consistency(
+
+    alias_ok = check_stacking_alias_consistency(
         target_tf, auto_fix=bool(args.fix_stacking_alias)
     )
+    artifacts_ok = check_stacking_artifacts(target_tf)
+    if stacking_enabled:
+        results['Stacking别名'] = alias_ok
+        results['Stacking工件'] = artifacts_ok
+    else:
+        if not alias_ok or not artifacts_ok:
+            print(f"\n  {WARN} ML_ENABLE_STACKING=0，Stacking 问题仅告警不阻断部署")
+        results['Stacking别名'] = True
+        results['Stacking工件'] = True
+
     results['文件完整性'] = check_files()
-    results['Stacking工件'] = check_stacking_artifacts(target_tf)
     enhancer, loaded = check_model_loading(target_tf, args.verbose)
     results['模型加载'] = loaded
     results['特征管线'] = check_feature_pipeline(args.verbose)
@@ -473,7 +493,8 @@ def main():
         results['Live日志ML字段'] = check_latest_live_signal()
     elif cfg_ml:
         print(f"\n  {INFO} 已跳过 live 日志检查 (--skip-live-check)")
-    print_summary(results)
+    all_ok = print_summary(results)
+    sys.exit(0 if all_ok else 1)
 
 
 if __name__ == '__main__':

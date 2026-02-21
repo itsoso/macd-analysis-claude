@@ -7,7 +7,7 @@
 cd /opt/macd-analysis
 
 ML_ENV_OVERRIDE_CONTENT='[Service]
-Environment=ML_ENABLE_STACKING=1
+Environment=ML_ENABLE_STACKING=0
 Environment=ML_STACKING_TIMEFRAME=1h
 Environment=ML_STACKING_MIN_OOF_SAMPLES=20000
 Environment=ML_STACKING_MIN_VAL_AUC=0.53
@@ -24,7 +24,7 @@ echo "=========================================="
 
 # 1. 拉取最新代码
 echo ""
-echo "[1/4] 拉取最新代码..."
+echo "[1/5] 拉取最新代码..."
 git fetch origin main
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
@@ -40,7 +40,7 @@ fi
 
 # 2. 安装依赖 (如有变化)
 echo ""
-echo "[2/4] 检查依赖..."
+echo "[2/5] 检查依赖..."
 if [ "$LOCAL" != "$REMOTE" ] && git diff $LOCAL..HEAD --name-only | grep -q "requirements"; then
     echo "  requirements 有变更，安装依赖..."
     /opt/macd-analysis/venv/bin/pip install -r requirements.txt -q
@@ -49,9 +49,14 @@ else
     echo "  依赖无变化，跳过"
 fi
 
-# 3. 更新 systemd ML 环境覆盖
+# 3. 部署前 ML 健康检查
 echo ""
-echo "[3/4] 更新 systemd ML 环境覆盖..."
+echo "[3/5] 部署前 ML 健康检查..."
+/opt/macd-analysis/venv/bin/python3 check_ml_health.py --skip-live-check --timeframe 1h --fix-stacking-alias
+
+# 4. 更新 systemd ML 环境覆盖
+echo ""
+echo "[4/5] 更新 systemd ML 环境覆盖..."
 mkdir -p /etc/systemd/system/macd-analysis.service.d /etc/systemd/system/macd-engine.service.d
 cat > /etc/systemd/system/macd-analysis.service.d/20-ml-stacking.conf <<EOF
 $ML_ENV_OVERRIDE_CONTENT
@@ -62,9 +67,9 @@ EOF
 systemctl daemon-reload
 echo "  已写入: /etc/systemd/system/*/20-ml-stacking.conf"
 
-# 4. 重启服务
+# 5. 重启服务
 echo ""
-echo "[4/4] 重启服务..."
+echo "[5/5] 重启服务..."
 systemctl restart macd-analysis
 sleep 2
 WEB=$(systemctl is-active macd-analysis)

@@ -33,7 +33,7 @@ Environment=ML_CROSS_ASSET_MIN_FEATURE_COVERAGE=0.80'
 
 # 1. 检查交易引擎状态 (通过 systemd)
 echo ""
-echo "[1/6] 检查服务状态..."
+echo "[1/8] 检查服务状态..."
 ENGINE_ACTIVE=$($SSH_CMD "systemctl is-active macd-engine 2>/dev/null || echo inactive")
 WEB_ACTIVE=$($SSH_CMD "systemctl is-active macd-analysis 2>/dev/null || echo inactive")
 echo "  Web 服务:    $WEB_ACTIVE"
@@ -44,7 +44,7 @@ fi
 
 # 2. 拉取最新代码
 echo ""
-echo "[2/6] 拉取最新代码..."
+echo "[2/8] 拉取最新代码..."
 DIRTY=$($SSH_CMD "cd $REMOTE_DIR && git status --porcelain" 2>/dev/null || true)
 if [ -n "$DIRTY" ] && [ "$1" != "--force" ]; then
     echo "  ⚠️  服务器存在未提交修改，直接 reset 将永久丢失："
@@ -56,12 +56,17 @@ $SSH_CMD "cd $REMOTE_DIR && git reset --hard HEAD && git pull origin main"
 
 # 3. 安装/更新 Python 依赖
 echo ""
-echo "[3/7] 安装 Python 依赖..."
+echo "[3/8] 安装 Python 依赖..."
 $SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && pip install --quiet 'onnxruntime>=1.16.0' 'scikit-learn==1.7.2' 2>&1 | tail -3 && echo '  ✅ 依赖已确认 (onnxruntime, scikit-learn==1.7.2)'"
 
-# 4. 同步回测数据
+# 4. 部署前 ML 健康检查
 echo ""
-echo "[4/7] 同步回测数据..."
+echo "[4/8] 部署前 ML 健康检查..."
+$SSH_CMD "cd $REMOTE_DIR && source venv/bin/activate && python3 check_ml_health.py --skip-live-check --timeframe 1h --fix-stacking-alias"
+
+# 5. 同步回测数据
+echo ""
+echo "[5/8] 同步回测数据..."
 $SSH_CMD "mkdir -p $REMOTE_DIR/data/backtests"
 SYNC_FILES=()
 [ -f data/backtests/multi_tf_daily_backtest.db ] && SYNC_FILES+=(data/backtests/multi_tf_daily_backtest.db)
@@ -74,9 +79,9 @@ else
   echo "  ⚠️  本地无 data/backtests/*.db，跳过"
 fi
 
-# 5. 应用 systemd ML 环境变量覆盖（固定 stacking 配置）
+# 6. 应用 systemd ML 环境变量覆盖（默认关闭 stacking，达标后再打开）
 echo ""
-echo "[5/7] 更新 systemd ML 环境覆盖..."
+echo "[6/8] 更新 systemd ML 环境覆盖..."
 $SSH_CMD "mkdir -p /etc/systemd/system/macd-analysis.service.d /etc/systemd/system/macd-engine.service.d"
 $SSH_CMD "cat > /etc/systemd/system/macd-analysis.service.d/20-ml-stacking.conf <<'EOF'
 $ML_ENV_OVERRIDE_CONTENT
@@ -86,14 +91,14 @@ $ML_ENV_OVERRIDE_CONTENT
 EOF"
 $SSH_CMD "systemctl daemon-reload && echo '  ✅ 已写入 systemd override (macd-analysis, macd-engine)'"
 
-# 6. 重启 Web 服务
+# 7. 重启 Web 服务
 echo ""
-echo "[6/7] 重启 Web 服务..."
+echo "[7/8] 重启 Web 服务..."
 $SSH_CMD "systemctl restart macd-analysis && sleep 2 && systemctl is-active macd-analysis >/dev/null && echo '  ✅ Web 服务已重启' || echo '  ❌ Web 服务重启失败!'"
 
-# 7. 重启交易引擎 (加载新代码)
+# 8. 重启交易引擎 (加载新代码)
 echo ""
-echo "[7/7] 重启交易引擎..."
+echo "[8/8] 重启交易引擎..."
 $SSH_CMD "rm -f $REMOTE_DIR/data/live/engine.pid; systemctl reset-failed macd-engine 2>/dev/null; systemctl restart macd-engine && sleep 5 && systemctl is-active macd-engine >/dev/null && echo '  ✅ 交易引擎已重启 (paper mode)' || echo '  ❌ 交易引擎重启失败!'"
 
 # 最终确认
