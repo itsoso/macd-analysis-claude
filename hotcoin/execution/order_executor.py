@@ -19,7 +19,7 @@ import time
 from collections import deque
 from decimal import Decimal, ROUND_DOWN
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
 import requests
@@ -180,9 +180,17 @@ class OrderExecutor:
     METRICS_WINDOW_SEC = 300
     METRICS_EVENT_LIMIT = 5000
 
-    def __init__(self, config: ExecutionConfig):
-        self.config = config
-        self.paper = config.use_paper_trading
+    def __init__(self, config: Any):
+        """
+        兼容构造:
+        - ExecutionConfig (推荐)
+        - HotCoinConfig (历史调用路径，会自动取 .execution)
+        """
+        exec_cfg = config.execution if hasattr(config, "execution") else config
+        if not isinstance(exec_cfg, ExecutionConfig):
+            raise TypeError(f"OrderExecutor expects ExecutionConfig/HotCoinConfig, got {type(config).__name__}")
+        self.config = exec_cfg
+        self.paper = exec_cfg.use_paper_trading
         self._exchange_info = ExchangeInfoCache()
         self._api_key = os.environ.get("BINANCE_API_KEY", "")
         self._api_secret = os.environ.get("BINANCE_SECRET_KEY", "")
@@ -193,6 +201,8 @@ class OrderExecutor:
         self._precheck_failures: Dict[str, int] = {}
         self._precheck_failures_by_symbol: Dict[str, Dict[str, int]] = {}
         self._precheck_symbol_last_seen: Dict[str, float] = {}
+        self._precheck_stats_reset_at: float = time.time()
+        self._PRECHECK_STATS_TTL = 3600  # 每小时重置统计
         self._metrics_lock = threading.Lock()
         self._runtime_events: Dict[str, deque] = {
             "order_attempt": deque(),
@@ -221,10 +231,16 @@ class OrderExecutor:
         return math.floor(value * factor) / factor
 
     def _record_precheck_failure(self, symbol: str, precheck_code: str):
+        now = time.time()
+        if now - self._precheck_stats_reset_at > self._PRECHECK_STATS_TTL:
+            self._precheck_failures.clear()
+            self._precheck_failures_by_symbol.clear()
+            self._precheck_symbol_last_seen.clear()
+            self._precheck_stats_reset_at = now
         self._precheck_failures[precheck_code] = self._precheck_failures.get(precheck_code, 0) + 1
         sym_stat = self._precheck_failures_by_symbol.setdefault(symbol, {})
         sym_stat[precheck_code] = sym_stat.get(precheck_code, 0) + 1
-        self._precheck_symbol_last_seen[symbol] = time.time()
+        self._precheck_symbol_last_seen[symbol] = now
         self._record_runtime_event("precheck_failed")
         self._prune_precheck_symbol_stats()
 

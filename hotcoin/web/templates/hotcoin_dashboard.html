@@ -265,6 +265,71 @@
         </div>
     </div>
 
+    <!-- 活跃持仓面板 -->
+    <div class="card full-width" style="margin-bottom:20px" id="positions-panel">
+        <h2>活跃持仓 <span class="badge" id="pos-badge">0</span>
+            <button class="mini-btn" onclick="loadPositions()">刷新</button>
+        </h2>
+        <div id="positions-content">
+            <div style="color:var(--text-muted);padding:10px 0">暂无持仓</div>
+        </div>
+    </div>
+
+    <!-- PnL 统计面板 -->
+    <div class="stat-row" id="pnl-stats-row" style="display:none">
+        <div class="stat-box"><div class="label">总交易</div><div class="value" id="pnl-total-trades">0</div></div>
+        <div class="stat-box"><div class="label">胜率</div><div class="value green" id="pnl-win-rate">0%</div></div>
+        <div class="stat-box"><div class="label">总盈亏</div><div class="value" id="pnl-total">$0</div></div>
+        <div class="stat-box"><div class="label">利润因子</div><div class="value" id="pnl-profit-factor">-</div></div>
+        <div class="stat-box"><div class="label">最大回撤</div><div class="value red" id="pnl-max-dd">$0</div></div>
+        <div class="stat-box"><div class="label">最佳</div><div class="value green" id="pnl-best">$0</div></div>
+        <div class="stat-box"><div class="label">最差</div><div class="value red" id="pnl-worst">$0</div></div>
+    </div>
+
+    <!-- 交易记录表 -->
+    <div class="card full-width" style="margin-bottom:20px" id="trades-panel">
+        <h2>交易记录 <span class="badge" id="trades-badge">0</span>
+            <button class="mini-btn" onclick="loadTrades()">刷新</button>
+        </h2>
+        <div style="max-height:320px;overflow-y:auto">
+            <table>
+                <thead>
+                    <tr>
+                        <th>交易对</th><th>方向</th><th>数量</th><th>入场价</th><th>出场价</th>
+                        <th>盈亏</th><th>盈亏%</th><th>持仓时间</th><th>原因</th><th>时间</th>
+                    </tr>
+                </thead>
+                <tbody id="trades-tbody">
+                    <tr><td colspan="10" style="color:var(--text-muted)">暂无交易</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 操作面板: 紧急平仓 + 资产余额 -->
+    <div class="grid" style="margin-bottom:20px">
+        <div class="card">
+            <h2>紧急操作</h2>
+            <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+                紧急全部市价平仓 (不可撤销)
+            </p>
+            <button class="refresh-btn" id="emergency-close-btn"
+                    style="background:var(--accent-red);padding:10px 24px;font-size:14px;font-weight:700"
+                    onclick="emergencyCloseAll()">
+                紧急平仓
+            </button>
+            <div id="emergency-result" style="margin-top:10px;font-size:13px;color:var(--text-secondary)"></div>
+        </div>
+        <div class="card">
+            <h2>账户余额
+                <button class="mini-btn" onclick="loadBalances()">刷新</button>
+            </h2>
+            <div id="balance-panel" style="font-size:13px;color:var(--text-secondary)">
+                点击刷新查看余额
+            </div>
+        </div>
+    </div>
+
     <div class="grid">
         <div class="card full-width">
             <h2>候选池 Top 20 <span class="badge" id="pool-badge">0</span></h2>
@@ -286,6 +351,17 @@
                 </thead>
                 <tbody id="pool-tbody"></tbody>
             </table>
+        </div>
+
+        <div class="card full-width" id="sentiment-panel">
+            <h2>市场情绪 <button class="mini-btn" onclick="loadSentiment()">刷新</button></h2>
+            <div style="display:flex;gap:20px;flex-wrap:wrap">
+                <div id="sentiment-stats" style="flex:1;min-width:200px">
+                    <div style="color:var(--text-muted);font-size:13px">点击刷新加载情绪数据</div>
+                </div>
+                <div id="sentiment-posts" style="flex:2;min-width:300px;max-height:200px;overflow-y:auto;font-size:12px;color:var(--text-secondary)">
+                </div>
+            </div>
         </div>
 
         <div class="card full-width">
@@ -311,6 +387,9 @@
                 </select>
                 <label>Trace</label>
                 <input id="chart-trace-id" type="text" placeholder="可选 trace_id 过滤" style="min-width:180px" />
+                <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer">
+                    <input type="checkbox" id="chart-scores-toggle"> 信号分数
+                </label>
                 <button class="refresh-btn" id="chart-refresh-btn">刷新图表</button>
                 <button class="mini-btn" id="chart-trace-clear-btn">清空Trace</button>
                 <button class="mini-btn" id="chart-import-snapshot-btn">导入快照</button>
@@ -789,11 +868,34 @@
         ).trim();
         return {
             meta: meta,
+            snapshot: snap,
             payload: payload,
             selected_point: snap.selected_point || null,
             selected_event: snap.selected_event || null,
             trace_id_filter: traceFilter,
         };
+    }
+
+    async function verifySnapshotIntegrity(normalized) {
+        const out = {
+            has_checksum: false,
+            expected_sha256: '',
+            actual_sha256: '',
+            checksum_ok: true,
+        };
+        if (!normalized || !normalized.meta || !normalized.snapshot) return out;
+        const expected = String(normalized.meta.content_sha256 || '').trim().toLowerCase();
+        if (!expected) return out;
+        out.has_checksum = true;
+        out.expected_sha256 = expected;
+        try {
+            const actual = await sha256Hex(JSON.stringify(normalized.snapshot));
+            out.actual_sha256 = String(actual || '').toLowerCase();
+            out.checksum_ok = Boolean(out.actual_sha256) && out.actual_sha256 === expected;
+        } catch (_e) {
+            out.checksum_ok = false;
+        }
+        return out;
     }
 
     function applySnapshotReplay(normalized) {
@@ -842,12 +944,18 @@
             schema_version: normalized.meta.schema_version || '',
             exported_at: normalized.meta.exported_at || '',
             content_sha256: normalized.meta.content_sha256 || '',
+            checksum_ok: normalized.integrity ? normalized.integrity.checksum_ok : true,
+            checksum_expected: normalized.integrity ? normalized.integrity.expected_sha256 : '',
+            checksum_actual: normalized.integrity ? normalized.integrity.actual_sha256 : '',
         };
         setReplayMode(true, replayMeta);
         const tag = replayMeta.exported_at ? ` @${replayMeta.exported_at}` : '';
         const digest = replayMeta.content_sha256 ? ` sha256=${String(replayMeta.content_sha256).slice(0, 12)}...` : '';
+        const checksumTag = replayMeta.content_sha256
+            ? (replayMeta.checksum_ok ? ' checksum=OK' : ' checksum=FAILED')
+            : '';
         document.getElementById('chart-badge').textContent = `${symbol || '-'} ${interval || '-'} [REPLAY]`;
-        document.getElementById('chart-meta').textContent = `回放 K线 ${klines.length} 根 | 买卖点 ${points.length} 个${tag}${digest}`;
+        document.getElementById('chart-meta').textContent = `回放 K线 ${klines.length} 根 | 买卖点 ${points.length} 个${tag}${digest}${checksumTag}`;
 
         if (normalized.selected_point && typeof normalized.selected_point === 'object') {
             const tgtTs = Number(normalized.selected_point.time || 0);
@@ -873,9 +981,21 @@
                 setEventActionStatus('快照格式无效：缺少 chart_payload/klines', true);
                 return;
             }
+            normalized.integrity = await verifySnapshotIntegrity(normalized);
             const ok = applySnapshotReplay(normalized);
             if (!ok) {
                 setEventActionStatus('快照回放失败', true);
+                return;
+            }
+            if (normalized.integrity.has_checksum && !normalized.integrity.checksum_ok) {
+                setEventActionStatus(
+                    `快照校验失败：expected=${normalized.integrity.expected_sha256.slice(0, 12)}... actual=${normalized.integrity.actual_sha256.slice(0, 12)}...（已只读回放）`,
+                    true
+                );
+                return;
+            }
+            if (normalized.integrity.has_checksum && normalized.integrity.checksum_ok) {
+                setEventActionStatus(`快照校验通过 (sha256:${normalized.integrity.expected_sha256.slice(0, 12)}...)`);
             }
         } catch (e) {
             setEventActionStatus(`导入快照失败: ${e.message || e}`, true);
@@ -1090,7 +1210,302 @@
         autoRefreshTimer = setInterval(refreshData, 10000);
     }
 
+    async function emergencyCloseAll() {
+        const btn = document.getElementById('emergency-close-btn');
+        const result = document.getElementById('emergency-result');
+        if (!confirm('确认执行紧急全部平仓？此操作不可撤销！')) return;
+        if (!confirm('再次确认：将以市价卖出所有持仓！')) return;
+        btn.disabled = true;
+        btn.textContent = '执行中...';
+        result.textContent = '';
+        try {
+            const resp = await fetch('/hotcoin/api/emergency_close', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ confirm: 'yes', reason: 'dashboard_emergency' }),
+            });
+            const data = await resp.json();
+            if (data.ok) {
+                result.innerHTML = `<span style="color:var(--accent-green)">完成: 已平 ${data.closed} 个, 失败 ${data.failed} 个</span>`;
+                refreshData();
+            } else {
+                result.innerHTML = `<span style="color:var(--accent-red)">失败: ${data.error || '未知错误'}</span>`;
+            }
+        } catch (e) {
+            result.innerHTML = `<span style="color:var(--accent-red)">请求失败: ${e.message}</span>`;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '紧急平仓';
+        }
+    }
+
+    async function loadBalances() {
+        const panel = document.getElementById('balance-panel');
+        panel.textContent = '加载中...';
+        try {
+            const resp = await fetch('/hotcoin/api/balances');
+            const data = await resp.json();
+            if (!data.ok) {
+                panel.innerHTML = `<span style="color:var(--accent-red)">${data.error || '查询失败'}</span>`;
+                return;
+            }
+            const balances = data.balances || [];
+            if (!balances.length) {
+                panel.textContent = 'Paper 模式或无余额';
+                return;
+            }
+            const rows = balances
+                .sort((a, b) => b.total - a.total)
+                .slice(0, 15)
+                .map(b => `<tr><td><strong>${b.asset}</strong></td><td>${b.free}</td><td>${b.locked}</td><td>${b.total}</td></tr>`)
+                .join('');
+            panel.innerHTML = `<table style="width:100%">
+                <thead><tr><th>资产</th><th>可用</th><th>冻结</th><th>总计</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        } catch (e) {
+            panel.innerHTML = `<span style="color:var(--accent-red)">请求失败: ${e.message}</span>`;
+        }
+    }
+
+    // ===== 持仓面板 =====
+    async function loadPositions() {
+        try {
+            const resp = await fetch('/hotcoin/api/positions');
+            const data = await resp.json();
+            if (!data.ok) return;
+            renderPositions(data.positions || [], data.pnl_summary || {}, data.risk_state || {});
+        } catch (e) { console.error('持仓加载失败', e); }
+    }
+
+    function renderPositions(positions, pnlSummary, riskState) {
+        document.getElementById('pos-badge').textContent = positions.length;
+        const panel = document.getElementById('positions-content');
+        if (!positions.length) {
+            panel.innerHTML = '<div style="color:var(--text-muted);padding:10px 0">暂无持仓</div>';
+            return;
+        }
+        let totalPnl = 0;
+        const rows = positions.map(p => {
+            totalPnl += p.unrealized_pnl;
+            const pnlClass = p.pnl_pct >= 0 ? 'chg-pos' : 'chg-neg';
+            const slDisplay = `${(p.sl_pct * 100).toFixed(1)}%`;
+            let tpDisplay = '-';
+            if (p.trailing_active) {
+                tpDisplay = `追踪 ${(p.trailing_stop_pct * 100).toFixed(1)}%`;
+            } else if (p.next_tp) {
+                tpDisplay = `T${p.next_tp.tier}: ${(p.next_tp.target_pct * 100).toFixed(0)}% 卖${(p.next_tp.exit_ratio * 100).toFixed(0)}%`;
+            }
+            const entry_t = new Date(p.entry_time * 1000).toLocaleTimeString();
+            return `<tr>
+                <td><strong>${p.symbol.replace('USDT','')}</strong>/USDT</td>
+                <td class="${p.side==='BUY'?'chg-pos':'chg-neg'}">${p.side}</td>
+                <td>${p.qty.toFixed(4)}</td>
+                <td>$${p.entry_price.toFixed(6)}</td>
+                <td>$${p.current_price.toFixed(6)}</td>
+                <td>$${p.value_usd.toFixed(2)}</td>
+                <td class="${pnlClass}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
+                <td class="${pnlClass}">${(p.pnl_pct * 100).toFixed(2)}%</td>
+                <td>止损 ${slDisplay}</td>
+                <td>${tpDisplay}</td>
+                <td>${p.holding_min.toFixed(0)}m / ${p.max_hold_minutes}m</td>
+                <td>${entry_t}</td>
+                <td><button class="mini-btn" data-pos-symbol="${p.symbol}">查看</button></td>
+            </tr>`;
+        }).join('');
+        panel.innerHTML = `<table><thead><tr>
+            <th>币种</th><th>方向</th><th>数量</th><th>入场价</th><th>当前价</th><th>价值</th>
+            <th>浮盈</th><th>盈亏%</th><th>止损</th><th>止盈</th><th>持仓时间</th><th>入场时间</th><th>图表</th>
+        </tr></thead><tbody>${rows}</tbody></table>`;
+
+        panel.querySelectorAll('button[data-pos-symbol]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.getElementById('chart-symbol').value = btn.getAttribute('data-pos-symbol');
+                _selectedSymbol = btn.getAttribute('data-pos-symbol');
+                loadChart(true);
+            });
+        });
+
+        // 更新统计行
+        document.getElementById('stat-pnl').textContent = `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`;
+        document.getElementById('stat-pnl').className = `value ${totalPnl >= 0 ? 'green' : 'red'}`;
+        document.getElementById('stat-positions').textContent = positions.length;
+
+        // PnL 统计面板
+        if (pnlSummary && pnlSummary.total_trades > 0) {
+            document.getElementById('pnl-stats-row').style.display = '';
+            document.getElementById('pnl-total-trades').textContent = pnlSummary.total_trades;
+            document.getElementById('pnl-win-rate').textContent = `${(pnlSummary.win_rate * 100).toFixed(1)}%`;
+            const tp = pnlSummary.total_pnl || 0;
+            document.getElementById('pnl-total').textContent = `${tp >= 0 ? '+' : ''}$${tp.toFixed(2)}`;
+            document.getElementById('pnl-total').className = `value ${tp >= 0 ? 'green' : 'red'}`;
+            document.getElementById('pnl-profit-factor').textContent = pnlSummary.profit_factor === 'inf' ? '∞' : pnlSummary.profit_factor;
+            document.getElementById('pnl-max-dd').textContent = `-$${(pnlSummary.max_drawdown || 0).toFixed(2)}`;
+            document.getElementById('pnl-best').textContent = `+$${(pnlSummary.best_trade || 0).toFixed(2)}`;
+            document.getElementById('pnl-worst').textContent = `$${(pnlSummary.worst_trade || 0).toFixed(2)}`;
+        }
+    }
+
+    // ===== 交易记录 =====
+    async function loadTrades() {
+        try {
+            const resp = await fetch('/hotcoin/api/trades?limit=50');
+            const data = await resp.json();
+            if (!data.ok) return;
+            renderTrades(data.trades || []);
+        } catch (e) { console.error('交易记录加载失败', e); }
+    }
+
+    function renderTrades(trades) {
+        document.getElementById('trades-badge').textContent = trades.length;
+        const tbody = document.getElementById('trades-tbody');
+        if (!trades.length) {
+            tbody.innerHTML = '<tr><td colspan="10" style="color:var(--text-muted)">暂无交易</td></tr>';
+            return;
+        }
+        tbody.innerHTML = trades.map(t => {
+            const pnlClass = t.pnl >= 0 ? 'chg-pos' : 'chg-neg';
+            const exit_t = new Date((t.exit_time || 0) * 1000).toLocaleString();
+            return `<tr>
+                <td><strong>${(t.symbol||'').replace('USDT','')}</strong>/USDT</td>
+                <td class="${t.side==='BUY'?'chg-pos':'chg-neg'}">${t.side}</td>
+                <td>${(t.qty||0).toFixed(4)}</td>
+                <td>$${(t.entry_price||0).toFixed(6)}</td>
+                <td>$${(t.exit_price||0).toFixed(6)}</td>
+                <td class="${pnlClass}">${t.pnl >= 0 ? '+' : ''}$${(t.pnl||0).toFixed(4)}</td>
+                <td class="${pnlClass}">${((t.pnl_pct||0)*100).toFixed(2)}%</td>
+                <td>${(t.holding_min||0).toFixed(0)}m</td>
+                <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(t.reason)}">${escapeHtml(t.reason)}</td>
+                <td style="font-size:11px">${exit_t}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    // ===== 情绪面板 =====
+    async function loadSentiment() {
+        try {
+            const resp = await fetch('/hotcoin/api/hot_posts');
+            const data = await resp.json();
+            const posts = data.posts || [];
+            const statsEl = document.getElementById('sentiment-stats');
+            const postsEl = document.getElementById('sentiment-posts');
+
+            if (!posts.length) {
+                statsEl.innerHTML = '<div style="color:var(--text-muted)">暂无社媒数据</div>';
+                postsEl.innerHTML = '';
+                return;
+            }
+            const mentionMap = {};
+            let totalSentiment = 0;
+            posts.forEach(p => {
+                (p.symbols || []).forEach(s => { mentionMap[s] = (mentionMap[s] || 0) + 1; });
+                totalSentiment += (p.sentiment || 0);
+            });
+            const avgSentiment = totalSentiment / posts.length;
+            const sentPct = Math.round((avgSentiment + 1) * 50);
+            const topMentions = Object.entries(mentionMap).sort((a,b) => b[1] - a[1]).slice(0, 10);
+
+            statsEl.innerHTML = `
+                <div style="font-size:32px;font-weight:700;color:${sentPct >= 50 ? 'var(--accent-green)' : 'var(--accent-red)'}">
+                    ${sentPct}%
+                </div>
+                <div style="color:var(--text-muted);margin-bottom:8px">情绪指数 (${posts.length} 帖)</div>
+                <div style="font-size:12px;color:var(--text-secondary)">
+                    ${topMentions.map(([s, n]) => `<span style="margin-right:8px">${s}(${n})</span>`).join('')}
+                </div>
+            `;
+            postsEl.innerHTML = posts.slice(0, 20).map(p => {
+                const ts = p.ts ? new Date(p.ts * 1000).toLocaleTimeString() : '';
+                const sentColor = (p.sentiment||0) > 0 ? 'var(--accent-green)' : ((p.sentiment||0) < 0 ? 'var(--accent-red)' : 'var(--text-muted)');
+                return `<div style="padding:3px 0;border-bottom:1px solid var(--border)">
+                    <span style="color:var(--text-muted)">${ts}</span>
+                    <span style="color:${sentColor}">[${((p.sentiment||0) > 0 ? '+' : '') + (p.sentiment||0).toFixed(1)}]</span>
+                    ${escapeHtml((p.text || '').slice(0, 120))}
+                    ${(p.symbols||[]).map(s => `<span style="color:var(--accent-yellow)">#${s}</span>`).join(' ')}
+                </div>`;
+            }).join('');
+        } catch (e) { console.error('情绪加载失败', e); }
+    }
+
+    // ===== K线信号分数叠加 =====
+    let _scoreMarkersSeries = null;
+
+    function renderScoreMarkers(scores) {
+        if (!scores || !Object.keys(scores).length) return;
+        if (!candleSeries) return;
+        const existing = candleSeries.markers ? candleSeries.markers() : [];
+        const scoreMarkers = [];
+        for (const [tsStr, sc] of Object.entries(scores)) {
+            const t = Number(tsStr);
+            const dominant = sc.ss > sc.bs ? 'ss' : 'bs';
+            const val = dominant === 'ss' ? sc.ss : sc.bs;
+            if (val < 20) continue;
+            scoreMarkers.push({
+                time: t,
+                position: dominant === 'ss' ? 'aboveBar' : 'belowBar',
+                color: dominant === 'ss' ? '#ff6b8a' : '#4ae08a',
+                shape: 'circle',
+                text: String(Math.round(val)),
+            });
+        }
+        const allMarkers = [...(existing || []), ...scoreMarkers]
+            .sort((a, b) => a.time - b.time);
+        candleSeries.setMarkers(allMarkers);
+    }
+
+    // 修改 loadChart 以支持 scores
+    const _origLoadChart = loadChart;
+    loadChart = async function(force = false) {
+        createChartIfNeeded();
+        const symbol = document.getElementById('chart-symbol').value;
+        if (!symbol) return;
+        if (!force && symbol === _selectedSymbol && candleSeries && candleSeries._lastLoadedSymbol === symbol) return;
+        _selectedSymbol = symbol;
+        if (_snapshotReplayMode) setReplayMode(false, null);
+        const interval = document.getElementById('chart-interval').value;
+        const days = document.getElementById('chart-days').value;
+        const traceId = getTraceFilterValue();
+        if (!isValidTraceId(traceId)) {
+            document.getElementById('chart-meta').textContent = 'trace_id 格式无效';
+            return;
+        }
+        const includeScores = document.getElementById('chart-scores-toggle').checked;
+        const btn = document.getElementById('chart-refresh-btn');
+        btn.disabled = true; btn.textContent = '图表加载中...';
+        try {
+            const qs = new URLSearchParams({ symbol, interval, days: String(days) });
+            if (traceId) qs.set('trace_id', traceId);
+            if (includeScores) qs.set('scores', '1');
+            const resp = await fetch(`/hotcoin/api/chart?${qs.toString()}`);
+            if (!resp.ok) throw new Error(resp.statusText);
+            const data = await resp.json();
+            _latestChartPayload = data;
+            const traceInput = document.getElementById('chart-trace-id');
+            if (traceInput) traceInput.value = data.trace_id_filter || '';
+            const klines = data.klines || [];
+            const markers = data.markers || [];
+            candleSeries.setData(klines);
+            candleSeries.setMarkers(markers);
+            candleSeries._lastLoadedSymbol = symbol;
+            chart.timeScale().fitContent();
+            document.getElementById('chart-badge').textContent = `${symbol} ${interval}`;
+            const traceInfo = data.trace_id_filter ? ` | trace=${data.trace_id_filter}` : '';
+            const scoreInfo = includeScores ? ` | 分数 ${Object.keys(data.scores || {}).length} 点` : '';
+            document.getElementById('chart-meta').textContent = `K线 ${klines.length} 根 | 买卖点 ${markers.length} 个${traceInfo}${scoreInfo}`;
+            renderTradePoints(data.trade_points || []);
+            if (includeScores && data.scores) renderScoreMarkers(data.scores);
+        } catch (e) {
+            document.getElementById('chart-meta').textContent = `图表加载失败: ${e.message}`;
+        } finally {
+            btn.disabled = false; btn.textContent = '刷新图表';
+        }
+    };
+
+    // 启动时自动加载持仓和交易
     startAutoRefresh();
+    loadPositions();
+    loadTrades();
+    setInterval(loadPositions, 15000);
     </script>
 </body>
 </html>

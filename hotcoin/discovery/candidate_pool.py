@@ -330,7 +330,7 @@ class CandidatePool:
         now = time.time()
         to_remove = []
         with self._lock:
-            for sym, coin in self._coins.items():
+            for sym, coin in list(self._coins.items()):
                 if coin.status == "cooling" and now >= coin.cooling_until:
                     to_remove.append(sym)
                 elif (coin.heat_score < self.config.pool_exit_score
@@ -338,14 +338,21 @@ class CandidatePool:
                       and now - coin.low_score_since > self.config.pool_exit_hold_sec):
                     to_remove.append(sym)
 
-            for sym in to_remove:
-                del self._coins[sym]
-                self._heat_hist_ts.pop(sym, None)  # 清理热度历史跟踪
-                self._db.execute("DELETE FROM coin_pool WHERE symbol = ?", (sym,))
+            if not to_remove:
+                return
 
-            if to_remove:
+            for sym in to_remove:
+                self._coins.pop(sym, None)
+                self._heat_hist_ts.pop(sym, None)
+
+            try:
+                for sym in to_remove:
+                    self._db.execute("DELETE FROM coin_pool WHERE symbol = ?", (sym,))
                 self._db.commit()
-                log.info("出池: %s", ", ".join(to_remove))
+            except Exception:
+                log.exception("出池 DB 写入失败, 下次循环重试")
+
+            log.info("出池: %s", ", ".join(to_remove))
 
     @property
     def size(self) -> int:

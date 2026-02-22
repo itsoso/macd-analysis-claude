@@ -197,14 +197,18 @@ class TickerStream:
 
     def _cleanup_stale(self, now: float):
         """清理 30 分钟无更新的币种数据, 防止内存泄漏。"""
-        stale_cutoff = now - 1800
-        stale = [s for s, t in self._tickers.items() if t.event_time / 1000 < stale_cutoff]
-        for sym in stale:
-            self._tickers.pop(sym, None)
-            self._vol_window.pop(sym, None)
-            self._price_snapshots.pop(sym, None)
-        if stale:
-            log.debug("清理 %d 个不活跃币种数据", len(stale))
+        try:
+            stale_cutoff = now - 1800
+            stale = [s for s, t in self._tickers.items()
+                     if (t.event_time or 0) / 1000 < stale_cutoff]
+            for sym in stale:
+                self._tickers.pop(sym, None)
+                self._vol_window.pop(sym, None)
+                self._price_snapshots.pop(sym, None)
+            if stale:
+                log.debug("清理 %d 个不活跃币种数据", len(stale))
+        except Exception:
+            log.debug("清理不活跃币种异常", exc_info=True)
 
     def _get_volume_1m(self, sym: str) -> float:
         window = self._vol_window.get(sym)

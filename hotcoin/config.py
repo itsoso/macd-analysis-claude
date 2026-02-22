@@ -97,21 +97,22 @@ class TradingConfig:
     signal_loop_sec: float = 10.0
     max_signal_workers: int = 5
 
-    # 入场
-    min_consensus_strength: int = 20      # 多周期共识最低强度
-    entry_confirm_tf: str = "15m"         # 方向确认周期
-    entry_trigger_tf: str = "5m"          # 触发周期
+    # 入场 (scalping: 更低门槛, 更快响应)
+    min_consensus_strength: int = 15      # 多周期共识最低强度 (原20)
+    entry_confirm_tf: str = "5m"          # 方向确认周期 (原15m, scalping用5m更快)
+    entry_trigger_tf: str = "1m"          # 触发周期 (原5m)
 
-    # 出场
-    default_sl_pct: float = -0.05         # 默认止损 -5%
-    atr_sl_mult: float = 1.5             # ATR 止损倍数 (比 ETH 的 2.5 更紧)
+    # 出场 (scalping: 小止盈快出)
+    default_sl_pct: float = -0.03         # 止损 -3% (原-5%)
+    atr_sl_mult: float = 1.2             # ATR 止损倍数 (原1.5, 更紧)
     take_profit_tiers: List[tuple] = field(default_factory=lambda: [
-        (0.05, 0.30),   # 涨 5% 卖 30%
-        (0.10, 0.30),   # 涨 10% 卖 30%
+        (0.015, 0.30),   # 涨 1.5% 卖 30% (scalping 快止盈)
+        (0.03, 0.30),    # 涨 3% 再卖 30%
+        (0.06, 0.20),    # 涨 6% 再卖 20%
     ])
-    trailing_stop_pct: float = 0.03
-    max_hold_minutes: int = 240           # 最长持仓 4h
-    black_swan_pct: float = -0.20         # 15min 跌超此值立即止损
+    trailing_stop_pct: float = 0.015      # 追踪止损 1.5% (原3%)
+    max_hold_minutes: int = 60            # 最长持仓 1h (原4h, scalping快进快出)
+    black_swan_pct: float = -0.10         # 5min 跌超此值立即止损 (原-20%)
 
 
 # ---------------------------------------------------------------------------
@@ -121,10 +122,10 @@ class TradingConfig:
 @dataclass
 class ExecutionConfig:
     enable_order_execution: bool = False
-    max_concurrent_positions: int = 5
-    max_single_position_pct: float = 0.10  # 单币最大 10% 资金
-    max_total_exposure_pct: float = 0.40   # 总敞口 40%
-    max_sector_exposure_pct: float = 0.20  # 同板块上限
+    max_concurrent_positions: int = 15     # 最大 15 并发 (scalping 多币轮动)
+    max_single_position_pct: float = 0.08  # 单币最大 8% 资金 (分散风险)
+    max_total_exposure_pct: float = 0.80   # 总敞口 80% (scalping 高频利用资金)
+    max_sector_exposure_pct: float = 0.25  # 同板块上限
     initial_capital: float = field(default_factory=lambda: _safe_float("HOTCOIN_CAPITAL", 1000))
 
     # 风控

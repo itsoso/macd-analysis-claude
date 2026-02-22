@@ -290,6 +290,8 @@
         <div class="header-right">
             <span>引擎 <span class="status-dot" id="engine-dot"></span> <strong id="engine-state">-</strong></span>
             <span>WebSocket <span class="status-dot" id="ws-status"></span></span>
+            <span title="币安广场采集状态">广场 <span class="status-dot" id="square-status"></span> <strong id="square-state">-</strong></span>
+            <span title="Twitter 采集状态">Twitter <span class="status-dot" id="twitter-status"></span> <strong id="twitter-state">-</strong></span>
             <div class="auto-refresh-toggle">
                 <span>自动刷新</span>
                 <div class="toggle-switch active" id="auto-toggle" onclick="toggleAutoRefresh()"></div>
@@ -415,6 +417,11 @@ async function refreshAll() {
         if (postsResp.ok) {
             const data = await postsResp.json();
             allPosts = data.posts || [];
+            if (data.monitors) {
+                // 与 status 一致时也刷新一遍，避免状态滞后
+                updateMonitorBadge('square', (data.monitors || {}).square || {});
+                updateMonitorBadge('twitter', (data.monitors || {}).twitter || {});
+            }
             renderPosts();
         }
     } catch(e) { console.error('refresh error:', e); }
@@ -445,6 +452,47 @@ function updateStats(data) {
         const d = new Date(data.ts * 1000);
         document.getElementById('stat-update').textContent = d.toLocaleTimeString();
     }
+
+    const monitors = data.monitors || {};
+    updateMonitorBadge('square', monitors.square || {});
+    updateMonitorBadge('twitter', monitors.twitter || {});
+}
+
+function updateMonitorBadge(name, st) {
+    const dot = document.getElementById(`${name}-status`);
+    const text = document.getElementById(`${name}-state`);
+    if (!dot || !text) return;
+
+    const enabled = st.enabled !== false;
+    const running = !!st.running;
+    const hasError = !!(st.last_error || '');
+    const posts = Number(st.recent_posts || 0);
+
+    if (!enabled) {
+        dot.className = 'status-dot offline';
+        text.textContent = 'off';
+        text.style.color = 'var(--accent-red)';
+        text.title = st.last_error || '未启用';
+        return;
+    }
+    if (running && !hasError) {
+        dot.className = 'status-dot online';
+        text.textContent = posts > 0 ? `on(${posts})` : 'on';
+        text.style.color = 'var(--accent-green)';
+        text.title = '运行中';
+        return;
+    }
+    if (running && hasError) {
+        dot.className = 'status-dot degraded';
+        text.textContent = 'degraded';
+        text.style.color = 'var(--accent-yellow)';
+        text.title = st.last_error || '运行中但有错误';
+        return;
+    }
+    dot.className = 'status-dot offline';
+    text.textContent = hasError ? 'error' : 'off';
+    text.style.color = 'var(--accent-red)';
+    text.title = st.last_error || '未运行';
 }
 
 // ── Coin table ──

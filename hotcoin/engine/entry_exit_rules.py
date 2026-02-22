@@ -43,20 +43,48 @@ class HotCoinEntryExit:
 
         signal: TradeSignal
         coin: HotCoin (可选, 提供额外上下文)
+
+        Scalping 增强:
+        - S 信号 (S1-S5) 多信号触发时降低 strength 门槛
+        - L2/L3 预警级别降低门槛
+        - S2/S3 突破信号放宽方向确认
         """
         if signal.action not in ("BUY", "SELL"):
             return EntryDecision(allow=False, reason="信号为 HOLD")
 
-        if signal.strength < self.config.min_consensus_strength:
+        # --- S 信号计数 + 预警级别 → 动态调整 strength 门槛 ---
+        active_signals = getattr(signal, "active_signals", None) or []
+        alert_level = getattr(signal, "alert_level", "") or ""
+        s_count = sum(1 for s in active_signals if s.startswith("S"))
+        has_breakout = any(s.startswith("S2") or s.startswith("S3") for s in active_signals)
+
+        # 基础门槛
+        min_strength = self.config.min_consensus_strength
+
+        # S 信号降低门槛: 每个 S 信号 -2, 最多降 8
+        if s_count >= 2:
+            min_strength -= min(s_count * 2, 8)
+
+        # L2/L3 预警进一步降低门槛
+        if alert_level == "L3":
+            min_strength -= 5
+        elif alert_level == "L2":
+            min_strength -= 3
+
+        # 最低保底 5 (防止无条件入场)
+        min_strength = max(5, min_strength)
+
+        if signal.strength < min_strength:
             return EntryDecision(
                 allow=False,
-                reason=f"strength={signal.strength} < {self.config.min_consensus_strength}",
+                reason=f"strength={signal.strength} < {min_strength} (S×{s_count}, {alert_level or 'N/A'})",
             )
 
-        # 检查 15m 方向确认
+        # --- 方向确认 (有突破信号时放宽) ---
         tf_details = signal.tf_details or {}
         confirm_tf = self.config.entry_confirm_tf
-        if confirm_tf in tf_details:
+        if confirm_tf in tf_details and not has_breakout:
+            # 有 S2/S3 突破信号时跳过方向确认 (突破本身就是方向信号)
             td = tf_details[confirm_tf]
             ss, bs = td.get("ss", 0), td.get("bs", 0)
             if signal.action == "BUY" and bs <= ss:
@@ -64,9 +92,12 @@ class HotCoinEntryExit:
             if signal.action == "SELL" and ss <= bs:
                 return EntryDecision(allow=False, reason=f"{confirm_tf} 方向未确认 (ss={ss:.0f} <= bs={bs:.0f})")
 
-        # 如果有候选币信息, 检查热度
-        if coin and coin.heat_score < 30:
-            return EntryDecision(allow=False, reason=f"热度过低 ({coin.heat_score:.0f})")
+        # 如果有候选币信息, 检查热度 (L2/L3 降低热度要求)
+        heat_min = 30
+        if alert_level in ("L2", "L3"):
+            heat_min = 20
+        if coin and coin.heat_score < heat_min:
+            return EntryDecision(allow=False, reason=f"热度过低 ({coin.heat_score:.0f} < {heat_min})")
 
         # F1-F3 反欺诈过滤
         filters = getattr(signal, "active_filters", None) or []
@@ -80,8 +111,15 @@ class HotCoinEntryExit:
         if pump_phase == "distribution":
             return EntryDecision(allow=False, reason="Pump阶段=派发, 不入场")
 
+        # --- 止损动态调整: 早期拉升/主升阶段用更紧止损 ---
         sl = self.config.default_sl_pct
-        return EntryDecision(allow=True, reason="OK", suggested_sl_pct=sl)
+        if pump_phase == "main_pump":
+            sl = sl * 0.7  # 主升阶段更紧止损 (快速获利)
+        elif pump_phase == "early_pump" and s_count >= 3:
+            sl = sl * 0.8  # 早拉+多信号: 稍紧
+
+        reason = f"OK (S×{s_count}, {alert_level or 'N/A'}, {pump_phase or 'normal'})"
+        return EntryDecision(allow=True, reason=reason, suggested_sl_pct=sl)
 
     def check_exit(self, position: dict, current_price: float,
                    coin=None) -> Optional[ExitDecision]:

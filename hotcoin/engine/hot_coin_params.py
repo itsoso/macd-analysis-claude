@@ -53,10 +53,10 @@ HOT_COIN_CONSENSUS_CONFIG = {
     "coverage_min": 0.5,
 }
 
-# K 线获取参数
+# K 线获取参数 + max_bars 限制 (缩短计算量)
 HOT_COIN_KLINE_PARAMS = {
-    "1m": {"days": 1, "min_bars": 30},
-    "5m": {"days": 3, "min_bars": 30},
-    "15m": {"days": 7, "min_bars": 50},
-    "1h": {"days": 30, "min_bars": 50},
+    "1m": {"days": 1, "min_bars": 30, "max_bars": 200},
+    "5m": {"days": 3, "min_bars": 30, "max_bars": 200},
+    "15m": {"days": 7, "min_bars": 50, "max_bars": 300},
+    "1h": {"days": 30, "min_bars": 50, "max_bars": 400},
 }

@@ -49,6 +49,12 @@ class TwitterMonitor:
         self._kol_set: Set[str] = set(DEFAULT_KOLS)
         self._sentiment_cache: Dict[str, float] = {}
         self._recent_posts: deque = deque(maxlen=100)
+        self._started_at = 0.0
+        self._running = False
+        self._last_connect_ts = 0.0
+        self._last_event_ts = 0.0
+        self._last_error = ""
+        self._error_count = 0
 
         try:
             from hotcoin.discovery.sentiment_scorer import SentimentScorer
@@ -62,20 +68,32 @@ class TwitterMonitor:
 
     async def run(self, shutdown: asyncio.Event):
         if not self.enabled:
+            self._running = False
+            self._last_error = "TWITTER_BEARER_TOKEN missing"
             log.warning("Twitter 监控未启用 (TWITTER_BEARER_TOKEN 未设置)")
             return
 
         log.info("Twitter KOL 监控启动 (%d 个 KOL)", len(self._kol_set))
+        self._started_at = self._started_at or time.time()
+        self._running = True
         await self._setup_rules()
 
         while not shutdown.is_set():
             try:
-                await asyncio.to_thread(self._stream_tweets)
+                connected, processed = await asyncio.to_thread(self._stream_tweets)
+                if connected:
+                    self._last_connect_ts = time.time()
+                    self._last_error = ""
+                if processed > 0:
+                    self._last_event_ts = time.time()
             except asyncio.CancelledError:
                 break
             except Exception:
+                self._error_count += 1
+                self._last_error = "stream_exception"
                 log.exception("Twitter stream 异常, 30s 后重连")
                 await asyncio.sleep(30)
+        self._running = False
 
     def _stream_tweets(self):
         """连接 Filtered Stream, 解析推文。"""
@@ -84,23 +102,32 @@ class TwitterMonitor:
         try:
             resp = requests.get(url, headers=self._headers, params=params, stream=True, timeout=90)
             if resp.status_code == 429:
+                self._error_count += 1
+                self._last_error = "twitter_http_429"
                 log.warning("Twitter rate limited, 等待 60s")
                 time.sleep(60)
-                return
+                return False, 0
             if resp.status_code != 200:
+                self._error_count += 1
+                self._last_error = f"twitter_http_{resp.status_code}"
                 log.warning("Twitter stream 返回 %d: %s", resp.status_code, resp.text[:200])
-                return
+                return False, 0
 
+            processed = 0
             for line in resp.iter_lines():
                 if not line:
                     continue
                 try:
                     data = json.loads(line)
-                    self._process_tweet(data)
+                    processed += self._process_tweet(data)
                 except json.JSONDecodeError:
                     continue
+            return True, processed
         except requests.RequestException as e:
+            self._error_count += 1
+            self._last_error = f"twitter_req_error:{type(e).__name__}"
             log.debug("Twitter stream 断开: %s", e)
+            return False, 0
 
     def _process_tweet(self, data: dict):
         """从推文中提取币种提及。"""
@@ -152,6 +179,7 @@ class TwitterMonitor:
                 mention_count_1h=len(self._mention_counts[symbol]),
                 sentiment=self._sentiment_cache.get(symbol, 0.0),
             )
+        return len(tickers)
 
     async def _setup_rules(self):
         """设置 Filtered Stream 规则 (关键词过滤)。"""
@@ -194,3 +222,15 @@ class TwitterMonitor:
         now = time.time()
         recent = [t for t in mentions if now - t < 3600]
         return len(recent)
+
+    def status(self) -> dict:
+        return {
+            "enabled": bool(self.enabled),
+            "running": bool(self._running),
+            "started_at": self._started_at,
+            "last_connect_ts": self._last_connect_ts,
+            "last_event_ts": self._last_event_ts,
+            "last_error": self._last_error,
+            "error_count": int(self._error_count),
+            "recent_posts": len(self._recent_posts),
+        }

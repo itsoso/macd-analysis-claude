@@ -373,7 +373,7 @@ class HotCoinRunner:
 
                 # 2) 过滤 + 取 Top N
                 candidates = self.pool.get_top(
-                    n=self.config.execution.max_concurrent_positions * 2,
+                    n=self.config.execution.max_concurrent_positions,
                     min_score=self.config.discovery.pool_enter_score,
                 )
                 candidates = self.coin_filter.apply(candidates)
@@ -601,6 +601,7 @@ class HotCoinRunner:
             ],
             "precheck_stats": precheck_stats,
             "hot_posts": self._collect_hot_posts(),
+            "monitors": self._collect_monitor_status(),
         }
         self._write_json_atomic(payload)
 
@@ -618,6 +619,35 @@ class HotCoinRunner:
         posts.sort(key=lambda p: p.get("ts", 0), reverse=True)
         return posts[:50]
 
+    def _collect_monitor_status(self) -> dict:
+        out = {
+            "square": {
+                "enabled": True,
+                "running": False,
+                "last_error": "",
+                "recent_posts": 0,
+            },
+            "twitter": {
+                "enabled": bool(getattr(self.twitter_monitor, "enabled", False)),
+                "running": False,
+                "last_error": "",
+                "recent_posts": 0,
+            },
+        }
+        try:
+            sq = getattr(self, "square_monitor", None)
+            if sq and hasattr(sq, "status"):
+                out["square"].update(sq.status() or {})
+        except Exception:
+            pass
+        try:
+            tw = getattr(self, "twitter_monitor", None)
+            if tw and hasattr(tw, "status"):
+                out["twitter"].update(tw.status() or {})
+        except Exception:
+            pass
+        return out
+
     def _write_stopped_status(self):
         self._write_json_atomic({
             "running": False,
@@ -625,6 +655,7 @@ class HotCoinRunner:
             "engine_state": "stopped",
             "can_open_new_positions": False,
             "message": "热点币系统已停止",
+            "monitors": self._collect_monitor_status(),
         })
 
     def _write_json_atomic(self, payload: dict):

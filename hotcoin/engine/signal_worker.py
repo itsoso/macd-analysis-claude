@@ -169,8 +169,11 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
             df = _add_hot_indicators(df)
             add_moving_averages(df, timeframe=tf)
 
+            max_bars = kline_cfg.get("max_bars", 500)
+            if len(df) > max_bars:
+                df = df.iloc[-max_bars:].copy()
             data_all = {tf: df}
-            signals = compute_signals_six(df, tf, data_all, max_bars=500)
+            signals = compute_signals_six(df, tf, data_all, max_bars=max_bars)
 
             idx = len(df) - 1
             dt = df.index[idx]

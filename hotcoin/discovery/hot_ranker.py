@@ -32,11 +32,17 @@ class HotRanker:
     def update_scores(self, pool):
         """对候选池中所有币种重新评分 (单次批量 commit)。"""
         coins = pool.get_all()
+        scored = []
         for coin in coins:
-            self._compute_score(coin)
-        pool.update_coins_batch(coins)
-        for coin in coins:
-            pool.record_heat_history(coin)
+            try:
+                self._compute_score(coin)
+                scored.append(coin)
+            except Exception:
+                log.warning("评分失败 %s, 跳过", coin.symbol, exc_info=True)
+        if scored:
+            pool.update_coins_batch(scored)
+            for coin in scored:
+                pool.record_heat_history(coin)
 
     def _compute_score(self, coin):
         """计算六维热度评分, 0-100 范围。"""

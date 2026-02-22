@@ -97,14 +97,29 @@ class PnLTracker:
         total_pnl = sum(t.pnl for t in snapshot)
         avg_hold = sum(t.holding_sec for t in snapshot) / len(snapshot)
 
+        gross_profit = sum(t.pnl for t in wins) if wins else 0.0
+        gross_loss = abs(sum(t.pnl for t in losses)) if losses else 0.0
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float("inf") if gross_profit > 0 else 0.0
+
+        cum_pnl = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for t in snapshot:
+            cum_pnl += t.pnl
+            peak = max(peak, cum_pnl)
+            dd = peak - cum_pnl
+            max_dd = max(max_dd, dd)
+
         return {
             "total_trades": len(snapshot),
             "wins": len(wins),
             "losses": len(losses),
-            "win_rate": len(wins) / len(snapshot),
+            "win_rate": round(len(wins) / len(snapshot), 4),
             "total_pnl": round(total_pnl, 2),
             "avg_pnl": round(total_pnl / len(snapshot), 2),
             "avg_holding_min": round(avg_hold / 60, 1),
             "best_trade": round(max(t.pnl for t in snapshot), 2),
             "worst_trade": round(min(t.pnl for t in snapshot), 2),
+            "profit_factor": round(profit_factor, 2) if profit_factor != float("inf") else "inf",
+            "max_drawdown": round(max_dd, 2),
         }

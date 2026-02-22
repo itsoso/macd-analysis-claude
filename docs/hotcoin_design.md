@@ -6,7 +6,7 @@
 
 **目标**: 在热点币的爆发初期介入，通过多维信号确认降低假突破风险，结合五层风控保护资金安全。
 
-**当前状态**: Phase 1 完成 + R1-R7 (~8200 行代码, 47 个文件, 142 单测全绿)，paper 模式可运行。
+**当前状态**: Phase 1 完成 + R1-R9 (~8600 行代码, 48 个文件, 151 单测全绿)，paper 模式可运行。
 
 ## 2. 系统架构
 
@@ -315,6 +315,14 @@ hotcoin/data/
 | R7-4 | order_executor | 缺资产查询 | R7 (query_account_balances) |
 | R7-5 | web/routes | _runner TOCTOU 竞态 | R7 (_get_runner local binding) |
 | R7-6 | web/routes | 缺紧急平仓/余额 API | R7 (/api/emergency_close + /api/balances) |
+| R8-1 | spot_engine | close/partial_close PnL 用 hint_price 而非 exec_price | R8 (优先用 exec_price) |
+| R8-2 | candidate_pool | remove_expired DB 写入异常可致内存/DB 不一致 | R8 (try/except + list 快照) |
+| R8-3 | ticker_stream | _cleanup_stale 异常导致内存泄漏 | R8 (try/except 保护) |
+| R8-4 | order_executor | 预检统计 counter 无限增长 | R8 (每小时自动重置) |
+| R8-5 | signal_worker | K 线缓存超限时逐条淘汰 O(n) | R8 (批量淘汰 50 条) |
+| R9-1 | dashboard.html | 缺紧急平仓 UI 和余额面板 | R9 (双确认按钮 + 余额表格) |
+| R9-2 | runner | 优雅关闭无超时保护 | R9 (asyncio.wait_for 15s) |
+| R9-3 | runner | _write_status_snapshot risk_summary 异常可中断 | R9 (try/except) |
 
 </details>
 

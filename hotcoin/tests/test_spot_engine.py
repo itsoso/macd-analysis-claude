@@ -32,7 +32,8 @@ def engine():
 
 
 def test_allocator_single():
-    config = ExecutionConfig(initial_capital=10000, max_concurrent_positions=5)
+    config = ExecutionConfig(initial_capital=10000, max_concurrent_positions=5,
+                             max_single_position_pct=0.5)
     alloc = CapitalAllocator(config)
 
     # High heat + high liquidity → more allocation

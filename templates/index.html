@@ -127,6 +127,7 @@
             cursor: pointer;
             font-size: 13px;
             color: var(--text-secondary);
+            text-decoration: none;
             transition: all 0.15s;
             gap: 10px;
             white-space: nowrap; overflow: hidden;
@@ -731,6 +732,9 @@
 
         <div class="nav-section">
             <div class="nav-section-title">ETH/USDT 回测</div>
+            <a class="nav-item" href="/hotcoin/monitor" data-tooltip="热点币实盘监控">
+                <span class="nav-icon">📡</span><span class="nav-item-text">热点币监控</span>
+            </a>
             <div class="nav-item" data-page="global-strategy" data-tooltip="全局最优策略">
                 <span class="nav-icon">🏆</span><span class="nav-item-text">全局最优策略</span>
             </div>
@@ -2483,11 +2487,16 @@
     // ===== Navigation =====
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', () => {
+            const pageId = item.dataset.page;
+            if (!pageId) {
+                return; // 外链菜单项（如 /hotcoin/monitor）直接交由浏览器跳转
+            }
             document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             item.classList.add('active');
-            const pageId = item.dataset.page;
-            document.getElementById(pageId).classList.add('active');
+            const pageEl = document.getElementById(pageId);
+            if (!pageEl) return;
+            pageEl.classList.add('active');
 
             if (pageId === 'global-strategy' && !window._gsLoaded) loadGlobalStrategy();
                 if (pageId === 'strategy-compare' && !window._scLoaded) loadStrategyCompare();

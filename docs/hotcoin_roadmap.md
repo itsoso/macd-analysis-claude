@@ -3,7 +3,7 @@
 ## 当前状态
 
 Phase 1 核心代码完成，近期完成 Phase A/B/C 收口（状态机、事件回放、训练治理门禁）+ R6-R7 优化。
-热点币回归测试 102 项通过，核心 ETH 40 项通过，共 142 项全绿。Paper 模式可运行，处于实盘前治理阶段。
+热点币回归测试 111 项通过，核心 ETH 40 项通过，共 151 项全绿。Paper 模式可运行，处于实盘前治理阶段。
 
 ---
 
@@ -215,6 +215,8 @@ Phase 1 核心代码完成，近期完成 Phase A/B/C 收口（状态机、事�
 
 ## 变更日志
 
+- `2026-02-18` R9 (Opus)：前端紧急平仓按钮 (双确认) + 资产余额面板、runner 优雅关闭 15s 超时保护、状态快照 risk_summary 异常保护。151 测试全绿。
+- `2026-02-18` R8 (Opus)：PnL 优先用 exec_price、candidate_pool 出池 DB 异常保护、ticker_stream cleanup 异常保护、预检统计每小时自动重置、K 线缓存批量淘汰。111 hotcoin + 40 core = 151 测试全绿。
 - `2026-02-18` R7 (Opus)：TickerStream 快照副本 (Flask 线程安全)、AnomalyDetector 清理异常保护、紧急平仓 API (emergency_close_all)、资产余额查询 API、web/routes _runner TOCTOU 修复。102 hotcoin + 40 core = 142 测试全绿。
 - `2026-02-21` R9：新增 `/hotcoin/api/chart` 与仪表盘 K 线买卖点可视化，补充 chart API 测试。84 测试全绿。
 - `2026-02-21` R8：状态机恢复滞后（hysteresis）上线，新增 `test_runner_state_hysteresis.py`。70 测试全绿。

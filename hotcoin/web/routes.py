@@ -198,6 +198,38 @@ def _load_chart_klines(symbol: str, interval: str, days: int, bars_limit: int = 
     return out
 
 
+def _compute_bar_scores(symbol: str, interval: str, days: int):
+    """计算每根 bar 的六书融合分数, 返回 {unix_ts: {ss, bs}} 。"""
+    try:
+        from binance_fetcher import fetch_binance_klines
+        from hotcoin.engine.signal_worker import _add_hot_indicators
+        from hotcoin.engine.hot_coin_params import HOT_COIN_FUSION_CONFIG
+        from ma_indicators import add_moving_averages
+        from signal_core import compute_signals_six, calc_fusion_score_six
+
+        df = fetch_binance_klines(symbol=symbol, interval=interval, days=days)
+        if df is None or len(df) < 20:
+            return {}
+        df = _add_hot_indicators(df)
+        add_moving_averages(df, timeframe=interval)
+        data_all = {interval: df}
+        signals = compute_signals_six(df, interval, data_all, max_bars=800)
+
+        scores = {}
+        step = max(1, len(df) // 200)
+        for i in range(max(0, len(df) - 200), len(df), step):
+            try:
+                dt = df.index[i]
+                ss, bs = calc_fusion_score_six(signals, df, i, dt, HOT_COIN_FUSION_CONFIG)
+                t_sec = int(dt.timestamp())
+                scores[t_sec] = {"ss": round(ss, 1), "bs": round(bs, 1)}
+            except Exception:
+                continue
+        return scores
+    except Exception:
+        return {}
+
+
 def _load_trade_markers_from_pnl(symbol: str, since_ts: float, until_ts: float, limit: int = 200):
     import glob
 
@@ -411,6 +443,54 @@ def _default_execution_metrics():
     }
 
 
+def _default_monitor_status():
+    return {
+        "square": {
+            "enabled": True,
+            "running": False,
+            "last_error": "",
+            "recent_posts": 0,
+        },
+        "twitter": {
+            "enabled": False,
+            "running": False,
+            "last_error": "",
+            "recent_posts": 0,
+        },
+    }
+
+
+def _normalize_monitor_status(raw):
+    out = _default_monitor_status()
+    if not isinstance(raw, dict):
+        return out
+    for name in ("square", "twitter"):
+        cur = raw.get(name)
+        if isinstance(cur, dict):
+            out[name].update(cur)
+    return out
+
+
+def _read_runner_monitor_status():
+    runner = _get_runner()
+    if runner is None:
+        return None
+    out = _default_monitor_status()
+    try:
+        sq = getattr(runner, "square_monitor", None)
+        if sq and hasattr(sq, "status"):
+            out["square"].update(sq.status() or {})
+    except Exception:
+        pass
+    try:
+        tw = getattr(runner, "twitter_monitor", None)
+        if tw and hasattr(tw, "status"):
+            out["twitter"].update(tw.status() or {})
+    except Exception:
+        pass
+    return out
+
+
 def _normalize_execution_metrics(raw):
     if not isinstance(raw, dict):
         return _default_execution_metrics()
@@ -591,6 +671,7 @@ def api_status():
             )
             cached["can_open_new_positions"] = bool(cached.get("can_open_new_positions", False))
             cached["freshness"] = cached.get("freshness", {}) or {}
+            cached["monitors"] = _normalize_monitor_status(cached.get("monitors"))
             return jsonify(cached)
         return jsonify({
             "pool_size": 0,
@@ -610,6 +691,7 @@ def api_status():
             "state_recovery_pending": None,
             "can_open_new_positions": False,
             "freshness": {},
+            "monitors": _default_monitor_status(),
             "message": "热点币系统未启动",
         })
 
@@ -635,6 +717,7 @@ def api_status():
             )
             merged["can_open_new_positions"] = bool(merged.get("can_open_new_positions", False))
             merged["freshness"] = merged.get("freshness", {}) or {}
+            merged["monitors"] = _read_runner_monitor_status() or _normalize_monitor_status(merged.get("monitors"))
             return jsonify(merged)
 
     pool = runner.pool
@@ -714,6 +797,9 @@ def api_status():
         "state_recovery_pending": state_recovery_pending,
         "can_open_new_positions": can_open,
         "freshness": freshness,
+        "monitors": _read_runner_monitor_status() or _normalize_monitor_status(
+            cached.get("monitors") if isinstance(cached, dict) else None
+        ),
     })
 
 
@@ -812,6 +898,11 @@ def api_chart():
         trace_id_filter=trace_id_filter,
     )
 
+    scores = {}
+    include_scores = request.args.get("scores", "0") == "1"
+    if include_scores:
+        scores = _compute_bar_scores(symbol, interval, days)
+
     return jsonify(
         {
             "symbol": symbol,
@@ -821,6 +912,7 @@ def api_chart():
             "klines": klines,
             "markers": markers,
             "trade_points": points,
+            "scores": scores,
             "ts": time.time(),
         }
     )
@@ -948,7 +1040,18 @@ def api_hot_posts():
             except Exception:
                 pass
         posts.sort(key=lambda p: p.get("ts", 0), reverse=True)
-        return jsonify({"posts": posts[:50], "ts": now, "source": "runner"})
+        monitors = _default_monitor_status()
+        try:
+            if sq and hasattr(sq, "status"):
+                monitors["square"].update(sq.status() or {})
+        except Exception:
+            pass
+        try:
+            if tw and hasattr(tw, "status"):
+                monitors["twitter"].update(tw.status() or {})
+        except Exception:
+            pass
+        return jsonify({"posts": posts[:50], "ts": now, "source": "runner", "monitors": monitors})
 
     # Fallback: 从状态文件读取
     cached = _read_runtime_status_file()
@@ -957,9 +1060,10 @@ def api_hot_posts():
             "posts": cached["hot_posts"],
             "ts": float(cached.get("ts", 0) or 0),
             "source": "status_file",
+            "monitors": _normalize_monitor_status(cached.get("monitors")),
         })
 
-    return jsonify({"posts": [], "ts": now, "source": "none"})
+    return jsonify({"posts": [], "ts": now, "source": "none", "monitors": _default_monitor_status()})
 
 
 @hotcoin_bp.route("/api/emergency_close", methods=["POST"])
@@ -993,6 +1097,127 @@ def api_balances():
         return jsonify({"ok": True, "balances": balances, "ts": time.time()})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@hotcoin_bp.route("/api/positions")
+def api_positions():
+    """返回活跃持仓详情, 含实时 PnL、止损止盈状态。"""
+    r = _get_runner()
+    if r is None:
+        return jsonify({"ok": True, "positions": [], "pnl_summary": {}, "ts": time.time()})
+
+    try:
+        tickers = r.ticker_stream.tickers
+        cfg = r.config.trading
+        positions_out = []
+        for sym, pos in list(r.spot_engine.risk.positions.items()):
+            ticker = tickers.get(sym)
+            cur_price = ticker.close if ticker and ticker.close > 0 else 0
+            if pos.side == "BUY":
+                unrealized_pnl = (cur_price - pos.entry_price) * pos.qty if cur_price > 0 else 0
+                pnl_pct = (cur_price - pos.entry_price) / pos.entry_price if pos.entry_price > 0 and cur_price > 0 else 0
+            else:
+                unrealized_pnl = (pos.entry_price - cur_price) * pos.qty if cur_price > 0 else 0
+                pnl_pct = (pos.entry_price - cur_price) / pos.entry_price if pos.entry_price > 0 and cur_price > 0 else 0
+
+            holding_min = (time.time() - pos.entry_time) / 60
+            value = cur_price * pos.qty if cur_price > 0 else pos.entry_price * pos.qty
+
+            tp_tiers = cfg.take_profit_tiers or []
+            next_tp = None
+            for i, (tp_pct, exit_ratio) in enumerate(tp_tiers):
+                if i >= pos.partial_exits:
+                    next_tp = {"tier": i + 1, "target_pct": tp_pct, "exit_ratio": exit_ratio}
+                    break
+            trailing_active = pos.partial_exits >= len(tp_tiers)
+
+            positions_out.append({
+                "symbol": sym,
+                "side": pos.side,
+                "entry_price": round(pos.entry_price, 8),
+                "current_price": round(cur_price, 8),
+                "qty": round(pos.qty, 8),
+                "value_usd": round(value, 2),
+                "unrealized_pnl": round(unrealized_pnl, 4),
+                "pnl_pct": round(pnl_pct, 4),
+                "realized_pnl": round(pos.realized_pnl, 4),
+                "max_pnl_pct": round(pos.max_pnl_pct, 4),
+                "partial_exits": pos.partial_exits,
+                "holding_min": round(holding_min, 1),
+                "entry_time": pos.entry_time,
+                "sl_pct": cfg.default_sl_pct,
+                "next_tp": next_tp,
+                "trailing_active": trailing_active,
+                "trailing_stop_pct": cfg.trailing_stop_pct if trailing_active else None,
+                "max_hold_minutes": cfg.max_hold_minutes,
+                "time_remaining_min": round(max(0, cfg.max_hold_minutes - holding_min), 1),
+            })
+
+        pnl_summary = {}
+        try:
+            pnl_summary = r.spot_engine.pnl.get_summary()
+        except Exception:
+            pass
+
+        return jsonify({
+            "ok": True,
+            "positions": positions_out,
+            "pnl_summary": pnl_summary,
+            "risk_state": r.spot_engine.risk.get_summary(),
+            "ts": time.time(),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@hotcoin_bp.route("/api/trades")
+def api_trades():
+    """返回最近交易记录。"""
+    r = _get_runner()
+    limit = min(100, max(1, int(request.args.get("limit", 50))))
+
+    if r is not None:
+        try:
+            with r.spot_engine.pnl._lock:
+                trades = list(r.spot_engine.pnl._trades[-limit:])
+            records = []
+            for t in reversed(trades):
+                records.append({
+                    "symbol": t.symbol,
+                    "side": t.side,
+                    "entry_price": round(t.entry_price, 8),
+                    "exit_price": round(t.exit_price, 8),
+                    "qty": round(t.qty, 8),
+                    "pnl": round(t.pnl, 4),
+                    "pnl_pct": round(t.pnl_pct, 4),
+                    "holding_min": round(t.holding_sec / 60, 1),
+                    "reason": t.reason,
+                    "entry_time": t.entry_time,
+                    "exit_time": t.exit_time,
+                })
+            return jsonify({"ok": True, "trades": records, "ts": time.time()})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+
+    trade_files = sorted(
+        [f for f in os.listdir(_TRADES_GLOB_DIR)
+         if f.startswith("hotcoin_trades_") and f.endswith(".jsonl")],
+        reverse=True,
+    ) if os.path.isdir(_TRADES_GLOB_DIR) else []
+    records = []
+    for fname in trade_files:
+        if len(records) >= limit:
+            break
+        try:
+            with open(os.path.join(_TRADES_GLOB_DIR, fname)) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        records.append(json.loads(line))
+        except Exception:
+            pass
+    records.sort(key=lambda r: r.get("exit_time", 0), reverse=True)
+    return jsonify({"ok": True, "trades": records[:limit], "ts": time.time()})
 
 
 @hotcoin_bp.route("/api/params")
