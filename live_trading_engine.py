@@ -490,9 +490,8 @@ class LiveTradingEngine:
                 f"coverage={coverage:.0%}"
             )
 
-            # ── 反手模式: 宽松处理 ──
+            # ── 反手模式: 宽松但仍需最低共识 ──
             if reverse_mode:
-                # 反手时只在 coverage 不足时阻止
                 if coverage < 0.3:
                     sig.action = "HOLD"
                     sig.reason = (f"反手被阻止: 覆盖率不足 "
@@ -500,12 +499,26 @@ class LiveTradingEngine:
                     self.logger.info(f"{mode_tag} ⛔ {sig.reason}")
                     return sig
 
-                # 反手放行 — 附加信息，标记为反手开仓
+                # 反手仍需最低 strength 和方向一致
+                if strength < 20:
+                    sig.action = "HOLD"
+                    sig.reason = (f"反手被阻止: strength={strength} < 20 "
+                                  f"({label})")
+                    self.logger.info(f"{mode_tag} ⛔ {sig.reason}")
+                    return sig
+
+                if not actionable:
+                    sig.action = "HOLD"
+                    sig.reason = (f"反手被阻止: 共识不可操作 "
+                                  f"({label}, strength={strength})")
+                    self.logger.info(f"{mode_tag} ⛔ {sig.reason}")
+                    return sig
+
                 sig.reason = (f"{sig.reason} | 反手放行: {label} "
                               f"strength={strength}")
                 self.logger.info(
                     f"{mode_tag} ✅ 反手开仓确认: {sig.action} "
-                    f"(共识={direction}, 反手模式放宽门控)"
+                    f"(共识={direction}, strength={strength})"
                 )
                 return sig
 

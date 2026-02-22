@@ -74,7 +74,7 @@ class RiskConfig:
     # --- 熔断机制 ---
     max_daily_loss_pct: float = 0.05       # 日最大亏损比例 → 暂停
     max_weekly_loss_pct: float = 0.10      # 周最大亏损比例 → 暂停
-    max_consecutive_losses: int = 5        # 连续亏损次数 → 暂停
+    max_consecutive_losses: int = 999      # 连续亏损次数 → 暂停 (已禁用)
     max_drawdown_pct: float = 0.15         # 最大回撤 → 暂停
 
     # --- 订单安全 ---
@@ -132,7 +132,7 @@ PHASE_CONFIGS = {
             reserve_pct=0.50,         # 保留50%
             max_daily_loss_pct=0.05,
             max_weekly_loss_pct=0.10,
-            max_consecutive_losses=5,
+            max_consecutive_losses=999,  # 不限制连续亏损
             max_drawdown_pct=0.10,    # 10%回撤暂停
             max_slippage_pct=0.003,
         ),
@@ -149,7 +149,7 @@ PHASE_CONFIGS = {
             reserve_pct=0.30,
             max_daily_loss_pct=0.05,
             max_weekly_loss_pct=0.08,
-            max_consecutive_losses=5,
+            max_consecutive_losses=999,  # 不限制连续亏损
             max_drawdown_pct=0.15,
         ),
         "initial_capital": 1000,
@@ -1269,7 +1269,7 @@ class LiveTradingConfig:
             "risk": {
                 "max_leverage": 2,
                 "max_daily_loss_pct": 0.05,
-                "max_consecutive_losses": 5,
+                "max_consecutive_losses": 999,
             },
             "initial_capital": 500,
             "log_dir": "logs/live",
