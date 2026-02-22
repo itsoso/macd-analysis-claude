@@ -371,9 +371,10 @@ class HotCoinRunner:
                 # 1) 更新六维热度评分
                 self.ranker.update_scores(self.pool)
 
-                # 2) 过滤 + 取 Top N
+                # 2) 过滤 + 取 Top N (信号计算数量受 max_signal_candidates 限制)
+                max_candidates = self.config.trading.max_signal_candidates
                 candidates = self.pool.get_top(
-                    n=self.config.execution.max_concurrent_positions,
+                    n=max_candidates,
                     min_score=self.config.discovery.pool_enter_score,
                 )
                 candidates = self.coin_filter.apply(candidates)

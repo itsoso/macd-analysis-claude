@@ -95,7 +95,8 @@ class DiscoveryConfig:
 class TradingConfig:
     timeframes: List[str] = field(default_factory=lambda: ["1m", "5m", "15m", "1h"])
     signal_loop_sec: float = 10.0
-    max_signal_workers: int = 5
+    max_signal_workers: int = 10
+    max_signal_candidates: int = 8  # 每轮最多计算信号的候选数 (控制延迟)
 
     # 入场 (scalping: 更低门槛, 更快响应)
     min_consensus_strength: int = 15      # 多周期共识最低强度 (原20)
