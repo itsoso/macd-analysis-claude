@@ -130,6 +130,8 @@ class TradeSignal:
     alert_score: float = 0.0
     active_signals: list = field(default_factory=list)
     active_filters: list = field(default_factory=list)
+    # ML 增强
+    ml_trade_prob: float = -1.0  # -1 = 不可用, 0-1 = ML 预测概率
 
 
 def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = None) -> TradeSignal:
@@ -297,6 +299,46 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
     except Exception:
         log.warning("%s Pump/Alert 增强层异常", symbol, exc_info=True)
 
+    # --- ML 交易方向增强 (shadow 模式) ---
+    ml_trade_prob = -1.0
+    _ML_TRADE_SHADOW = True
+    try:
+        from hotcoin.ml.predictor_hot import get_predictor
+        from hotcoin.ml.features_hot import compute_hot_features
+
+        # 用最短周期的 df 计算特征
+        ml_df = None
+        for _tf_pref in ["5m", "15m", "1m", "3m"]:
+            if _tf_pref in tf_raw_dfs:
+                ml_df = tf_raw_dfs[_tf_pref]
+                break
+        if ml_df is None and tf_raw_dfs:
+            ml_df = next(iter(tf_raw_dfs.values()))
+
+        if ml_df is not None and len(ml_df) >= 30:
+            from indicators import add_all_indicators
+            from ma_indicators import add_moving_averages as _add_ma
+            ml_df_copy = add_all_indicators(ml_df.copy())
+            _add_ma(ml_df_copy, timeframe="15m")
+            features = compute_hot_features(ml_df_copy)
+            predictor = get_predictor()
+            prob = predictor.predict_trade(features)
+            if prob is not None:
+                ml_trade_prob = prob
+                if not _ML_TRADE_SHADOW:
+                    # 非 shadow: ML 高置信度时调整信号
+                    if prob > 0.65 and action == "HOLD":
+                        action = "BUY"
+                        confidence = min(1.0, confidence + 0.2)
+                    elif prob < 0.35 and action == "HOLD":
+                        action = "SELL"
+                        confidence = min(1.0, confidence + 0.2)
+                else:
+                    log.debug("%s ML trade_prob=%.3f (shadow, action=%s)",
+                              symbol, prob, action)
+    except Exception:
+        log.debug("%s ML trade 增强异常", symbol, exc_info=True)
+
     return TradeSignal(
         symbol=symbol,
         action=action,
@@ -314,4 +356,5 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
         alert_score=alert_score,
         active_signals=active_signals_list,
         active_filters=active_filters_list,
+        ml_trade_prob=ml_trade_prob,
     )

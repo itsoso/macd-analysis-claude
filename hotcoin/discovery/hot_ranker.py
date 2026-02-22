@@ -25,9 +25,12 @@ log = logging.getLogger("hotcoin.ranker")
 class HotRanker:
     """六维热度评分引擎。"""
 
+    _ML_SHADOW = True  # True = ML 只记录不影响评分
+
     def __init__(self, config: DiscoveryConfig, coin_age_fn=None):
         self.cfg = config
         self._coin_age_fn = coin_age_fn
+        self._ml_predictor = None
 
     def update_scores(self, pool):
         """对候选池中所有币种重新评分 (单次批量 commit)。"""
@@ -114,6 +117,18 @@ class HotRanker:
         coin.heat_score = round(score, 1)
         coin.last_score_update = now
 
+        # --- ML 热度增强 (shadow 模式) ---
+        ml_prob = self._predict_hotness_ml(coin)
+        if ml_prob is not None:
+            ml_score = ml_prob * 100  # 0-1 → 0-100
+            if not self._ML_SHADOW:
+                # 非 shadow: ML 分数占 20% 权重融合
+                score = score * 0.8 + ml_score * 0.2
+                coin.heat_score = round(max(0, min(100, score)), 1)
+            else:
+                log.debug("%s ML hotness=%.1f (shadow, rule=%.1f)",
+                          coin.symbol, ml_score, coin.heat_score)
+
         # 低分跟踪
         if score < self.cfg.pool_exit_score:
             if coin.low_score_since == 0:
@@ -164,3 +179,31 @@ class HotRanker:
         if coin.price_change_5m > 0.15:
             penalty += 20
         return min(100, penalty)
+
+    def _predict_hotness_ml(self, coin) -> float:
+        """用 ML 模型预测热度概率, 返回 0-1 或 None。"""
+        try:
+            if self._ml_predictor is None:
+                from hotcoin.ml.predictor_hot import get_predictor
+                self._ml_predictor = get_predictor()
+
+            # 构造简化特征 (从 coin 属性)
+            import pandas as pd
+            features = pd.DataFrame([{
+                "ret_1": coin.price_change_5m,
+                "ret_5": coin.price_change_1h / 12 if coin.price_change_1h else 0,
+                "vol_ratio_5_20": coin.volume_surge_ratio,
+                "vol_change": coin.volume_surge_ratio - 1,
+                "consecutive_green": 0,
+                "consecutive_red": 0,
+                "vol_surge_3_20": coin.volume_surge_ratio,
+                "body_range_ratio": 0.5,
+                "mom_1": coin.price_change_5m,
+                "mom_3": coin.price_change_5m * 3,
+                "mom_5": coin.price_change_1h / 12 * 5 if coin.price_change_1h else 0,
+                "mom_10": coin.price_change_1h / 6 if coin.price_change_1h else 0,
+            }])
+            return self._ml_predictor.predict_hotness(features)
+        except Exception as e:
+            log.debug("ML hotness 预测失败: %s", e)
+            return None
