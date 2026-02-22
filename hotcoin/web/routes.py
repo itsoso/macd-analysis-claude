@@ -644,7 +644,7 @@ def _compute_health_status(payload: dict):
 @hotcoin_bp.route("/")
 def dashboard():
     """热点币仪表盘页面。"""
-    return render_template("hotcoin_dashboard.html")
+    return render_template("hotcoin_dashboard.html", active_page="live-hotcoin-dashboard")
 
 
 def _get_runner():
@@ -1016,7 +1016,7 @@ def api_pool():
 @hotcoin_bp.route("/monitor")
 def monitor():
     """热点币实盘监控页面。"""
-    return render_template("hotcoin_monitor.html")
+    return render_template("hotcoin_monitor.html", active_page="live-hotcoin-monitor")
 
 
 @hotcoin_bp.route("/api/hot_posts")
@@ -1189,9 +1189,20 @@ def api_trades():
                     "exit_price": round(t.exit_price, 8),
                     "qty": round(t.qty, 8),
                     "pnl": round(t.pnl, 4),
-                    "pnl_pct": round(t.pnl_pct, 4),
+                    "pnl_pct": round(t.pnl_pct, 6),
+                    "pnl_gross": round(getattr(t, "pnl_gross", t.pnl), 4),
+                    "fee_total": round(getattr(t, "fee_total", 0), 4),
+                    "fee_entry": round(getattr(t, "fee_entry", 0), 4),
+                    "fee_exit": round(getattr(t, "fee_exit", 0), 4),
                     "holding_min": round(t.holding_sec / 60, 1),
                     "reason": t.reason,
+                    "entry_reason": getattr(t, "entry_reason", ""),
+                    "signal_strength": getattr(t, "signal_strength", 0),
+                    "alert_level": getattr(t, "alert_level", ""),
+                    "pump_phase": getattr(t, "pump_phase", ""),
+                    "active_signals": getattr(t, "active_signals", ""),
+                    "active_filters": getattr(t, "active_filters", ""),
+                    "note": getattr(t, "note", ""),
                     "entry_time": t.entry_time,
                     "exit_time": t.exit_time,
                 })
