@@ -179,7 +179,26 @@ class ListingMonitor:
             return True
 
     def _parse_listing_announcement(self, title: str, code: str):
-        """从公告标题中提取新币符号。"""
+        """从公告标题中提取新币符号 — LLM 优先, 正则降级。"""
+        # 尝试 LLM 解析
+        try:
+            from hotcoin.discovery.announcement_llm import parse_announcement
+            result = parse_announcement(title, announcement_id=code or title)
+            if result and result.get("event_type") == "listing" and result.get("symbols"):
+                for sym in result["symbols"]:
+                    if sym.endswith("USDT"):
+                        log.info("LLM 发现新币: %s (conf=%.2f, title=%s)",
+                                 sym, result.get("confidence", 0), title[:80])
+                        self.pool.on_listing(sym, open_time=0)
+                return
+        except Exception as e:
+            log.debug("LLM 解析降级: %s", e)
+
+        # 正则降级
+        self._parse_with_regex(title)
+
+    def _parse_with_regex(self, title: str):
+        """正则提取新币符号 (降级方案)。"""
         m = _WILL_LIST_RE.search(title)
         if m:
             token = m.group(1).upper()

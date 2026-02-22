@@ -453,7 +453,7 @@ def transfer_test(data: Dict[str, pd.DataFrame], interval: str = "15m"):
 
 def main():
     parser = argparse.ArgumentParser(description="热点币 ML 训练")
-    parser.add_argument("--task", choices=["hotness", "trade", "transfer_test"],
+    parser.add_argument("--task", choices=["hotness", "trade", "transfer_test", "pump"],
                         required=True, help="训练任务")
     parser.add_argument("--symbols", default="MULTI",
                         help="MULTI = top 100 by volume, 或逗号分隔的币种列表")
@@ -482,6 +482,9 @@ def main():
         train_trade_model(data, args.tf)
     elif args.task == "transfer_test":
         transfer_test(data, args.tf)
+    elif args.task == "pump":
+        from hotcoin.ml.train_pump import train_pump_classifier
+        train_pump_classifier(symbols, args.tf, args.days)
 
 
 if __name__ == "__main__":

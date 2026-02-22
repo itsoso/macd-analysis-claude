@@ -14,9 +14,12 @@ Pump 阶段检测器
 
 from dataclasses import dataclass
 from enum import Enum
+import logging
 
 import numpy as np
 import pandas as pd
+
+log = logging.getLogger("hotcoin.pump_detector")
 
 
 class PumpPhase(Enum):
@@ -192,3 +195,109 @@ def _suggest_action(phase: PumpPhase, score: float) -> str:
     if phase == PumpPhase.ACCUMULATION:
         return "WATCH"
     return "WATCH"
+
+
+# ---------------------------------------------------------------------------
+# ML 增强 Pump 检测 (shadow 模式)
+# ---------------------------------------------------------------------------
+
+_ML_MODEL = None
+_ML_META = None
+_ML_SHADOW = True  # True = 只记录不覆盖规则结果
+
+
+def _load_pump_model(interval: str = "15m"):
+    """懒加载 pump 分类模型。"""
+    global _ML_MODEL, _ML_META
+    if _ML_MODEL is not None:
+        return True
+
+    import os
+    model_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", f"pump_lgb_{interval}.txt"
+    )
+    meta_path = model_path.replace(".txt", "_meta.json")
+
+    if not os.path.exists(model_path):
+        return False
+
+    try:
+        import lightgbm as lgb
+        import json
+        _ML_MODEL = lgb.Booster(model_file=model_path)
+        if os.path.exists(meta_path):
+            with open(meta_path, "r") as f:
+                _ML_META = json.load(f)
+        log.info("Pump ML 模型已加载: %s", model_path)
+        return True
+    except Exception as e:
+        log.warning("Pump ML 模型加载失败: %s", e)
+        return False
+
+
+def detect_pump_phase_ml(
+    df: pd.DataFrame,
+    interval: str = "15m",
+    shadow: bool = True,
+) -> PumpResult:
+    """
+    ML 增强的 Pump 阶段检测。
+
+    先用规则检测, 再用 ML 模型预测, 加权融合。
+    shadow=True 时只记录 ML 结果, 返回规则结果。
+    """
+    rule_result = detect_pump_phase(df)
+
+    if not _load_pump_model(interval):
+        return rule_result
+
+    try:
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from hotcoin.ml.train_pump import compute_pump_features
+
+        features = compute_pump_features(df)
+        last_row = features.iloc[[-1]].values
+
+        # 处理 NaN
+        last_row = np.nan_to_num(last_row, nan=0.0)
+
+        probs = _ML_MODEL.predict(last_row)[0]  # shape: (5,)
+        ml_phase_idx = int(np.argmax(probs))
+        ml_confidence = float(probs[ml_phase_idx])
+
+        phase_map = {
+            0: PumpPhase.NORMAL,
+            1: PumpPhase.ACCUMULATION,
+            2: PumpPhase.EARLY_PUMP,
+            3: PumpPhase.MAIN_PUMP,
+            4: PumpPhase.DISTRIBUTION,
+        }
+        ml_phase = phase_map[ml_phase_idx]
+
+        log.info("Pump ML: %s (conf=%.2f) | Rule: %s (score=%.1f) | shadow=%s",
+                 ml_phase.value, ml_confidence,
+                 rule_result.phase.value, rule_result.score,
+                 shadow)
+
+        if shadow or _ML_SHADOW:
+            return rule_result
+
+        # 非 shadow: ML 置信度 > 0.6 时用 ML 结果
+        if ml_confidence > 0.6:
+            suggested = _suggest_action(ml_phase, rule_result.score)
+            return PumpResult(
+                phase=ml_phase,
+                score=rule_result.score,
+                volume_z=rule_result.volume_z,
+                momentum=rule_result.momentum,
+                acceleration=rule_result.acceleration,
+                buy_ratio=rule_result.buy_ratio,
+                suggested_action=suggested,
+            )
+
+        return rule_result
+
+    except Exception as e:
+        log.warning("Pump ML 推理失败: %s", e)
+        return rule_result
