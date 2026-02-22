@@ -175,6 +175,74 @@ def compute_hot_features(df: pd.DataFrame, cross_data: Optional[Dict] = None) ->
     return features
 
 
+def compute_cross_asset_features(
+    target_df: pd.DataFrame,
+    btc_df: Optional[pd.DataFrame] = None,
+    market_returns: Optional[Dict[str, pd.Series]] = None,
+) -> Dict:
+    """
+    计算跨资产特征 (P3 实现)。
+
+    Parameters
+    ----------
+    target_df : 目标币种 K 线 DataFrame
+    btc_df : BTC K 线 DataFrame (用于计算相关性)
+    market_returns : {symbol: return_series} 全市场收益率 (用于排名)
+
+    Returns
+    -------
+    dict: 可直接传给 compute_hot_features(cross_data=...)
+    """
+    result = {}
+    close = target_df["close"]
+    volume = target_df["volume"] if "volume" in target_df.columns else None
+
+    # 1. 与 BTC 的 20bar 滚动相关性
+    if btc_df is not None and "close" in btc_df.columns:
+        btc_close = btc_df["close"]
+        # 对齐 index
+        common_idx = close.index.intersection(btc_close.index)
+        if len(common_idx) >= 20:
+            target_ret = close.loc[common_idx].pct_change()
+            btc_ret = btc_close.loc[common_idx].pct_change()
+            corr = target_ret.rolling(20).corr(btc_ret)
+            result["corr_btc_20"] = float(corr.iloc[-1]) if not pd.isna(corr.iloc[-1]) else 0.0
+        else:
+            result["corr_btc_20"] = 0.0
+
+    # 2. 全市场成交量排名百分位
+    if market_returns and volume is not None:
+        all_volumes = {}
+        for sym, ret_s in market_returns.items():
+            all_volumes[sym] = ret_s.abs().mean()  # 用收益率绝对值均值作为活跃度代理
+        if all_volumes:
+            target_activity = close.pct_change().abs().mean()
+            rank = sum(1 for v in all_volumes.values() if v <= target_activity)
+            result["volume_rank_pct"] = rank / max(1, len(all_volumes))
+
+    # 3. 全市场涨幅排名百分位
+    if market_returns:
+        target_ret_last = float(close.pct_change(5).iloc[-1]) if len(close) > 5 else 0
+        all_rets = []
+        for sym, ret_s in market_returns.items():
+            if len(ret_s) > 5:
+                all_rets.append(float(ret_s.iloc[-1]))
+        if all_rets:
+            rank = sum(1 for r in all_rets if r <= target_ret_last)
+            result["return_rank_pct"] = rank / max(1, len(all_rets))
+
+    # 4. 市场整体动量 (全市场平均涨幅)
+    if market_returns:
+        recent_rets = []
+        for sym, ret_s in market_returns.items():
+            if len(ret_s) > 0:
+                recent_rets.append(float(ret_s.iloc[-1]))
+        if recent_rets:
+            result["sector_momentum"] = float(np.mean(recent_rets))
+
+    return result
+
+
 def make_hotness_labels(returns_df: pd.DataFrame, window: int = 15,
                         percentile: float = 0.90) -> pd.Series:
     """
