@@ -25,7 +25,7 @@
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
             background: var(--bg-primary); color: var(--text-primary);
-            padding: 20px; min-height: 100vh;
+            display: flex; height: 100vh; overflow: hidden;
         }
 
         /* Header */
@@ -41,12 +41,6 @@
             display: flex; gap: 12px; align-items: center;
             font-size: 13px; color: var(--text-secondary);
         }
-        .back-link {
-            display: inline-block; color: var(--accent-blue);
-            text-decoration: none; font-size: 14px; margin-bottom: 16px;
-        }
-        .back-link:hover { text-decoration: underline; }
-
         /* Buttons */
         .btn {
             border: none; padding: 6px 16px; border-radius: 6px;
@@ -280,10 +274,173 @@
         .post-feed::-webkit-scrollbar { width: 4px; }
         .post-feed::-webkit-scrollbar-track { background: transparent; }
         .post-feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+        /* ── 全局侧边栏 ── */
+        .sidebar {
+            width: 260px; min-width: 260px;
+            background: var(--bg-secondary); border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; overflow-y: auto;
+            transition: width 0.25s ease, min-width 0.25s ease;
+            flex-shrink: 0;
+        }
+        .sidebar.collapsed { width: 56px; min-width: 56px; }
+        .sidebar.collapsed .sidebar-header h1,
+        .sidebar.collapsed .sidebar-header p,
+        .sidebar.collapsed .nav-section-title,
+        .sidebar.collapsed .nav-item-text,
+        .sidebar.collapsed .user-name,
+        .sidebar.collapsed .logout-btn { display: none; }
+        .sidebar.collapsed .sidebar-header { padding: 14px 0; text-align: center; }
+        .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
+        .sidebar.collapsed .nav-item .nav-icon { width: auto; font-size: 18px; }
+        .sidebar.collapsed .sidebar-footer { justify-content: center; padding: 12px 0; }
+        .sidebar.collapsed .user-info { gap: 0; }
+        .sidebar.collapsed .user-avatar { font-size: 20px; }
+        .sidebar.collapsed .nav-section { padding: 8px 0; }
+        .sidebar.collapsed .nav-item { position: relative; }
+        .sidebar.collapsed .nav-item::after {
+            content: attr(data-tooltip);
+            position: absolute; left: 100%; top: 50%; transform: translateY(-50%);
+            background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border);
+            padding: 4px 10px; border-radius: 6px; font-size: 12px; white-space: nowrap;
+            pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 1000;
+            margin-left: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .sidebar.collapsed .nav-item:hover::after { opacity: 1; }
+        .sidebar-header {
+            padding: 20px 16px 14px; border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+        }
+        .sidebar-header-text { flex: 1; min-width: 0; overflow: hidden; }
+        .sidebar-header h1 {
+            font-size: 16px; font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            margin-bottom: 2px; white-space: nowrap;
+        }
+        .sidebar-header p { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+        .sidebar-toggle {
+            background: none; border: none; color: var(--text-muted); cursor: pointer;
+            width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center;
+            justify-content: center; transition: all 0.2s; flex-shrink: 0; font-size: 16px;
+        }
+        .sidebar-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .sidebar-toggle svg { transition: transform 0.25s ease; }
+        .sidebar.collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+        .nav-section { padding: 10px 0; border-bottom: 1px solid var(--border); }
+        .nav-section-title {
+            font-size: 10px; font-weight: 600; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: 0.5px; padding: 0 16px; margin-bottom: 4px;
+            white-space: nowrap;
+        }
+        a.nav-item {
+            display: flex; align-items: center; padding: 7px 16px; cursor: pointer;
+            font-size: 13px; color: var(--text-secondary); transition: all 0.15s;
+            gap: 10px; text-decoration: none; white-space: nowrap; overflow: hidden;
+        }
+        a.nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+        a.nav-item.active {
+            background: rgba(74, 158, 255, 0.1); color: var(--accent-blue);
+            border-left: 2px solid var(--accent-blue);
+        }
+        .nav-icon { width: 18px; text-align: center; font-size: 14px; flex-shrink: 0; }
+        .nav-item-text { overflow: hidden; text-overflow: ellipsis; }
+        .sidebar-footer {
+            margin-top: auto; padding: 10px 16px;
+            border-top: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+        }
+        .user-info { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); }
+        .user-avatar { font-size: 16px; }
+        .user-name { font-weight: 500; white-space: nowrap; }
+        .logout-btn {
+            font-size: 12px; color: var(--text-muted); text-decoration: none;
+            padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border);
+            transition: all 0.2s; white-space: nowrap;
+        }
+        .logout-btn:hover { color: var(--accent-red); border-color: var(--accent-red); }
+        .hotcoin-main { flex: 1; overflow-y: auto; padding: 20px; }
     </style>
 </head>
 <body>
-    <a href="/" class="back-link">&larr; 返回主页</a>
+    <!-- 全局侧边栏 -->
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="sidebar-header-text">
+                <h1>技术分析平台</h1>
+                <p>六书融合 · ETH/USDT</p>
+            </div>
+            <button class="sidebar-toggle" id="sidebarToggle" title="收起/展开菜单">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+        </div>
+        <div class="nav-section">
+            <div class="nav-section-title">实盘运营</div>
+            <a class="nav-item" href="/strategy/live-control" data-tooltip="实盘控制面板">
+                <span class="nav-icon">🎛️</span><span class="nav-item-text">实盘控制面板</span>
+            </a>
+            <a class="nav-item" href="/hotcoin/" data-tooltip="热点币仪表盘">
+                <span class="nav-icon">🔥</span><span class="nav-item-text">热点币仪表盘</span>
+            </a>
+            <a class="nav-item active" href="/hotcoin/monitor" data-tooltip="热点币实盘监控">
+                <span class="nav-icon">📡</span><span class="nav-item-text">热点币监控</span>
+            </a>
+            <a class="nav-item" href="/strategy/live-hotcoin-config" data-tooltip="热点币参数配置">
+                <span class="nav-icon">⚙️</span><span class="nav-item-text">热点币配置</span>
+            </a>
+            <a class="nav-item" href="/strategy/current" data-tooltip="当前最优策略">
+                <span class="nav-icon">📌</span><span class="nav-item-text">当前最优策略(v6.0)</span>
+            </a>
+        </div>
+        <div class="nav-section">
+            <div class="nav-section-title">书籍大纲</div>
+            <a class="nav-item" href="/" data-tooltip="背离技术分析">
+                <span class="nav-icon">📖</span><span class="nav-item-text">背离技术分析</span>
+            </a>
+            <a class="nav-item" href="/book/ma" data-tooltip="均线技术分析">
+                <span class="nav-icon">📈</span><span class="nav-item-text">均线技术分析</span>
+            </a>
+            <a class="nav-item" href="/book/candlestick" data-tooltip="日本蜡烛图技术">
+                <span class="nav-icon">🕯️</span><span class="nav-item-text">日本蜡烛图技术</span>
+            </a>
+            <a class="nav-item" href="/book/bollinger" data-tooltip="布林线">
+                <span class="nav-icon">📉</span><span class="nav-item-text">布林线</span>
+            </a>
+            <a class="nav-item" href="/book/volume-price" data-tooltip="量价分析">
+                <span class="nav-icon">📊</span><span class="nav-item-text">量价分析</span>
+            </a>
+            <a class="nav-item" href="/book/kdj" data-tooltip="KDJ波段操作">
+                <span class="nav-icon">📈</span><span class="nav-item-text">KDJ波段操作</span>
+            </a>
+            <a class="nav-item" href="/book/turtle" data-tooltip="海龟交易法则">
+                <span class="nav-icon">🐢</span><span class="nav-item-text">海龟交易法则</span>
+            </a>
+        </div>
+        <div class="nav-section">
+            <div class="nav-section-title">ETH/USDT 回测</div>
+            <a class="nav-item" href="/strategy/global" data-tooltip="全局最优策略">
+                <span class="nav-icon">🏆</span><span class="nav-item-text">全局最优策略</span>
+            </a>
+            <a class="nav-item" href="/strategy/six-book" data-tooltip="六书融合策略">
+                <span class="nav-icon">⭐</span><span class="nav-item-text">六书融合策略</span>
+            </a>
+            <a class="nav-item" href="/strategy/optimize-six-book" data-tooltip="六书优化">
+                <span class="nav-icon">🚀</span><span class="nav-item-text">六书优化</span>
+            </a>
+            <a class="nav-item" href="/strategy/multi-tf-backtest" data-tooltip="多周期联合回测">
+                <span class="nav-icon">🔗</span><span class="nav-item-text">多周期联合回测</span>
+            </a>
+        </div>
+        <div class="sidebar-footer">
+            <div class="user-info">
+                <span class="user-avatar">👤</span>
+                <span class="user-name">admin</span>
+            </div>
+            <a class="logout-btn" href="/logout" title="登出">退出</a>
+        </div>
+    </nav>
+
+    <div class="hotcoin-main">
 
     <div class="header">
         <h1>热点币实盘监控 <span>HotCoin Monitor</span></h1>
@@ -705,6 +862,19 @@ function stopTimer() {
 // ── Init ──
 refreshAll();
 startTimer();
+
+// 侧边栏收起/展开
+(function() {
+    var sidebar = document.getElementById('sidebar');
+    var toggle = document.getElementById('sidebarToggle');
+    var STORAGE_KEY = 'sidebar_collapsed';
+    if (localStorage.getItem(STORAGE_KEY) === '1') sidebar.classList.add('collapsed');
+    toggle.addEventListener('click', function() {
+        sidebar.classList.toggle('collapsed');
+        localStorage.setItem(STORAGE_KEY, sidebar.classList.contains('collapsed') ? '1' : '0');
+    });
+})();
 </script>
+    </div><!-- /hotcoin-main -->
 </body>
 </html>
