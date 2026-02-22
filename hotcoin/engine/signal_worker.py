@@ -339,6 +339,37 @@ def compute_signal_for_symbol(symbol: str, timeframes: Optional[List[str]] = Non
     except Exception:
         log.debug("%s ML trade 增强异常", symbol, exc_info=True)
 
+    # --- 在线学习反馈收集 ---
+    try:
+        from hotcoin.ml.feedback_collector import get_feedback_collector
+        collector = get_feedback_collector()
+        # 只记录有明确方向的信号
+        if action in ("BUY", "SELL") and tf_details:
+            last_close = 0.0
+            for td in tf_details.values():
+                if "last_close" in td:
+                    last_close = td["last_close"]
+                    break
+            if last_close > 0:
+                # 简化特征字典 (从 tf_details 提取)
+                feat_dict = {
+                    "strength": strength,
+                    "confidence": confidence,
+                    "pump_score": pump_score,
+                    "alert_score": alert_score,
+                    "ml_trade_prob": ml_trade_prob,
+                    "n_timeframes": len(tf_scores),
+                }
+                collector.record_signal(
+                    symbol=symbol,
+                    features=feat_dict,
+                    action=action,
+                    price_at_signal=last_close,
+                    ml_trade_prob=ml_trade_prob,
+                )
+    except Exception:
+        pass  # 反馈收集不应影响信号输出
+
     return TradeSignal(
         symbol=symbol,
         action=action,

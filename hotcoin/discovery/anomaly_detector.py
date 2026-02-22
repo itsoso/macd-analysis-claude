@@ -27,6 +27,7 @@ class AnomalySignal:
     price_change_24h: float         # 24h 涨幅
     quote_volume_24h: float         # 24h USDT 成交额
     detected_at: float              # unix timestamp
+    ml_quality_score: float = -1.0  # ML 异动质量评分 (-1=不可用, 0-1=预测概率)
 
     @property
     def summary(self) -> str:
@@ -91,6 +92,54 @@ class AnomalyDetector:
             price_change_24h=ticker.price_change_24h,
             quote_volume_24h=ticker.quote_volume,
             detected_at=now,
+            ml_quality_score=self._predict_anomaly_quality(
+                vol_ratio, ticker.price_change_5m,
+                ticker.price_change_24h, ticker.quote_volume,
+            ),
         )
-        log.info("异动检测: %s", signal.summary)
+        log.info("异动检测: %s (ml_q=%.2f)", signal.summary, signal.ml_quality_score)
         return signal
+
+    def _predict_anomaly_quality(
+        self,
+        vol_ratio: float,
+        price_change_5m: float,
+        price_change_24h: float,
+        quote_volume_24h: float,
+    ) -> float:
+        """
+        ML 异动质量评分: 预测该异动是否会持续 (非假突破)。
+
+        基于规则的启发式评分 (0-1), 后续可替换为训练模型。
+        高分 = 更可能是真实 pump, 低分 = 可能是假突破/闪崩。
+        """
+        score = 0.5  # 基准
+
+        # 成交量放大越大, 质量越高 (但超过 20x 可能是异常)
+        if vol_ratio >= 5:
+            score += 0.15
+        if vol_ratio >= 10:
+            score += 0.1
+        if vol_ratio > 20:
+            score -= 0.1  # 过度放量可能是操纵
+
+        # 5min 涨幅适中 (3-10%) 质量高, 过大可能是闪崩前兆
+        if 0.03 <= price_change_5m <= 0.10:
+            score += 0.15
+        elif price_change_5m > 0.15:
+            score -= 0.1
+
+        # 24h 涨幅不大时异动更有价值 (早期发现)
+        if price_change_24h < 0.10:
+            score += 0.1
+        elif price_change_24h > 0.30:
+            score -= 0.15  # 已经涨太多, 追高风险
+
+        # 流动性越好, 异动越可信
+        import math
+        if quote_volume_24h > 5_000_000:
+            score += 0.1
+        elif quote_volume_24h > 1_000_000:
+            score += 0.05
+
+        return round(max(0, min(1, score)), 3)

@@ -68,11 +68,16 @@ class HotRanker:
                 elif hours_until < 24:
                     s_announce = 90.0
 
-        # --- 维度 2: 社媒扩散 (Phase 2) ---
+        # --- 维度 2: 社媒扩散 (Phase 2 — LLM 情感增强) ---
         s_social = min(100, coin.mention_velocity * 10)
 
-        # --- 维度 3: 情绪倾向 (Phase 2) ---
+        # --- 维度 3: 情绪倾向 (Phase 2 — LLM 情感增强) ---
         s_sentiment = max(0, min(100, (coin.sentiment + 1) * 50))
+
+        # LLM 情感覆盖 (如果有社交文本数据)
+        llm_sentiment = self._get_llm_sentiment(coin)
+        if llm_sentiment is not None:
+            s_sentiment = max(0, min(100, (llm_sentiment + 1) * 50))
 
         # --- 维度 4: 价格动量 ---
         s_momentum = self._score_momentum(coin)
@@ -206,4 +211,20 @@ class HotRanker:
             return self._ml_predictor.predict_hotness(features)
         except Exception as e:
             log.debug("ML hotness 预测失败: %s", e)
+            return None
+
+    def _get_llm_sentiment(self, coin) -> float:
+        """获取 LLM 情感分析结果, 返回 -1~1 或 None。"""
+        try:
+            # 只在有社交文本时调用
+            texts = getattr(coin, "social_texts", None)
+            if not texts:
+                return None
+
+            from hotcoin.discovery.sentiment_llm import analyze_batch
+            result = analyze_batch(texts, symbol=coin.symbol)
+            if result["confidence"] > 0.3:
+                return result["sentiment"]
+            return None
+        except Exception:
             return None
