@@ -526,8 +526,8 @@ function renderCoins() {
             : `<span class="tag pump-${phase}">${phaseNames[phase] || phase}</span>`;
 
         // Signals + Filters
-        const sigs = (c.active_signals || '').split(',').filter(Boolean);
-        const filts = (c.active_filters || '').split(',').filter(Boolean);
+        const sigs = (c.active_signals || '').split(',').map(s => s.trim()).filter(Boolean);
+        const filts = (c.active_filters || '').split(',').map(s => s.trim()).filter(Boolean);
         const sigHtml = sigs.map(s => `<span class="sig-chip sig-S">${s}</span>`).join('')
             + filts.map(f => `<span class="sig-chip sig-F">${f}</span>`).join('');
 

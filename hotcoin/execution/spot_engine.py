@@ -95,6 +95,7 @@ class HotCoinSpotEngine:
         - 若已有 BUY 持仓: 视为平仓信号
         - 若无仓位: 仅记录并忽略
         """
+        tid = getattr(sig, "trace_id", "")
         pos = self.risk.positions.get(sig.symbol)
         if not pos:
             log.debug("忽略 SELL %s: 现货无仓位可平", sig.symbol)
@@ -108,6 +109,11 @@ class HotCoinSpotEngine:
         if price <= 0:
             log.warning("忽略 SELL %s: 无法获取价格", sig.symbol)
             return
+        self._emit_event("sell_signal_close", {
+            "symbol": sig.symbol, "price": price,
+            "reason": sig.reason or "signal exit",
+            "strength": sig.strength,
+        }, trace_id=tid)
         self._close_position(sig.symbol, price, f"SELL signal: {sig.reason or 'signal exit'}")
 
     def _try_open(self, sig: TradeSignal, coin: Optional[HotCoin], entry_decision,
@@ -132,6 +138,8 @@ class HotCoinSpotEngine:
             liquidity_score=liquidity_score,
             current_positions=self.risk.num_positions,
             used_exposure=used,
+            alert_level=getattr(coin, "alert_level", "") if coin else "",
+            pump_phase=getattr(coin, "pump_phase", "") if coin else "",
         )
 
         if alloc <= 0:
@@ -358,10 +366,11 @@ class HotCoinSpotEngine:
             log.error("平仓下单失败 %s: %s — 保留仓位", symbol, result.get("error"))
             return
 
-        pnl = self.risk.close_position(symbol, price, reason)
+        real_price = exec_price if exec_price > 0 else price
+        pnl = self.risk.close_position(symbol, real_price, reason)
         self.pnl.record_trade(
             symbol=symbol, side=pos.side,
-            entry_price=pos.entry_price, exit_price=price,
+            entry_price=pos.entry_price, exit_price=real_price,
             qty=pos.qty, entry_time=pos.entry_time,
             reason=reason,
         )
@@ -408,13 +417,20 @@ class HotCoinSpotEngine:
             log.error("部分平仓下单失败 %s: %s — 保留仓位", symbol, result.get("error"))
             return
 
-        pnl = self.risk.partial_close(symbol, price, pct, reason)
+        real_price = exec_price if exec_price > 0 else price
+        pnl = self.risk.partial_close(symbol, real_price, pct, reason)
         self.pnl.record_trade(
             symbol=symbol, side=pos.side,
-            entry_price=pos.entry_price, exit_price=price,
+            entry_price=pos.entry_price, exit_price=real_price,
             qty=close_qty, entry_time=pos.entry_time,
             reason=reason,
         )
+
+        remaining = self.risk.positions.get(symbol)
+        if remaining and remaining.qty * real_price < 1.0:
+            log.info("Dust清理 %s: 剩余价值 $%.4f < $1, 全部平仓",
+                     symbol, remaining.qty * real_price)
+            self._close_position(symbol, real_price, "dust_cleanup")
 
     def reconcile_open_orders(self) -> dict:
         """
@@ -489,3 +505,7 @@ class HotCoinSpotEngine:
             "pnl_summary": self.pnl.get_summary(),
             "paper": self.config.execution.use_paper_trading,
         }
+
+
+# 历史兼容别名（旧脚本可能仍在导入 SpotEngine）。
+SpotEngine = HotCoinSpotEngine

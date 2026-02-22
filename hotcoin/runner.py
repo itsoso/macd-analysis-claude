@@ -359,9 +359,11 @@ class HotCoinRunner:
         interval = self.config.trading.signal_loop_sec
         reconcile_every = 30  # 每 30 轮 (~5min) 对账一次
         loop_count = 0
+        _slow_threshold = max(interval * 3, 30)
         while not self._shutdown.is_set():
             cycle_id = uuid.uuid4().hex[:12]
             loop_count += 1
+            _cycle_t0 = time.time()
             try:
                 # 0) 清除冷却到期 / 低分超时的币种
                 self.pool.remove_expired()
@@ -389,29 +391,23 @@ class HotCoinRunner:
                                  sig.action, sig.symbol, sig.strength,
                                  sig.confidence, sig.reason)
 
-                # 3.5) 回写 Pump + Alert 到候选池 (仅覆盖非空值, 避免默认值冲刷)
+                # 3.5) 回写 Pump + Alert + Signals 到候选池
                 for sig in signals:
                     coin = self.pool.get(sig.symbol)
                     if coin is None:
                         continue
-                    changed = False
                     if sig.pump_phase:
                         coin.pump_phase = sig.pump_phase
-                        changed = True
                     if sig.pump_score > 0:
                         coin.pump_score = sig.pump_score
-                        changed = True
                     if sig.alert_level:
                         coin.alert_level = sig.alert_level
-                        changed = True
                     if sig.alert_score > 0:
                         coin.alert_score = sig.alert_score
-                        changed = True
-                    # signals/filters 每轮都全量更新 (可以从有到无)
+                    # signals/filters 每轮全量更新 (可以从有→无)
                     coin.active_signals = ",".join(sig.active_signals) if sig.active_signals else ""
                     coin.active_filters = ",".join(sig.active_filters) if sig.active_filters else ""
-                    if changed:
-                        self.pool.update_coin(coin)
+                    self.pool.update_coin(coin)
 
                 current_prices = {
                     sym: ticker.close
@@ -503,6 +499,13 @@ class HotCoinRunner:
             except Exception:
                 log.exception("主循环异常 (pool=%d, positions=%d)",
                               self.pool.size, self.spot_engine.num_positions)
+
+            _cycle_elapsed = time.time() - _cycle_t0
+            if _cycle_elapsed > _slow_threshold:
+                log.warning("主循环 [%s] 耗时 %.1fs 超过慢阈值 %.0fs (pool=%d)",
+                            cycle_id[:8], _cycle_elapsed, _slow_threshold, self.pool.size)
+            elif loop_count % 60 == 0:
+                log.info("主循环健康: 第%d轮 耗时 %.1fs", loop_count, _cycle_elapsed)
 
             await asyncio.sleep(interval)
 
